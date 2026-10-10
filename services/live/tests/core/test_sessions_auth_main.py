@@ -1,0 +1,387 @@
+"""Session registry + notify, hello auth (no Firebase Auth: tokenless hello lands in the demo shop) and the
+real-mode wiring of ``main.py`` (Live bridge, guidance hooks, optional routers, /health).
+
+No network: real mode runs on the in-memory ``FakeBackend`` and a fake system prompt.
+"""
+import asyncio
+import base64
+import sys
+import time
+from types import SimpleNamespace
+
+import pytest
+from fastapi import APIRouter, FastAPI
+from fastapi.testclient import TestClient
+from live_fakes import FakeBackend
+from starlette.websockets import WebSocketDisconnect
+
+from aira_live import auth, confirm, sessions
+from aira_live import main as main_mod
+from aira_live.i18n import t
+from aira_live.live_bridge import NOTICE_PREFIX, LiveEvent
+from aira_live.tool_runtime import live_tools
+from aira_live.tools import NON_BLOCKING_TOOLS, TOOL_FUNCS
+
+DEMO = "murugan_dairy"
+HELLO = {"t": "hello", "uid": "u1", "shopId": DEMO, "lang": "en", "verbosity": "short", "appVersion": "0.1.0"}
+
+
+def _wait(pred, timeout: float = 2.0) -> None:
+    """Poll from the test thread (the server runs in TestClient's portal thread)."""
+    deadline = time.time() + timeout
+    while not pred():
+        if time.time() > deadline:
+            raise AssertionError("condition not met in time")
+        time.sleep(0.01)
+
+
+def _registered(shop_id: str) -> list[str]:
+    return [s.session_id for s, _ in sessions.by_shop(shop_id)]
+
+
+def _tool_name(tool) -> str:
+    return getattr(tool, "name", None) or tool.__name__
+
+
+@pytest.fixture(autouse=True)
+def clean_env(monkeypatch):
+    for name in ("GEMINI_API_KEY", "AIRA_MOCK", "AIRA_ALLOW_NO_TOKEN", "AIRA_DEMO_SHOP"):
+        monkeypatch.delenv(name, raising=False)
+
+
+@pytest.fixture
+def mem_store():
+    previous = confirm._store
+    store = confirm.MemoryProposalStore()
+    confirm.set_store(store)
+    yield store
+    confirm.set_store(previous)
+
+
+@pytest.fixture
+def real_mode(monkeypatch, fake_db, mem_store):
+    """GEMINI_API_KEY set (real mode), tokenless hello allowed, every Live connection is a new FakeBackend."""
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    monkeypatch.setenv("AIRA_ALLOW_NO_TOKEN", "1")
+    backends: list[FakeBackend] = []
+
+    async def fake_prompt(shop_id, lang, verbosity):
+        return f"prompt for {shop_id}"
+
+    def factory(session):
+        backends.append(FakeBackend())
+        return backends[-1]
+
+    monkeypatch.setattr(main_mod, "build_system_prompt", fake_prompt)
+    monkeypatch.setattr(main_mod.app.state, "backend_factory", factory)
+    return backends
+
+
+# ---------- sessions: registry + notify ----------
+async def test_notify_reaches_every_live_session_of_that_shop_only(mk_session):
+    s1, r1 = mk_session(shop="murugan")
+    s2, r2 = mk_session(shop="murugan")
+    s3, r3 = mk_session(shop="other")
+    spoken = []
+
+    class Bridge:
+        async def speak_notice(self, text):
+            spoken.append(text)
+
+    sessions.register(s1, Bridge())
+    sessions.register(s2)
+    sessions.register(s3)
+    try:
+        n = await sessions.notify("murugan", "Sakthi vendor confirmed: delivery at 6 pm.")
+        assert n == 2 and spoken == ["Sakthi vendor confirmed: delivery at 6 pm."]
+        assert [m.t for m in r1.msgs] == ["transcript", "cue"] and r1.msgs[0].text.startswith("Sakthi vendor")
+        assert r1.msgs[1].cue == "ack" and [m.t for m in r2.msgs] == ["transcript", "cue"]
+        assert r3.msgs == []
+    finally:
+        for s in (s1, s2, s3):
+            sessions.unregister(s.session_id)
+    assert await sessions.notify("murugan", "x") == 0
+
+
+async def test_registry_attach_and_unregister_by_id_or_session(mk_session):
+    s, _ = mk_session(shop="reg_shop")
+    bridge = object()
+    sessions.register(s)
+    sessions.attach_bridge(s.session_id, bridge)
+    assert sessions.by_shop("reg_shop") == [(s, bridge)]
+    sessions.unregister(s.session_id)
+    assert sessions.by_shop("reg_shop") == []
+    sessions.register(s)
+    sessions.unregister(s)  # the foundation's callers pass the Session itself
+    assert sessions.by_shop("reg_shop") == []
+    sessions.attach_bridge("gone", bridge)  # a session that already left is ignored
+    sessions.unregister("gone")
+
+
+async def test_notify_survives_a_failing_bridge(mk_session):
+    bad, r_bad = mk_session(shop="nb_shop")
+    good, r_good = mk_session(shop="nb_shop")
+
+    class Broken:
+        async def speak_notice(self, text):
+            raise RuntimeError("live gone")
+
+    sessions.register(bad, Broken())
+    sessions.register(good)
+    try:
+        assert await sessions.notify("nb_shop", "Low stock: Aavin milk", cue="warn") == 1
+        assert r_good.msgs[-1].cue == "warn"
+    finally:
+        sessions.unregister(bad)
+        sessions.unregister(good)
+
+
+# ---------- auth.verify_hello (no Firebase Auth) ----------
+async def test_tokenless_hello_ignores_the_client_shop_and_uses_the_demo_shop(monkeypatch):
+    monkeypatch.setenv("AIRA_ALLOW_NO_TOKEN", "1")
+    r = await auth.verify_hello(None, "u1", "someone_elses_shop", mock=False)
+    assert r == auth.AuthResult(uid="u1", shop_id=DEMO, role="owner")
+    assert auth.DEMO_SHOP == DEMO
+
+
+async def test_demo_shop_comes_from_env(monkeypatch):
+    monkeypatch.setenv("AIRA_ALLOW_NO_TOKEN", "1")
+    monkeypatch.setenv("AIRA_DEMO_SHOP", "test_shop")
+    assert (await auth.verify_hello(None, "u1", DEMO, mock=False)).shop_id == "test_shop"
+
+
+async def test_mock_mode_without_token_lands_in_the_demo_shop():
+    r = await auth.verify_hello(None, "dev", "murugan", mock=True)
+    assert r.shop_id == DEMO and r.uid == "dev"
+
+
+@pytest.mark.parametrize("token", [None, ""])
+async def test_no_token_is_refused_when_tokenless_mode_is_off(token):
+    with pytest.raises(auth.AuthError):
+        await auth.verify_hello(token, "dev", DEMO, mock=False)
+
+
+async def test_a_token_never_unlocks_another_shop(monkeypatch):
+    # There is no Firebase Auth to check a token against, so a token grants nothing beyond tokenless mode.
+    with pytest.raises(auth.AuthError):
+        await auth.verify_hello("forged-token", "u9", "other_shop", mock=False)
+    monkeypatch.setenv("AIRA_ALLOW_NO_TOKEN", "1")
+    assert (await auth.verify_hello("forged-token", "u9", "other_shop", mock=False)).shop_id == DEMO
+
+
+# ---------- /health ----------
+def test_health_and_healthz_alias():
+    client = TestClient(main_mod.app)
+    health = client.get("/health")
+    assert health.status_code == 200 and health.json()["ok"] is True
+    assert client.get("/healthz").json() == health.json() == {"ok": True, "mock": True}
+
+
+# ---------- guidance hooks (Sarmitha's aira_live.tools.guidance, imported lazily) ----------
+def test_client_events_and_stop_reach_guidance_hooks(monkeypatch, fake_db):
+    calls = {"event": [], "stop": []}
+
+    async def handle_client_event(session, name, data):
+        calls["event"].append((session.session_id, name, data))
+
+    async def stop_guidance(session):
+        calls["stop"].append(session.session_id)
+
+    monkeypatch.setitem(sys.modules, "aira_live.tools.guidance",
+                        SimpleNamespace(handle_client_event=handle_client_event, stop_guidance=stop_guidance))
+    with TestClient(main_mod.app).websocket_connect("/ws") as ws:
+        ws.send_json({**HELLO, "shopId": "murugan"})
+        sid = ws.receive_json()["sessionId"]
+        ws.send_json({"t": "event", "name": "fingertip_in_target", "data": {"label": "Sakthi curd"}})
+        ws.send_json({"t": "event", "name": "visibility", "data": {"hidden": True}})
+        ws.send_json({"t": "stop"})
+        assert ws.receive_json() == {"t": "cue", "cue": "done"}
+    _wait(lambda: len(calls["stop"]) >= 2)  # disconnect cleanup runs after the client closes
+    assert calls["event"] == [(sid, "fingertip_in_target", {"label": "Sakthi curd"}),
+                              (sid, "visibility", {"hidden": True})]
+    assert calls["stop"] == [sid, sid]  # once on stop, once on disconnect
+
+
+def test_broken_guidance_hook_never_closes_the_socket(monkeypatch, fake_db):
+    async def boom(*a):
+        raise RuntimeError("guidance bug")
+
+    monkeypatch.setitem(sys.modules, "aira_live.tools.guidance",
+                        SimpleNamespace(handle_client_event=boom, stop_guidance=boom))
+    with TestClient(main_mod.app).websocket_connect("/ws") as ws:
+        ws.send_json(HELLO)
+        ws.receive_json()
+        ws.send_json({"t": "event", "name": "fingertip_in_target", "data": {}})
+        ws.send_json({"t": "text", "text": "still alive?"})
+        assert ws.receive_json()["text"] == "(mock) you said: still alive?"
+        ws.send_json({"t": "stop"})
+        assert ws.receive_json() == {"t": "cue", "cue": "done"}
+
+
+# ---------- hello in real mode ----------
+def test_real_mode_tokenless_hello_ignores_the_client_shop(real_mode):
+    with TestClient(main_mod.app).websocket_connect("/ws") as ws:
+        ws.send_json({**HELLO, "shopId": "other_shop"})
+        ready = ws.receive_json()
+        assert ready["t"] == "ready" and ready["mock"] is False
+        assert real_mode[0].system_prompt == f"prompt for {DEMO}"
+        assert ready["sessionId"] in _registered(DEMO) and _registered("other_shop") == []
+
+
+def test_hello_without_token_is_refused_and_closed_when_tokenless_mode_is_off(real_mode, monkeypatch):
+    monkeypatch.delenv("AIRA_ALLOW_NO_TOKEN")
+    with TestClient(main_mod.app).websocket_connect("/ws") as ws:
+        ws.send_json(HELLO)
+        assert ws.receive_json() == {"t": "error", "code": "permission", "say": t("auth.denied", "en")}
+        with pytest.raises(WebSocketDisconnect) as closed:
+            ws.receive_json()
+        assert closed.value.code == 4403
+    assert real_mode == []  # Live was never started
+
+
+def test_ws_real_mode_wires_bridge_audio_text_and_transcripts(real_mode):
+    with TestClient(main_mod.app).websocket_connect("/ws") as ws:
+        ws.send_json({**HELLO, "idToken": "ignored"})
+        ready = ws.receive_json()
+        sid = ready["sessionId"]
+        fb = real_mode[0]
+        assert ready["t"] == "ready" and ready["mock"] is False
+        assert sorted(_tool_name(x) for x in fb.tools) == sorted(f.__name__ for f in TOOL_FUNCS)
+        ws.send_json({"t": "audio", "pcm16": base64.b64encode(b"\x00\x01").decode()})
+        _wait(lambda: fb.sent_audio)
+        assert fb.sent_audio == [b"\x00\x01"]
+        fb.push(LiveEvent("output_transcript", text="Hello Murugan.", final=True))
+        assert ws.receive_json() == {"t": "transcript", "role": "aira", "text": "Hello Murugan.", "final": True}
+        ws.send_json({"t": "text", "text": "how much curd is left?"})
+        _wait(lambda: fb.sent_text)
+        assert fb.sent_text == ["how much curd is left?"]
+        ws.send_json({"t": "stop"})
+        assert ws.receive_json() == {"t": "cue", "cue": "done"}
+        fb.push(LiveEvent("audio", audio=b"\x05\x06"))  # the rest of the stopped answer is dropped
+        fb.push(LiveEvent("input_transcript", text="Next question.", final=True))
+        # Events arrive in order, so the dropped audio would have come first.
+        assert ws.receive_json() == {"t": "transcript", "role": "user", "text": "Next question.", "final": True}
+    _wait(lambda: fb.closed and sid not in _registered(DEMO))  # disconnect closes Live and unregisters
+
+
+def test_live_tools_mark_delivery_count_and_sale_pay_non_blocking(mk_session):
+    from google.adk.tools import FunctionTool
+    from google.genai import types
+
+    assert NON_BLOCKING_TOOLS == frozenset({"delivery_count", "sale_pay"})
+    s, _ = mk_session()
+    tools = live_tools(TOOL_FUNCS, s, NON_BLOCKING_TOOLS)
+    by_name = {_tool_name(x): x for x in tools}
+    assert set(by_name) == {f.__name__ for f in TOOL_FUNCS}
+    for name in NON_BLOCKING_TOOLS:
+        tool = by_name[name]
+        assert isinstance(tool, FunctionTool) and tool.behavior == types.Behavior.NON_BLOCKING
+    assert not isinstance(by_name["confirm_action"], FunctionTool)
+
+
+async def test_non_blocking_tool_still_runs_with_its_session(mk_session):
+    from google.adk.tools import FunctionTool
+
+    from aira_live.session import get_session
+
+    s, _ = mk_session()
+
+    async def sale_pay(method: str) -> dict:
+        """Wait for payment."""
+        return {"say": f"waiting for {method}", "session": get_session().session_id}
+
+    (tool,) = live_tools([sale_pay], s, frozenset({"sale_pay"}))
+    assert isinstance(tool, FunctionTool)
+    result = await tool.func(method="upi", tool_context=SimpleNamespace(function_call_id="fc1"))
+    assert result == {"say": "waiting for upi", "session": s.session_id}
+    assert s.tool_results == [{"tool": "sale_pay", "call_id": "fc1", "result": result}]
+
+
+def test_notify_speaks_into_the_live_session(real_mode):
+    with TestClient(main_mod.app).websocket_connect("/ws") as ws:
+        ws.send_json(HELLO)
+        ws.receive_json()
+        fb = real_mode[0]
+        assert ws.portal.call(sessions.notify, DEMO, "Sakthi vendor confirmed: delivery at 6 pm.") >= 1
+        assert ws.receive_json() == {"t": "transcript", "role": "aira",
+                                     "text": "Sakthi vendor confirmed: delivery at 6 pm.", "final": True}
+        assert ws.receive_json() == {"t": "cue", "cue": "ack"}
+        assert len(fb.sent_text) == 1 and fb.sent_text[0].startswith(NOTICE_PREFIX)
+        assert "Sakthi vendor confirmed" in fb.sent_text[0]
+
+
+def test_live_start_failure_reports_network_error_and_keeps_the_socket(real_mode, monkeypatch):
+    class Broken(FakeBackend):
+        async def start(self, *a):
+            raise ConnectionError("live down")
+
+    broken: list[Broken] = []
+
+    def factory(session):
+        broken.append(Broken())
+        return broken[-1]
+
+    monkeypatch.setattr(main_mod.app.state, "backend_factory", factory)
+    with TestClient(main_mod.app).websocket_connect("/ws") as ws:
+        ws.send_json(HELLO)
+        assert ws.receive_json() == {"t": "error", "code": "network", "say": t("live.unavailable", "en")}
+        ready = ws.receive_json()
+        assert ready["t"] == "ready" and ready["sessionId"] in _registered(DEMO)
+        ws.send_json({"t": "text", "text": "hello?"})
+        assert ws.receive_json()["text"] == "(mock) you said: hello?"
+    assert broken and broken[0].closed  # the half-open backend is closed
+
+
+def test_confirm_reply_in_real_mode_tells_the_model(real_mode, mem_store):
+    async def commit(payload, value):
+        return {"say": "Order sent to Sakthi vendor."}
+
+    confirm.register_committer("test.real.ws", commit)
+    with TestClient(main_mod.app).websocket_connect("/ws") as ws:
+        ws.send_json(HELLO)
+        sid = ws.receive_json()["sessionId"]
+        asyncio.run(mem_store.put(DEMO, "cf_1", {"kind": "order", "prompt": "Order?", "payload": {},
+                                                 "committer": "test.real.ws", "status": "pending",
+                                                 "sessionId": sid}))
+        ws.send_json({"t": "confirm", "id": "cf_1", "answer": "yes"})
+        assert ws.receive_json()["text"] == "Order sent to Sakthi vendor."
+        fb = real_mode[0]
+        _wait(lambda: fb.sent_text)
+        assert fb.sent_text[0].startswith("[CONFIRMATION]") and "cf_1" in fb.sent_text[0]
+        assert "Order sent to Sakthi vendor." in fb.sent_text[0]
+
+
+def test_second_hello_replaces_the_session_and_closes_its_bridge(real_mode):
+    with TestClient(main_mod.app).websocket_connect("/ws") as ws:
+        ws.send_json(HELLO)
+        first = ws.receive_json()["sessionId"]
+        ws.send_json({**HELLO, "lang": "ta"})
+        second = ws.receive_json()["sessionId"]
+        assert first != second and len(real_mode) == 2
+        assert real_mode[0].closed and not real_mode[1].closed
+        assert first not in _registered(DEMO) and second in _registered(DEMO)
+    _wait(lambda: real_mode[1].closed)
+
+
+# ---------- optional routers (other lanes' APIRouters) ----------
+def test_jobs_router_is_mounted():
+    assert {"/jobs/expiry", "/jobs/day-summary", "/jobs/forecast-refresh"} <= {r.path for r in main_mod.app.routes}
+
+
+def test_include_optional_routers_mounts_present_modules_and_skips_missing(monkeypatch):
+    router = APIRouter()
+
+    @router.get("/fake-route")
+    def fake_route():
+        return {"ok": True}
+
+    monkeypatch.setitem(sys.modules, "aira_live.fake_router_mod", SimpleNamespace(router=router))
+    app = FastAPI()
+    mounted = main_mod.include_optional_routers(app, ("aira_live.fake_router_mod", "aira_live.not_there.webhooks"))
+    assert mounted == ["aira_live.fake_router_mod"]
+    assert TestClient(app).get("/fake-route").json() == {"ok": True}
+
+
+def test_webhooks_router_is_in_the_optional_list():
+    assert "aira_live.messaging.webhooks" in main_mod.OPTIONAL_ROUTERS
+    assert "aira_live.jobs" in main_mod.OPTIONAL_ROUTERS

@@ -41,9 +41,7 @@ SAMPLE_ARGS = {
     "invoice_check": {"order_id": "o1"}, "supplier_pay": {"order_id": "o1", "method": "cash"},
     "sale_start": {"items": [{"name": "curd", "qty": 2}]}, "sale_pay": {"sale_id": "s1", "method": "upi"},
     "stock_query": {"product": "curd"}, "expiry_check": {},
-    "product_find": {"product": "curd", "count_needed": 2}, "product_identify": {},
-    "location_remember": {"product": "curd", "zone": "fridge2/middle/left"},
-    "day_summary": {}, "reorder_suggest": {"product": "milk"},
+    "product_find": {"product": "curd", "count_needed": 2},
 }
 STUBS = sorted(SAMPLE_ARGS)
 

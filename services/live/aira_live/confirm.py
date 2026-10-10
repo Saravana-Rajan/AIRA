@@ -2,21 +2,39 @@
 
 Every consequential tool returns ``propose(...)`` first; the commit runs only through ``resolve(...)`` after a
 spoken (``confirm_action``) or tapped (client ``confirm``) "yes". A proposal commits at most once.
+
+- A proposal lives at ``shops/{shop}/proposals/{confirm_id}`` with ``status`` pending, committed, rejected or
+  expired. It expires ``PROPOSAL_TTL_S`` seconds after it is made.
+- A proposal belongs to the session that made it. Another session (even of the same shop, e.g. two judge phones
+  in the demo shop) gets the same "unknown" reply as for a missing id, and the proposal stays pending.
+- Only an explicit "yes" commits. A repeated answer never commits again: it says "already done" and carries the
+  stored result, so the owner never hears a second "order sent".
+- Exactly once: ``resolve`` holds a per-proposal lock, so a voice ``confirm_action`` and an on-screen ``confirm``
+  at the same moment run the committer once. The lock is in-process, which is enough because aira-live runs as a
+  single instance. Committers are also idempotent: proposing tools put ``ids.current_idem_key()`` in the payload.
+- A committer that raises leaves the proposal pending, so the owner can retry it.
 """
 import asyncio
+import logging
+import time
 import uuid
+import weakref
 from collections.abc import Awaitable, Callable
 from typing import Literal, Protocol
 
 from aira_live import config
 from aira_live.contracts import ConfirmMsg
 from aira_live.i18n import t
-from aira_live.session import get_session
+from aira_live.session import Session, get_session
+
+log = logging.getLogger(__name__)
 
 Committer = Callable[[dict, str | None], Awaitable[dict]]
+PROPOSAL_TTL_S = 120
 _COMMITTERS: dict[str, Committer] = {}
 _KINDS = {"order", "payment", "sale", "discrepancy", "generic"}
-_LOCKS: dict[tuple[str, str], asyncio.Lock] = {}
+# Held only while a resolve runs, so answered proposals do not pile up locks.
+_LOCKS: "weakref.WeakValueDictionary[tuple[str, str], asyncio.Lock]" = weakref.WeakValueDictionary()
 
 
 class ProposalStore(Protocol):
@@ -78,27 +96,73 @@ def register_committer(name: str, fn: Committer) -> None:
 
 
 async def propose(kind: str, prompt: str, payload: dict, committer: str) -> dict:
+    """Store a pending proposal for the current session, show it on the phone, return the question to ask.
+
+    Raises ``KeyError`` when no committer is registered as ``committer`` (nothing is stored or sent).
+    """
+    if committer not in _COMMITTERS:
+        raise KeyError(f"no committer registered as {committer!r}")
     s = get_session()
-    cid = uuid.uuid4().hex[:10]
-    await store().put(s.shop_id, cid, {"kind": kind, "prompt": prompt, "payload": payload,
-                                       "committer": committer, "status": "pending", "sessionId": s.session_id})
+    cid = "cf_" + uuid.uuid4().hex[:10]
+    await store().put(s.shop_id, cid, {
+        "kind": kind, "prompt": prompt, "payload": payload, "committer": committer, "status": "pending",
+        "createdAt": time.time(), "sessionId": s.session_id, "uid": s.uid,
+    })
     await s.send(ConfirmMsg(id=cid, kind=kind if kind in _KINDS else "generic", prompt=prompt))
     return {"needs_confirm": True, "confirm_id": cid, "say": prompt}
 
 
 async def resolve(confirm_id: str, answer: Literal["yes", "no"], value: str | None = None) -> dict:
+    """Apply the owner's answer to a proposal of the current session; only an explicit "yes" commits.
+
+    Every reply has ``ok``, ``say`` and ``status`` (committed, rejected, expired, pending or unknown). The first
+    commit returns the committer's result; unknown, foreign, expired and uncommittable proposals add an ``error``.
+    """
     s = get_session()
-    lock = _LOCKS.setdefault((s.shop_id, confirm_id), asyncio.Lock())
+    key = (s.shop_id, confirm_id)
+    lock = _LOCKS.get(key)
+    if lock is None:  # no await between the lookup and the insert, so every concurrent resolve shares one lock
+        lock = _LOCKS[key] = asyncio.Lock()
     async with lock:  # concurrent "yes" answers commit exactly once
-        doc = await store().get(s.shop_id, confirm_id)
-        if doc is None:
-            return {"say": t("confirm.unknown", s.lang), "error": "unknown_confirm"}
-        if doc["status"] != "pending":
-            return {"say": t("confirm.already", s.lang), "status": doc["status"], "result": doc.get("result")}
-        if answer == "no":
-            await store().update(s.shop_id, confirm_id, {"status": "rejected"})
-            return {"say": t("confirm.cancelled", s.lang), "status": "rejected"}
-        # A committer that raises leaves the proposal pending, so it can be retried.
-        result = await _COMMITTERS[doc["committer"]](doc["payload"], value)
-        await store().update(s.shop_id, confirm_id, {"status": "committed", "result": result})
-        return {"status": "committed", **result}
+        return await _resolve_locked(s, confirm_id, answer, value)
+
+
+async def _resolve_locked(s: Session, confirm_id: str, answer: str, value: str | None) -> dict:
+    st = store()
+    doc = await st.get(s.shop_id, confirm_id)
+    if doc is not None and doc.get("sessionId") != s.session_id:
+        log.warning("session %s tried to answer proposal %s of another session", s.session_id, confirm_id)
+        doc = None  # same reply as a missing id, so nothing about the proposal leaks
+    if doc is None:
+        return {"ok": False, "say": t("confirm.unknown", s.lang), "status": "unknown", "error": "unknown_confirm"}
+
+    status = doc.get("status", "pending")
+    if status == "committed":
+        result = doc.get("result") or {}
+        return {"ok": result.get("ok", True), "say": t("confirm.already", s.lang), "status": "committed",
+                "result": result}
+    if status == "rejected":
+        return {"ok": False, "say": t("confirm.cancelled", s.lang), "status": "rejected"}
+
+    created = doc.get("createdAt")
+    if status == "expired" or (created is not None and time.time() - created > PROPOSAL_TTL_S):
+        if status != "expired":
+            await st.update(s.shop_id, confirm_id, {"status": "expired"})
+        return {"ok": False, "say": t("confirm.expired", s.lang), "status": "expired", "error": "expired_confirm"}
+
+    if str(answer).strip().lower() != "yes":
+        result = {"ok": False, "say": t("confirm.cancelled", s.lang)}
+        await st.update(s.shop_id, confirm_id, {"status": "rejected", "result": result, "resolvedAt": time.time()})
+        return {**result, "status": "rejected"}
+
+    committer = _COMMITTERS.get(doc.get("committer", ""))
+    if committer is None:  # e.g. the committer's module is not imported in this process
+        log.error("proposal %s names unregistered committer %r", confirm_id, doc.get("committer"))
+        return {"ok": False, "say": t("error.internal", s.lang), "status": "pending", "error": "no_committer"}
+
+    # A committer that raises leaves the proposal pending, so it can be retried.
+    result = await committer(doc.get("payload") or {}, value)
+    if not isinstance(result, dict):
+        result = {"say": str(result)}
+    await st.update(s.shop_id, confirm_id, {"status": "committed", "result": result, "resolvedAt": time.time()})
+    return {"ok": True, **result, "status": "committed"}

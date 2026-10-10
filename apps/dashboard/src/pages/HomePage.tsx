@@ -1,20 +1,32 @@
-import { Header } from "../components/Header";
-import { StockTable } from "../components/StockTable";
+import type { DashboardViews } from "../lib/views";
+import type { ForecastItem } from "../lib/forecast";
+import { TodayPage } from "./TodayPage";
+import { StockPage } from "./StockPage";
+import { OrdersPage } from "./OrdersPage";
+import { ForecastPage } from "./ForecastPage";
+import { AuditPage, type ResolveEvidence } from "./AuditPage";
 
-export const DEMO_SHOP_ID = "murugan_dairy";
+export { DEMO_SHOP_ID } from "../lib/access";
 
-/** The dashboard's single page for now. Today, Orders & Deliveries and Audit cards land in kanish/03. */
-export function HomePage() {
+const OVERVIEW_ORDERS = 3;
+const OVERVIEW_ACTIONS = 8;
+
+/** The overview: every section as a card. The grid places them (1 column on a phone, 2–3 on a laptop). */
+export function HomePage(props: {
+  views: DashboardViews;
+  forecast: ForecastItem[] | null;
+  forecastLoading: boolean;
+  resolveEvidence: ResolveEvidence;
+}) {
+  // A short list must never hide a delivery that does not match its order.
+  const orders = [...props.views.orders].sort((a, b) => Number(b.isDiscrepancy) - Number(a.isDiscrepancy));
   return (
     <>
-      <a class="skip-link" href="#main">Skip to content</a>
-      <Header shopName="Murugan Dairy" />
-      <main id="main" class="main">
-        <section class="card card--wide" aria-labelledby="stock-title">
-          <h2 id="stock-title" class="card__title">Stock</h2>
-          <StockTable shopId={DEMO_SHOP_ID} />
-        </section>
-      </main>
+      <TodayPage summary={props.views.today} />
+      <StockPage rows={props.views.stock} />
+      <OrdersPage rows={orders} limit={OVERVIEW_ORDERS} />
+      <ForecastPage items={props.forecast} loading={props.forecastLoading} />
+      <AuditPage rows={props.views.audit} resolveEvidence={props.resolveEvidence} limit={OVERVIEW_ACTIONS} />
     </>
   );
 }

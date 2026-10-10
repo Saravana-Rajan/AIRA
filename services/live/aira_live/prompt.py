@@ -1,0 +1,145 @@
+"""System prompt for the Live voice agent: shop context + language + safety rules."""
+from __future__ import annotations
+
+from aira_live.db import db
+
+LANG_NAME = {"ta": "Tamil", "hi": "Hindi", "en": "English"}
+MIX = {
+    "ta": "Tamil-English mixing is fine and natural.",
+    "hi": "Hindi-English mixing is fine and natural.",
+    "en": "Simple Indian English.",
+}
+
+
+def _num(x) -> str:
+    return f"{x:g}" if isinstance(x, (int, float)) and not isinstance(x, bool) else str(x)
+
+
+def _pack(p: dict) -> str:
+    if p.get("pack"):
+        return str(p["pack"])
+    unit = p.get("unit", "pack")
+    if p.get("packSizeL"):
+        return f"{_num(p['packSizeL'])} L" if unit == "L" else f"{_num(p['packSizeL'])} L {unit}"
+    if p.get("packSizeG"):
+        return f"{_num(p['packSizeG'])} g {unit}"
+    return unit
+
+
+def _label(p: dict) -> str:
+    brand, name = str(p.get("brand", "")).strip(), str(p.get("name", "")).strip()
+    if brand and not name.lower().startswith(brand.lower()):
+        return f"{brand} {name}".strip()
+    return name or brand or p.get("sku", "")
+
+
+def _price(p: dict) -> str:
+    price = p.get("price")
+    if price is None or isinstance(price, bool):
+        return "price not set"
+    return f"₹{_num(price)} per {p.get('unit', 'pack')}"
+
+
+def _aliases(doc: dict, lang: str) -> str:
+    names = [a for a in (doc.get("aliases") or {}).get(lang, []) if a]
+    return f"; also called: {', '.join(names)}" if names else ""
+
+
+def _product_line(p: dict, lang: str) -> str:
+    return f"- {p.get('sku', '')}: {_label(p)}, {_pack(p)}, {_price(p)}{_aliases(p, lang)}"
+
+
+def _supplier_line(s: dict, lang: str) -> str:
+    # Never put phone numbers into the prompt: the model must not speak or invent them.
+    line = f"- {s.get('name', s.get('id', 'supplier'))} via {s.get('channel', 'whatsapp')}"
+    if s.get("products"):
+        line += f"; supplies: {', '.join(str(x) for x in s['products'])}"
+    return line + _aliases(s, lang)
+
+
+RULES = (
+    (
+        "1. Before any order, payment or sale is committed, read it back and wait for the owner's yes. "
+        "When a tool returns needs_confirm, ask exactly its 'say' question, then call confirm_action with the "
+        "confirm_id and the owner's answer."
+    ),
+    (
+        "2. Never say a number (price, quantity, stock, money, change) that did not come from a tool result in "
+        "this conversation or from the PRODUCTS list below. If you need any other number, call a tool."
+    ),
+    (
+        "3. If a tool result is unsure, has needs_retake or low confidence, say you are not sure and give its aim "
+        "hint. Never guess counts, amounts or products."
+    ),
+    "4. Customers may also speak. Only the owner can confirm actions.",
+    "5. Never describe or identify people. Never say a currency note is real or fake.",
+    (
+        "6. Messages starting with [NOTICE FOR THE SHOPKEEPER] or [CONFIRMATION] come from the system: relay or "
+        "acknowledge them briefly. A message starting with \"Correction needed:\" comes from the safety checker: "
+        "correct yourself in one short sentence."
+    ),
+    (
+        "7. For a customer sale, first call product_find with count_needed set to how many packs to pick, then "
+        "sale_start."
+    ),
+    (
+        '8. If the phone sends the text "check touch <label>", call product_find for that label to check what the '
+        "owner is touching, and say only the result."
+    ),
+    (
+        "9. Payments are cash or UPI only. A payment counts only after a cash count, the soundbox announcement or "
+        "the owner's yes."
+    ),
+    (
+        "10. Evidence before state: an order is not a delivery, an invoice is not proof of receipt, and a saved "
+        "location is not proof the product is still there. Check with a tool before you say it is done."
+    ),
+)
+
+
+def render_prompt(shop: dict, products: list[dict], suppliers: list[dict], lang: str, verbosity: str) -> str:
+    length = "One short sentence unless the owner asks for more." if verbosity == "short" else "At most three short sentences."
+    intro = (
+        f"You are AIRA, the voice assistant of {shop.get('name', 'the shop')}, a small dairy shop run by a blind "
+        "owner. You help him run the shop alone: orders, deliveries, invoices, payments, sales and stock."
+    )
+    lines = [
+        intro,
+        f"Speak {LANG_NAME.get(lang, 'English')}. {MIX.get(lang, MIX['en'])} {length}",
+        "RULES:",
+        *RULES,
+        "PRODUCTS (sku: name, pack, price):",
+        *[_product_line(p, lang) for p in products],
+        "SUPPLIERS:",
+        *[_supplier_line(s, lang) for s in suppliers],
+    ]
+    return "\n".join(lines)
+
+
+def catalog_facts(products: list[dict]) -> dict:
+    """The numbers the PRODUCTS list lets the model repeat, shaped like one more tool result.
+
+    Pass it to ``safety.check_numbers`` / ``safety.llm_verify`` next to the turn's tool results, so a price
+    read straight from the prompt ("curd is ₹60 a litre") is not flagged as invented.
+    """
+    keys = ("price", "packSizeL", "packSizeG")
+    # Keyed by sku: the checker reads values only, so digits inside sku ids ("500ml") never become allowed.
+    return {"catalog": {str(p.get("sku", "")): {k: p[k] for k in keys if p.get(k) is not None} for p in products}}
+
+
+_LAST_FACTS: dict[str, dict] = {}
+
+
+def last_catalog_facts(shop_id: str) -> dict:
+    """``catalog_facts`` of the products in the last prompt built for ``shop_id`` ({} before the first build)."""
+    return _LAST_FACTS.get(shop_id, {})
+
+
+async def build_system_prompt(shop_id: str, lang: str, verbosity: str) -> str:
+    shop_ref = db().collection("shops").document(shop_id)
+    snap = await shop_ref.get()
+    shop = (snap.to_dict() or {}) if snap.exists else {"name": shop_id}
+    products = [(d.to_dict() or {}) | {"sku": d.id} async for d in shop_ref.collection("products").stream()]
+    suppliers = [(d.to_dict() or {}) | {"id": d.id} async for d in shop_ref.collection("suppliers").stream()]
+    _LAST_FACTS[shop_id] = catalog_facts(products)
+    return render_prompt(shop, products, suppliers, lang, verbosity)

@@ -1,0 +1,34 @@
+flowchart LR
+  P["Chest-mounted phone<br/>AIRA app (installable PWA)<br/>voice · camera on request · fingertip tracking<br/>bump guard · offline sale queue"]
+  G[["Gemini API<br/>gemini-3.8-live · gemini-robotics-er-2-preview<br/>gemini-3.8-flash · gemini-3.6-flash"]]
+  subgraph CR["Cloud Run · aira-live · asia-south1 (FastAPI + Google ADK)"]
+    O["Voice orchestrator<br/>Gemini Live session + tool calls<br/>confirm before consequence"]
+    V["vision/<br/>Robotics-ER 2: count · point · identify<br/>Flash read A + read B (two generations)"]
+    B["business/ (deterministic)<br/>ledger · sales · payments · reconcile · expiry · audit"]
+    M["memory/<br/>spatial · episodic · prefs"]
+    A["analytics/<br/>events · 7-day demand · day summary"]
+    W["messaging/<br/>WhatsApp Cloud API · webhook · click-to-chat"]
+  end
+  FS[("Firestore · database aira<br/>system of record")]
+  SM["Secret Manager<br/>aira-gemini-api-key"]
+  FH["Firebase Hosting · site aira-shop<br/>app at / · Shop Dashboard at /dashboard"]
+  D["Shop Dashboard<br/>family · helpers · judges"]
+  VD["Vendor phone<br/>WhatsApp"]
+  GH["GitHub Actions<br/>push to main: test, build, deploy<br/>Workload Identity Federation"]
+  AR[("Artifact Registry<br/>aira")]
+
+  P <-->|WSS audio + camera frames| O
+  O <-->|bidi audio| G
+  V -->|count · point · read| G
+  O --> V & B & M & A & W
+  B -->|transactions + idempotency keys| FS
+  M --> FS
+  A --> FS
+  W <-->|order + vendor reply| VD
+  FH -->|serves| P
+  FH -->|serves| D
+  D -->|realtime listeners| FS
+  SM -.->|GEMINI_API_KEY| O
+  GH --> AR
+  AR -->|image| O
+  GH -->|hosting deploy| FH

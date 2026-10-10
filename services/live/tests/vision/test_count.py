@@ -1,0 +1,106 @@
+import pytest
+
+from aira_live.models import model_for
+from aira_live.vision.count import assess, count_in_frame
+from aira_live.vision.gemini import VisionError
+
+
+def grid(n, start=150, step=120):
+    pts = []
+    for i in range(n):
+        pts.append({"point": [start + (i // 5) * step, start + (i % 5) * step], "label": "pack", "cut": False})
+    return pts
+
+
+def test_clean_grid_counts_with_full_confidence():
+    r = assess(grid(12))
+    assert r.count == 12 and r.confidence == 1.0 and r.needs_retake is False and r.aim_hint == ""
+
+
+def test_dedupes_double_points():
+    items = grid(4) + [{"point": [152, 151], "label": "pack"}]   # same pack pointed twice
+    assert assess(items).count == 4
+
+
+def test_ignores_invalid_points():
+    items = grid(3) + [{"point": [1200, 5]}, {"point": [1]}, {"point": "a"}, "junk", {"label": "no point"},
+                       {"point": [True, 400]}, {"point": [-1, 400]}, {"point": None}, None]
+    assert assess(items).count == 3
+
+
+def test_non_list_reply_is_treated_as_nothing_seen():
+    for junk in (None, 5, "packs", {"point": [100, 100]}):
+        r = assess(junk)
+        assert r.count is None and r.needs_retake is True and r.aim_hint == "vision.aim.show_items"
+
+
+def test_edge_cut_items_ask_to_move_back():
+    items = grid(5) + [{"point": [10, 500], "label": "pack", "cut": True}]
+    r = assess(items)
+    assert r.count == 6 and r.needs_retake is True and r.aim_hint == "vision.aim.move_back"
+    assert r.confidence < 1.0
+
+
+def test_point_near_frame_edge_counts_as_cut_even_without_flag():
+    items = grid(4) + [{"point": [500, 990], "label": "pack"}]
+    r = assess(items)
+    assert r.count == 5 and r.needs_retake is True and r.aim_hint == "vision.aim.move_back"
+
+
+def test_cut_flag_as_string_false_is_not_cut():
+    items = grid(3)
+    items[0]["cut"] = "false"
+    r = assess(items)
+    assert r.needs_retake is False and r.aim_hint == ""
+
+
+def test_overlapping_cluster_asks_to_spread_out():
+    items = [{"point": [500, 500 + i * 20], "label": "pack"} for i in range(6)]
+    r = assess(items)
+    assert r.needs_retake is True and r.aim_hint == "vision.aim.spread_out"
+    assert r.count == 6 and r.confidence < 1.0
+
+
+def test_nothing_visible_returns_none():
+    r = assess([])
+    assert r.count is None and r.needs_retake is True and r.aim_hint == "vision.aim.show_items"
+    assert r.confidence == 0.0
+
+
+async def test_count_in_frame_uses_er2_count_role(fake_genai, frame):
+    client = fake_genai('[{"point": [200, 200], "label": "Sakthi curd 1 L pouch"}, '
+                        '{"point": [200, 400], "label": "Sakthi curd 1 L pouch"}]')
+    r = await count_in_frame(frame, "Sakthi curd 1 L pouch")
+    assert r.count == 2
+    call = client.aio.models.calls[0]
+    assert call["model"] == model_for("count")
+    assert any("Sakthi curd 1 L pouch" in str(p) for p in call["contents"])
+
+
+async def test_count_in_frame_accepts_wrapped_dict(fake_genai, frame):
+    fake_genai('{"points": [{"point": [300, 300]}, {"point": [300, 600]}, {"point": [600, 300]}]}')
+    assert (await count_in_frame(frame, "Aavin milk 500 ml pouch")).count == 3
+
+
+async def test_count_in_frame_accepts_a_single_point_object(fake_genai, frame):
+    fake_genai('{"point": [500, 500], "label": "Arun ice cream box"}')
+    r = await count_in_frame(frame, "Arun ice cream box")
+    assert r.count == 1 and r.needs_retake is False
+
+
+async def test_count_in_frame_empty_reply_never_invents_a_count(fake_genai, frame):
+    fake_genai('{"items": []}')
+    r = await count_in_frame(frame, "Aavin milk 500 ml pouch")
+    assert r.count is None and r.aim_hint == "vision.aim.show_items"
+
+
+async def test_count_in_frame_reply_without_points_never_invents_a_count(fake_genai, frame):
+    fake_genai('{"count": 12}')   # a bare number with nothing to point at is not evidence
+    r = await count_in_frame(frame, "Sakthi curd 1 L pouch")
+    assert r.count is None and r.needs_retake is True
+
+
+async def test_count_in_frame_raises_when_every_model_fails(fake_genai, frame):
+    fake_genai("x", "y", "z")
+    with pytest.raises(VisionError):
+        await count_in_frame(frame, "Aavin milk 1 L pouch")

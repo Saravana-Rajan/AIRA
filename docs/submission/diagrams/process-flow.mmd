@@ -1,0 +1,20 @@
+flowchart BT
+  subgraph R["Restock: order, delivery, invoice, pay vendor"]
+    direction LR
+    A["1 Order by voice<br/>read-back + spoken yes<br/>WhatsApp to vendor"] --> B["2 Delivery<br/>live count, one by one or by crate"]
+    B --> C["3 Invoice<br/>two independent reads + code check"]
+    C -->|match| D["4 Pay vendor<br/>cash slot guided · notes checked<br/>spoken yes"]
+    C -->|mismatch| X["DISCREPANCY<br/>spoken + logged"]
+    X --> D
+    D --> E["5 Remember shelf<br/>this is the Sakthi curd shelf"]
+  end
+  subgraph S["Sell: customer sale, payment, stock"]
+    direction LR
+    F["6 Customer sale<br/>hand guided to product<br/>pack verified"] --> G["7 Payment<br/>cash change in code<br/>UPI soundbox matched · spoken yes"]
+    G --> H["Stock -2 L exactly once<br/>Firestore transaction"]
+    H --> I{"Low stock?<br/>expiry?"}
+    I -->|no: next customer| F
+    H --> J["8 End of day<br/>spoken summary + suggested order"]
+  end
+  R ==>|shelves stocked| S
+  S -.->|yes: low stock or expiry, reorder| R

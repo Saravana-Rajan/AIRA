@@ -1,0 +1,12 @@
+[
+  {"sku": "aavin_milk_500ml", "name": "Aavin Milk 500 ml", "brand": "Aavin", "pack": "500 ml pouch"},
+  {"sku": "aavin_milk_1l", "name": "Aavin Milk 1 L", "brand": "Aavin", "pack": "1 L pouch"},
+  {"sku": "sakthi_curd_500ml", "name": "Sakthi Curd 500 ml", "brand": "Sakthi", "pack": "500 ml pack"},
+  {"sku": "sakthi_curd_1l", "name": "Sakthi Curd 1 L", "brand": "Sakthi", "pack": "1 L pack"},
+  {"sku": "aavin_buttermilk_200ml", "name": "Aavin Buttermilk 200 ml", "brand": "Aavin", "pack": "200 ml pouch"},
+  {"sku": "aavin_ghee_200ml", "name": "Aavin Ghee 200 ml", "brand": "Aavin", "pack": "200 ml jar"},
+  {"sku": "aavin_ghee_500ml", "name": "Aavin Ghee 500 ml", "brand": "Aavin", "pack": "500 ml jar"},
+  {"sku": "aavin_paneer_200g", "name": "Aavin Paneer 200 g", "brand": "Aavin", "pack": "200 g pack"},
+  {"sku": "aavin_butter_100g", "name": "Aavin Butter 100 g", "brand": "Aavin", "pack": "100 g pack"},
+  {"sku": "arun_icecream_box", "name": "Arun Ice Cream Family Box", "brand": "Arun", "pack": "family box"}
+]

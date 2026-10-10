@@ -28,10 +28,11 @@ def store():
     confirm.set_store(previous)
 
 
-def put_pending(store, confirm_id, committer):
+def put_pending(store, confirm_id, committer, session_id):
+    """A pending proposal made by ``session_id`` (proposals answer only to the session that made them)."""
     asyncio.run(store.put("murugan_dairy", confirm_id, {"kind": "order", "prompt": "Order?", "payload": {},
                                                         "committer": committer, "status": "pending",
-                                                        "sessionId": "x"}))
+                                                        "sessionId": session_id}))
 
 
 def test_healthz_reports_mock_without_key():
@@ -115,9 +116,9 @@ def test_confirm_message_resolves_proposal(store):
         return {"say": "Order sent to Sakthi vendor."}
 
     confirm.register_committer("test.ws", commit)
-    put_pending(store, "c1", "test.ws")
     with TestClient(app).websocket_connect("/ws") as ws:
-        ws.send_json(HELLO); ws.receive_json()
+        ws.send_json(HELLO)
+        put_pending(store, "c1", "test.ws", ws.receive_json()["sessionId"])
         ws.send_json({"t": "confirm", "id": "c1", "answer": "yes"})
         assert ws.receive_json() == {"t": "transcript", "role": "aira", "text": "Order sent to Sakthi vendor.",
                                      "final": True}
@@ -133,14 +134,35 @@ def test_confirm_for_unknown_id_is_spoken_not_fatal(store):
         assert reply["t"] == "transcript" and reply["text"] == "I couldn't find that request."
 
 
+def test_another_phone_cannot_confirm_a_proposal_of_this_session(store):
+    calls = []
+
+    async def commit(payload, value):
+        calls.append(payload)
+        return {"say": "Paid."}
+
+    confirm.register_committer("test.ws.other", commit)
+    client = TestClient(app)
+    with client.websocket_connect("/ws") as owner, client.websocket_connect("/ws") as other:
+        owner.send_json(HELLO)
+        put_pending(store, "c3", "test.ws.other", owner.receive_json()["sessionId"])
+        other.send_json(HELLO); other.receive_json()  # same demo shop, different session
+        other.send_json({"t": "confirm", "id": "c3", "answer": "yes"})
+        assert other.receive_json()["text"] == "I couldn't find that request."
+        assert calls == [] and asyncio.run(store.get("murugan_dairy", "c3"))["status"] == "pending"
+        owner.send_json({"t": "confirm", "id": "c3", "answer": "yes"})
+        assert owner.receive_json()["text"] == "Paid."
+    assert len(calls) == 1
+
+
 def test_failing_committer_reports_internal_error_and_socket_stays_open(store):
     async def commit(payload, value):
         raise RuntimeError("network down")
 
     confirm.register_committer("test.ws.boom", commit)
-    put_pending(store, "c2", "test.ws.boom")
     with TestClient(app).websocket_connect("/ws") as ws:
-        ws.send_json(HELLO); ws.receive_json()
+        ws.send_json(HELLO)
+        put_pending(store, "c2", "test.ws.boom", ws.receive_json()["sessionId"])
         ws.send_json({"t": "confirm", "id": "c2", "answer": "yes"})
         err = ws.receive_json()
         assert err["t"] == "error" and err["code"] == "internal" and err["say"]

@@ -17,3 +17,6 @@ TOOL_FUNCS: list[Callable[..., Awaitable[dict]]] = [
     day_summary, reorder_suggest, confirm_action,
 ]
 TOOLS_BY_NAME: dict[str, Callable[..., Awaitable[dict]]] = {f.__name__: f for f in TOOL_FUNCS}
+# Live tools that run in the background (Live NON_BLOCKING behaviour): the conversation goes on while
+# delivery_count streams counts and sale_pay waits for the soundbox.
+NON_BLOCKING_TOOLS: frozenset[str] = frozenset({"delivery_count", "sale_pay"})

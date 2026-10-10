@@ -1,0 +1,7 @@
+{
+  "app": "${APP_URL}",
+  "dashboard": "${DASHBOARD_URL}",
+  "api_health": "${LIVE_URL}/healthz",
+  "repo": "https://github.com/Saravana-Rajan/AIRA",
+  "video": "${VIDEO_URL}"
+}

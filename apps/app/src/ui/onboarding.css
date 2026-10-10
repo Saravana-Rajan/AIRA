@@ -1,0 +1,246 @@
+/* Onboarding: the one Start tap. LIGHT THEME ONLY; every colour comes from tokens.css.
+   The page is quiet and left-aligned. Start is the one bold thing: a navy slab that fills the
+   bottom of the screen, so a blind owner finds it by touching the lower half of the phone. */
+@import "./tokens.css";
+
+.onboard {
+  display: flex;
+  flex-direction: column;
+  min-height: 100dvh;
+  margin: 0;
+  padding: max(20px, env(safe-area-inset-top)) var(--gutter) 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-size: var(--text-body);
+  line-height: 1.4;
+}
+
+/* ---------- logo, name, shop ---------- */
+.onboard__head {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+.onboard__logo {
+  width: 64px;
+  height: 64px;
+  border-radius: 18px;
+}
+.onboard__titles {
+  display: flex;
+  flex-direction: column;
+}
+.onboard__title {
+  margin: 0;
+  font-size: 40px;
+  font-weight: 800;
+  line-height: 1;
+  letter-spacing: -0.02em;
+}
+.onboard__shop {
+  margin-top: 4px;
+  font-size: 20px;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+.onboard__how {
+  margin: 20px 0 0;
+  max-width: 32ch;
+  font-size: var(--text-body);
+  color: var(--text-muted);
+}
+
+/* ---------- language tiles ---------- */
+.onboard__langs {
+  margin: 20px 0 0;
+  padding: 0;
+  border: 0;
+  min-width: 0;
+}
+.onboard__legend {
+  padding: 0;
+  margin-bottom: 10px;
+  font-size: var(--text-status);
+  font-weight: 600;
+}
+/* One full-width row per language: big targets, and no script ever wraps mid-word. */
+.onboard__tiles {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.lang-tile {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 68px;
+  padding: 10px 16px;
+  border: 2px solid var(--border);
+  border-radius: 18px;
+  background: var(--surface);
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.lang-tile .lang-tile__input {
+  position: absolute;
+  inset: 0;
+  margin: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+.lang-tile__native {
+  font-size: 26px;
+  font-weight: 700;
+  line-height: 1.2;
+}
+.lang-tile__english {
+  font-size: 16px;
+  color: var(--text-muted);
+}
+/* An empty ring until picked, then a filled tick: the choice reads by shape, not colour alone. */
+.lang-tile__tick {
+  flex: none;
+  width: 30px;
+  height: 30px;
+  margin-left: auto;
+  padding: 4px;
+  border: 2px solid var(--border);
+  border-radius: 50%;
+  background: var(--bg);
+  fill: none;
+  stroke: transparent;
+  stroke-width: 3.2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.lang-tile[data-checked="true"] {
+  border-color: var(--brand-blue);
+  background: color-mix(in srgb, var(--brand-blue) 8%, var(--bg));
+  box-shadow: inset 0 0 0 1px var(--brand-blue);
+}
+.lang-tile[data-checked="true"] .lang-tile__tick {
+  border-color: var(--brand-blue);
+  background: var(--brand-blue);
+  stroke: var(--bg);
+}
+.lang-tile:has(.lang-tile__input:focus-visible) {
+  outline: var(--focus-ring);
+  outline-offset: 3px;
+}
+
+/* ---------- TalkBack switch ---------- */
+.tb-switch {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin: 18px 0 20px;
+  padding: 14px 0;
+  border-top: 1px solid var(--border);
+  cursor: pointer;
+}
+.tb-switch .tb-switch__input {
+  position: absolute;
+  inset: 0;
+  margin: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+.tb-switch__track {
+  flex: none;
+  position: relative;
+  width: 60px;
+  height: 34px;
+  border-radius: var(--radius-pill);
+  background: var(--border);
+  transition: background-color 160ms ease;
+}
+.tb-switch__knob {
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: var(--bg);
+  box-shadow: 0 1px 3px color-mix(in srgb, var(--text) 30%, transparent);
+  transition: transform 160ms ease;
+}
+.tb-switch__input:checked + .tb-switch__track { background: var(--brand-blue); }
+.tb-switch__input:checked + .tb-switch__track .tb-switch__knob { transform: translateX(26px); }
+.tb-switch__input:focus-visible + .tb-switch__track {
+  outline: var(--focus-ring);
+  outline-offset: 3px;
+}
+.tb-switch__text {
+  display: flex;
+  flex-direction: column;
+}
+.tb-switch__label {
+  font-size: 20px;
+  font-weight: 600;
+}
+.tb-switch__hint {
+  font-size: 16px;
+  color: var(--text-muted);
+}
+
+/* ---------- Start: the navy slab ---------- */
+.onboard__start {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 6px;
+  /* fills whatever height is left down to the bottom edge; full bleed past the page gutter */
+  flex: 1 0 auto;
+  margin: auto calc(-1 * var(--gutter)) 0;
+  min-height: max(28dvh, 200px);
+  padding: 28px calc(var(--gutter) + 8px) max(28px, env(safe-area-inset-bottom));
+  border: 0;
+  border-radius: 32px 32px 0 0;
+  background: var(--text);
+  color: var(--bg);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+  transition: background-color 120ms ease;
+}
+.onboard__start:active {
+  background: color-mix(in srgb, var(--text) 86%, var(--brand-blue));
+}
+.onboard__start:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: -8px;
+}
+.onboard__spark {
+  width: 56px;
+  height: 56px;
+  margin-bottom: 6px;
+}
+.onboard__stop--1 { stop-color: var(--brand-cyan); }
+.onboard__stop--2 { stop-color: var(--brand-blue); }
+.onboard__stop--3 { stop-color: var(--brand-purple); }
+.onboard__stop--4 { stop-color: var(--brand-orange); }
+.onboard__start-label {
+  font-size: 48px;
+  font-weight: 800;
+  line-height: 1.05;
+  letter-spacing: -0.01em;
+}
+.onboard__start-hint {
+  font-size: var(--text-body);
+  color: color-mix(in srgb, var(--bg) 82%, var(--text));
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tb-switch__track,
+  .tb-switch__knob,
+  .onboard__start {
+    transition: none;
+  }
+}
