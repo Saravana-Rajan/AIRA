@@ -89,7 +89,9 @@ def include_optional_routers(target: FastAPI, modules: tuple[str, ...] = OPTIONA
     return mounted
 
 
-include_optional_routers(app)
+# The optional routers that are actually serving (logged at startup, checked by tests).
+MOUNTED_ROUTERS: list[str] = include_optional_routers(app)
+log.info("mounted routers: %s", MOUNTED_ROUTERS or "none")
 
 
 async def _guidance_hook(name: str, *args) -> None:

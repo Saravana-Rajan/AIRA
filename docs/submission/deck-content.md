@@ -195,6 +195,9 @@ Team Techjays · Saravana Rajan B · Ishwarya · Sarmitha · Kanish
 
 ## Before export (Oct 17 checklist, not a slide)
 - [ ] File → Make a copy of the official template; keep all 16 slides in order.
+- [ ] Slides 5, 7, 8 and 9: check every feature and service named is in the final build, and delete any line
+  that is not. On Oct 10 these were still being built by other lanes: MediaPipe fingertip tracking, the
+  Android Trusted Web Activity packaging, the `messaging/` WhatsApp Cloud API webhook and the bump guard.
 - [ ] If either `.mmd` file changed, render the diagrams again and insert them on slides 6 and 8:
   `npx -y @mermaid-js/mermaid-cli@11 -i docs/submission/diagrams/process-flow.mmd -o docs/submission/diagrams/process-flow.png -w 1600 -b white`
   `npx -y @mermaid-js/mermaid-cli@11 -i docs/submission/diagrams/architecture.mmd -o docs/submission/diagrams/architecture.png -w 1600 -b white`
@@ -208,5 +211,10 @@ Team Techjays · Saravana Rajan B · Ishwarya · Sarmitha · Kanish
   `python3 scripts/check_submission.py --description docs/submission/description.txt --pdf docs/submission/AIRA-deck.pdf`
   and confirm `OK    all checks passed` (strictly under 5,000,000 bytes). If it is too big, compress the
   screenshots in Slides and export again.
+- [ ] Check the text the AI pre-screen will read: `python3 scripts/check_deck_pdf.py docs/submission/AIRA-deck.pdf`
+  (needs `pdftotext` from poppler). It must print `OK    deck PDF: 16 pages, every rubric keyword present`. It
+  fails on a lost slide or rubric phrase, a leftover `<fill: ...>` or file path, a service the prototype does
+  not run outside slide 13, a counterfeit claim, or the project ID in a screenshot. Read every `WARN` line:
+  an image-only slide is invisible to the pre-screen, so give it a text caption.
 - [ ] Run `uv run --no-project --python 3.12 --with pytest python -m pytest scripts/tests/test_deck_content.py -q`
   after any edit to this file or the diagrams.

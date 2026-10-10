@@ -1,0 +1,8 @@
+{
+  "_note": "FORMAT EXAMPLE ONLY. These are not measurements. Real trials go in trials.json (see README.md).",
+  "trials": [
+    {"trial": 1, "product": "sakthi_curd_1l", "startedAtMs": 0, "touchedAtMs": 8400, "correctItem": true},
+    {"trial": 2, "product": "aavin_milk_500ml", "startedAtMs": 0, "touchedAtMs": 11200, "correctItem": true},
+    {"trial": 3, "product": "arun_icecream_box", "startedAtMs": 0, "touchedAtMs": null, "correctItem": false}
+  ]
+}

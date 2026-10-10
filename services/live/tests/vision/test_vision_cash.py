@@ -5,11 +5,13 @@ Fully offline: `generate_json` and `image_part` are monkeypatched on `aira_live.
 import base64
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 from aira_live.frames import Frame
 from aira_live.i18n import LANGS
+from aira_live.models import model_for
 from aira_live.vision import cash
 from aira_live.vision.cash_merge import COINS, NOTES, VALID_DENOMINATIONS, merge_cash
 from aira_live.vision.cash_models import CashRead
@@ -300,3 +302,52 @@ def test_cash_hints_never_claim_to_detect_fake_notes():
         low = en[key].lower()
         for word in ("fake", "counterfeit", "genuine", "forged", "real note"):
             assert word not in low, f"{key} mentions {word!r}"
+
+
+# ---------- end to end through the real vision.gemini helper (fake client only) ----------
+class _ByModelClient:
+    """Answers by model ID, so the two concurrent reads can arrive in any order."""
+
+    def __init__(self, replies):
+        self.replies, self.calls = replies, []
+        self.aio = SimpleNamespace(models=self)
+
+    async def generate_content(self, model, contents, config=None):
+        self.calls.append({"model": model, "contents": contents})
+        reply = self.replies[model]
+        if isinstance(reply, BaseException):
+            raise reply
+        return SimpleNamespace(text=reply)
+
+
+@pytest.fixture
+def by_model(monkeypatch):
+    from aira_live.vision import gemini
+
+    for role in ("READ", "VERIFY"):
+        monkeypatch.delenv(f"AIRA_MODEL_{role}", raising=False)
+
+    def make(replies):
+        client = _ByModelClient(replies)
+        gemini.set_client(client)
+        return client
+
+    yield make
+    gemini.set_client(None)
+
+
+async def test_read_cash_end_to_end_uses_read_and_verify_models(by_model):
+    read_m, verify_m = model_for("read"), model_for("verify")
+    assert read_m != verify_m  # two different model generations, so the reads are independent
+    client = by_model({read_m: json.dumps(A_1000), verify_m: "```json\n" + json.dumps(B_1000) + "\n```"})
+    r = await cash.read_cash([_frame()])
+    assert r.agreed is True and r.total == 1000 and r.hint_key == ""
+    assert sorted(c["model"] for c in client.calls) == sorted([read_m, verify_m])
+    prompts = {c["model"]: c["contents"][0] for c in client.calls}
+    assert prompts[read_m] == cash.PROMPT_A and prompts[verify_m] == cash.PROMPT_B
+
+
+async def test_read_cash_end_to_end_verify_model_down_never_agrees(by_model):
+    by_model({model_for("read"): json.dumps(A_1000), model_for("verify"): RuntimeError("503")})
+    r = await cash.read_cash([_frame()])
+    assert r.agreed is False and r.total is None and r.hint_key == "cash.show_again"

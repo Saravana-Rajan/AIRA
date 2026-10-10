@@ -25,6 +25,14 @@ def test_decision_switches_when_flash_is_clearly_more_accurate():
     assert spike_er2.decide(4000, er2_accuracy=0.95, flash_accuracy=0.80) == "SWITCH"  # too slow anyway
 
 
+def test_decision_never_switches_to_a_slower_flash():
+    assert spike_er2.decide(3500, flash_p50_ms=1200) == "SWITCH"
+    assert spike_er2.decide(3500, flash_p50_ms=3500) == "KEEP"
+    assert spike_er2.decide(3500, flash_p50_ms=4800) == "KEEP"
+    # A clearly more accurate Flash is still worth switching to.
+    assert spike_er2.decide(3500, er2_accuracy=0.6, flash_accuracy=0.9, flash_p50_ms=4800) == "SWITCH"
+
+
 # ---- summary -----------------------------------------------------------------
 
 def _row(truth, pred, ms, err=""):
@@ -182,7 +190,7 @@ def test_live_run_with_fake_model_writes_results_and_decides(tmp_path, make_jpeg
 def test_live_run_records_which_model_answered(tmp_path, make_jpeg, fake_models, monkeypatch, capsys):
     """If ER 2 times out, generate_json answers with the Flash fallback inside the same call.
     The CSV must say who really answered, so ER 2's numbers are not silently Flash's."""
-    rows = _dataset(tmp_path, make_jpeg, n_per_sku=1)
+    _dataset(tmp_path, make_jpeg, n_per_sku=1)
     calls = []
 
     async def fake_generate_json(role, parts, schema_hint, thinking="low", timeout_s=6.0):
@@ -237,6 +245,75 @@ def test_shipped_labels_point_at_real_photos():
     rows = common.load_labels(packs / "labels.json", {"file", "sku"})
     rep = spike_er2.check_dataset(rows, packs, common.candidate_skus())
     assert rep["missing"] == [] and rep["not_jpeg"] == [] and rep["unknown_sku"] == []
+
+
+def _pass_aware(monkeypatch, er2_ms, flash_ms, flash_fails=False):
+    """Fake identify + timing per pass: the Flash pass runs with AIRA_MODEL_POINT=test-flash."""
+    import os
+
+    def is_flash():
+        return os.environ.get("AIRA_MODEL_POINT") == "test-flash"
+
+    async def identify(frame, candidates):
+        if is_flash() and flash_fails:
+            raise RuntimeError("flash unavailable")
+        return identify_mod.IdentifyResult(sku="aavin_milk_1l", confidence=0.9, alternatives=[])
+
+    async def fake_timed(coro):
+        result = await coro
+        return result, (flash_ms if is_flash() else er2_ms)
+
+    monkeypatch.setattr(identify_mod, "identify_product", identify)
+    monkeypatch.setattr(spike_er2, "timed", fake_timed)
+
+
+def test_live_run_never_switches_to_a_flash_that_failed(tmp_path, make_jpeg, fake_models, monkeypatch, capsys):
+    _dataset(tmp_path, make_jpeg, n_per_sku=1)
+    _pass_aware(monkeypatch, er2_ms=4000.0, flash_ms=900.0, flash_fails=True)
+    out = tmp_path / "r" / "s.csv"
+    code = spike_er2.main(["--data", str(tmp_path), "--out", str(out)])
+    text = capsys.readouterr().out
+    assert code == 1
+    assert "NO DECISION" in text and "every Flash call failed" in text
+    assert "DECISION: SWITCH" not in text
+    assert json.loads(out.with_suffix(".json").read_text())["decision"] is None
+
+
+def test_live_run_keeps_er2_but_warns_when_flash_failed(tmp_path, make_jpeg, fake_models, monkeypatch, capsys):
+    _dataset(tmp_path, make_jpeg, n_per_sku=1)
+    _pass_aware(monkeypatch, er2_ms=1500.0, flash_ms=900.0, flash_fails=True)
+    code = spike_er2.main(["--data", str(tmp_path), "--out", str(tmp_path / "r" / "s.csv")])
+    text = capsys.readouterr().out
+    assert code == 0
+    assert "DECISION: KEEP" in text
+    assert "every Flash call failed" in text
+
+
+def test_live_run_switches_when_er2_is_slow_and_flash_answers(tmp_path, make_jpeg, fake_models, monkeypatch,
+                                                              capsys):
+    _dataset(tmp_path, make_jpeg, n_per_sku=1)
+    _pass_aware(monkeypatch, er2_ms=4000.0, flash_ms=900.0)
+    out = tmp_path / "r" / "s.csv"
+    code = spike_er2.main(["--data", str(tmp_path), "--out", str(out)])
+    text = capsys.readouterr().out
+    assert code == 0
+    assert "DECISION: SWITCH identify + point to test-flash" in text
+    assert "pointing_model=test-flash" in text and "AIRA_MODEL_POINT" in text
+    assert json.loads(out.with_suffix(".json").read_text())["decision"] == "SWITCH"
+
+
+def test_live_run_keeps_er2_when_flash_is_slower(tmp_path, make_jpeg, fake_models, monkeypatch, capsys):
+    _dataset(tmp_path, make_jpeg, n_per_sku=1)
+    _pass_aware(monkeypatch, er2_ms=3600.0, flash_ms=5200.0)
+    out = tmp_path / "r" / "s.csv"
+    code = spike_er2.main(["--data", str(tmp_path), "--out", str(out)])
+    text = capsys.readouterr().out
+    assert code == 0
+    assert "DECISION: KEEP" in text
+    assert "Flash is slower" in text
+    summary = json.loads(out.with_suffix(".json").read_text())
+    assert summary["decision"] == "KEEP"
+    assert summary["er2"]["p50_ms"] == 3600 and summary["flash"]["p50_ms"] == 5200
 
 
 def test_live_run_all_failures_gives_no_decision(tmp_path, make_jpeg, fake_models, monkeypatch, capsys):

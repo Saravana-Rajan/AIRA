@@ -4,6 +4,7 @@
 import type { ClientMsg, FramePurpose } from "@aira/contracts";
 import { app } from "../core/app";
 import { toGray, qualityHint } from "./quality";
+import { overrideSource } from "./source";
 
 export type FrameMsg = Extract<ClientMsg, { t: "frame" }>;
 export type CameraErrorCode = "permission" | "no_frame" | "no_canvas" | "too_large";
@@ -134,8 +135,10 @@ export function stopCamera(): void {
 }
 
 export async function captureFrame(purpose: FramePurpose): Promise<FrameMsg> {
-  if (!deps.source) await startCamera();
-  const src = deps.source;
+  // Demo mode (/try): draw the demo media and never open the camera. null = real camera.
+  const demo = overrideSource();
+  if (!demo && !deps.source) await startCamera();
+  const src = demo ?? deps.source;
   if (!src) throw new CameraError("no_frame");
   const sw = src.width();
   const sh = src.height();

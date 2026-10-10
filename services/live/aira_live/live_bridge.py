@@ -20,6 +20,7 @@ from typing import TYPE_CHECKING, AsyncIterator, Awaitable, Callable, Literal, P
 from aira_live import safety
 from aira_live.contracts import AudioOutMsg, CueMsg, ErrorMsg, TranscriptMsg
 from aira_live.i18n import t
+from aira_live.prompt import last_catalog_facts
 
 if TYPE_CHECKING:
     from aira_live.session import Session
@@ -106,6 +107,7 @@ class LiveBridge:
         self._connected = False
         self._closed = False
         self._muted = False
+        self._answering = False  # Live is speaking an answer that has not ended (turn_complete / interrupted)
         self._task: asyncio.Task | None = None
         self._pending_text: list[str] = []
         self._in_partial = ""
@@ -163,6 +165,10 @@ class LiveBridge:
         """Typed text, notices and corrections. Queued while reconnecting and sent once Live is back."""
         if self._closed:
             return
+        if self._muted and not self._answering:
+            # A long-press with nothing playing (e.g. to stop guidance) must not swallow the answer to this new
+            # prompt. If the stopped answer is still streaming, the mute lifts when Live cuts or ends it.
+            self._muted = False
         if not self._connected:
             self._queue_text(text)
             return
@@ -177,7 +183,11 @@ class LiveBridge:
         await self.send_text(f"{NOTICE_PREFIX} Tell the shopkeeper briefly, in his language: {text}")
 
     def hard_stop(self) -> None:
-        """Long-press: drop the rest of the current answer (audio + captions) until the next question starts."""
+        """Long-press: drop the rest of the current answer (audio + captions).
+
+        The mute lifts when the next question starts (the owner speaks, or a new text prompt arrives while nothing
+        is playing), when Live cuts or ends the stopped answer, or on a reconnect.
+        """
         self._muted = True
 
     def _queue_text(self, text: str) -> None:
@@ -205,6 +215,8 @@ class LiveBridge:
             self._connected = False
             # A half-heard utterance may be cut short ("rupees 6" of "rupees 60"): never hand it to listeners.
             self._in_partial = self._out_partial = ""
+            # A stopped answer died with this connection; what Live says after the reconnect is new.
+            self._muted = self._answering = False
             await self._send(CueMsg(cue="reconnect"))
             while True:
                 failures += 1
@@ -241,9 +253,11 @@ class LiveBridge:
     async def _handle_event(self, ev: LiveEvent) -> None:
         s = self.session
         if ev.kind == "audio":
+            self._answering = True
             if not self._muted and ev.audio:
                 await s.send(AudioOutMsg(pcm24=base64.b64encode(ev.audio).decode()))
         elif ev.kind == "output_transcript":
+            self._answering = True
             if self._muted:  # the owner stopped this answer: he never hears these words
                 return
             # Live streams fragments, then (usually) the whole sentence with final=True.
@@ -264,6 +278,8 @@ class LiveBridge:
             if ev.text:
                 await s.send(TranscriptMsg(role="user", text=ev.text, final=ev.final))
         elif ev.kind == "interrupted":
+            # Live cut the answer (barge-in or a new prompt): the stopped answer is over, the next one is new.
+            self._muted = self._answering = False
             await s.send(CueMsg(cue="interrupted"))
         elif ev.kind == "turn_complete":
             if self._in_partial:  # the backend never marked the utterance final
@@ -271,7 +287,7 @@ class LiveBridge:
                 self._notify_listeners(utterance)
             if ev.more:  # the same answer goes on in another model turn
                 return
-            self._muted = False
+            self._muted = self._answering = False
             await self._end_turn()
         elif ev.kind == "resumption_handle":
             if ev.handle:
@@ -301,7 +317,8 @@ class LiveBridge:
         current = self._take_tool_results()
         if spoken and current:  # only turns where a tool ran; prices may also come from the catalog prompt
             recent = [r for turn in self._recent_results for r in turn]
-            await self._safety_check(spoken, current + recent)
+            facts = last_catalog_facts(getattr(self.session, "shop_id", ""))  # PRODUCTS list numbers in the prompt
+            await self._safety_check(spoken, current + recent + ([facts] if facts else []))
         if current:
             self._recent_results.append(current)
 

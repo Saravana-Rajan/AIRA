@@ -3,21 +3,21 @@
 Memory only remembers and guides: these tools never write stock or money. A location the owner states is saved
 as user-confirmed; a camera read below 0.6 confidence is spoken as "Not sure", never as a guess.
 """
-import importlib
 import logging
 
 from aira_live import db as dbmod
+from aira_live.business.catalog import resolve as catalog_resolve
 from aira_live.i18n import t
 from aira_live.memory import episodic, spatial
 from aira_live.memory.zones import normalize_zone, speak_zone
 from aira_live.session import get_session
+from aira_live.tools import guidance
 from aira_live.vision.gemini import VisionError
 from aira_live.vision.identify import ProductRef, identify_product, next_hint
 
 log = logging.getLogger(__name__)
 
 MIN_ID_CONF = 0.6
-CATALOG_MODULE = "aira_live.business.catalog"
 
 
 # --- this shop's products -------------------------------------------------------------------------------------
@@ -34,62 +34,15 @@ def _pack(d: dict) -> str:
     return str(d.get("unit", ""))
 
 
-def _ref(sku: str, d: dict) -> ProductRef | None:
-    if not d.get("name"):
-        return None
-    return ProductRef(sku=sku, name=str(d["name"]), brand=str(d.get("brand", "")), pack=_pack(d))
-
-
-async def _product_docs(shop_id: str) -> dict[str, dict]:
-    coll = dbmod.db().collection("shops").document(shop_id).collection("products")
-    return {snap.id: snap.to_dict() or {} async for snap in coll.stream()}
-
-
 async def shop_products(shop_id: str) -> list[ProductRef]:
-    """Every product of ``shop_id`` as a ProductRef (the candidate list for identify / point)."""
-    refs = [_ref(sku, d) for sku, d in (await _product_docs(shop_id)).items()]
-    return [r for r in refs if r is not None]
-
-
-# --- spoken name -> product (Kanish's business.catalog.resolve) -----------------------------------------------
-
-
-def _catalog_module():
-    """business.catalog, imported at call time so the tool registry loads while that lane is landing."""
-    try:
-        return importlib.import_module(CATALOG_MODULE)
-    except ModuleNotFoundError as exc:
-        if exc.name != CATALOG_MODULE:
-            raise
-        return None
-
-
-async def _fallback_resolve(shop_id: str, spoken: str, lang: str) -> ProductRef | None:
-    """Exact sku / name / alias match, used only while business.catalog is missing.
-
-    A word shared by several packs ("milk") resolves only to the one marked ``defaultPack``; otherwise None.
-    """
-    q = " ".join(spoken.casefold().split())
-    if not q:
-        return None
-    hits: list[tuple[str, dict]] = []
-    for sku, d in (await _product_docs(shop_id)).items():
-        aliases = d.get("aliases") or {}
-        words = [sku, d.get("name", "")]
-        for key in (lang, "en"):
-            words += aliases.get(key, []) if isinstance(aliases, dict) else []
-        if q in {" ".join(str(w).casefold().split()) for w in words}:
-            hits.append((sku, d))
-    if len(hits) > 1:
-        hits = [h for h in hits if h[1].get("defaultPack")]
-    return _ref(*hits[0]) if len(hits) == 1 else None
-
-
-async def catalog_resolve(shop_id: str, spoken: str, lang: str) -> ProductRef | None:
-    mod = _catalog_module()
-    if mod is None:
-        return await _fallback_resolve(shop_id, spoken, lang)
-    return await mod.resolve(shop_id, spoken, lang)
+    """Every named product of ``shop_id`` as a ProductRef (the candidate list for identify / point)."""
+    coll = dbmod.db().collection("shops").document(shop_id).collection("products")
+    out: list[ProductRef] = []
+    async for snap in coll.stream():
+        d = snap.to_dict() or {}
+        if d.get("name"):
+            out.append(ProductRef(sku=snap.id, name=str(d["name"]), brand=str(d.get("brand", "")), pack=_pack(d)))
+    return out
 
 
 # --- Live tools -------------------------------------------------------------------------------------------------
@@ -133,9 +86,30 @@ async def product_identify() -> dict:
             "confidence": res.confidence}
 
 
+def _count(value) -> int:
+    """count_needed as a whole number of packs, at least 1 (Live may send "2", 2.0 or nothing)."""
+    try:
+        return max(1, int(float(value)))
+    except (TypeError, ValueError, OverflowError):
+        return 1
+
+
 async def product_find(product: str, count_needed: int = 1) -> dict:
     """Guide the owner's hand to a product: saved location first, then the camera.
 
     count_needed is how many packs to pick (set it for a customer sale). Sends target messages for hand guidance.
     """
-    raise NotImplementedError  # sarmitha/03 Task 4 (guidance loop)
+    s = get_session()
+    ref = await catalog_resolve(s.shop_id, product, s.lang)
+    if ref is None:  # never start the camera for a product the shop doesn't have
+        return {"say": t("products.unknown", s.lang, spoken=product), "found": False}
+    now = spatial._utcnow()
+    loc = await spatial.where(s.shop_id, ref.sku)
+    stale = loc is None or spatial.is_stale(loc, now)
+    candidates = await shop_products(s.shop_id)
+    if not any(c.sku == ref.sku for c in candidates):
+        candidates.append(ref)
+    await guidance.start(s, ref, _count(count_needed), candidates)
+    await episodic.log(s.shop_id, "find", f"Finding {guidance._item(ref)}", "product", ref.sku)
+    say = f"{spatial.describe_location(ref.name, loc, s.lang, now)} {t('guide.start', s.lang)}"
+    return {"say": say, "found": True, "sku": ref.sku, "stale": stale}

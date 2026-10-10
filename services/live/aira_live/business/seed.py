@@ -1,7 +1,8 @@
 """Seed a shop's catalog (shop doc, products, suppliers) into a Store. Supplier phones come from env, never git.
 
-Stock is not written here: starting stock goes through the ledger, so it has a ledger trail.
-The docs are the same as scripts/seed_firestore.py writes for these paths.
+`seed_into` writes no stock. Starting stock (the catalog's optional `inventory`) goes through the ledger in
+`seed_inventory` (reason ADJUST, actor "system"), so it has a ledger trail.
+The catalog docs are the same as scripts/seed_firestore.py writes for these paths.
 
 CLI, from services/live. It writes to Firestore database "aira" through aira_live.db, or to the emulator when
 FIRESTORE_EMULATOR_HOST is set. Each supplier's phone is read from the env var its `phoneEnv` names:
@@ -16,9 +17,10 @@ import json
 import os
 import sys
 from collections.abc import Mapping
+from datetime import date
 from pathlib import Path
 
-from aira_live.business import paths
+from aira_live.business import ledger, paths
 from aira_live.business.store import Store
 
 FORBIDDEN_DATABASE = "(default)"
@@ -60,6 +62,34 @@ async def seed_into(store: Store, catalog: dict, *, env: Mapping[str, str] | Non
         await store.set(path, doc)
 
 
+def _lots(row: dict) -> list[tuple[str, float, str | None]]:
+    """(idem-key suffix, qty, expiryDate) per starting lot of one `inventory` row.
+
+    A row is {sku, qty[, expiryDate]} or the scripts/seed_firestore.py shape {sku, onHand, batches: [...]}."""
+    if row.get("batches"):
+        return [(f":{b.get('batchId') or i}", float(b.get("qty") or 0), b.get("expiryDate"))
+                for i, b in enumerate(row["batches"])]
+    return [("", float(row.get("qty", row.get("onHand", 0)) or 0), row.get("expiryDate"))]
+
+
+async def seed_inventory(store: Store, catalog: dict, *, today: date | None = None) -> None:
+    """Starting stock through the ledger (ADJUST, actor "system"). Idempotent per shop + sku (+ lot), so a
+    re-run adds nothing. Admin action: publishes no analytics events. Run `seed_into` first (needs products)."""
+    sid = catalog["shop"]["id"]
+    for row in catalog.get("inventory") or []:
+        sku = row["sku"]
+        for suffix, qty, exp in _lots(row):
+            if qty <= 0:
+                continue
+
+            async def fn(txn, sku=sku, qty=qty, exp=exp, key=f"seed:{sid}:{sku}{suffix}"):
+                prep = await ledger.prepare_movement(txn, sid, sku, qty, "ADJUST", "seed", "seed", key,
+                                                     expiry_date=exp, today=today, actor="system")
+                return ledger.commit_movement(txn, prep)
+
+            await store.run(fn)
+
+
 def _firestore_store() -> Store:
     from aira_live.business.store import FirestoreStore
 
@@ -74,7 +104,13 @@ def main(argv: list[str] | None = None) -> int:
         print('error: refusing to write to the "(default)" database; AIRA uses database "aira"', file=sys.stderr)
         return 2
     catalog = load_catalog(ns.catalog)
-    asyncio.run(seed_into(_firestore_store(), catalog))
+    store = _firestore_store()
+
+    async def run() -> None:
+        await seed_into(store, catalog)
+        await seed_inventory(store, catalog)
+
+    asyncio.run(run())
     print(f"seeded {catalog['shop']['id']} from {ns.catalog}")
     return 0
 

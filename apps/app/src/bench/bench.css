@@ -1,0 +1,139 @@
+/* /bench page. LIGHT THEME ONLY (overrides §6): every colour is a ui/tokens.css variable.
+   Every selector is scoped under .bench because Vite bundles this file with the phone app's CSS. */
+
+body:has(> #root > .bench) {
+  margin: 0;
+  background: var(--bg);
+}
+
+.bench {
+  box-sizing: border-box;
+  max-width: 760px;
+  margin: 0 auto;
+  padding: 16px 16px 48px;
+  min-height: 100vh;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-size: var(--text-body);
+  line-height: 1.45;
+}
+.bench *, .bench *::before, .bench *::after { box-sizing: inherit; }
+
+.bench-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 0 16px;
+  border-bottom: 1px solid var(--border);
+}
+.bench-head h1 {
+  margin: 0;
+  font-size: 28px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+
+.bench-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 14px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text-muted);
+  font-size: 16px;
+  font-weight: 600;
+}
+.bench-chip::before {
+  content: "";
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--text-muted);
+}
+.bench-chip.is-on { color: var(--text); border-color: var(--ok); }
+.bench-chip.is-on::before { background: var(--ok); animation: bench-pulse 1.6s ease-in-out infinite; }
+
+@keyframes bench-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+
+.bench-card {
+  margin-top: 16px;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  background: var(--surface);
+}
+.bench-card h2 {
+  margin: 0 0 12px;
+  font-size: 20px;
+  font-weight: 700;
+}
+
+.bench-field { display: block; margin-bottom: 12px; }
+.bench-field span { display: block; margin-bottom: 6px; color: var(--text-muted); font-size: 16px; }
+.bench-field input {
+  width: 100%;
+  min-height: 48px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+}
+
+.bench-actions { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 16px; }
+.bench-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 48px;
+  padding: 10px 18px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--bg);
+  color: var(--brand-blue);
+  font: inherit;
+  font-weight: 600;
+  text-decoration: none;
+  cursor: pointer;
+}
+.bench-btn.primary { background: var(--brand-blue); border-color: var(--brand-blue); color: var(--bg); }
+.bench-btn.danger { color: var(--danger); }
+.bench-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.bench-btn:focus-visible,
+.bench-field input:focus-visible {
+  outline: 3px solid var(--brand-blue);
+  outline-offset: 2px;
+}
+
+.bench-help { margin: 12px 0 0; color: var(--text-muted); font-size: 16px; }
+.bench-big { margin: 0; font-size: 22px; font-weight: 600; }
+
+.bench-table-wrap { overflow-x: auto; }
+.bench-table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+.bench-table th, .bench-table td {
+  padding: 10px 8px;
+  border-bottom: 1px solid var(--border);
+  text-align: right;
+  vertical-align: top;
+}
+.bench-table thead th { color: var(--text-muted); font-size: 14px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; }
+.bench-table th[scope="row"], .bench-table thead th:first-child { text-align: left; font-weight: 500; }
+.bench-table tbody tr:last-child th, .bench-table tbody tr:last-child td { border-bottom: 0; }
+.bench-metric { display: block; }
+.bench-table code { display: block; color: var(--text-muted); font-size: 13px; }
+/* fewer than 20 runs: orange underline (orange text would fail AA contrast) */
+.bench-table td.low-n { font-weight: 600; box-shadow: inset 0 -3px 0 var(--brand-orange); }
+.bench code { font-family: ui-monospace, "SF Mono", Menlo, monospace; }
+
+@media (prefers-reduced-motion: reduce) {
+  .bench-chip.is-on::before { animation: none; }
+}

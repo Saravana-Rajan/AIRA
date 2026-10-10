@@ -32,6 +32,14 @@ function Evidence(props: { uri: string; resolve: ResolveEvidence }) {
   return <span class="muted">{done ? "Kept private" : "Checking…"}</span>;
 }
 
+/** The backend writes outcomes as short codes ("ok", "needs_recount"); show them as plain words. */
+function outcomeText(outcome: string): string {
+  const words = outcome.trim().replace(/[_-]+/g, " ").replace(/\s+/g, " ").toLowerCase();
+  if (!words) return "Not recorded";
+  if (words === "ok") return "OK";
+  return words[0].toUpperCase() + words.slice(1);
+}
+
 /**
  * What the owner, AIRA and the system did, newest first, with the evidence each step relied on.
  * limit: on the overview, show only the newest actions and link to the full trail.
@@ -66,10 +74,10 @@ export function AuditPage(props: { rows: AuditRow[]; resolveEvidence: ResolveEvi
                   <td>
                     <span class="cell__main">{r.actionText}</span>
                     <span class="narrow-only muted">
-                      By {r.actorLabel}. Outcome: {r.outcome}
+                      By {r.actorLabel}. Outcome: {outcomeText(r.outcome)}
                     </span>
                   </td>
-                  <td class="wide-only">{r.outcome}</td>
+                  <td class="wide-only">{outcomeText(r.outcome)}</td>
                   <td>{r.evidenceUri ? <Evidence uri={r.evidenceUri} resolve={props.resolveEvidence} /> : <span class="muted">None</span>}</td>
                 </tr>
               ))}

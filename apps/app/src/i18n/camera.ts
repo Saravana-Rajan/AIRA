@@ -30,6 +30,21 @@ const pick = (s: S, lang: Lang): string => s[lang] ?? s.en;
 export const hintText = (k: HintKey, lang: Lang): string => pick(HINTS[k], lang);
 export const cueText = (c: CueWord, lang: Lang): string => pick(CUES[c], lang);
 
+/** OPEN_URL hand-off (click-to-chat WhatsApp, tel: call to the vendor). */
+export type OpenUrlPhrase = "whatsapp" | "call" | "blocked";
+
+const OPEN_URL: Record<OpenUrlPhrase, S> = {
+  whatsapp: { en: "Opening WhatsApp.", ta: "வாட்ஸ்அப் திறக்கிறேன்.", hi: "व्हाट्सऐप खोल रहे हैं।" },
+  call:     { en: "Calling the vendor.", ta: "விற்பனையாளரை அழைக்கிறேன்.", hi: "विक्रेता को कॉल कर रहे हैं।" },
+  blocked:  {
+    en: "Could not open the link. Double-tap to open it.",
+    ta: "இணைப்பைத் திறக்க முடியவில்லை. திறக்க இருமுறை தட்டுங்கள்.",
+    hi: "लिंक नहीं खुला। खोलने के लिए दो बार टैप करें।",
+  },
+};
+
+export const openUrlText = (k: OpenUrlPhrase, lang: Lang): string => pick(OPEN_URL[k], lang);
+
 /** Spoken once when a live count finishes. Never invents an expected number: null means "none given". */
 export function finalReadback(lang: Lang, counted: number, expected: number | null): string {
   if (expected === null) {

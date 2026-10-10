@@ -7,6 +7,7 @@ that feed scripts/check_submission.py, or the honesty and privacy rules.
 """
 from __future__ import annotations
 
+import json
 import re
 import shlex
 from pathlib import Path
@@ -19,6 +20,7 @@ EMAIL = SUBMISSION / "support-email.md"
 CHECKLIST = SUBMISSION / "video-checklist.md"
 GITIGNORE = ROOT / ".gitignore"
 DASHBOARD_RULES = ROOT / "docs" / "hackathon" / "official" / "participation" / "dashboard-submission.md"
+CATALOG = ROOT / "content" / "catalog" / "murugan_dairy.json"
 
 MAIN_TARGET_S = 230  # 3:50
 MAIN_MAX_S = 240  # never over 4:00
@@ -40,6 +42,9 @@ WORDINGS = ("3 to 4 minute", "up to 3 minutes", "strictly below three minutes")
 DEADLINE = "18 October 2026, 11:59 PM IST"
 SUPPORT = "support@hack2skill.com"
 CHECKER_FLAGS = {"--description", "--links", "--pdf", "--video", "--max-video", "--strict-warn"}
+# The order caption must name the channel that really sent the order (messaging lane: WhatsApp
+# Cloud API -> Telegram bot -> click-to-chat). Catalog channel -> words the caption rule must use.
+CHANNEL_CAPTION = {"telegram": "telegram bot", "whatsapp": "whatsapp business cloud api"}
 
 BANNED = (
     "udhaar",
@@ -245,3 +250,45 @@ def test_files_use_docs_submission_paths_and_no_banned_words():
         for banned in BANNED:
             assert banned not in low, f"{path.name}: {banned}"
         assert "AIRA" in text
+
+
+# ---------- vendor channel and console privacy ----------
+
+
+def test_order_caption_rule_names_every_vendor_channel():
+    honesty = _section(_checklist(), "Honesty rules").lower()
+    suppliers = json.loads(CATALOG.read_text(encoding="utf-8"))["suppliers"]
+    channels = {s["channel"] for s in suppliers} - {"call"}  # a phone call is not filmed
+    for channel in channels | set(CHANNEL_CAPTION):
+        assert CHANNEL_CAPTION[channel] in honesty, channel
+    assert "click-to-chat" in honesty
+
+
+def test_vendor_reply_is_not_spoken_after_click_to_chat():
+    # A click-to-chat reply lands in the owner's own WhatsApp, so AIRA never speaks it
+    # (docs/ops/whatsapp-setup.md, "Free fallbacks").
+    honesty = _section(_checklist(), "Honesty rules").lower()
+    assert any("click-to-chat" in line and "reply" in line and "never dub" in line for line in honesty.splitlines())
+
+
+def test_before_the_shoot_sets_up_the_real_vendor_channel():
+    before = _section(_checklist(), "Before the shoot")
+    assert "content/catalog/murugan_dairy.json" in before
+    assert "Telegram" in before
+    assert "Start" in before  # a bot can message the vendor only after they press Start
+    assert "telegramChatId" in before
+
+
+def test_scene_names_do_not_promise_a_channel():
+    text = _checklist()
+    shots = _section(text, "Shot list")
+    rows = CUT_ROW.findall(_section(text, "Fallback cut"))
+    assert "Vendor order by voice" in shots
+    assert not any("whatsapp" in r[0].lower() for r in rows)
+
+
+def test_console_shots_hide_the_project_id_and_account():
+    lines = _checklist().lower().splitlines()
+    assert any(
+        "project id" in line and "email" in line and ("blur" in line or "crop" in line) for line in lines
+    )

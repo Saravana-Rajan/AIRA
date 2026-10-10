@@ -22,14 +22,13 @@ import math
 import os
 import sys
 from collections import Counter
-from contextlib import contextmanager
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from common import (  # noqa: E402
-    candidate_skus, frame_from_file, jpeg_size, load_candidates, load_labels, percentile, timed,
-    write_csv,
+    answering_models, candidate_skus, frame_from_file, jpeg_size, load_candidates, load_labels,
+    percentile, timed, write_csv,
 )
 
 BENCH = Path(__file__).resolve().parent
@@ -37,21 +36,24 @@ ROLE = "point"
 ENV_OVERRIDE = "AIRA_MODEL_POINT"
 
 # Decision rule. Murugan waits for the answer while holding the pack, so latency
-# comes first: if ER 2's median identify call is slower than 3 s, switch. Even
-# when it is fast enough, switch if Flash is clearly more accurate (10+ points).
+# comes first: if ER 2's median identify call is slower than 3 s (and Flash is
+# faster), switch. Even when ER 2 is fast enough, switch if Flash is clearly more
+# accurate (10+ points). Never switch to a Flash that failed every call (_live).
 THRESHOLD_MS = 3000
 ACCURACY_MARGIN = 0.10
 MIN_PER_SKU = 2
 
 
 def decide(er2_p50_ms: float, er2_accuracy: float | None = None,
-           flash_accuracy: float | None = None) -> str:
-    """'KEEP' ER 2 for the point role, or 'SWITCH' it to the Flash fallback."""
-    if er2_p50_ms > THRESHOLD_MS:
+           flash_accuracy: float | None = None, flash_p50_ms: float | None = None) -> str:
+    """'KEEP' ER 2 for the point role, or 'SWITCH' it to the Flash fallback.
+
+    When `flash_p50_ms` is given, latency alone justifies a switch only if Flash is faster."""
+    if er2_p50_ms > THRESHOLD_MS and (flash_p50_ms is None or flash_p50_ms < er2_p50_ms):
         return "SWITCH"
-    if er2_accuracy is not None and flash_accuracy is not None:
-        if round(flash_accuracy - er2_accuracy, 3) >= ACCURACY_MARGIN:
-            return "SWITCH"
+    if (er2_accuracy is not None and flash_accuracy is not None
+            and round(flash_accuracy - er2_accuracy, 3) >= ACCURACY_MARGIN):
+        return "SWITCH"
     return "KEEP"
 
 
@@ -89,29 +91,6 @@ def _models() -> tuple[str, str | None]:
     return model_for(ROLE), fallback_for(ROLE)
 
 
-@contextmanager
-def _answering_models(identify_mod):
-    """Record the "_model" of every generate_json reply that identify_product receives.
-
-    generate_json retries and then falls back to Flash inside one call, and IdentifyResult does not
-    say which model answered. Without this, a timed-out ER 2 call that Flash answered would be
-    scored as ER 2. The spy is removed when the pass ends."""
-    seen: list[str] = []
-    original = identify_mod.generate_json
-
-    async def spy(*args, **kwargs):
-        data = await original(*args, **kwargs)
-        model = data.get("_model") if isinstance(data, dict) else None
-        seen.append(model if isinstance(model, str) else "")
-        return data
-
-    identify_mod.generate_json = spy
-    try:
-        yield seen
-    finally:
-        identify_mod.generate_json = original
-
-
 async def run_pass(label: str, override: str | None, rows: list[dict], data_dir: Path) -> list[dict]:
     """One identify pass over every photo. `override` forces AIRA_MODEL_POINT for the pass;
     the caller's environment is restored afterwards."""
@@ -127,7 +106,8 @@ async def run_pass(label: str, override: str | None, rows: list[dict], data_dir:
         model = model_for(ROLE)
         cands = load_candidates()
         out = []
-        with _answering_models(identify) as seen:
+        # A timed-out ER 2 call that Flash answered inside generate_json must not be scored as ER 2.
+        with answering_models(identify) as seen:
             for r in rows:
                 frame = frame_from_file(Path(data_dir) / r["file"], "identify")
                 n_seen = len(seen)
@@ -209,9 +189,12 @@ async def _live(rows: list[dict], data_dir: Path, out: Path) -> int:
     er2 = await run_pass("er2", None, rows, data_dir)
     flash = await run_pass("flash", flash_model, rows, data_dir)
     s_er2, s_flash = summarize(er2), summarize(flash)
+    flash_failed = s_flash["p50_ms"] is None  # no Flash call returned
     decision = None
     if s_er2["p50_ms"] is not None:
-        decision = decide(s_er2["p50_ms"], s_er2["accuracy"], s_flash["accuracy"])
+        decision = decide(s_er2["p50_ms"], s_er2["accuracy"], s_flash["accuracy"], s_flash["p50_ms"])
+        if decision == "SWITCH" and flash_failed:
+            decision = None  # never point production at a model that did not answer once
     write_csv(out, er2 + flash)
     out.with_suffix(".json").write_text(json.dumps(
         {"er2": {"model": er2[0]["model"] if er2 else None, **s_er2},
@@ -224,15 +207,25 @@ async def _live(rows: list[dict], data_dir: Path, out: Path) -> int:
     if s_er2["fallbacks"]:
         print(f"warning: {s_er2['fallbacks']} of {s_er2['n']} ER 2 calls were answered by the fallback "
               "(see the 'answered_by' column); the ER 2 numbers include those answers and their wait.")
+    if flash_failed:
+        print(f"warning: every Flash call failed ({flash_model}); the fallback for role '{ROLE}' "
+              "is not working. Check the 'error' column.")
     if decision is None:
-        print("NO DECISION: every ER 2 call failed. Check GEMINI_API_KEY and the 'error' column.")
+        if s_er2["p50_ms"] is None:
+            print("NO DECISION: every ER 2 call failed. Check GEMINI_API_KEY and the 'error' column.")
+        else:
+            print("NO DECISION: ER 2 is too slow, but every Flash call failed, so there is nothing "
+                  "to switch to. Fix the Flash errors and run the spike again.")
         return 1
+    if decision == "KEEP" and s_er2["p50_ms"] > THRESHOLD_MS:
+        print(f"note: ER 2 p50 is over {THRESHOLD_MS} ms, but Flash is slower ({s_flash['p50_ms']} ms).")
     if decision == "KEEP":
         print(f"DECISION: KEEP ER 2 for identify + point (role '{ROLE}').")
     else:
         print(f"DECISION: SWITCH identify + point to {flash_model}: set pointing_model={flash_model} "
-              f"in the Firestore doc config/runtime (database 'aira'), or env {ENV_OVERRIDE} on aira-live. "
-              "Counting stays on ER 2 (role 'count').")
+              "in the Firestore doc config/runtime (database 'aira'), e.g. "
+              "`uv run python -m aira_live.remote_config set pointing_model fallback`, "
+              f"or env {ENV_OVERRIDE} on aira-live. Counting stays on ER 2 (role 'count').")
     return 0
 
 

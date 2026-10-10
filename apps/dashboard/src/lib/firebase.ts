@@ -1,19 +1,21 @@
 import { initializeApp } from "firebase/app";
 import { connectFirestoreEmulator, getFirestore } from "firebase/firestore";
+import { emulatorTarget, firebaseOptions, firestoreDatabaseId, missingFirebaseConfig } from "./firebaseConfig";
 
 // No Firebase Auth in this build: the demo shop is publicly readable and the dashboard never writes.
-const app = initializeApp({
-  apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
-  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
-  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID,
-  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET,
-  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID,
-  appId: import.meta.env.VITE_FIREBASE_APP_ID,
-});
+// This module is loaded on demand (connect.ts lazyListen). Throwing here shows the page as "Offline"
+// with a clear message instead of a blank screen.
+const env = import.meta.env as Record<string, unknown>;
 
-/** Firestore database "aira" (never "(default)"). */
-export const db = getFirestore(app, "aira");
-
-if (import.meta.env.VITE_USE_EMULATOR === "1") {
-  connectFirestoreEmulator(db, "localhost", Number(import.meta.env.VITE_FIRESTORE_EMULATOR_PORT ?? 8085));
+const missing = missingFirebaseConfig(env);
+if (missing.length > 0) {
+  throw new Error(`Firebase web config is missing: ${missing.join(", ")}`);
 }
+
+const app = initializeApp(firebaseOptions(env));
+
+/** Firestore database from VITE_FIRESTORE_DATABASE: "aira", never the default database. */
+export const db = getFirestore(app, firestoreDatabaseId(env));
+
+const emulator = emulatorTarget(env);
+if (emulator) connectFirestoreEmulator(db, emulator.host, emulator.port);

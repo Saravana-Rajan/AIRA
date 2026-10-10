@@ -1,0 +1,105 @@
+// apps/app/test/guidance.hands.test.ts — MediaPipe fingertip tracking (MediaPipe itself is faked)
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+
+const created: { delegate: string }[] = [];
+const detectForVideo = vi.fn();
+let failGpu = false;
+
+vi.mock("../src/guidance/mediapipe", () => ({
+  FilesetResolver: { forVisionTasks: vi.fn(async () => ({ wasm: true })) },
+  HandLandmarker: {
+    createFromOptions: vi.fn(async (_files: unknown, o: { baseOptions: { delegate: string } }) => {
+      if (o.baseOptions.delegate === "GPU" && failGpu) throw new Error("no WebGL2");
+      created.push({ delegate: o.baseOptions.delegate });
+      return { detectForVideo };
+    }),
+  },
+}));
+vi.mock("../src/camera/capture", () => ({ getVideo: vi.fn(() => null), startCamera: vi.fn(async () => { throw new Error("camera must not open"); }) }));
+
+import { fingertipFrom, trackFingertip, __resetHands } from "../src/guidance/hands";
+import { setFrameSource } from "../src/camera/source";
+import { startCamera } from "../src/camera/capture";
+
+const hand = (x: number, y: number) => ({ landmarks: [Array.from({ length: 21 }, (_, i) => (i === 8 ? { x, y } : { x: 0, y: 0 }))] });
+
+describe("fingertipFrom (MediaPipe result → 0–1000 image coords)", () => {
+  it("uses the index fingertip (landmark 8) of the first hand and never swaps x and y", () => {
+    expect(fingertipFrom(hand(0.2, 0.75))).toEqual({ x1000: 200, y1000: 750 });
+  });
+  it("null when there is no hand", () => {
+    expect(fingertipFrom({ landmarks: [] })).toBeNull();
+    expect(fingertipFrom(null)).toBeNull();
+    expect(fingertipFrom(undefined)).toBeNull();
+  });
+  it("clamps landmarks slightly outside the image", () => {
+    expect(fingertipFrom(hand(-0.05, 1.02))).toEqual({ x1000: 0, y1000: 1000 });
+  });
+});
+
+describe("trackFingertip", () => {
+  let frames: (() => void)[] = [];
+  beforeEach(() => {
+    frames = [];
+    created.length = 0;
+    failGpu = false;
+    detectForVideo.mockReset();
+    __resetHands();
+    vi.stubGlobal("requestAnimationFrame", (cb: () => void) => { frames.push(cb); return frames.length; });
+    vi.stubGlobal("cancelAnimationFrame", vi.fn());
+  });
+  afterEach(() => {
+    setFrameSource(null);
+    vi.unstubAllGlobals();
+  });
+  const runFrame = () => { const f = frames.shift(); f?.(); };
+
+  it("demo mode tracks the demo element and never opens the camera; stop ends the loop", async () => {
+    const demo = document.createElement("canvas");
+    demo.width = 640; demo.height = 480;
+    setFrameSource(demo);
+    detectForVideo.mockReturnValueOnce(hand(0.5, 0.25)).mockReturnValueOnce({ landmarks: [] });
+    const tips: unknown[] = [];
+    const stop = await trackFingertip((t) => tips.push(t));
+    runFrame();
+    runFrame();
+    expect(tips).toEqual([{ x1000: 500, y1000: 250 }, null]);
+    expect(detectForVideo.mock.calls[0][0]).toBe(demo);
+    expect(startCamera).not.toHaveBeenCalled();
+    stop();
+    runFrame();
+    expect(tips).toHaveLength(2);
+  });
+
+  it("MediaPipe timestamps are strictly increasing even when the clock does not move", async () => {
+    setFrameSource(document.createElement("canvas"));
+    vi.spyOn(performance, "now").mockReturnValue(1000);
+    detectForVideo.mockReturnValue({ landmarks: [] });
+    const stop = await trackFingertip(() => {});
+    runFrame(); runFrame(); runFrame();
+    const ts = detectForVideo.mock.calls.map((c) => c[1] as number);
+    expect(ts[1]).toBeGreaterThan(ts[0]);
+    expect(ts[2]).toBeGreaterThan(ts[1]);
+    stop();
+    vi.mocked(performance.now).mockRestore();
+  });
+
+  it("falls back to the CPU when the GPU delegate fails, and loads the model only once", async () => {
+    setFrameSource(document.createElement("canvas"));
+    failGpu = true;
+    const a = await trackFingertip(() => {});
+    const b = await trackFingertip(() => {});
+    expect(created).toEqual([{ delegate: "CPU" }]);
+    a(); b();
+  });
+
+  it("a detector error reports 'no hand' instead of breaking the loop", async () => {
+    setFrameSource(document.createElement("canvas"));
+    detectForVideo.mockImplementationOnce(() => { throw new Error("gl lost"); }).mockReturnValueOnce(hand(0.1, 0.1));
+    const tips: unknown[] = [];
+    const stop = await trackFingertip((t) => tips.push(t));
+    runFrame(); runFrame();
+    expect(tips).toEqual([null, { x1000: 100, y1000: 100 }]);
+    stop();
+  });
+});

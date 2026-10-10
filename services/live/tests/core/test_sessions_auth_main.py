@@ -5,6 +5,7 @@ No network: real mode runs on the in-memory ``FakeBackend`` and a fake system pr
 """
 import asyncio
 import base64
+import importlib
 import sys
 import time
 from types import SimpleNamespace
@@ -364,8 +365,27 @@ def test_second_hello_replaces_the_session_and_closes_its_bridge(real_mode):
 
 
 # ---------- optional routers (other lanes' APIRouters) ----------
-def test_jobs_router_is_mounted():
-    assert {"/jobs/expiry", "/jobs/day-summary", "/jobs/forecast-refresh"} <= {r.path for r in main_mod.app.routes}
+# FastAPI >= 0.140 keeps an included router as one lazy entry in app.routes (no .path), so mounting is checked
+# through MOUNTED_ROUTERS, the OpenAPI paths and a real request instead.
+def test_jobs_router_is_mounted(monkeypatch):
+    monkeypatch.delenv("AIRA_JOB_TOKEN", raising=False)
+    assert "aira_live.jobs" in main_mod.MOUNTED_ROUTERS
+    assert {"/jobs/expiry", "/jobs/day-summary", "/jobs/forecast-refresh"} <= set(main_mod.app.openapi()["paths"])
+    client = TestClient(main_mod.app)
+    assert client.post("/jobs/expiry").status_code != 404  # served (and refused: no job token)
+    assert client.post("/jobs/not-a-job").status_code == 404
+
+
+def test_webhooks_router_is_mounted_once_present():
+    module = "aira_live.messaging.webhooks"
+    try:
+        webhooks = importlib.import_module(module)
+    except ModuleNotFoundError as exc:
+        if main_mod._is_missing(exc, module):
+            pytest.skip(f"{module} is not in the tree yet (kanish/02)")
+        raise
+    assert module in main_mod.MOUNTED_ROUTERS
+    assert {"/webhooks/whatsapp", "/webhooks/telegram"} <= {r.path for r in webhooks.router.routes}
 
 
 def test_include_optional_routers_mounts_present_modules_and_skips_missing(monkeypatch):

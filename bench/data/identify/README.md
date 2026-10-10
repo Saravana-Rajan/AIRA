@@ -82,11 +82,12 @@ DECISION: KEEP ... | SWITCH ...
 
 **Decision rule** (`spike_er2.decide`):
 
-- **SWITCH** the `point` role (identify + point) to the Flash fallback if ER 2's p50 is over **3000 ms**, or if Flash is at least **10 points** more accurate.
-- Otherwise **KEEP** ER 2.
+- **SWITCH** the `point` role (identify + point) to the Flash fallback if ER 2's p50 is over **3000 ms** and Flash's p50 is lower, or if Flash is at least **10 points** more accurate.
+- Otherwise **KEEP** ER 2. If ER 2 is over 3000 ms but Flash is slower, the script keeps ER 2 and prints a note.
+- **NO DECISION** (exit 1) if every ER 2 call failed, or if ER 2 is too slow but every Flash call failed. The script never recommends a model that did not answer. It also warns when every Flash call failed, because Flash is ER 2's fallback in production.
 - Counting (role `count`) stays on ER 2 either way.
 
-To switch, set `pointing_model` in the Firestore doc `config/runtime` (database `aira`), or set env `AIRA_MODEL_POINT` on `aira-live`. Post the two summary lines and the decision in the team chat.
+To switch, set `pointing_model` in the Firestore doc `config/runtime` (database `aira`), for example with `uv run python -m aira_live.remote_config set pointing_model fallback`, or set env `AIRA_MODEL_POINT` on `aira-live`. Post the two summary lines and the decision in the team chat.
 
 ## Score set B for the deck
 

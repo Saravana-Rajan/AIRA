@@ -48,10 +48,18 @@ describe("dashboard design tokens (light theme only)", () => {
 });
 
 describe("firebase client", () => {
-  it("uses the Firestore database id aira, never (default)", () => {
+  it("uses the Firestore database id from VITE_FIRESTORE_DATABASE (aira), never (default)", () => {
     const src = sources["../src/lib/firebase.ts"];
     expect(src).toBeDefined();
-    expect(src).toMatch(/getFirestore\(\s*app\s*,\s*"aira"\s*\)/);
+    expect(src).toMatch(/getFirestore\(\s*app\s*,\s*firestoreDatabaseId\(\s*env\s*\)\s*\)/);
+    expect(src).not.toMatch(/\(default\)/);
+  });
+
+  it("builds the web config from VITE_FIREBASE_* and refuses to start without it (shown as Offline)", () => {
+    const src = sources["../src/lib/firebase.ts"];
+    expect(src).toMatch(/initializeApp\(\s*firebaseOptions\(\s*env\s*\)\s*\)/);
+    expect(src).toMatch(/missingFirebaseConfig\(\s*env\s*\)/);
+    expect(src).toMatch(/emulatorTarget\(\s*env\s*\)/);
   });
 
   it("never writes to Firestore (read-only dashboard)", () => {

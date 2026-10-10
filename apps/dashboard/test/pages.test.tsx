@@ -162,7 +162,23 @@ describe("AuditPage", () => {
   it("folds who and outcome into the action cell for narrow cards", () => {
     const el = mount(<AuditPage rows={rows} resolveEvidence={async () => null} />);
     expect([...el.querySelectorAll("thead th.wide-only")].map((h) => text(h))).toEqual(["Who", "Outcome"]);
-    expect(text(el.querySelector("tbody tr .narrow-only"))).toBe("By AIRA. Outcome: ok");
+    expect(text(el.querySelector("tbody tr .narrow-only"))).toBe("By AIRA. Outcome: OK");
+  });
+
+  it("writes each outcome in plain sentence case", () => {
+    const el = mount(
+      <AuditPage
+        resolveEvidence={async () => null}
+        rows={[
+          { ...rows[0], id: "x1", outcome: "ok" },
+          { ...rows[0], id: "x2", outcome: "discrepancy" },
+          { ...rows[0], id: "x3", outcome: "needs_recount" },
+          { ...rows[0], id: "x4", outcome: "" },
+        ]}
+      />,
+    );
+    const outcomes = [...el.querySelectorAll("tbody tr")].map((r) => text(r.querySelectorAll("td")[3]));
+    expect(outcomes).toEqual(["OK", "Discrepancy", "Needs recount", "Not recorded"]);
   });
 
   it("says when nothing has been recorded yet", () => {

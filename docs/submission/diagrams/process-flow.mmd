@@ -18,3 +18,15 @@ flowchart BT
   end
   R ==>|shelves stocked| S
   S -.->|yes: low stock or expiry, reorder| R
+
+  %% Light theme, AIRA brand tokens (build overrides section 6)
+  classDef default fill:#F5F8FD,stroke:#1F6FFF,stroke-width:1.5px,color:#0B1F4B
+  classDef danger fill:#FEF2F2,stroke:#DC2626,stroke-width:2px,color:#0B1F4B
+  classDef ok fill:#F0FDF4,stroke:#16A34A,stroke-width:2px,color:#0B1F4B
+  classDef warn fill:#FFF7ED,stroke:#FF8A3D,stroke-width:2px,color:#0B1F4B
+  class X danger
+  class H ok
+  class I warn
+  style R fill:#FFFFFF,stroke:#E3E9F4,stroke-width:2px,color:#0B1F4B
+  style S fill:#FFFFFF,stroke:#E3E9F4,stroke-width:2px,color:#0B1F4B
+  linkStyle default stroke:#4A5A7A,stroke-width:1.5px

@@ -36,14 +36,14 @@ LITERALS = {
 # Typed sample arguments for each stub. When an owner implements a tool, they remove it from STUBS
 # and test it in their own tests/<area>/ folder.
 SAMPLE_ARGS = {
-    "order_create": {"supplier": "Sakthi vendor", "items": [{"name": "curd 1 litre", "qty": 30}]},
-    "order_status": {}, "delivery_start": {}, "delivery_count": {"sku": "sakthi_curd_1l"},
+    "delivery_start": {}, "delivery_count": {"sku": "sakthi_curd_1l"},
     "invoice_check": {"order_id": "o1"}, "supplier_pay": {"order_id": "o1", "method": "cash"},
     "sale_start": {"items": [{"name": "curd", "qty": 2}]}, "sale_pay": {"sale_id": "s1", "method": "upi"},
     "stock_query": {"product": "curd"}, "expiry_check": {},
-    "product_find": {"product": "curd", "count_needed": 2},
 }
-STUBS = sorted(SAMPLE_ARGS)
+STUBS = sorted(set(SAMPLE_ARGS)
+               - {"delivery_start", "delivery_count", "invoice_check"}          # tests/tools/test_delivery.py
+               - {"supplier_pay", "sale_start", "sale_pay", "stock_query", "expiry_check"})  # test_payments_sales.py
 
 
 def test_every_tool_exists_with_exact_parameters():

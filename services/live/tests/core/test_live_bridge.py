@@ -283,6 +283,57 @@ async def test_hard_stop_also_lifts_when_the_stopped_turn_completes(mk_session):
     await bridge.close()
 
 
+async def test_a_long_press_while_idle_never_swallows_the_next_notice(mk_session):
+    """Long-press with nothing playing (e.g. to stop guidance): the next vendor notice is still heard."""
+    s, rec = mk_session()
+    b = FakeBackend()
+    bridge = _bridge(s, b)
+    await bridge.start()
+    bridge.hard_stop()
+    await bridge.speak_notice("Sakthi vendor confirmed: delivery at 6 pm.")
+    b.push(LiveEvent("output_transcript", text="Sakthi vendor delivers at 6 pm.", final=True))
+    b.push(LiveEvent("audio", audio=b"notice"))
+    b.push(LiveEvent("turn_complete"))
+    await wait_until(lambda: _of(rec, "audio"))
+    assert _audio(rec) == [b"notice"]
+    assert [m.text for m in _of(rec, "transcript")] == ["Sakthi vendor delivers at 6 pm."]
+    await bridge.close()
+
+
+async def test_text_sent_during_a_stopped_answer_is_heard_once_that_answer_is_cut(mk_session):
+    s, rec = mk_session()
+    b = FakeBackend()
+    bridge = _bridge(s, b)
+    await bridge.start()
+    b.push(LiveEvent("audio", audio=b"a1"))
+    await wait_until(lambda: _of(rec, "audio"))
+    bridge.hard_stop()
+    await bridge.send_text("How many curd packets are left?")  # typed while the stopped answer still streams
+    b.push(LiveEvent("audio", audio=b"a2"))                    # rest of the stopped answer -> dropped
+    b.push(LiveEvent("interrupted"))                           # the new prompt cut the old answer
+    b.push(LiveEvent("audio", audio=b"a3"))                    # answer to the typed question -> played
+    await wait_until(lambda: len(_of(rec, "audio")) == 2)
+    assert _audio(rec) == [b"a1", b"a3"]
+    await bridge.close()
+
+
+async def test_a_reconnect_ends_the_hard_stop(mk_session):
+    """The stopped answer died with the old connection; what Live says after reconnecting is new."""
+    s, rec = mk_session()
+    b1, b2 = FakeBackend(), FakeBackend()
+    bridge = _bridge(s, b1, b2)
+    await bridge.start()
+    b1.push(LiveEvent("audio", audio=b"old"))
+    await wait_until(lambda: _of(rec, "audio"))
+    bridge.hard_stop()
+    b1.end()  # the connection drops in the middle of the stopped answer
+    await wait_until(lambda: b2.started_with == [None])
+    b2.push(LiveEvent("audio", audio=b"new"))
+    await wait_until(lambda: len(_of(rec, "audio")) == 2)
+    assert _audio(rec) == [b"old", b"new"]
+    await bridge.close()
+
+
 async def test_unheard_words_of_a_stopped_answer_are_not_checked(mk_session):
     s, rec = mk_session()
     b = FakeBackend()

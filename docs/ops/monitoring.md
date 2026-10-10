@@ -4,7 +4,7 @@ This is the minimal setup: one shop, the Cloud Run service `aira-live` in `asia-
 
 ## 1. Uptime check on `aira-live` (add later)
 
-**What:** an HTTPS uptime check on `GET /healthz` of `aira-live`. A healthy service returns `200` with `{"ok":true,"mock":false}`.
+**What:** an HTTPS uptime check on `GET /health` of `aira-live`. A healthy service returns `200` with `{"ok":true,"mock":false}`. Use `/health`, not the `/healthz` alias: Cloud Run's frontend reserves some paths that end in `z`, so a probe on `/healthz` can fail even when the service is up.
 
 **Why:** the demo link must never silently break. `aira-live` runs `--min-instances 1 --max-instances 1`, so a crash-looping revision means AIRA is down for the shop.
 
@@ -14,10 +14,10 @@ Create it in the console under **Monitoring → Uptime checks → Create**, or w
 LIVE_HOST=$(gcloud run services describe aira-live --region asia-south1 --project "$GCP_PROJECT" \
   --format='value(status.url)' | sed 's#https://##')
 
-gcloud monitoring uptime create aira-live-healthz --project "$GCP_PROJECT" \
+gcloud monitoring uptime create aira-live-health --project "$GCP_PROJECT" \
   --resource-type=uptime-url \
   --resource-labels="host=${LIVE_HOST},project_id=${GCP_PROJECT}" \
-  --path=/healthz --protocol=https --period=5 \
+  --path=/health --protocol=https --period=5 --timeout=10 \
   --matcher-content='"ok":true' --matcher-type=contains-string
 ```
 
@@ -25,7 +25,7 @@ Recommended settings:
 
 | Setting | Value |
 |---|---|
-| Path | `/healthz` |
+| Path | `/health` |
 | Period | 5 min (1 min during the judging window) |
 | Timeout | 10 s |
 | Content match | contains `"ok":true` |
@@ -39,7 +39,7 @@ Recommended settings:
 
 Create one policy: **"AIRA uptime check failing"**.
 
-- **Condition:** metric `monitoring.googleapis.com/uptime_check/check_passed`, resource `uptime_url`, filter `metric.label.check_id = "aira-live-healthz"`.
+- **Condition:** metric `monitoring.googleapis.com/uptime_check/check_passed`, resource `uptime_url`, filtered to the `aira-live-health` check. Monitoring gives the check an id that starts with the display name plus a random suffix, so pick the check in the console, or copy its id from `gcloud monitoring uptime list-configs --project "$GCP_PROJECT"` into `metric.label.check_id`.
 - **Trigger:** the check fails from more than one region for 2 minutes.
 - **Notification channel:** the owner's email. Add a phone/SMS channel during the judging window.
 - **Documentation field:** link to this file, section 4.
@@ -61,7 +61,7 @@ There is no Remote Config. Runtime switches live in one Firestore document, `con
 | `pointing_model` | string | Model for `point` (`point_to`). It must be listed in `aira_live/models.py` (`DEFAULTS` or `FALLBACKS`); otherwise it is ignored |
 | `count_model` | string | Model for `count` (`count_in_frame`). Same rule |
 | `live_model` | string | Gemini Live voice model. Same rule |
-| `whatsapp_enabled` | bool | `false` → supplier orders use the click-to-chat fallback |
+| `whatsapp_enabled` | bool | `false` → supplier orders use the click-to-chat fallback. The messaging channel reads it with `remote_config.flag("whatsapp_enabled", True)` |
 
 **Model priority:** env `AIRA_MODEL_<ROLE>` > `config/runtime` > `models.DEFAULTS`. An env override on the Cloud Run service always wins, so remove it before relying on the Firestore switch.
 

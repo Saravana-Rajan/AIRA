@@ -15,7 +15,7 @@ This is a plan for people to follow. Nothing here records, uploads or sends anyt
 - Where they differ, this checklist wins:
   - Timings follow spec §8.
   - The forecast caption is "Demand forecast from Firestore sales".
-  - The WhatsApp caption depends on how the order was really sent (see Honesty rules).
+  - Spec §8 calls scene 2 the "WhatsApp order". Aavin and Sakthi now order over Telegram (`content/catalog/murugan_dairy.json`), so the scene is the "Vendor order", and its caption depends on how the order was really sent (see Honesty rules).
   - The cash caption is "Cash total checked in code".
   - The shoot is on Oct 16.
 
@@ -38,9 +38,11 @@ Check the support thread from `docs/submission/support-email.md`.
 - [ ] Location: a real small dairy shop, or the user-study mock counter. Stock: Aavin milk 500 ml, Sakthi curd 1 L, Arun ice cream boxes, a cashbox and a UPI soundbox.
 - [ ] Note the real prices on filming day. Keep every ₹ amount consistent across scenes.
 - [ ] Deployed build tagged; note `git describe --tags`. Film only the real deployed app: no mockups and no scripted responses.
-- [ ] WhatsApp channel decided:
-  - Cloud API, if the tokens are live and the vendor phone is a registered test recipient.
-  - Otherwise click-to-chat: a pre-typed message sent with one tap.
+- [ ] Vendor channel decided and tested once, end to end, the day before. Check the Sakthi vendor's `channel` in `content/catalog/murugan_dairy.json`:
+  - `telegram` (the current setting): `TELEGRAM_TOKEN` is live, the vendor phone has opened the AIRA bot in Telegram and pressed **Start**, and the supplier has a `telegramChatId` (steps in `docs/ops/whatsapp-setup.md`).
+  - `whatsapp`: the Cloud API tokens are live and the vendor phone is a registered test recipient.
+  - Otherwise click-to-chat: a pre-typed WhatsApp message sent with one tap.
+  - Write down the channel used. The order caption depends on it.
 - [ ] Delivery props: 28 curd packs, and a printed bill for 30 (the discrepancy moment).
 - [ ] Phone A (on the chest): runs AIRA with screen recording and internal audio.
 - [ ] Phone B (teammate): films hands, shelf, bill and cashbox from the side.
@@ -52,7 +54,7 @@ Check the support thread from `docs/submission/support-email.md`.
 | Time | Scene | Must be visible or audible |
 |---|---|---|
 | 0:00–0:25 | Hook: a blind owner opens the shop alone | White cane, chest phone, shutter, the first "AIRA" and the low-stock line |
-| 0:25–0:55 | WhatsApp order by voice | Order read-back, the spoken "yes", the vendor phone receiving it, the vendor reply spoken back |
+| 0:25–0:55 | Vendor order by voice | Order read-back, the spoken "yes", the vendor phone receiving it, the vendor reply spoken back (Telegram or Cloud API only) |
 | 0:55–1:40 | Delivery count + invoice check | Count reaching 28, "2 short", the bill for 30 vs 28 received flagged |
 | 1:40–2:05 | Pay the vendor | Cash slot guidance, the notes shown, the total read back as correct |
 | 2:05–2:55 | Customer sale | Hand guided to the curd, pack confirmed, change computed, then a UPI payment matched to the soundbox announcement |
@@ -67,7 +69,7 @@ Same footage, trimmed. Scene times are in seconds.
 | Scene | Main cut | Fallback cut | What to trim |
 |---|---|---|---|
 | Hook | 25 | 15 | Shorter walk to the shutter |
-| WhatsApp order | 30 | 20 | Keep the read-back, the "yes" and the reply; cut the typing |
+| Vendor order | 30 | 20 | Keep the read-back, the "yes" and the reply; cut the wait for the reply |
 | Delivery count + invoice | 45 | 35 | Speed up the middle of the count (show the speed-up); keep "28" and the bill check |
 | Pay the vendor | 25 | 15 | One cash slot, then the total |
 | Customer sale (cash + UPI) | 50 | 40 | Keep the hand guidance and the soundbox match; shorter change scene |
@@ -83,6 +85,7 @@ Total: 155 s (2:35), plus up to 20 s for transitions. The finished file must be 
 - [ ] English captions for every spoken line. Tamil speech gets English subtitles. Large, high-contrast text.
 - [ ] Numbers on screen come only from `bench/results/*.csv` through `scripts/bench_table.py`. A metric shown as `pending` is left out of the video; never put a guessed number on screen.
 - [ ] If no measured numbers exist yet, the last scene shows the quote or the AIRA logo, not placeholder numbers.
+- [ ] Console and phone shots: crop or blur the project ID, the signed-in account email and any billing page. Blur phone numbers and chat names on the vendor phone.
 - [ ] Export both cuts as 1080p H.264 MP4: `docs/submission/aira-demo.mp4` and `docs/submission/aira-demo-short.mp4`.
 - [ ] Check the main cut (should pass with one WARN, because it is over 2:59):
 
@@ -109,9 +112,11 @@ python3 scripts/check_submission.py --description docs/submission/description.tx
 ## Honesty rules (every cut)
 
 - [ ] Every AIRA line comes from the working app. If a take fails, reshoot; never dub or fake a response.
-- [ ] The WhatsApp caption matches what really happened:
+- [ ] The vendor order caption matches the channel that really sent it:
+  - "Sent by the AIRA Telegram bot", only if the Telegram bot sent it.
   - "Sent with the WhatsApp Business Cloud API", only if the Cloud API sent it.
   - Otherwise "Pre-typed WhatsApp message, sent with one tap (click-to-chat)".
+- [ ] With click-to-chat the vendor's reply lands in the owner's own WhatsApp, so AIRA does not speak it: cut the spoken-reply line and never dub it.
 - [ ] UPI is confirmed by the shop's payment soundbox. Never claim a bank integration.
 - [ ] Cash: AIRA reads the total; it never judges whether a note is genuine.
 - [ ] The forecast caption says it comes from Firestore sales data.

@@ -73,11 +73,13 @@ def confusion_partners(sku: str, candidates: list[ProductRef]) -> list[str]:
 
 
 def _conf(v: Any) -> float:
+    if isinstance(v, bool):  # `true` is not a confidence; never let it name a product at 1.0
+        return 0.0
     try:
         f = float(v or 0.0)
     except (TypeError, ValueError):
         return 0.0
-    if math.isnan(f) or f < 0:
+    if not math.isfinite(f) or f < 0:
         return 0.0
     if f > 1.0:  # some replies use a percentage
         f = f / 100.0 if f <= 100.0 else 0.0

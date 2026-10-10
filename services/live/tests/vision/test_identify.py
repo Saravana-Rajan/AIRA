@@ -107,6 +107,12 @@ def test_malformed_model_fields_never_crash_or_invent():
     assert next_hint(r, CANDS) == "vision.aim.hold_closer"
 
 
+def test_boolean_or_infinite_confidence_is_not_a_number():
+    for bad in (True, False, float("inf"), float("-inf")):
+        r = decide({"sku": "arun_icecream_box", "confidence": bad, "label_visible": True}, CANDS)
+        assert r.sku is None and r.confidence == 0.0, bad
+
+
 def test_list_reply_uses_first_item():
     r = decide({"items": [{"sku": "arun_icecream_box", "confidence": 0.9, "label_visible": True}]}, CANDS)
     assert r.sku == "arun_icecream_box"

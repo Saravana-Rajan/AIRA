@@ -5,6 +5,9 @@
 import json
 from pathlib import Path
 
+import pytest
+
+from aira_live import prompt as prompt_mod
 from aira_live import safety
 from aira_live.prompt import (
     build_system_prompt,
@@ -16,6 +19,12 @@ from aira_live.prompt import (
 CATALOG = Path(__file__).resolve().parents[4] / "content" / "catalog" / "murugan_dairy.json"
 
 CURD = {"sku": "sakthi_curd_1l", "name": "curd", "brand": "Sakthi", "unit": "pouch", "packSizeL": 1, "price": 60}
+
+
+@pytest.fixture(autouse=True)
+def _fresh_catalog_facts(monkeypatch):
+    """build_system_prompt caches catalog facts per shop in module state; keep it from leaking between tests."""
+    monkeypatch.setattr(prompt_mod, "_LAST_FACTS", {})
 
 
 # --- prompt -----------------------------------------------------------------------------------------------
@@ -179,3 +188,38 @@ def test_correction_text_names_the_wrong_number():
     assert "600" in safety.correction_text([600], "en")
     assert "600" in safety.correction_text([600], "ta")
     assert safety.correction_text([], "en") != "safety.correction"
+
+
+# --- bridge integration: catalog prices from the prompt are allowed numbers --------------------------------
+async def test_bridge_safety_check_allows_prices_from_the_prompt_catalog(fake_db, mk_session):
+    import asyncio
+
+    from live_fakes import FakeBackend, wait_until
+
+    from aira_live.live_bridge import LiveBridge, LiveEvent
+
+    shop = fake_db.collection("shops").document("murugan_dairy")
+    await shop.set({"name": "Murugan Dairy"})
+    await shop.collection("products").document("aavin_milk_500ml").set(
+        {"name": "milk", "brand": "Aavin", "unit": "L", "packSizeL": 0.5, "price": 44})
+    prompt = await build_system_prompt("murugan_dairy", "en", "short")
+
+    s, rec = mk_session()
+    b = FakeBackend()
+    bridge = LiveBridge(s, lambda: b, prompt, [])
+    await bridge.start()
+    # product_find ran (no price in its result); AIRA quotes the catalog price from the prompt -> no warn
+    s.tool_results.append({"tool": "product_find", "call_id": "c1", "result": {"found": True, "say": "Top shelf."}})
+    b.push(LiveEvent("output_transcript", text="Aavin milk, ₹44, top shelf.", final=True))
+    b.push(LiveEvent("turn_complete"))
+    await wait_until(lambda: s.tool_results == [])
+    # a price that is in neither the tool results nor the catalog is still flagged
+    s.tool_results.append({"tool": "product_find", "call_id": "c2", "result": {"found": True, "say": "Top shelf."}})
+    b.push(LiveEvent("output_transcript", text="Aavin milk, ₹440, top shelf.", final=True))
+    b.push(LiveEvent("turn_complete"))
+    await wait_until(lambda: b.sent_text)
+    for _ in range(20):
+        await asyncio.sleep(0)
+    assert b.sent_text == [safety.correction_text([440], "en")]
+    assert [m.cue for m in rec.msgs if m.t == "cue"].count("warn") == 1
+    await bridge.close()

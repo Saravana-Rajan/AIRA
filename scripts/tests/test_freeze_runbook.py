@@ -140,7 +140,7 @@ def test_links_template_has_the_five_links():
     data = json.loads(raw)
     assert set(data) == LINK_KEYS
     assert data["repo"] == REPO
-    assert data["api_health"] == "${LIVE_URL}/healthz"
+    assert data["api_health"] == "${LIVE_URL}/health"
     assert set(re.findall(r"\$\{(\w+)\}", raw)) == PLACEHOLDERS
     for key, value in data.items():
         assert value.startswith("https://") or value.startswith("${"), key
@@ -154,7 +154,7 @@ def test_filled_template_passes_the_link_checker(monkeypatch):
         "VIDEO_URL": "https://www.youtube.com/watch?v=example",
     }
     data = json.loads(_fill(TEMPLATE.read_text(encoding="utf-8"), env, monkeypatch))
-    assert data["api_health"] == "https://aira-live.example.run.app/healthz"
+    assert data["api_health"] == "https://aira-live.example.run.app/health"
     assert cs.check_links(data, fetch=lambda u: (200, u)) == []
 
 
@@ -231,11 +231,17 @@ def test_freeze_pins_traffic_and_records_the_deployed_commit():
 
 def test_health_check_matches_the_real_endpoint():
     text = _runbook()
-    assert 'curl -fsS "$LIVE_URL/healthz"' in text
+    assert 'curl -fsS "$LIVE_URL/health"' in text
     assert '{"ok":true,"mock":false}' in text
     main = MAIN_PY.read_text(encoding="utf-8")
-    assert '@app.get("/healthz")' in main
+    assert '@app.get("/health")' in main
     assert '"mock":' in main
+
+
+def test_health_path_avoids_cloud_run_reserved_z_paths():
+    """Cloud Run's frontend reserves some paths that end in "z", so /healthz can fail on a healthy service."""
+    for path in (RUNBOOK, TEMPLATE):
+        assert "/healthz" not in path.read_text(encoding="utf-8"), path.name
 
 
 def test_hosting_links_match_the_site():
@@ -338,7 +344,7 @@ def test_evaluation_window_rules():
     assert "firebase deploy" in low
     assert "(default)" in window
     assert "private window" in low
-    assert 'curl -fsS "$LIVE_URL/healthz"' in window
+    assert 'curl -fsS "$LIVE_URL/health"' in window
     assert "no budget alerts" in low
 
 

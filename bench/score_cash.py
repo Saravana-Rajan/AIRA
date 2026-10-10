@@ -103,11 +103,21 @@ async def predict(rows: list[dict], data_dir: Path) -> tuple[dict, dict, dict]:
 
 
 def load_predictions(path: Path) -> tuple[dict, dict]:
-    """Saved predictions: a {file: CashRead dict} map, or a results file this script wrote."""
-    doc = json.loads(path.read_text(encoding="utf-8"))
-    if isinstance(doc, dict) and isinstance(doc.get("predictions"), dict) and "metrics" in doc:
-        return doc["predictions"], doc.get("latencies_ms") or {}
-    return doc, {}
+    """Saved predictions: a {file: CashRead dict} map, or a results file this script wrote.
+    Raises ValueError for anything else, so a wrong file is never scored as "every photo missing"."""
+    try:
+        doc = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as e:
+        raise ValueError(f"{path} is not valid JSON ({e})") from None
+    lat: object = {}
+    if isinstance(doc, dict) and "metrics" in doc and "predictions" in doc:
+        doc, lat = doc["predictions"], doc.get("latencies_ms") or {}
+    if not isinstance(doc, dict) or not all(isinstance(p, dict) for p in doc.values()):
+        raise ValueError(f"{path} must map each photo's file name to its saved CashRead object")
+    if not isinstance(lat, dict) or not all(
+            isinstance(ms, (int, float)) and not isinstance(ms, bool) for ms in lat.values()):
+        raise ValueError(f"{path}: latencies_ms must map file names to milliseconds")
+    return doc, lat
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -133,7 +143,11 @@ def main(argv: list[str] | None = None) -> int:
 
     errors: dict[str, str] = {}
     if args.predictions:
-        preds, lat = load_predictions(args.predictions)
+        try:
+            preds, lat = load_predictions(args.predictions)
+        except (OSError, ValueError) as e:
+            print(f"BAD PREDICTIONS: {e}")
+            return 1
     else:
         rep = check_dataset(labels, args.data)
         if args.dry_run or not rep["ready"]:

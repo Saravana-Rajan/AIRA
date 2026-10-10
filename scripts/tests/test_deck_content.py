@@ -5,9 +5,18 @@ editing costs points. The build overrides (docs/superpowers/plans/2026-10-10-00-
 removed several services, and some spec ideas are not built yet. The deck may name those only on
 the roadmap slide (13), never as part of the prototype.
 """
-import os
 import re
 from pathlib import Path
+
+# One rule list for the markdown (here) and the exported PDF (scripts/check_deck_pdf.py).
+from check_deck_pdf import (
+    BANNED_WORDS,
+    COUNTERFEIT_CLAIMS,
+    NOT_IN_PROTOTYPE,
+    ROADMAP_SLIDE,
+    RUBRIC,
+    project_id_from_env,
+)
 
 ROOT = Path(__file__).resolve().parents[2]
 SUBMISSION = ROOT / "docs" / "submission"
@@ -15,30 +24,12 @@ DECK = SUBMISSION / "deck-content.md"
 DIAGRAMS = SUBMISSION / "diagrams"
 ARCHITECTURE = DIAGRAMS / "architecture.mmd"
 PROCESS_FLOW = DIAGRAMS / "process-flow.mmd"
-ROADMAP_SLIDE = 13
-
-RUBRIC = [
-    "Generative AI", "Gemini", "Google Cloud architecture", "Cloud Run", "Firestore", "Firebase",
-    "scalab", "sustainab", "impact", "measurable", "original", "accessib", "user experience",
-    "functional prototype",
-]
-
-# Removed by build overrides §1, or not built (no evidence-image store, no on-phone face blur).
-# Allowed only on the roadmap slide.
-NOT_IN_PROTOTYPE = [
-    "Pub/Sub", "BigQuery", "Remote Config", "Cloud Scheduler", "App Check",
-    "Cloud Messaging", "FCM", "Firebase Auth", "Cloud Build", "us-central1",
-    "Cloud Storage", "blurred",
-]
 
 FINAL_MODELS = ["gemini-3.8-live", "gemini-robotics-er-2-preview", "gemini-3.8-flash", "gemini-3.6-flash"]
 RETIRED_MODELS = [
     "gemini-robotics-er-1.6", "gemini-3.8-live-extended-thinking", "gemini-3.1-pro",
     "gemini-2.5-computer-use",
 ]
-
-BANNED_WORDS = ("udhaar", "kaggle", "aira business")
-COUNTERFEIT_CLAIMS = ("counterfeit detection", "detects counterfeit", "fake note detection", "fake-note detection")
 
 SLIDE_RE = re.compile(r"^## Slide (\d+):", flags=re.MULTILINE)
 H2_RE = re.compile(r"^## ", flags=re.MULTILINE)
@@ -154,21 +145,8 @@ def test_slide_10_never_states_a_cost_before_it_is_computed():
     assert not re.search(r"₹\s*\d|\d\s*₹|\$\s*\d", body), "cost slide states a number not printed by cost_per_sale.py"
 
 
-def _project_id() -> str:
-    """GCP_PROJECT from the environment or a local (git-ignored) .env; never written in the repo."""
-    project = os.environ.get("GCP_PROJECT", "").strip()
-    for env_file in (ROOT / ".env", ROOT / "services" / "live" / ".env"):
-        if project or not env_file.exists():
-            continue
-        for line in env_file.read_text(encoding="utf-8").splitlines():
-            key, _, value = line.partition("=")
-            if key.strip() == "GCP_PROJECT":
-                project = value.strip().strip("\"'")
-    return project
-
-
 def test_no_project_id_secrets_or_personal_contacts():
-    project = _project_id()
+    project = project_id_from_env()
     for name, body in all_files().items():
         if project:
             assert project not in body, f"{name} contains the GCP project id"

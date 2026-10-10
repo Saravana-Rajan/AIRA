@@ -1,13 +1,16 @@
 """Task 3 (sarmitha/03): location_remember and product_identify Live tools."""
-import sys
-import types
+from pathlib import Path
 
 import pytest
 
+from aira_live.business import catalog, seed
+from aira_live.business.store import MemoryStore, set_store
 from aira_live.frames import Frame
 from aira_live.tools import products
 from aira_live.vision.gemini import VisionError
 from aira_live.vision.identify import IdentifyResult, ProductRef
+
+MURUGAN_CATALOG = Path(__file__).resolve().parents[4] / "content" / "catalog" / "murugan_dairy.json"
 
 CURD = ProductRef(sku="sakthi_curd_1l", name="Sakthi curd", brand="Sakthi", pack="1 L")
 MILK = ProductRef(sku="aavin_milk_500ml", name="Aavin milk", brand="Aavin", pack="0.5 L")
@@ -158,59 +161,69 @@ async def test_product_identify_vision_down_is_honest(wired, monkeypatch):
     assert out["say"] == "I can't reach the AI right now. Please try again in a minute."
 
 
-# --- catalog_resolve (Kanish's business.catalog, imported at call time) ---------------------------------------
-
-
-async def test_catalog_resolve_uses_business_catalog(monkeypatch):
-    fake = types.ModuleType(products.CATALOG_MODULE)
-    seen = []
-
-    async def resolve(shop_id, spoken, lang):
-        seen.append((shop_id, spoken, lang))
-        return CURD
-
-    fake.resolve = resolve
-    monkeypatch.setitem(sys.modules, products.CATALOG_MODULE, fake)
-    assert await products.catalog_resolve("demo", "thayir", "ta") == CURD
-    assert seen == [("demo", "thayir", "ta")]
+# --- the real business.catalog.resolve over the seeded Murugan Dairy catalog ----------------------------------
 
 
 @pytest.fixture
-def no_catalog(fake_db, monkeypatch):
-    monkeypatch.setattr(products, "_catalog_module", lambda: None)
-    base = ("shops", "demo", "products")
-    fake_db.store[base + ("aavin_milk_500ml",)] = {
-        "sku": "aavin_milk_500ml", "name": "Aavin Milk 500 ml", "brand": "Aavin", "pack": "500 ml pouch",
-        "defaultPack": True, "aliases": {"en": ["aavin milk", "milk"], "ta": ["பால்"]}}
-    fake_db.store[base + ("aavin_milk_1l",)] = {
-        "sku": "aavin_milk_1l", "name": "Aavin Milk 1 L", "brand": "Aavin", "pack": "1 L pouch",
-        "defaultPack": False, "aliases": {"en": ["one litre milk", "aavin milk", "milk"], "ta": ["பால்"]}}
-    fake_db.store[base + ("sakthi_curd_1l",)] = {
-        "sku": "sakthi_curd_1l", "name": "Sakthi Curd 1 L", "brand": "Sakthi", "pack": "1 L pack",
-        "aliases": {"en": ["curd"], "ta": ["தயிர்"]}}
-    return fake_db
+async def murugan(fake_db, session, monkeypatch):
+    """Murugan Dairy seeded into both backends: business.store (catalog.resolve) and aira_live.db (shop_products)."""
+    data = seed.load_catalog(MURUGAN_CATALOG)
+    store = MemoryStore()
+    await seed.seed_into(store, data, env={})
+    for p in data["products"]:
+        fake_db.store[("shops", "murugan_dairy", "products", p["sku"])] = dict(p)
+    set_store(store)
+    session.shop_id = "murugan_dairy"
+    monkeypatch.setattr(products, "get_session", lambda: session)
+    yield session
+    set_store(None)
 
 
-async def test_fallback_resolve_alias_name_and_sku(no_catalog):
-    assert (await products.catalog_resolve("demo", "Curd", "en")).sku == "sakthi_curd_1l"
-    assert (await products.catalog_resolve("demo", "தயிர்", "ta")).sku == "sakthi_curd_1l"
-    assert (await products.catalog_resolve("demo", "aavin milk 1 l", "en")).sku == "aavin_milk_1l"
-    assert (await products.catalog_resolve("demo", "aavin_milk_1l", "en")).sku == "aavin_milk_1l"
-    assert (await products.catalog_resolve("demo", "one litre milk", "en")).pack == "1 L pouch"
+def test_catalog_resolve_is_business_catalog():
+    assert products.catalog_resolve is catalog.resolve
 
 
-async def test_fallback_resolve_shared_alias_picks_default_pack(no_catalog):
-    assert (await products.catalog_resolve("demo", "milk", "en")).sku == "aavin_milk_500ml"
+async def test_location_remember_real_catalog_tamil_alias(murugan, fake_db):
+    murugan.lang = "ta"
+    out = await products.location_remember("தயிர்", "fridge two, middle shelf, left")
+    assert out["zone"] == "fridge2/middle/left"
+    assert out["say"].startswith("சேமித்தேன்: Sakthi Curd 1 L ")
+    doc = fake_db.store[("shops", "murugan_dairy", "locations", "sakthi_curd_1l")]
+    assert doc["confirmedBy"] == "user" and doc["zone"] == "fridge2/middle/left"
 
 
-async def test_fallback_resolve_unknown_or_blank_is_none(no_catalog):
-    assert await products.catalog_resolve("demo", "biscuit", "en") is None
-    assert await products.catalog_resolve("demo", "   ", "en") is None
+async def test_location_remember_real_catalog_size_hint(murugan, fake_db):
+    out = await products.location_remember("half litre curd", "fridge 2 top shelf")
+    assert out["zone"] == "fridge2/top"
+    assert ("shops", "murugan_dairy", "locations", "sakthi_curd_500ml") in fake_db.store
+    assert ("shops", "murugan_dairy", "locations", "sakthi_curd_1l") not in fake_db.store
 
 
-async def test_fallback_resolve_ambiguous_without_default_is_none(no_catalog):
-    no_catalog.store[("shops", "demo", "products", "aavin_milk_500ml")]["defaultPack"] = False
-    assert await products.catalog_resolve("demo", "milk", "en") is None
+async def test_location_remember_real_catalog_unknown_saves_nothing(murugan, fake_db):
+    out = await products.location_remember("biscuit", "counter")
+    assert out == {"say": "I don't know the product \"biscuit\".", "zone": None}
+    assert not any(p[2] in ("locations", "memoryEvents") for p in fake_db.store if len(p) > 2)
+
+
+async def test_shop_products_match_catalog_refs(murugan):
+    """identify / product_find compare a camera sku with a resolved ref: both sides must name packs the same."""
+    refs = await products.shop_products("murugan_dairy")
+    assert len(refs) == 10
+    for ref in refs:
+        assert await catalog.resolve("murugan_dairy", ref.sku, "en") == ref
+
+
+async def test_product_identify_real_catalog_speaks_pack(murugan, monkeypatch):
+    _identify_frame(murugan)
+
+    async def ident(frame, candidates):
+        assert len(candidates) == 10
+        return IdentifyResult(sku="aavin_buttermilk_200ml", confidence=0.88, alternatives=[])
+
+    monkeypatch.setattr(products, "identify_product", ident)
+    out = await products.product_identify()
+    assert out == {"say": "This is Aavin Buttermilk 200 ml, 200 ml pouch.", "sku": "aavin_buttermilk_200ml",
+                   "confidence": 0.88}
 
 
 # --- registry ---------------------------------------------------------------------------------------------------
