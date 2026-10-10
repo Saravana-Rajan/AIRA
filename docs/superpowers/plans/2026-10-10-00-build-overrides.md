@@ -82,6 +82,25 @@ All resources are named `aira-*`.
 - Real Gemini calls are allowed only in explicitly marked spike/bench scripts and opt-in tests (`AIRA_LIVE_TESTS=1`).
 - The default test suite must pass offline with fakes.
 
+## 7. Models: final choice (verified against the project's model list, 2026-10-10)
+
+`aira_live/models.py` defaults. Env `AIRA_MODEL_<ROLE>` overrides them, then the Firestore `config/runtime` doc does.
+
+| Role | Model | Status | Why |
+|---|---|---|---|
+| `live` | `gemini-3.8-live` | Stable | Lowest-latency voice agent; barge-in; Tamil/Hindi |
+| `point`, `count` | `gemini-robotics-er-2-preview` | Preview | The only spatial/counting model |
+| fallback for `point`, `count` | `gemini-3.8-flash` | Stable | |
+| `read` (invoice/cash read A) | `gemini-3.8-flash` | Stable | Google's "most intelligent Flash" |
+| `verify` (independent read B + safety number check) | `gemini-3.6-flash` | Stable | A **different model generation** than read A, so the two reads aren't correlated |
+
+**Do not use:**
+- `gemini-3.8-live-extended-thinking`: slower; async calls only.
+- `gemini-3.1-pro-preview`: preview and slower.
+- `gemini-robotics-er-1.6-preview`: shut down.
+- `gemini-2.5-computer-use-preview`.
+- Any image or video generation models.
+
 ## 6. Visual design: LIGHT THEME ONLY
 
 The owner uses AIRA by voice, but judges, family and helpers see the screen. UX is 10% of the score, and there's a Best UI/UX prize. **Light theme only.** No dark mode, no `prefers-color-scheme: dark` styles.
