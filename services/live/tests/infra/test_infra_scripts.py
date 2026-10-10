@@ -41,7 +41,7 @@ REQUIRED_DEPLOY_FLAGS = {
 }
 SECRETS_FLAG = (
     "--update-secrets GEMINI_API_KEY=aira-gemini-api-key:latest,AIRA_JOB_TOKEN=aira-job-token:latest,"
-    "WHATSAPP_VERIFY_TOKEN=aira-whatsapp-verify-token:latest"
+    "WHATSAPP_VERIFY_TOKEN=aira-whatsapp-verify-token:latest,TELEGRAM_WEBHOOK_SECRET=aira-telegram-webhook-secret:latest"
 )
 CONDITION = "assertion.repository=='Saravana-Rajan/AIRA' && assertion.ref=='refs/heads/main'"
 

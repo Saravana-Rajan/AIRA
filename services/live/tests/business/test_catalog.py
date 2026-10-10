@@ -146,7 +146,7 @@ async def test_resolve_supplier(store, spoken, lang, supplier_id):
 async def test_resolve_supplier_returns_the_order_fields(store):
     sup = await catalog.resolve_supplier(SHOP, "sakthi vendor", "en")
     assert {"id", "name", "phone", "channel", "products", "aliases"} <= set(sup)
-    assert sup["name"] == "Sakthi curd vendor" and sup["channel"] == "whatsapp" and sup["phone"] == ""
+    assert sup["name"] == "Sakthi curd vendor" and sup["channel"] == "telegram" and sup["phone"] == ""
     assert sup["products"] == ["sakthi_curd_500ml", "sakthi_curd_1l"]
     assert "phoneEnv" not in sup
 
@@ -228,7 +228,7 @@ async def test_seed_writes_shop_products_and_suppliers(store):
     assert (await store.get(f"shops/{SHOP}"))["name"] == "Murugan Dairy"
     curd = await store.get(f"shops/{SHOP}/products/sakthi_curd_1l")
     assert curd["price"] == 60 and curd["sku"] == "sakthi_curd_1l" and curd["unit"] == "L"
-    assert (await store.get(f"shops/{SHOP}/suppliers/sakthi_vendor"))["channel"] == "whatsapp"
+    assert (await store.get(f"shops/{SHOP}/suppliers/sakthi_vendor"))["channel"] == "telegram"
     assert (await store.get(f"shops/{SHOP}/suppliers/arun_distributor"))["channel"] == "call"
     assert [sku for sku, _ in await store.list(f"shops/{SHOP}/products")] == sorted(ALL_SKUS)
     assert [sid for sid, _ in await store.list(f"shops/{SHOP}/suppliers")] == \

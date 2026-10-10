@@ -64,12 +64,12 @@
                  "en": ["arun ice cream box", "ice cream box", "arun family pack", "ice cream", "icecream"]}}
   ],
   "suppliers": [
-    {"id": "aavin_vendor", "name": "Aavin vendor", "channel": "whatsapp", "phoneEnv": "SUPPLIER_AAVIN_PHONE",
+    {"id": "aavin_vendor", "name": "Aavin vendor", "channel": "telegram", "phoneEnv": "SUPPLIER_AAVIN_PHONE",
      "products": ["aavin_milk_500ml", "aavin_milk_1l", "aavin_buttermilk_200ml", "aavin_ghee_200ml", "aavin_ghee_500ml", "aavin_paneer_200g", "aavin_butter_100g"],
      "aliases": {"ta": ["ஆவின் வியாபாரி", "பால் வியாபாரி", "பால்காரர்", "ஆவின்"],
                  "hi": ["आविन वाले", "दूध वाले", "आविन"],
                  "en": ["aavin vendor", "milk vendor", "milkman", "aavin agent", "aavin"]}},
-    {"id": "sakthi_vendor", "name": "Sakthi curd vendor", "channel": "whatsapp", "phoneEnv": "SUPPLIER_SAKTHI_PHONE",
+    {"id": "sakthi_vendor", "name": "Sakthi curd vendor", "channel": "telegram", "phoneEnv": "SUPPLIER_SAKTHI_PHONE",
      "products": ["sakthi_curd_500ml", "sakthi_curd_1l"],
      "aliases": {"ta": ["சக்தி வியாபாரி", "தயிர் வியாபாரி", "சக்தி"],
                  "hi": ["शक्ति वाले", "दही वाले", "शक्ति"],
