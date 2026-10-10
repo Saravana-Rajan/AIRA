@@ -1,0 +1,20 @@
+{
+  "confirm.unknown": "वह अनुरोध नहीं मिला।",
+  "confirm.already": "वह पहले ही हो चुका है।",
+  "confirm.cancelled": "ठीक है, रद्द कर दिया।",
+  "error.unsupported": "माफ़ कीजिए, मैं समझ नहीं पाया।",
+  "error.too_large": "वह तस्वीर बहुत बड़ी है।",
+  "error.internal": "कुछ गड़बड़ हो गई। फिर से कोशिश कीजिए।",
+  "mock.echo": "(mock) आपने कहा: {text}",
+  "vision.aim.move_back": "फ़ोन को थोड़ा पीछे ले जाइए।",
+  "vision.aim.spread_out": "गिनने के लिए सामान को अलग-अलग रखिए।",
+  "vision.aim.show_items": "सामान कैमरे के सामने दिखाइए।",
+  "vision.aim.show_label": "पैकेट घुमाइए ताकि लेबल कैमरे की ओर हो।",
+  "vision.aim.hold_closer": "इसे कैमरे के पास लाइए।",
+  "vision.aim.not_visible": "अभी मुझे वह दिखाई नहीं दे रहा।",
+  "cash.spread_notes": "नोट अलग-अलग फैलाइए ताकि हर नोट दिखे।",
+  "bump.stop": "रुकिए!",
+  "bump.left_right": "आपके {side} तरफ़ रुकावट है।",
+  "bump.side.left": "बाएँ",
+  "bump.side.right": "दाएँ"
+}

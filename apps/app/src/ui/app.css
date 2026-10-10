@@ -1,0 +1,302 @@
+/* AIRA phone screen. Light theme only; every colour comes from tokens.css. */
+@import "./tokens.css";
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  margin: 0;
+  height: 100%;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-size: var(--text-body);
+  line-height: 1.4;
+  -webkit-font-smoothing: antialiased;
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* ---------- the one gesture surface ---------- */
+.surface {
+  display: block;
+  width: 100vw;
+  height: 100dvh;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: var(--bg);
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  touch-action: manipulation;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+}
+.surface:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: -6px;
+}
+
+/* ---------- state colour ---------- */
+.screen {
+  --state: var(--brand-blue);
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  padding: max(var(--gutter), env(safe-area-inset-top)) var(--gutter) max(var(--gutter), env(safe-area-inset-bottom));
+  gap: 12px;
+}
+.screen[data-status="connecting"] { --state: var(--text-muted); }
+.screen[data-status="ready"] { --state: var(--brand-blue); }
+.screen[data-status="listening"] { --state: var(--brand-cyan); }
+.screen[data-status="thinking"] { --state: var(--brand-purple); }
+.screen[data-status="counting"] { --state: var(--brand-blue); }
+.screen[data-status="warning"] { --state: var(--brand-orange); }
+.screen[data-status="stop"] { --state: var(--danger); }
+
+/* ---------- top bar ---------- */
+.topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+.brand__logo {
+  width: 48px;
+  height: 48px;
+  border-radius: 14px;
+  flex: none;
+}
+.brand__shop {
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.status-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 16px;
+  border-radius: var(--radius-pill);
+  border: 2px solid var(--state);
+  background: var(--bg);
+  color: var(--text);
+  font-size: var(--text-status);
+  font-weight: 600;
+  white-space: nowrap;
+  transition: border-color 200ms ease;
+}
+.status-chip__dot {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--state);
+  flex: none;
+}
+.screen[data-status="listening"] .status-chip__dot,
+.screen[data-status="stop"] .status-chip__dot {
+  animation: pulse 1.1s ease-in-out infinite;
+}
+.screen[data-status="stop"] .status-chip {
+  background: var(--danger);
+  border-color: var(--danger);
+  color: var(--bg);
+}
+.screen[data-status="stop"] .status-chip__dot {
+  background: var(--bg);
+}
+
+/* ---------- voice orb ---------- */
+.stage {
+  flex: 1 1 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 160px;
+}
+.orb {
+  --level: 0;
+  position: relative;
+  display: block;
+  width: min(62vw, 34vh, 300px);
+  aspect-ratio: 1;
+}
+.orb__waves {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+.orb__wave {
+  fill: none;
+  stroke: var(--state);
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-dasharray: 30 20;
+  opacity: calc(0.25 + var(--level) * 0.6);
+  transform-origin: 50% 50%;
+  transition: stroke 200ms ease, opacity 120ms linear;
+}
+.orb__wave--2 { opacity: calc(0.2 + var(--level) * 0.5); }
+.orb__wave--3 { opacity: calc(0.15 + var(--level) * 0.4); }
+.screen[data-status="listening"] .orb__wave,
+.screen[data-status="thinking"] .orb__wave {
+  animation: spin 6s linear infinite;
+}
+.screen[data-status="listening"] .orb__wave--2 { animation-direction: reverse; }
+.orb__core {
+  position: absolute;
+  inset: 22%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: radial-gradient(circle at 35% 30%, var(--bg), var(--surface) 55%, var(--border));
+  border: 3px solid var(--state);
+  box-shadow: 0 10px 40px -12px var(--state);
+  transform: scale(calc(1 + var(--level) * 0.18));
+  transition: transform 90ms linear, border-color 200ms ease, box-shadow 200ms ease;
+  overflow: hidden;
+}
+.orb__swirl {
+  position: absolute;
+  inset: -20%;
+  background: var(--gradient);
+  opacity: 0.16;
+  border-radius: 50%;
+}
+.screen[data-status="thinking"] .orb__swirl {
+  animation: spin 3s linear infinite;
+  opacity: 0.28;
+}
+.orb__spark {
+  position: relative;
+  width: 46%;
+  height: 46%;
+  fill: var(--state);
+  transition: fill 200ms ease;
+}
+.screen[data-status="listening"] .orb__core {
+  animation: breathe 1.6s ease-in-out infinite;
+}
+
+/* ---------- live captions ---------- */
+.captions {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.caption {
+  display: block;
+  font-weight: 600;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+.caption--hint {
+  color: var(--text-muted);
+  font-size: var(--text-status);
+  font-weight: 500;
+  text-align: center;
+}
+.caption--user {
+  color: var(--text-muted);
+  font-size: var(--text-caption-user);
+}
+.caption--aira {
+  color: var(--text);
+  font-size: var(--text-caption-aira);
+  font-weight: 700;
+}
+.caption--user .caption__text,
+.caption--aira .caption__text {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  overflow: hidden;
+}
+
+/* ---------- current task ---------- */
+.task-card {
+  --tone: var(--brand-blue);
+  display: flex;
+  align-items: stretch;
+  gap: 14px;
+  padding: 16px 18px;
+  border-radius: var(--radius-card);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  animation: rise 220ms ease-out;
+}
+.task-card[data-tone="ok"] { --tone: var(--ok); }
+.task-card[data-tone="warn"] { --tone: var(--brand-orange); }
+.task-card[data-tone="danger"] { --tone: var(--danger); }
+.task-card__mark {
+  width: 6px;
+  border-radius: var(--radius-pill);
+  background: var(--tone);
+  flex: none;
+}
+.task-card__body {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.task-card__title {
+  color: var(--text-muted);
+  font-size: var(--text-body);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.task-card__detail {
+  color: var(--text);
+  font-size: var(--text-task);
+  font-weight: 700;
+  line-height: 1.2;
+  overflow-wrap: anywhere;
+}
+
+/* ---------- motion ---------- */
+@keyframes pulse {
+  0%, 100% { transform: scale(1); opacity: 1; }
+  50% { transform: scale(1.45); opacity: 0.55; }
+}
+@keyframes breathe {
+  0%, 100% { box-shadow: 0 10px 40px -12px var(--state); }
+  50% { box-shadow: 0 10px 60px -4px var(--state); }
+}
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+@keyframes rise {
+  from { transform: translateY(12px); opacity: 0; }
+  to { transform: none; opacity: 1; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation: none !important;
+    transition: none !important;
+  }
+  .orb__core {
+    transform: none;
+  }
+}

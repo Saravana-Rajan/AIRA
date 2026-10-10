@@ -1,0 +1,106 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "AIRA shop catalog seed",
+  "description": "Demo shop, products, suppliers and optional starting stock, seeded into Firestore database 'aira' by scripts/seed_firestore.py. price/costPrice are integer rupees per selling unit: per litre for unit L, per pack/jar/box otherwise.",
+  "type": "object",
+  "required": ["note", "shop", "products", "suppliers"],
+  "properties": {
+    "note": {"type": "string", "minLength": 1},
+    "shop": {
+      "type": "object",
+      "required": ["id", "name", "city"],
+      "properties": {
+        "id": {"type": "string", "pattern": "^[a-z0-9_]+$"},
+        "name": {"type": "string", "minLength": 1},
+        "city": {"type": "string", "minLength": 1},
+        "currency": {"const": "INR"},
+        "timezone": {"type": "string"}
+      }
+    },
+    "products": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"$ref": "#/$defs/product"}
+    },
+    "suppliers": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"$ref": "#/$defs/supplier"}
+    },
+    "inventory": {
+      "description": "Optional starting stock (selling units). Products without a row start at onHand 0.",
+      "type": "array",
+      "items": {"$ref": "#/$defs/stock"}
+    }
+  },
+  "$defs": {
+    "aliases": {
+      "type": "object",
+      "required": ["ta", "hi", "en"],
+      "properties": {
+        "ta": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}},
+        "hi": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}},
+        "en": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}}
+      }
+    },
+    "product": {
+      "type": "object",
+      "required": ["sku", "name", "brand", "unit", "price", "costPrice", "reorderThreshold", "shelfLifeDays", "aliases"],
+      "properties": {
+        "sku": {"type": "string", "pattern": "^[a-z0-9_]+$"},
+        "name": {"type": "string", "minLength": 1},
+        "brand": {"type": "string", "minLength": 1},
+        "pack": {"type": "string", "description": "Spoken pack description, e.g. \"500 ml pouch\""},
+        "unit": {"enum": ["L", "pack", "jar", "box"]},
+        "packSizeL": {"type": ["number", "null"], "exclusiveMinimum": 0},
+        "packSizeG": {"type": ["number", "null"], "exclusiveMinimum": 0},
+        "defaultPack": {"type": "boolean", "description": "Pack chosen when the owner names the product without a size"},
+        "price": {"type": "integer", "minimum": 1},
+        "costPrice": {"type": "integer", "minimum": 1},
+        "reorderThreshold": {"type": "number", "minimum": 0},
+        "shelfLifeDays": {"type": "integer", "minimum": 1},
+        "demoDailyBase": {"type": "number", "minimum": 0, "description": "Demo-only daily sales base for the demo sales backfill"},
+        "aliases": {"$ref": "#/$defs/aliases"}
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"unit": {"const": "L"}}, "required": ["unit"]},
+          "then": {"required": ["packSizeL"], "properties": {"packSizeL": {"type": "number"}}}
+        }
+      ]
+    },
+    "supplier": {
+      "type": "object",
+      "required": ["id", "name", "channel", "phoneEnv", "products"],
+      "properties": {
+        "id": {"type": "string", "pattern": "^[a-z0-9_]+$"},
+        "name": {"type": "string", "minLength": 1},
+        "channel": {"enum": ["whatsapp", "telegram", "call"]},
+        "phoneEnv": {"type": "string", "pattern": "^[A-Z][A-Z0-9_]*$", "description": "Env var holding the E.164 phone number; numbers are never committed"},
+        "products": {"type": "array", "minItems": 1, "items": {"type": "string", "pattern": "^[a-z0-9_]+$"}},
+        "aliases": {"$ref": "#/$defs/aliases"}
+      },
+      "not": {"required": ["phone"]}
+    },
+    "stock": {
+      "type": "object",
+      "required": ["sku", "onHand"],
+      "properties": {
+        "sku": {"type": "string", "pattern": "^[a-z0-9_]+$"},
+        "onHand": {"type": "number", "minimum": 0},
+        "batches": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["batchId", "qty", "expiryDate"],
+            "properties": {
+              "batchId": {"type": "string", "minLength": 1},
+              "qty": {"type": "number", "minimum": 0},
+              "expiryDate": {"type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}$"}
+            }
+          }
+        }
+      }
+    }
+  }
+}

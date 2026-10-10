@@ -1,0 +1,14 @@
+{
+  "name": "AIRA",
+  "short_name": "AIRA",
+  "description": "A voice-first assistant for a blind shopkeeper.",
+  "start_url": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#FFFFFF",
+  "theme_color": "#FFFFFF",
+  "icons": [
+    { "src": "/icons/aira-logo-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "/icons/aira-logo-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+  ]
+}

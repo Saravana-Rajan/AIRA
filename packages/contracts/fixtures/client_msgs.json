@@ -1,0 +1,14 @@
+[
+  {"t":"hello","uid":"u1","shopId":"murugan_dairy","lang":"ta","verbosity":"short","appVersion":"0.1.0"},
+  {"t":"hello","uid":"u1","shopId":"murugan_dairy","lang":"en","verbosity":"detail","appVersion":"0.1.0","resume":"s1"},
+  {"t":"audio","pcm16":"AAAA"},
+  {"t":"frame","id":"f1","jpeg":"/9j/4AAQ","w":640,"h":480,"ts":1760000000000,"purpose":"count"},
+  {"t":"frame","id":"f2","jpeg":"/9j/4AAQ","w":1280,"h":720,"ts":1760000000400,"purpose":"cash"},
+  {"t":"text","text":"order 30 litres sakthi curd"},
+  {"t":"event","name":"fingertip_in_target","data":{"frameId":"f1","dwellMs":500}},
+  {"t":"event","name":"visibility","data":{"state":"hidden"}},
+  {"t":"event","name":"network","data":{"online":false}},
+  {"t":"confirm","id":"c1","answer":"yes"},
+  {"t":"confirm","id":"c2","answer":"no","value":"28"},
+  {"t":"stop"}
+]

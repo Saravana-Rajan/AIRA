@@ -1,0 +1,22 @@
+{
+  "firestore": [
+    {
+      "database": "aira",
+      "rules": "infra/firestore.rules",
+      "indexes": "infra/firestore.indexes.json"
+    }
+  ],
+  "hosting": {
+    "site": "aira-shop",
+    "public": "dist/hosting",
+    "ignore": ["firebase.json", "**/.*", "**/node_modules/**"],
+    "rewrites": [
+      { "source": "/dashboard/**", "destination": "/dashboard/index.html" },
+      { "source": "**", "destination": "/index.html" }
+    ]
+  },
+  "emulators": {
+    "firestore": { "port": 8085 },
+    "ui": { "enabled": false }
+  }
+}

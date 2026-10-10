@@ -1,0 +1,195 @@
+/* AIRA Shop Dashboard. Light theme only; colours come from tokens.css. */
+@import "./tokens.css";
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-size: var(--text-body);
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+a {
+  color: var(--brand-blue);
+}
+
+:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+.skip-link {
+  position: absolute;
+  left: var(--gutter);
+  top: -48px;
+  padding: 8px 12px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.skip-link:focus {
+  top: var(--gutter);
+}
+
+/* ---------- header ---------- */
+.header {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px var(--gutter);
+  border-bottom: 1px solid var(--border);
+  background: var(--bg);
+}
+.header::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -1px;
+  height: 3px;
+  background: var(--gradient);
+}
+.header__logo {
+  width: 40px;
+  height: 40px;
+  border-radius: 12px;
+}
+.header__title {
+  margin: 0;
+  font-size: var(--text-h1);
+  font-weight: 700;
+  line-height: 1.2;
+}
+.header__sub {
+  display: block;
+  color: var(--text-muted);
+  font-size: var(--text-small);
+  font-weight: 500;
+}
+.live {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  color: var(--text-muted);
+  font-size: var(--text-small);
+  font-weight: 600;
+}
+.live__dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--ok);
+  animation: live-pulse 1.6s ease-in-out infinite;
+}
+
+/* ---------- cards ---------- */
+.main {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: var(--gutter);
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: var(--gutter);
+}
+@media (min-width: 760px) {
+  .main {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+@media (min-width: 1100px) {
+  .main {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+.card {
+  min-width: 0;
+  padding: 18px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+}
+.card--wide {
+  grid-column: 1 / -1;
+}
+.card__title {
+  margin: 0 0 12px;
+  font-size: var(--text-h2);
+  font-weight: 700;
+}
+.muted {
+  color: var(--text-muted);
+}
+
+/* ---------- stock table ---------- */
+.table-wrap {
+  overflow-x: auto;
+}
+.table {
+  width: 100%;
+  border-collapse: collapse;
+}
+.table caption {
+  text-align: left;
+  color: var(--text-muted);
+  font-size: var(--text-small);
+  padding-bottom: 8px;
+}
+.table th,
+.table td {
+  padding: 10px 8px;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+}
+.table th {
+  color: var(--text-muted);
+  font-size: var(--text-small);
+  font-weight: 600;
+}
+.table td.num {
+  font-variant-numeric: tabular-nums;
+}
+.badge {
+  display: inline-block;
+  padding: 2px 10px;
+  border-radius: var(--radius-pill);
+  font-size: var(--text-small);
+  font-weight: 600;
+  color: var(--text);
+  background: var(--bg);
+  border: 2px solid var(--border);
+}
+.badge--ok {
+  border-color: var(--ok);
+}
+.badge--low {
+  border-color: var(--danger);
+}
+
+@keyframes live-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation: none !important;
+    transition: none !important;
+  }
+}

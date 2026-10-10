@@ -1,0 +1,22 @@
+rules_version = '2';
+
+// Rules for the Firestore database "aira" (firebase.json → firestore[{ "database": "aira" }]).
+// There is no Firebase Auth in this build:
+// - murugan_dairy is the public demo shop shown on the Shop Dashboard (demo data only), so anyone can read it.
+// - Every client write is denied. aira-live writes with its service account (server SDK, rules don't apply):
+//   the model proposes, the backend commits.
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // The shop doc itself and every subcollection (products, inventory, ledger, sales, orders, ...).
+    match /shops/{shopId}/{document=**} {
+      allow read: if shopId == 'murugan_dairy';
+      allow write: if false;
+    }
+
+    // Everything else (idempotency/, config/, other shops) is server-only.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

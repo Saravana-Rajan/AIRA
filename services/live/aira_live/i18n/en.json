@@ -1,0 +1,20 @@
+{
+  "confirm.unknown": "I couldn't find that request.",
+  "confirm.already": "That was already done.",
+  "confirm.cancelled": "Okay, cancelled.",
+  "error.unsupported": "Sorry, I didn't understand that.",
+  "error.too_large": "That image is too large.",
+  "error.internal": "Something went wrong. Please try again.",
+  "mock.echo": "(mock) you said: {text}",
+  "vision.aim.move_back": "Move the phone back a little.",
+  "vision.aim.spread_out": "Spread the items apart so I can count them.",
+  "vision.aim.show_items": "Show me the items in front of the camera.",
+  "vision.aim.show_label": "Turn the pack so the label faces the camera.",
+  "vision.aim.hold_closer": "Hold it closer to the camera.",
+  "vision.aim.not_visible": "I can't see it right now.",
+  "cash.spread_notes": "Spread the notes apart so each one is visible.",
+  "bump.stop": "Stop!",
+  "bump.left_right": "Obstacle on your {side}.",
+  "bump.side.left": "left",
+  "bump.side.right": "right"
+}
