@@ -104,6 +104,12 @@ Use `${{ secrets.X }}` everywhere. **Never** use `vars.`.
      - `VITE_AIRA_LIVE_WS=wss://$WS_HOST/ws` + the `VITE_FIREBASE_*` secrets → `bash scripts/build_hosting.sh`.
      - `npx firebase-tools@latest deploy --only hosting:aira-shop --project ${{ secrets.GCP_PROJECT }} --non-interactive`. firebase-tools uses `GOOGLE_APPLICATION_CREDENTIALS` from the auth step.
 
+**Who can deploy (owner's rule, strict):** ONLY pushes by **`Saravana-Rajan`** to `main` of **`Saravana-Rajan/AIRA`**.
+- The GCP provider condition enforces this: `assertion.repository=='Saravana-Rajan/AIRA' && assertion.ref=='refs/heads/main' && assertion.actor=='Saravana-Rajan'`. It's already applied.
+- `deploy.yml` must ALSO gate the deploy job with `if: github.repository == 'Saravana-Rajan/AIRA' && github.ref == 'refs/heads/main' && github.actor == 'Saravana-Rajan'`.
+- **No agent ever pushes to `main`.** Integration leaves the result on a branch, and the owner pushes it.
+- Never touch any other git repo or GCP project.
+
 **Workflow security** (from the automated security review; mandatory in both `ci.yml` and `deploy.yml`):
 - **Permissions:** top-level `permissions: { contents: read }` only. Put `id-token: write` **only** on the `deploy` job (`jobs.deploy.permissions: { contents: read, id-token: write }`). The `test` job never gets `id-token`.
 - **Pin every action to a full commit SHA**, with the tag as a comment:
