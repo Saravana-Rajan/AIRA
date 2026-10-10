@@ -82,6 +82,39 @@ All resources are named `aira-*`.
 - Real Gemini calls are allowed only in explicitly marked spike/bench scripts and opt-in tests (`AIRA_LIVE_TESTS=1`).
 - The default test suite must pass offline with fakes.
 
+## 3a. Auto-deploy: FINAL setup (already created in GCP and GitHub; deploy.yml MUST match this)
+
+**GitHub repository SECRETS** (not variables; the repo is public, and secrets are masked in logs):
+- `GCP_PROJECT`, `GCP_WIF_PROVIDER`, `GCP_DEPLOY_SA`
+- `VITE_FIREBASE_API_KEY`, `VITE_FIREBASE_AUTH_DOMAIN`, `VITE_FIREBASE_PROJECT_ID`, `VITE_FIREBASE_STORAGE_BUCKET`, `VITE_FIREBASE_MESSAGING_SENDER_ID`, `VITE_FIREBASE_APP_ID`
+
+Use `${{ secrets.X }}` everywhere. **Never** use `vars.`.
+
+**`.github/workflows/deploy.yml`**, on push to `main`; permissions `contents: read`, `id-token: write`:
+1. **test job:** `npm ci && npm test`; `cd services/live && uv sync --frozen && uv run pytest -q`.
+2. **deploy job** (`needs: test`):
+   - `google-github-actions/auth@v2` with `workload_identity_provider: ${{ secrets.GCP_WIF_PROVIDER }}`, `service_account: ${{ secrets.GCP_DEPLOY_SA }}`, `create_credentials_file: true`.
+   - `google-github-actions/setup-gcloud@v2`, then `gcloud auth configure-docker asia-south1-docker.pkg.dev --quiet`.
+   - **Build the image in the runner (NOT Cloud Build):**
+     `docker build -t asia-south1-docker.pkg.dev/${{ secrets.GCP_PROJECT }}/aira/aira-live:${{ github.sha }} services/live`
+     Then `docker push` the same tag.
+   - **Deploy:** `gcloud run deploy aira-live --image <that tag> --region asia-south1 --project ${{ secrets.GCP_PROJECT }} --service-account aira-live@${{ secrets.GCP_PROJECT }}.iam.gserviceaccount.com --min-instances 1 --max-instances 1 --timeout 3600 --session-affinity --allow-unauthenticated --set-secrets GEMINI_API_KEY=aira-gemini-api-key:latest --set-env-vars FIRESTORE_DATABASE=aira,AIRA_DEMO_SHOP=murugan_dairy,AIRA_ALLOW_NO_TOKEN=1,GCP_PROJECT=${{ secrets.GCP_PROJECT }}`
+   - **Hosting:**
+     - `WS_HOST=$(gcloud run services describe aira-live --region asia-south1 --project ... --format='value(status.url)' | sed 's#https://##')`.
+     - `VITE_AIRA_LIVE_WS=wss://$WS_HOST/ws` + the `VITE_FIREBASE_*` secrets → `bash scripts/build_hosting.sh`.
+     - `npx firebase-tools@latest deploy --only hosting:aira-shop --project ${{ secrets.GCP_PROJECT }} --non-interactive`. firebase-tools uses `GOOGLE_APPLICATION_CREDENTIALS` from the auth step.
+
+**Already created in GCP** (don't recreate):
+
+| Resource | Notes |
+|---|---|
+| Service account `aira-live` | Runtime. `datastore.user` limited by IAM condition to database `aira`; `secretAccessor` on `aira-gemini-api-key` only |
+| Service account `aira-deployer` | `workloadIdentityUser` for the repo; `artifactregistry.writer` on repo `aira`; `serviceAccountUser` on `aira-live`; `run.developer` conditioned to `aira-*` services; `firebasehosting.admin`; `serviceUsageConsumer` |
+| Artifact Registry repo `aira` | `asia-south1` |
+| Workload identity | Pool `aira-github-pool`, provider `aira-github` (repo `Saravana-Rajan/AIRA`, ref `refs/heads/main` only) |
+
+`infra/setup_github_deploy.sh` documents exactly these commands; it's re-runnable and idempotent.
+
 ## 7. Models: final choice (verified against the project's model list, 2026-10-10)
 
 `aira_live/models.py` defaults. Env `AIRA_MODEL_<ROLE>` overrides them, then the Firestore `config/runtime` doc does.
