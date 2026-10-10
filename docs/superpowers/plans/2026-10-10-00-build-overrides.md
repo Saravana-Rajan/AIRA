@@ -104,6 +104,21 @@ Use `${{ secrets.X }}` everywhere. **Never** use `vars.`.
      - `VITE_AIRA_LIVE_WS=wss://$WS_HOST/ws` + the `VITE_FIREBASE_*` secrets → `bash scripts/build_hosting.sh`.
      - `npx firebase-tools@latest deploy --only hosting:aira-shop --project ${{ secrets.GCP_PROJECT }} --non-interactive`. firebase-tools uses `GOOGLE_APPLICATION_CREDENTIALS` from the auth step.
 
+**Workflow security** (from the automated security review; mandatory in both `ci.yml` and `deploy.yml`):
+- **Permissions:** top-level `permissions: { contents: read }` only. Put `id-token: write` **only** on the `deploy` job (`jobs.deploy.permissions: { contents: read, id-token: write }`). The `test` job never gets `id-token`.
+- **Pin every action to a full commit SHA**, with the tag as a comment:
+
+| Action | Pinned SHA |
+|---|---|
+| `actions/checkout` | `11d5960a326750d5838078e36cf38b85af677262` (v4) |
+| `actions/setup-node` | `49933ea5288caeca8642d1e84afbd3f7d6820020` (v4) |
+| `astral-sh/setup-uv` | `d0cc045d04ccac9d8b7881df0226f9e82c39688e` (v6) |
+| `google-github-actions/auth` | `c200f3691d83b41bf9bbd8638997a462592937ed` (v2) |
+| `google-github-actions/setup-gcloud` | `e427ad8a34f8676edf47cf7d7925499adf3eb74f` (v2) |
+
+- **No `pull_request_target`.** `ci.yml` uses `pull_request` with no secrets.
+- **Concurrency:** `deploy.yml` sets `concurrency: { group: deploy-main, cancel-in-progress: false }`.
+
 **Already created in GCP** (don't recreate):
 
 | Resource | Notes |
