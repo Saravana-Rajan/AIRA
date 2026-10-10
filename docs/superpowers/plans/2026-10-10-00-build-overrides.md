@@ -104,10 +104,10 @@ Use `${{ secrets.X }}` everywhere. **Never** use `vars.`.
      - `VITE_AIRA_LIVE_WS=wss://$WS_HOST/ws` + the `VITE_FIREBASE_*` secrets → `bash scripts/build_hosting.sh`.
      - `npx firebase-tools@latest deploy --only hosting:aira-shop --project ${{ secrets.GCP_PROJECT }} --non-interactive`. firebase-tools uses `GOOGLE_APPLICATION_CREDENTIALS` from the auth step.
 
-**Who can deploy (owner's rule, strict):** ONLY pushes by **`Saravana-Rajan`** to `main` of **`Saravana-Rajan/AIRA`**.
-- The GCP provider condition enforces this: `assertion.repository=='Saravana-Rajan/AIRA' && assertion.ref=='refs/heads/main' && assertion.actor=='Saravana-Rajan'`. It's already applied.
-- `deploy.yml` must ALSO gate the deploy job with `if: github.repository == 'Saravana-Rajan/AIRA' && github.ref == 'refs/heads/main' && github.actor == 'Saravana-Rajan'`.
-- **No agent ever pushes to `main`.** Integration leaves the result on a branch, and the owner pushes it.
+**Who can deploy (owner's rule):** ANY push to `main` of **`Saravana-Rajan/AIRA`**, by any teammate or collaborator. No other repo or branch can deploy.
+- The GCP provider condition is already applied: `assertion.repository=='Saravana-Rajan/AIRA' && assertion.ref=='refs/heads/main'`.
+- `deploy.yml` gates the deploy job with `if: github.repository == 'Saravana-Rajan/AIRA' && github.ref == 'refs/heads/main'`. There's no actor check.
+- Integration may push the tested result to `main` as a fast-forward.
 - Never touch any other git repo or GCP project.
 
 **Workflow security** (from the automated security review; mandatory in both `ci.yml` and `deploy.yml`):
