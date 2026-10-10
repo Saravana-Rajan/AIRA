@@ -6,63 +6,132 @@ Google Cloud AI Builder Cup 2026 · Team Techjays · Theme: Sustainability &amp;
 
 **A**rtificial Intelligence: understands the world. · **I**ntelligent Interaction: communicates naturally. · **R**eal-world Guidance: helps users navigate. · **A**ccessibility: supports independence.
 
-AIRA is a voice-first shop assistant for blind shopkeepers. A chest-mounted phone and one earphone replace the sighted helper, the computer and the inventory app. It is built on **Gemini Live**, **Gemini Robotics-ER 2**, **Firebase**, **Firestore** and **Cloud Run**.
+AIRA is a voice-first assistant that lets a blind shopkeeper run a small shop alone. He wears a phone on his chest and one earphone. He talks, and AIRA listens, looks through the camera and answers in Tamil, Hindi or English. It orders stock from vendors, counts deliveries, checks bills and cash, guides his hand to the right product, confirms UPI payments and keeps the stock book. Gemini understands and sees. Plain, tested code does the maths and keeps the records in Firestore. Our demo shop is **Murugan Dairy**, which sells Aavin milk, Sakthi curd and Arun ice cream.
 
-**Murugan's dairy shop** (Aavin milk, Sakthi curd, Arun ice cream):
+## Try it
 
-| | Murugan does | AIRA does |
+| What | Link |
+|---|---|
+| AIRA phone app (judge demo mode) | https://aira-shop.web.app |
+| Shop Dashboard (live, read-only) | https://aira-shop.web.app/dashboard |
+| Architecture | [docs/architecture.md](docs/architecture.md) |
+
+## What AIRA does
+
+| # | Murugan says or does | AIRA does |
 |---|---|---|
-| 🛒 | "Order 30 litres Sakthi curd" | Reads the order back, then sends it to the vendor on **WhatsApp** and speaks the vendor's reply |
-| 📦 | Puts the delivered packs in the fridge | **Counts them live** ("28… 2 short?") and checks the **paper invoice** against the order and the count |
-| 💵 | Pays the vendor | Guides him to the right cash, checks the notes, and records the payment |
-| 🧊 | Customer: "2 litres curd" | Guides his **hand** to the curd and verifies the pack in his hand |
-| ✅ | Takes payment | Checks the cash and the change, or confirms UPI by listening to the **payment soundbox** |
-| 📉 | — | Gives low-stock and expiry alerts, plus a demand-based reorder suggestion and a daily summary |
+| 1 | "Order 30 litres Sakthi curd." | Reads the order back and waits for "yes" |
+| 2 | (after "yes") | Sends the order to the vendor on **WhatsApp** (Cloud API). Telegram is optional. A `wa.me` link is the fallback. The vendor's reply is spoken to him |
+| 3 | Puts the delivered packs in the fridge | **Counts them live** with Gemini Robotics-ER 2: "28 counted. 2 short?" |
+| 4 | Holds up the paper invoice | Reads it **twice with two different models**. Code compares both reads with the order and the count |
+| 5 | Pays the vendor | Tells him which notes to take, checks the cash in his hand and records the payment |
+| 6 | Customer: "2 litres curd." | Guides his **hand** to the curd and checks the pack he picked up |
+| 7 | Customer pays | **Cash:** checks the notes and works out the change in code. **UPI:** listens to the shop's payment soundbox and matches the amount |
+| 8 | (every sale and delivery) | Updates the **stock ledger** exactly once per event |
+| 9 | (automatic) | Speaks **low-stock, expiry and demand forecast** alerts and suggests a reorder |
+| ∞ | Walks around the shop | **Bump guard:** the phone vibrates and beeps before he walks into a crate, an open fridge door or a shelf corner. It runs on the phone, with no network |
 
-**Design rule:** the model proposes, the backend commits. Exact arithmetic, a stock ledger, explicit states, idempotency and an audit trail all run in deterministic code on Firestore.
+## Google stack
+
+| Part | How AIRA uses it |
+|---|---|
+| **Gemini Live** `gemini-3.8-live` | The voice. Listens, talks, can be interrupted, and calls AIRA's tools |
+| **Gemini Robotics-ER 2** `gemini-robotics-er-2-preview` | Points at and counts products. Falls back to `gemini-3.8-flash` if it is slow or down |
+| **Gemini 3.8 Flash** `gemini-3.8-flash` | Reading: invoice and cash, first read |
+| **Gemini 3.6 Flash** `gemini-3.6-flash` | Verify: an independent second read from a different model generation |
+| **Cloud Run** | `aira-live`, the FastAPI backend in `asia-south1`. Holds the WebSocket voice session, tools, business engine and webhooks |
+| **Firestore** | The system of record, in database `aira`. Every stock, money and state change is a transaction |
+| **Firebase Hosting** | One site, `aira-shop`: the phone app at `/` and the Shop Dashboard at `/dashboard` |
+| **Secret Manager** | Holds the Gemini API key and optional messaging tokens |
+| **Artifact Registry** | Stores the `aira-live` container images |
+| **GitHub Actions + Workload Identity Federation** | Tests and deploys on every push to `main`. Keyless: no JSON service account key exists |
+| **MediaPipe** (on the phone) | Hand Landmarker tracks his fingertip for hand guidance. Object Detector powers the bump guard |
+
+Model IDs live in one file: `services/live/aira_live/models.py`.
 
 ## Repository layout
 
 ```
-assets/logo/          AIRA logo
-docs/
-  README.md           index of all documents
-  ideas/              catalog, pitch, Murugan's day, judges Q&A, 4-min video script, idea evolution
-  hackathon/          rules + rubric, submission checklist, official/ notes
-  research/           prior art, India context, Google tech + WhatsApp API facts
-  superpowers/specs/  2026-10-10-aira-design.md
-  superpowers/plans/  team plan · foundation · interfaces · saravana/ ishwarya/ sarmitha/ kanish/
-apps/app              AIRA phone app (installable PWA + Android APK)
-apps/dashboard        Shop Dashboard (web, Firestore realtime)
-packages/contracts    shared protocol + Firestore types + fixtures
-services/live         Cloud Run aira-live (Gemini Live voice orchestrator + tools + business engine)
-content/catalog       demo shop products + suppliers
-bench/                benchmark datasets + scorers
-infra/                GCP + Firebase bootstrap, rules, Pub/Sub, BigQuery, CI
+apps/app/            AIRA phone app (Vite + TypeScript + Preact, installable PWA)
+apps/dashboard/      Shop Dashboard (Vite + TypeScript + Preact, Firestore realtime)
+packages/contracts/  shared WebSocket protocol + Firestore types + JSON fixtures
+services/live/       aira-live on Cloud Run (Python 3.12, FastAPI, Gemini Live)
+  aira_live/         voice session, tools, vision, memory, business engine, messaging
+  tests/             pytest suite (runs offline with fakes)
+content/catalog/     demo shop products and suppliers (murugan_dairy.json)
+infra/               GCP bootstrap, Firestore rules and indexes, keyless deploy setup
+scripts/             seed_firestore.py, build_hosting.sh
+bench/               benchmark data formats and scorers
+.github/workflows/   ci.yml (pull requests) · deploy.yml (push to main)
+docs/                design spec, plans, architecture, research
+assets/logo/         AIRA logo
 ```
+
+## Run it locally
+
+You need Node 20+, Python 3.12 and [uv](https://docs.astral.sh/uv/).
+
+```bash
+# 1. Settings. Leave GEMINI_API_KEY empty and AIRA_MOCK=1 to run in mock mode.
+cp .env.example .env
+
+# 2. Backend on http://localhost:8080 (WebSocket at ws://localhost:8080/ws)
+cd services/live
+uv sync
+uv run uvicorn aira_live.main:app --reload --port 8080 --env-file ../../.env
+
+# 3. Phone app (new terminal, repo root). It connects to ws://localhost:8080/ws by default.
+npm ci
+npm run dev -w apps/app
+
+# 4. Optional: Shop Dashboard. Set the VITE_FIREBASE_* values,
+#    or VITE_USE_EMULATOR=1 with the Firestore emulator on port 8085.
+npm run dev -w apps/dashboard
+
+# 5. Optional: seed the demo shop into Firestore database "aira"
+uv run --project services/live python scripts/seed_firestore.py
+```
+
+## Tests
+
+```bash
+cd services/live && uv run pytest -q   # backend: business engine, tools, protocol, rules
+npm test                               # all TypeScript workspaces (vitest)
+```
+
+The default suites run offline. Real Gemini calls only run in opt-in tests (`AIRA_LIVE_TESTS=1`).
+
+Accuracy and latency numbers are measured in `bench/results`. We do not quote numbers we have not measured.
+
+## Deploy
+
+Every push to `main` deploys through [`.github/workflows/deploy.yml`](.github/workflows/deploy.yml):
+
+1. Run all tests.
+2. Sign in to Google Cloud with Workload Identity Federation. Only `main` of this repository can deploy.
+3. Build the `aira-live` image, push it to Artifact Registry and deploy it to Cloud Run (`asia-south1`).
+4. Build the app and the dashboard. The backend URL is injected at build time.
+5. Deploy both to Firebase Hosting.
+
+No project ID, key or service URL is stored in this repository. `infra/setup_github_deploy.sh` documents the one-time GCP setup.
+
+## Safety principles
+
+- **The model proposes, the backend commits.** Gemini never writes stock, money or state. Tools call plain code that checks the request and commits it in a Firestore transaction with an idempotency key. A retried call never deducts stock twice.
+- **Confirm before consequence.** Ordering, paying and completing a sale always wait for a spoken "yes".
+- **Evidence before state.** An order is not a delivery. An invoice is not proof of receipt. A saved location is not proof the product is still there. A payment counts only after a cash count, a soundbox announcement or the owner's clear confirmation.
+- **Uncertainty is allowed; invention is not.** If two reads disagree, AIRA says "not sure" and asks for another look. It never invents a count or an amount.
+- **Maths in code.** Totals, change and stock are computed in code, never by the model.
+- **No counterfeit claims.** Cash reading is help, not a fake-note detector.
+- **Payments are cash or UPI only.** A customer's payment screenshot is never trusted.
 
 ## Team
 
-| Member | Owns | Plans |
-|---|---|---|
-| Saravana (lead) | Foundation and contracts, Gemini Live voice orchestrator, cloud data/analytics/infra, submission | [`plans/saravana/`](docs/superpowers/plans/saravana/) (after [`00-foundation`](docs/superpowers/plans/2026-10-10-00-foundation.md)) |
-| Ishwarya | Phone app shell and voice, camera + hand guidance, judge demo mode, APK, benchmark runner | [`plans/ishwarya/`](docs/superpowers/plans/ishwarya/) |
-| Sarmitha | Vision with Gemini Robotics-ER 2 (count, identify, point), invoice + cash reads, memory + product finding | [`plans/sarmitha/`](docs/superpowers/plans/sarmitha/) |
-| Kanish | Business engine (ledger, sales, payments, states), orders/delivery/payments + WhatsApp, Shop Dashboard | [`plans/kanish/`](docs/superpowers/plans/kanish/) |
+**Techjays**
 
-**Start here:** [`docs/superpowers/plans/2026-10-10-00-team-plan.md`](docs/superpowers/plans/2026-10-10-00-team-plan.md)
-
-## Google technology
-
-| Required | How AIRA uses it |
+| Member | Area |
 |---|---|
-| **Gemini** | Live (voice), Robotics-ER 2 (counting, pointing, identifying), 3.8 Flash (invoice and cash reads) |
-| **Cloud Run** | aira-live: voice orchestrator, tools, business engine, webhooks, jobs |
-| **Firebase** | Hosting (app + dashboard), Auth, App Check, Cloud Messaging, Remote Config |
-| **Firestore** | System of record: products, stock ledger, orders, deliveries, sales, payments, memory, audit |
-
-Also used: Pub/Sub → BigQuery (history + demand forecasting), Cloud Scheduler, Cloud Storage, Secret Manager, Cloud Build, Cloud Monitoring, and MediaPipe on the phone.
-
-## Deployed
-
-The URLs will be added after the foundation plan, Task 8.
+| Saravana Rajan B (lead) | Contracts, Gemini Live voice session, cloud and deploy |
+| Ishwarya | Phone app, voice, camera, hand guidance, bump guard, demo mode |
+| Sarmitha | Vision with Gemini Robotics-ER 2, invoice and cash reads, memory |
+| Kanish | Business engine, orders, deliveries, payments, WhatsApp, Shop Dashboard |
