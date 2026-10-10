@@ -31,6 +31,7 @@
 |---|---|
 | [rules-and-rubric.md](hackathon/rules-and-rubric.md) | Timeline, eligibility, prizes, theme, judging rubric 40/25/25/10, mandatory tech |
 | [submission-checklist.md](hackathon/submission-checklist.md) | Every required item with an owner and due date, plus freeze rules |
+| [98-playbook.md](hackathon/98-playbook.md) | **How we target 98/100:** what judges must see for each criterion, benchmark targets, the pilot with a blind owner, presentation, timeline, and what to avoid |
 | [official/](hackathon/official/README.md) | Notes from the official event pages: overview, prizes, eligibility, submission, terms, themes |
 
 ## Research (`research/`)
