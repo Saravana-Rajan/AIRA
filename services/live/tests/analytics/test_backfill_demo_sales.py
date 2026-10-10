@@ -1,6 +1,7 @@
 """scripts/backfill_demo_sales.py: 30 days of plausible demo SALE ledger rows for Firestore database "aira"."""
 import importlib.util
 import json
+import os
 from collections import defaultdict
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -21,7 +22,9 @@ PACK_L = {"aavin_milk_500ml": 0.5, "aavin_milk_1l": 1.0, "sakthi_curd_500ml": 0.
 # Same units as content/catalog/murugan_dairy.json: milk and curd sell in litres, the rest per pack/jar/box.
 PRODUCTS = [{"sku": s, "unit": "L", "packSizeL": PACK_L[s]} if s in PACK_L else {"sku": s, "unit": "pack"}
             for s in ALL_SKUS]
-LEDGER_KEYS = {"sku", "delta", "reason", "refType", "refId", "idemKey", "at", "actor"}
+# The shape business.ledger.prepare_movement writes (contract LedgerTxn needs `id`; the ledger also keeps `unit`).
+LEDGER_KEYS = {"id", "sku", "delta", "unit", "reason", "refType", "refId", "idemKey", "at", "actor"}
+UNIT = {p["sku"]: p["unit"] for p in PRODUCTS}
 
 
 def ist_day(row):
@@ -61,6 +64,7 @@ def test_rows_are_sale_ledger_docs_with_fixed_ids():
         assert set(data) == LEDGER_KEYS
         assert data["reason"] == "SALE" and data["delta"] < 0 and data["actor"] == "system"
         assert data["refType"] == bf.REF_TYPE == "demo_backfill" and data["idemKey"] == path.rsplit("/", 1)[1]
+        assert data["id"] == path.rsplit("/", 1)[1] and data["unit"] == UNIT[data["sku"]]
         assert datetime.fromisoformat(data["at"]).utcoffset() == timedelta(0)        # ISO-8601 UTC, like now_iso()
         assert 6 <= datetime.fromisoformat(data["at"]).astimezone(IST).hour < 21      # shop hours
 
@@ -94,15 +98,39 @@ def test_catalog_demo_daily_base_overrides_the_default():
     assert sum(q for _, q in rows) / len(rows) > 70
 
 
-def test_target_needs_a_project_and_refuses_the_default_database():
-    assert bf.target(None, None, {"GCP_PROJECT": "demo-aira"}) == ("demo-aira", "aira")
-    assert bf.target("p", None, {"FIRESTORE_DATABASE": "aira-test"}) == ("p", "aira-test")
+def test_target_cloud_needs_an_explicit_project_and_the_yes_flag():
+    assert bf.target("demo-aira", None, {}, yes_write_cloud=True) == ("demo-aira", "aira", None)
+    assert bf.target("p", None, {"FIRESTORE_DATABASE": "aira-test"}, yes_write_cloud=True) == ("p", "aira-test", None)
+    with pytest.raises(ValueError, match="--project"):     # GCP_PROJECT from env or .env never picks the cloud
+        bf.target(None, None, {"GCP_PROJECT": "demo-aira"}, yes_write_cloud=True)
+    with pytest.raises(ValueError, match="--yes-write-cloud"):
+        bf.target("p", None, {})
+    with pytest.raises(ValueError, match="FIRESTORE_EMULATOR_HOST"):   # meant for the emulator: never the cloud
+        bf.target("p", None, {"FIRESTORE_EMULATOR_HOST": "127.0.0.1:8085"}, yes_write_cloud=True)
+
+
+def test_target_emulator_uses_the_env_host_else_the_firebase_json_port():
+    env = {"FIRESTORE_EMULATOR_HOST": "127.0.0.1:9999", "GCP_PROJECT": "demo-x"}
+    assert bf.target(None, None, env, emulator=True) == ("demo-x", "aira", "127.0.0.1:9999")
+    assert bf.target(None, None, {}, emulator=True) == ("demo-aira", "aira", "127.0.0.1:8085")
+    assert bf.target("p", None, {}, emulator=True) == ("p", "aira", "127.0.0.1:8085")
     with pytest.raises(ValueError):
-        bf.target(None, None, {})
-    with pytest.raises(ValueError):
-        bf.target("p", "(default)", {})
-    with pytest.raises(ValueError):
-        bf.target("p", None, {"FIRESTORE_DATABASE": "(default)"})
+        bf.target("p", None, {}, emulator=True, yes_write_cloud=True)
+
+
+def test_target_refuses_the_default_database():
+    for kw in ({"emulator": True}, {"yes_write_cloud": True}):
+        with pytest.raises(ValueError):
+            bf.target("p", "(default)", {}, **kw)
+        with pytest.raises(ValueError):
+            bf.target("p", None, {"FIRESTORE_DATABASE": "(default)"}, **kw)
+
+
+def test_docstring_examples_never_write_to_the_cloud_by_accident():
+    runs = [ln for ln in (bf.__doc__ or "").splitlines() if "backfill_demo_sales.py" in ln and "uv run" in ln]
+    assert runs
+    for ln in runs:
+        assert "--dry-run" in ln or "--emulator" in ln or ("--project" in ln and "--yes-write-cloud" in ln), ln
 
 
 class FakeClient:
@@ -147,17 +175,96 @@ def test_main_dry_run_writes_nothing(catalog, monkeypatch, capsys):
     assert "300" in out and "2026-09-11" in out and "2026-10-10" in out
 
 
-def test_main_writes_to_database_aira(catalog, monkeypatch, tmp_path, capsys):
-    monkeypatch.delenv("FIRESTORE_DATABASE", raising=False)
-    monkeypatch.delenv("GCP_PROJECT", raising=False)
+@pytest.fixture
+def clean_env(monkeypatch, tmp_path):
+    """No emulator host, project or database in os.environ (restored afterwards) and no .env file."""
+    for name in ("FIRESTORE_EMULATOR_HOST", "GCP_PROJECT", "FIRESTORE_DATABASE"):
+        monkeypatch.setenv(name, "x")   # setenv then delenv: monkeypatch restores the original value
+        monkeypatch.delenv(name)
+    return tmp_path / "missing.env"
+
+
+def _spy(monkeypatch):
     seen, client = [], FakeClient()
-    monkeypatch.setattr(bf, "make_client", lambda project, database: seen.append((project, database)) or client)
-    args = ["--project", "demo-aira", "--catalog", str(catalog), "--end", "2026-10-10",
-            "--env-file", str(tmp_path / "missing.env")]
+
+    def make_client(project, database):
+        seen.append((project, database, os.environ.get("FIRESTORE_EMULATOR_HOST")))
+        return client
+    monkeypatch.setattr(bf, "make_client", make_client)
+    return seen, client
+
+
+def test_main_default_is_a_dry_run_even_with_gcp_project_set(catalog, monkeypatch, clean_env, tmp_path, capsys):
+    env_file = tmp_path / ".env"
+    env_file.write_text("GCP_PROJECT=real-project\n", encoding="utf-8")
+    monkeypatch.setenv("GCP_PROJECT", "real-project")
+    monkeypatch.setattr(bf, "make_client", lambda *a: pytest.fail("no write flag: must not create a client"))
+    for extra in ([], ["--project", "real-project"]):
+        assert bf.main(["--catalog", str(catalog), "--end", "2026-10-10", "--env-file", str(env_file), *extra]) == 0
+        out = capsys.readouterr().out
+        assert "dry run" in out and "300" in out and "--emulator" in out and "--yes-write-cloud" in out
+
+
+def test_main_cloud_write_refuses_without_explicit_project(catalog, monkeypatch, clean_env, tmp_path, capsys):
+    env_file = tmp_path / ".env"
+    env_file.write_text("GCP_PROJECT=real-project\n", encoding="utf-8")
+    monkeypatch.setenv("GCP_PROJECT", "real-project")
+    monkeypatch.setattr(bf, "make_client", lambda *a: pytest.fail("must not connect"))
+    args = ["--yes-write-cloud", "--catalog", str(catalog), "--end", "2026-10-10", "--env-file", str(env_file)]
+    assert bf.main(args) == 2
+    assert "--project" in capsys.readouterr().err
+
+
+def test_main_cloud_write_refuses_when_the_env_file_names_an_emulator(catalog, monkeypatch, clean_env, tmp_path,
+                                                                    capsys):
+    env_file = tmp_path / ".env"
+    env_file.write_text("FIRESTORE_EMULATOR_HOST=127.0.0.1:8085\n", encoding="utf-8")
+    monkeypatch.setattr(bf, "make_client", lambda *a: pytest.fail("must not connect"))
+    args = ["--project", "p", "--yes-write-cloud", "--catalog", str(catalog), "--env-file", str(env_file)]
+    assert bf.main(args) == 2
+    assert "FIRESTORE_EMULATOR_HOST" in capsys.readouterr().err
+
+
+def test_main_writes_to_database_aira_with_project_and_yes_flag(catalog, monkeypatch, clean_env, capsys):
+    seen, client = _spy(monkeypatch)
+    args = ["--project", "demo-aira", "--yes-write-cloud", "--catalog", str(catalog), "--end", "2026-10-10",
+            "--env-file", str(clean_env)]
     assert bf.main(args) == 0
-    assert seen == [("demo-aira", "aira")]
+    assert seen == [("demo-aira", "aira", None)]
     assert sum(len(c) for c in client.commits) == 300
     assert "300" in capsys.readouterr().out
+
+
+def test_main_emulator_exports_the_env_file_host_before_connecting(catalog, monkeypatch, clean_env, tmp_path,
+                                                                  capsys):
+    env_file = tmp_path / ".env"
+    env_file.write_text("FIRESTORE_EMULATOR_HOST=127.0.0.1:9999\nGCP_PROJECT=demo-x\n", encoding="utf-8")
+    seen, client = _spy(monkeypatch)
+    args = ["--emulator", "--catalog", str(catalog), "--end", "2026-10-10", "--env-file", str(env_file)]
+    assert bf.main(args) == 0
+    assert seen == [("demo-x", "aira", "127.0.0.1:9999")]          # google-cloud-firestore reads os.environ only
+    assert sum(len(c) for c in client.commits) == 300
+    assert "emulator" in capsys.readouterr().out
+
+
+def test_main_emulator_defaults_to_the_firebase_json_port(catalog, monkeypatch, clean_env):
+    seen, _ = _spy(monkeypatch)
+    assert bf.main(["--emulator", "--catalog", str(catalog), "--env-file", str(clean_env)]) == 0
+    assert seen == [("demo-aira", "aira", "127.0.0.1:8085")]
+
+
+def test_main_dry_run_flag_wins_over_write_flags(catalog, monkeypatch, clean_env, capsys):
+    monkeypatch.setattr(bf, "make_client", lambda *a: pytest.fail("dry run must not create a Firestore client"))
+    assert bf.main(["--dry-run", "--emulator", "--catalog", str(catalog), "--env-file", str(clean_env)]) == 0
+    assert "dry run" in capsys.readouterr().out
+
+
+def test_main_emulator_and_cloud_flags_are_exclusive(catalog, monkeypatch, clean_env):
+    monkeypatch.setattr(bf, "make_client", lambda *a: pytest.fail("must not connect"))
+    with pytest.raises(SystemExit) as exc:
+        bf.main(["--emulator", "--project", "p", "--yes-write-cloud", "--catalog", str(catalog),
+                 "--env-file", str(clean_env)])
+    assert exc.value.code == 2
 
 
 def test_repo_catalog_backfills_all_ten_skus_for_thirty_days(monkeypatch, capsys):
@@ -170,9 +277,9 @@ def test_repo_catalog_backfills_all_ten_skus_for_thirty_days(monkeypatch, capsys
     assert "300" in capsys.readouterr().out
 
 
-def test_main_refuses_default_database(catalog, monkeypatch, tmp_path, capsys):
+def test_main_refuses_default_database(catalog, monkeypatch, clean_env, capsys):
     monkeypatch.setattr(bf, "make_client", lambda *a: pytest.fail("must not connect"))
-    args = ["--project", "p", "--database", "(default)", "--catalog", str(catalog),
-            "--env-file", str(tmp_path / "missing.env")]
-    assert bf.main(args) == 2
-    assert "(default)" in capsys.readouterr().err
+    for mode in (["--emulator"], ["--project", "p", "--yes-write-cloud"]):
+        args = [*mode, "--database", "(default)", "--catalog", str(catalog), "--env-file", str(clean_env)]
+        assert bf.main(args) == 2
+        assert "(default)" in capsys.readouterr().err

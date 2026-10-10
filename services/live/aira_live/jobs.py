@@ -15,7 +15,7 @@ from __future__ import annotations
 import hmac
 import logging
 from datetime import date, datetime
-from typing import Literal
+from typing import Annotated, Literal
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
@@ -33,9 +33,12 @@ LANGS = ("ta", "hi", "en")
 DEFAULT_LANG = "en"
 Lang = Literal["ta", "hi", "en"]
 SHOP_ID = r"^[A-Za-z0-9_-]{1,64}$"  # a Firestore doc id with no "/" (no path injection)
+JobToken = Annotated[str | None, Header(alias=TOKEN_HEADER)]
+ShopIdParam = Annotated[str | None, Query(pattern=SHOP_ID)]
+LangParam = Annotated[Lang | None, Query()]
 
 
-def require_job_token(token: str | None = Header(default=None, alias=TOKEN_HEADER)) -> None:
+def require_job_token(token: JobToken = None) -> None:
     """503 when AIRA_JOB_TOKEN is unset, 401 without the header, 403 when it does not match."""
     expected = config.load().job_token
     if not expected:
@@ -100,15 +103,12 @@ async def _targets(shop_id: str | None, lang: str | None) -> list[tuple[str, str
     return [(sid, lang or shop_lang) for sid, shop_lang in await _shops()]
 
 
-def _num(x) -> str:
-    return str(int(x)) if isinstance(x, float) and x.is_integer() else str(x)
-
-
-def _item(alert: dict) -> str:
-    """'6 Sakthi curd', or just the name when the scan gave no quantity (never invent one)."""
+def _item(alert: dict, lang: str) -> str:
+    """'6 litres of Sakthi curd' (the qty is in the alert's selling unit), or just the name when the scan gave no
+    quantity (never invent one)."""
     name = alert.get("name") or alert["sku"]
     qty = alert.get("qty")
-    return name if qty is None or qty == "" else f"{_num(qty)} {name}"
+    return name if qty is None or qty == "" else summary.item(qty, alert.get("unit"), name, lang)
 
 
 def _status(alert: dict) -> str:
@@ -120,7 +120,7 @@ def _expiry_text(alerts: list[dict], lang: str) -> str:
     """Expired items first (take them off the shelf), then items expiring soon."""
     parts = []
     for status, key in (("expired", "jobs.expired_alert"), ("expiring", "jobs.expiry_alert")):
-        items = [_item(a) for a in alerts if _status(a) == status]
+        items = [_item(a, lang) for a in alerts if _status(a) == status]
         if items:
             parts.append(t(key, lang, items=", ".join(items)))
     return " ".join(parts)
@@ -138,8 +138,7 @@ async def _publish_alerts(shop_id: str, alerts: list[dict], text: str) -> None:
 
 
 @router.post("/expiry")
-async def job_expiry(shop_id: str | None = Query(default=None, pattern=SHOP_ID),
-                     lang: Lang | None = Query(default=None)) -> dict:
+async def job_expiry(shop_id: ShopIdParam = None, lang: LangParam = None) -> dict:
     """Scan every shop (or one) for expired or soon-expiring stock and speak one alert per shop."""
     today = _today()
     shops = total = notified = errors = 0
@@ -164,8 +163,7 @@ async def job_expiry(shop_id: str | None = Query(default=None, pattern=SHOP_ID),
 
 
 @router.post("/day-summary")
-async def job_day_summary(shop_id: str | None = Query(default=None, pattern=SHOP_ID),
-                          lang: Lang | None = Query(default=None)) -> dict:
+async def job_day_summary(shop_id: ShopIdParam = None, lang: LangParam = None) -> dict:
     """Speak today's sales, revenue, top seller and tomorrow's suggested order (same words as day_summary)."""
     shops = notified = errors = 0
     messages: list[dict] = []
@@ -183,7 +181,7 @@ async def job_day_summary(shop_id: str | None = Query(default=None, pattern=SHOP
 
 
 @router.post("/forecast-refresh")
-async def job_forecast_refresh(shop_id: str | None = Query(default=None, pattern=SHOP_ID)) -> dict:
+async def job_forecast_refresh(shop_id: ShopIdParam = None) -> dict:
     """Drop the cached 7-day windows and recompute (default: the demo shop)."""
     result = await forecast.refresh_model(shop_id)
     return {"ok": True, "skus": len(result), "with_forecast": sum(v is not None for v in result.values())}

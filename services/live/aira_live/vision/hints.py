@@ -15,7 +15,7 @@ HINT_KEYS: tuple[str, ...] = (
     "vision.aim.spread_out",    # packs stacked or overlapping
     "vision.aim.show_items",    # nothing countable in view
     "vision.aim.show_label",    # size label needed (confusion pairs such as 500 ml vs 1 L)
-    "vision.aim.hold_closer",   # item too small or too far away
+    "vision.aim.hold_closer",   # item too small or too far away, or too many packs to count in one view
     "vision.aim.not_visible",   # pointing target not in view
 )
 

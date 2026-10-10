@@ -83,14 +83,17 @@ def frame_from_file(path: Path, purpose: str) -> "Frame":
 
 
 def percentile(values: list[float], p: float) -> float:
+    """Nearest-rank percentile: the smallest measured value with at least p% of values at or below it.
+
+    The same rule as scripts/bench_table.py and aira_live.vision.metrics.latency_stats, so the JSON
+    summaries, the ER 2 spike decision and the deck table all report the same, actually measured, number.
+    """
     if not values:
         raise ValueError("no values")
+    if not 0 <= p <= 100:
+        raise ValueError(f"percentile must be in 0..100, got {p}")
     v = sorted(values)
-    if len(v) == 1:
-        return float(v[0])
-    k = (len(v) - 1) * p / 100
-    lo, hi = int(k), min(int(k) + 1, len(v) - 1)
-    return float(v[lo] + (v[hi] - v[lo]) * (k - lo))
+    return float(v[max(1, math.ceil(p / 100 * len(v))) - 1])
 
 
 async def timed(coro) -> tuple[Any, float]:

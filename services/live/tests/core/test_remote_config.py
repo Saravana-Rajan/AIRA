@@ -5,7 +5,6 @@ Uses the real ``aira_live.config`` / ``aira_live.models`` and the shared ``fake_
 from __future__ import annotations
 
 import asyncio
-import inspect
 
 import pytest
 
@@ -35,6 +34,7 @@ def clean(monkeypatch):
 def store(fake_db, monkeypatch) -> dict:
     """The fake Firestore's backing dict, with Firestore reads enabled."""
     monkeypatch.setattr(rc, "_enabled", lambda: True)
+    monkeypatch.setattr(rc, "_reachable", lambda: True)
     reads: list[str] = []
     real_doc_ref = rc._doc_ref
 
@@ -114,6 +114,21 @@ def test_get_override_accepts_role_or_field():
     assert rc.get_override("pointing_model") == models.FALLBACKS["point"]
     assert rc.get_override("whatsapp_enabled") is False
     assert rc.get_override("nothing") is None
+
+
+def test_model_override_must_be_one_of_the_roles_own_models():
+    """A model listed for another role is not a valid override: live on a Flash model, or ER-2 pointing on the
+    Live model, would break every session."""
+    rc._cache.update({"live_model": models.FALLBACKS["point"], "pointing_model": models.DEFAULTS["live"],
+                      "count_model": models.DEFAULTS["verify"]})
+    assert rc.override_for_role("live") is None
+    assert rc.override_for_role("point") is None
+    assert rc.override_for_role("count") is None
+    assert models.model_for("live") == models.DEFAULTS["live"]
+    assert models.model_for("point") == models.DEFAULTS["point"]
+    rc._cache.update({"pointing_model": models.DEFAULTS["point"], "count_model": models.FALLBACKS["count"]})
+    assert rc.override_for_role("point") == models.DEFAULTS["point"]
+    assert rc.override_for_role("count") == models.FALLBACKS["count"]
 
 
 def test_unknown_model_warns_once(caplog):
@@ -216,6 +231,39 @@ def test_enabled_needs_project_and_no_mock(monkeypatch):
     assert rc._enabled() is True
 
 
+def test_reachable_ignores_mock_mode(monkeypatch):
+    """The ops CLI reads config/runtime from a shell with only ADC and GCP_PROJECT (no Gemini key = mock)."""
+    monkeypatch.delenv("FIRESTORE_EMULATOR_HOST", raising=False)
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.setenv("AIRA_MOCK", "1")
+    monkeypatch.setenv("GCP_PROJECT", "p")
+    assert rc._enabled() is False and rc._reachable() is True
+    monkeypatch.delenv("GCP_PROJECT")
+    assert rc._reachable() is False
+    monkeypatch.setenv("FIRESTORE_EMULATOR_HOST", "localhost:8085")
+    assert rc._reachable() is True
+
+
+async def test_ops_refresh_reads_in_mock_mode_but_runtime_refresh_does_not(fake_db, monkeypatch):
+    monkeypatch.delenv("FIRESTORE_EMULATOR_HOST", raising=False)
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.setenv("GCP_PROJECT", "p")
+    fake_db.store[DOC] = {"whatsapp_enabled": False}
+    assert await rc.refresh(force=True) == {}
+    assert await rc.refresh(force=True, ops=True) == {"whatsapp_enabled": False}
+
+
+def test_cli_show_and_set_work_in_mock_mode(fake_db, monkeypatch, capsys):
+    monkeypatch.delenv("FIRESTORE_EMULATOR_HOST", raising=False)
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.setenv("GCP_PROJECT", "p")
+    fake_db.store[DOC] = {"whatsapp_enabled": False}
+    assert rc._main(["show"]) == 0
+    assert "'whatsapp_enabled': False" in capsys.readouterr().out
+    assert rc._main(["set", "pointing_model", "fallback"]) == 0
+    assert repr(models.FALLBACKS["point"]) in capsys.readouterr().out
+
+
 def test_doc_ref_points_at_config_runtime(fake_db):
     assert rc._doc_ref().path == DOC
 
@@ -290,6 +338,10 @@ async def test_set_value_rejects_unknown_field_and_model(store):
     with pytest.raises(ValueError):
         await rc.set_value("pointing_model", "gemini-typo-9000")
     with pytest.raises(ValueError):
+        await rc.set_value("live_model", models.FALLBACKS["point"])       # a Flash model is not a Live model
+    with pytest.raises(ValueError):
+        await rc.set_value("pointing_model", models.DEFAULTS["live"])     # ER-2 pointing on the Live model
+    with pytest.raises(ValueError):
         await rc.set_value("whatsapp_enabled", "maybe")
     assert DOC not in store
 
@@ -319,10 +371,6 @@ def test_cli_show_and_set(store, capsys):
 
 # ---------- model priority (env > config/runtime > default) ----------
 
-_WIRED = "remote_config" in inspect.getsource(models.model_for)
-
-
-@pytest.mark.skipif(not _WIRED, reason="models.model_for does not consult remote_config yet (s1 owns models.py)")
 def test_model_for_priority_env_then_runtime_then_default(monkeypatch):
     assert models.model_for("point") == models.DEFAULTS["point"]
     rc._cache.update({"pointing_model": models.FALLBACKS["point"]})

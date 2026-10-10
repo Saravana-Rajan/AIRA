@@ -1,5 +1,7 @@
-"""The ONLY place model IDs are written. Env override: AIRA_MODEL_<ROLE> (the Firestore config/runtime override
-lands in saravana/02)."""
+"""The ONLY place model IDs are written.
+
+Priority (build overrides §7): env ``AIRA_MODEL_<ROLE>`` > the Firestore ``config/runtime`` doc
+(``remote_config.override_for_role``, validated against this role's own models) > ``DEFAULTS``."""
 import os
 from typing import Literal
 
@@ -17,7 +19,9 @@ FALLBACKS: dict[str, str] = {"point": "gemini-3.8-flash", "count": "gemini-3.8-f
 
 
 def model_for(role: Role) -> str:
-    return os.getenv(f"AIRA_MODEL_{role.upper()}") or DEFAULTS[role]
+    from aira_live import remote_config  # lazy: remote_config imports this module to validate overrides
+
+    return os.getenv(f"AIRA_MODEL_{role.upper()}") or remote_config.override_for_role(role) or DEFAULTS[role]
 
 
 def fallback_for(role: Role) -> str | None:

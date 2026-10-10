@@ -16,7 +16,8 @@ TOKEN = "test-job-token"
 OK = {"X-AIRA-Job-Token": TOKEN}
 PATHS = ["/jobs/expiry", "/jobs/day-summary", "/jobs/forecast-refresh"]
 FIXED_TODAY = date(2026, 10, 13)
-CURD = {"sku": "sakthi_curd_1l", "name": "Sakthi curd", "qty": 6, "daysLeft": 1}
+# business.expiry.scan alerts carry the product's selling unit; curd is stocked in litres.
+CURD = {"sku": "sakthi_curd_1l", "name": "Sakthi curd", "qty": 6, "unit": "L", "daysLeft": 1}
 REAL_SCAN = jobs._scan  # captured before any fixture patches it
 
 
@@ -151,7 +152,7 @@ def test_expiry_job_speaks_alerts_and_publishes(env):
     assert calls["scan"] == [("murugan_dairy", FIXED_TODAY)]
     shop_id, text, cue = calls["notify"][0]
     assert shop_id == "murugan_dairy" and cue == "warn"
-    assert "6 Sakthi curd" in text and "Expiring soon" in text
+    assert "6 litres of Sakthi curd" in text and "Expiring soon" in text
     assert body["messages"] == [{"shop_id": "murugan_dairy", "say": text}]
     topic, payload = calls["events"][0]
     assert topic == "alerts"
@@ -162,25 +163,51 @@ def test_expiry_job_speaks_alerts_and_publishes(env):
 
 def test_expiry_job_one_event_per_alert_but_one_spoken_message(env):
     c, calls, state = env
-    state["alerts"] = [dict(CURD), {"sku": "aavin_milk_500ml", "name": "Aavin milk", "qty": 4.0, "daysLeft": 0}]
+    state["alerts"] = [dict(CURD), {"sku": "aavin_milk_500ml", "name": "Aavin milk", "qty": 4.0, "unit": "L",
+                                    "daysLeft": 0}]
     body = c.post("/jobs/expiry", headers=OK).json()
     assert body["alerts"] == 2
     assert len(calls["notify"]) == 1
     text = calls["notify"][0][1]
-    assert "6 Sakthi curd" in text and "4 Aavin milk" in text and "4.0" not in text
+    assert "6 litres of Sakthi curd" in text and "4 litres of Aavin milk" in text and "4.0" not in text
     assert [p["sku"] for _, p in calls["events"]] == ["sakthi_curd_1l", "aavin_milk_500ml"]
+
+
+def test_expiry_job_speaks_the_unit_of_every_quantity(env):
+    """3.5 litres of 500 ml pouches is 7 pouches: '3.5 Aavin Milk 500 ml' would be a made-up count."""
+    c, calls, state = env
+    state["alerts"] = [{"sku": "aavin_milk_500ml", "name": "Aavin Milk 500 ml", "qty": 3.5, "unit": "L",
+                        "daysLeft": -1},
+                       {"sku": "aavin_ghee_200ml", "name": "Aavin Ghee", "qty": 1.0, "unit": "jar", "daysLeft": 1},
+                       {"sku": "arun_icecream_box", "name": "Arun Ice Cream", "qty": 2.0, "unit": "box",
+                        "daysLeft": 0}]
+    c.post("/jobs/expiry", headers=OK)
+    text = calls["notify"][0][1]
+    assert "Expired: 3.5 litres of Aavin Milk 500 ml." in text
+    assert "1 jar of Aavin Ghee" in text and "2 boxes of Arun Ice Cream" in text
+
+
+def test_expiry_job_units_in_tamil_and_hindi(env):
+    c, calls, state = env
+    state["shops"] = [("murugan_dairy", "ta")]
+    c.post("/jobs/expiry", headers=OK)
+    assert "Sakthi curd 6 லிட்டர்" in calls["notify"][-1][1]
+    state["shops"] = [("murugan_dairy", "hi")]
+    c.post("/jobs/expiry", headers=OK)
+    assert "6 लीटर Sakthi curd" in calls["notify"][-1][1]
 
 
 def test_expiry_job_says_expired_items_are_expired(env):
     c, calls, state = env
-    state["alerts"] = [{"sku": "aavin_paneer_200g", "name": "Aavin paneer", "qty": 2, "daysLeft": -1},
+    state["alerts"] = [{"sku": "aavin_paneer_200g", "name": "Aavin paneer", "qty": 2, "unit": "pack",
+                        "daysLeft": -1},
                        dict(CURD)]
     c.post("/jobs/expiry", headers=OK)
     text = calls["notify"][0][1]
     expired_at, soon_at = text.index("Expired"), text.index("Expiring soon")
     assert expired_at < soon_at  # the more urgent part first
-    assert "2 Aavin paneer" in text[expired_at:soon_at]
-    assert "6 Sakthi curd" in text[soon_at:]
+    assert "2 packs of Aavin paneer" in text[expired_at:soon_at]
+    assert "6 litres of Sakthi curd" in text[soon_at:]
     assert [p["status"] for _, p in calls["events"]] == ["expired", "expiring"]
 
 
@@ -267,9 +294,9 @@ def test_day_summary_speaks_sales_revenue_and_top_seller(env):
 
 def test_day_summary_adds_suggested_order_for_tomorrow(env):
     c, calls, state = env
-    state["summary"]["suggested_orders"] = [{"sku": "sakthi_curd_1l", "qty": 30}]
+    state["summary"]["suggested_orders"] = [{"sku": "sakthi_curd_1l", "qty": 30, "unit": "L"}]
     c.post("/jobs/day-summary", headers=OK)
-    assert "30 Sakthi curd" in calls["notify"][0][1]
+    assert "30 litres of Sakthi curd" in calls["notify"][0][1]
 
 
 def test_day_summary_no_sales(env):
@@ -301,7 +328,7 @@ def test_day_summary_failure_is_counted_not_invented(env, monkeypatch):
 
 def test_day_summary_matches_the_live_tool_text(env):
     c, calls, state = env
-    state["summary"]["suggested_orders"] = [{"sku": "sakthi_curd_1l", "qty": 30}]
+    state["summary"]["suggested_orders"] = [{"sku": "sakthi_curd_1l", "qty": 30, "unit": "L"}]
     c.post("/jobs/day-summary", headers=OK)
     assert calls["notify"][0][1] == summary.say(state["summary"], "en")
 
@@ -353,6 +380,20 @@ async def test_shops_reads_language_from_firestore(monkeypatch, fake_db):
     assert await jobs._lang_of("missing") == "en"
 
 
+# --- mounted on the real service (main.OPTIONAL_ROUTERS) -----------------------------------------
+
+def test_main_app_mounts_the_jobs_router(monkeypatch):
+    from aira_live import main
+
+    assert [main.app.url_path_for(n) for n in ("job_expiry", "job_day_summary", "job_forecast_refresh")] == PATHS
+    c = TestClient(main.app)
+    monkeypatch.delenv("AIRA_JOB_TOKEN", raising=False)
+    assert c.post("/jobs/expiry", headers=OK).status_code == 503  # mounted and fail-closed, not 404
+    monkeypatch.setenv("AIRA_JOB_TOKEN", TOKEN)
+    assert c.post("/jobs/day-summary").status_code == 401
+    assert c.post("/jobs/forecast-refresh", headers={"X-AIRA-Job-Token": "nope"}).status_code == 403
+
+
 # --- with Kanish's real business.expiry (skipped until that lane lands) --------------------------
 
 @pytest.mark.skipif(importlib.util.find_spec("aira_live.business.expiry") is None,
@@ -361,7 +402,7 @@ def test_expiry_job_with_the_real_scan(env, monkeypatch):
     from aira_live.business import store
 
     mem = store.MemoryStore()
-    mem.data["shops/murugan_dairy/products/sakthi_curd_1l"] = {"name": "Sakthi curd"}
+    mem.data["shops/murugan_dairy/products/sakthi_curd_1l"] = {"name": "Sakthi curd", "unit": "L"}
     mem.data["shops/murugan_dairy/inventory/sakthi_curd_1l"] = {
         "onHand": 6, "batches": [{"batchId": "b1", "qty": 6, "expiryDate": "2026-10-14"}]}
     store.set_store(mem)
@@ -372,4 +413,4 @@ def test_expiry_job_with_the_real_scan(env, monkeypatch):
     finally:
         store.set_store(None)
     assert body["alerts"] == 1 and body["errors"] == 0
-    assert "6 Sakthi curd" in calls["notify"][0][1]
+    assert "6 litres of Sakthi curd" in calls["notify"][0][1]

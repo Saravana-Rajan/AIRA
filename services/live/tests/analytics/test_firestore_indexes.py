@@ -1,4 +1,4 @@
-"""infra/firestore.indexes.analytics.json: the composite indexes the analytics queries need in database "aira".
+"""infra/firestore.indexes.json: the composite indexes for database "aira", checked against the analytics queries.
 
 How Firestore picks an index (https://firebase.google.com/docs/firestore/query-data/index-overview):
 - A query that filters or orders on one field only is served by the automatic single-field indexes.
@@ -7,13 +7,11 @@ How Firestore picks an index (https://firebase.google.com/docs/firestore/query-d
   fields first, then the range field in the query's sort direction. With no order_by, an inequality sorts
   its field ASCENDING, and a DESCENDING index does not serve it (one index per direction).
 
-The foundation's infra/firestore.indexes.json holds the DESCENDING "latest first" listing indexes. The
-analytics time-window queries ("since the start of the day / the window") are range filters with no
-order_by, so they need the ASCENDING variants kept in the analytics file. firebase.json reads one indexes
-file per database, so integration appends this file's "indexes" array to infra/firestore.indexes.json.
-
-QUERIES is the list of analytics query shapes. When an analytics query changes shape, update it here:
-the test then fails until some index serves the new shape.
+firebase.json deploys ONE indexes file for database "aira": infra/firestore.indexes.json. There is no separate
+analytics file. The analytics code issues single-field queries only (SINGLE_FIELD), so it needs no composite
+index. The three ASCENDING time-window indexes (WINDOW) already exist in the deployed database; they are kept
+in the one file so it matches what is deployed, and so a filter later pushed down to the server is served.
+When an analytics query changes shape, update the lists here: the test then fails until an index serves it.
 """
 
 import json
@@ -23,8 +21,8 @@ from typing import NamedTuple
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[4]
-ANALYTICS = REPO_ROOT / "infra" / "firestore.indexes.analytics.json"
-FOUNDATION = REPO_ROOT / "infra" / "firestore.indexes.json"
+INDEXES = REPO_ROOT / "infra" / "firestore.indexes.json"
+STRAY = REPO_ROOT / "infra" / "firestore.indexes.analytics.json"
 
 ASC, DESC = "ASCENDING", "DESCENDING"
 
@@ -46,8 +44,8 @@ SINGLE_FIELD = {
     "summary.today: orders state == DISCREPANCY": q("orders", ("state",)),
 }
 
-# The same reads with the filter pushed to the server; these need the analytics composite indexes.
-COMPOSITE = {
+# The same reads with the filter pushed to the server. Not issued today; their ASCENDING indexes are deployed.
+WINDOW = {
     "forecast.daily_demand(shop, sku): ledger sku == X, reason == SALE, at >= since":
         q("ledger", ("sku", "reason"), ("at", ASC)),
     "forecast window, sales only: ledger reason == SALE, at >= since":
@@ -56,7 +54,7 @@ COMPOSITE = {
         q("sales", ("state",), ("completedAt", ASC)),
 }
 
-QUERIES = {**SINGLE_FIELD, **COMPOSITE}
+QUERIES = {**SINGLE_FIELD, **WINDOW}
 
 
 # ---------- index model ----------
@@ -94,21 +92,8 @@ def _index(collection: str, *fields: tuple[str, str]) -> dict:
 
 
 @pytest.fixture(scope="module")
-def analytics() -> dict:
-    if not ANALYTICS.exists():
-        pytest.skip("infra/firestore.indexes.analytics.json is gone (merged into infra/firestore.indexes.json)")
-    return _load(ANALYTICS)
-
-
-@pytest.fixture(scope="module")
-def foundation() -> list[dict]:
-    return _load(FOUNDATION)["indexes"] if FOUNDATION.exists() else []
-
-
-@pytest.fixture(scope="module")
-def deployed(foundation) -> list[dict]:
-    """Every index the repo defines for database "aira": the foundation file plus the analytics file."""
-    return foundation + (_load(ANALYTICS)["indexes"] if ANALYTICS.exists() else [])
+def indexes() -> list[dict]:
+    return _load(INDEXES)["indexes"]
 
 
 # ---------- the index model follows Firestore's rules ----------
@@ -120,7 +105,7 @@ def test_single_field_and_equality_only_queries_need_no_composite():
 
 
 def test_equality_plus_range_needs_composite():
-    for name, query in COMPOSITE.items():
+    for name, query in WINDOW.items():
         assert needs_composite(query), name
 
 
@@ -142,16 +127,22 @@ def test_index_must_match_collection_and_fields_exactly():
     assert not serves(_index("ledger", ("reason", ASC), ("delta", ASC)), query)
 
 
-# ---------- the analytics indexes file ----------
+# ---------- infra/firestore.indexes.json ----------
 
-def test_file_uses_firebase_cli_format(analytics):
-    assert set(analytics) == {"indexes", "fieldOverrides"}
-    assert isinstance(analytics["indexes"], list) and analytics["indexes"]
-    assert analytics["fieldOverrides"] == []
+def test_one_indexes_file_and_no_stray_analytics_file():
+    assert INDEXES.exists()
+    assert not STRAY.exists(), "merge it into infra/firestore.indexes.json: firebase.json deploys only that file"
 
 
-def test_every_index_is_well_formed(analytics):
-    for index in analytics["indexes"]:
+def test_file_uses_firebase_cli_format():
+    data = _load(INDEXES)
+    assert set(data) == {"indexes", "fieldOverrides"}
+    assert isinstance(data["indexes"], list) and data["indexes"]
+    assert data["fieldOverrides"] == []
+
+
+def test_every_index_is_well_formed(indexes):
+    for index in indexes:
         assert set(index) == {"collectionGroup", "queryScope", "fields"}, index
         assert index["queryScope"] == "COLLECTION", index
         assert isinstance(index["collectionGroup"], str) and index["collectionGroup"], index
@@ -162,44 +153,25 @@ def test_every_index_is_well_formed(analytics):
             assert field["order"] in {ASC, DESC}, field
 
 
-def test_no_duplicate_indexes(analytics):
-    shapes = [_shape(i) for i in analytics["indexes"]]
+def test_no_duplicate_indexes(indexes):
+    shapes = [_shape(i) for i in indexes]
     assert len(shapes) == len(set(shapes))
 
 
-def test_every_analytics_query_is_served(deployed):
+def test_every_analytics_query_is_served(indexes):
     missing = [
         name for name, query in QUERIES.items()
-        if needs_composite(query) and not any(serves(index, query) for index in deployed)
+        if needs_composite(query) and not any(serves(index, query) for index in indexes)
     ]
     assert not missing, f"no index serves: {missing}"
 
 
-def test_every_analytics_index_serves_an_analytics_query(analytics):
-    unused = [
-        _shape(index) for index in analytics["indexes"]
-        if not any(serves(index, query) for query in QUERIES.values())
-    ]
-    assert not unused, f"indexes no analytics query uses: {unused}"
-
-
-def test_adds_only_indexes_the_foundation_lacks(analytics, foundation):
-    if not foundation:
-        pytest.skip("infra/firestore.indexes.json is not in the tree")
-    ours = {_shape(i) for i in analytics["indexes"]}
-    theirs = {_shape(i) for i in foundation}
-    if ours <= theirs:
-        pytest.skip("analytics indexes already merged into infra/firestore.indexes.json")
-    overlap = ours & theirs
-    assert not overlap, f"already in infra/firestore.indexes.json: {sorted(overlap)}"
-
-
-def test_foundation_alone_does_not_serve_the_composite_queries(foundation):
-    """Guards the reason this file exists: the foundation's DESCENDING indexes miss these ASCENDING windows.
-    Skipped once the analytics indexes are merged into the foundation file."""
-    if not foundation:
-        pytest.skip("infra/firestore.indexes.json is not in the tree")
-    served = [name for name, query in COMPOSITE.items() if any(serves(i, query) for i in foundation)]
-    if len(served) == len(COMPOSITE):
-        pytest.skip("analytics indexes already merged into infra/firestore.indexes.json")
-    assert not served, f"foundation already serves: {served}"
+def test_the_deployed_window_indexes_are_kept(indexes):
+    """The ASCENDING window indexes exist in the deployed database: dropping them from the file would make a
+    firebase deploy offer to delete them."""
+    deployed = {
+        ("ledger", (("sku", ASC), ("reason", ASC), ("at", ASC))),
+        ("ledger", (("reason", ASC), ("at", ASC))),
+        ("sales", (("state", ASC), ("completedAt", ASC))),
+    }
+    assert deployed <= {_shape(i) for i in indexes}

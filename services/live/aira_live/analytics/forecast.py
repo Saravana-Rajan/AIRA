@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import time
 from collections import defaultdict
 from collections.abc import Iterable, Mapping
@@ -94,9 +95,14 @@ def _today() -> date:
     return datetime.now(IST).date()
 
 
-def _enabled() -> bool:
+def _enabled(ops: bool = False) -> bool:
+    """The service reads the ledger only outside mock mode with a project. ``ops=True`` (the CLI) reads whenever
+    Firestore is configured (an emulator or a project): an operator's shell with ADC has no Gemini key."""
     settings = config.load()
-    return not getattr(settings, "mock", False) and bool(getattr(settings, "gcp_project", None))
+    project = bool(getattr(settings, "gcp_project", None))
+    if ops:
+        return project or bool(os.getenv("FIRESTORE_EMULATOR_HOST"))
+    return not getattr(settings, "mock", False) and project
 
 
 def _at_since(col, bound):
@@ -167,32 +173,37 @@ async def daily_demand(shop_id: str, sku: str) -> float | None:
     return moving_average_7(by_sku.get(sku, {}), today, active)
 
 
-async def daily_demand_all(shop_id: str) -> dict[str, float | None]:
-    """Demand for every product of the shop, plus any SKU that sold in the window."""
-    if not _enabled():
+async def daily_demand_all(shop_id: str, *, ops: bool = False) -> dict[str, float | None]:
+    """Demand for every product of the shop, plus any SKU that sold in the window. ``ops``: see ``_enabled``."""
+    if not _enabled(ops):
         return {}
     today = _today()
     try:
         skus = await _product_skus(shop_id)
-        by_sku, _ = await _window(shop_id, today)
+        by_sku, active = await _window(shop_id, today)
     except Exception as exc:
         log.warning("forecast: Firestore read failed for %s: %s", shop_id, exc)
         return {}
-    skus |= set(by_sku)
-    values = await asyncio.gather(*(daily_demand(shop_id, sku) for sku in sorted(skus)))
-    return dict(zip(sorted(skus), values))
+    return {sku: moving_average_7(by_sku.get(sku, {}), today, active) for sku in sorted(skus | set(by_sku))}
 
 
-async def refresh_model(shop_id: str | None = None) -> dict[str, float | None]:
+async def refresh_model(shop_id: str | None = None, *, ops: bool = False) -> dict[str, float | None]:
     """Drop cached windows and recompute every SKU (default: the demo shop). Used by /jobs/forecast-refresh;
     the name is kept from the plan, but there is no model to train in this build."""
     clear_cache()
-    return await daily_demand_all(shop_id or config.load().demo_shop_id)
+    return await daily_demand_all(shop_id or config.load().demo_shop_id, ops=ops)
+
+
+def _main(argv: list[str]) -> int:
+    """``python -m aira_live.analytics.forecast [shop_id]``: print every SKU's forecast (reads in mock mode too)."""
+    import json
+
+    shop_arg = argv[0] if argv else None
+    print(json.dumps(asyncio.run(refresh_model(shop_arg, ops=True)), indent=2, sort_keys=True))
+    return 0
 
 
 if __name__ == "__main__":
-    import json
     import sys
 
-    shop_arg = sys.argv[1] if len(sys.argv) > 1 else None
-    print(json.dumps(asyncio.run(refresh_model(shop_arg)), indent=2, sort_keys=True))
+    raise SystemExit(_main(sys.argv[1:]))

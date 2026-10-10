@@ -50,12 +50,12 @@ From `services/live`:
 
 ```bash
 uv run python ../../bench/score_invoice.py --dry-run          # offline: files exist, are JPEG, labels valid
-uv run --with pillow python ../../bench/score_invoice.py --device "Pixel 7a" --build "$(git rev-parse --short HEAD)"
+uv run python ../../bench/score_invoice.py --device "Pixel 7a" --build "$(git rev-parse --short HEAD)"
 uv run python ../../bench/score_invoice.py --predictions ../../bench/results/invoice.json   # re-score offline
 python3 ../../scripts/bench_table.py                              # deck table from bench/results/*.csv
 ```
 
 - The live run needs `GEMINI_API_KEY` and makes 2 Gemini calls per bill.
-- Pillow gives the second read its enhanced copy of the photo, as in production. Without Pillow, the scorer warns and both reads see the same photo.
+- Pillow (a dependency of `services/live`, installed by `uv sync`) gives the second read its enhanced copy of the photo, as in production. If it is somehow missing, the scorer warns and both reads see the same photo.
 - The live run writes `bench/results/invoice.json` (metrics, every prediction, per-bill latency) and `bench/results/invoice.csv` (rows for `scripts/bench_table.py`). Both are git-ignored.
 - A rate is written to the CSV only when there is data for it. Without any bill with a planted error, for example, the deck shows the catch rate as "pending", not 0%.

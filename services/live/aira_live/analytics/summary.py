@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import math
+from collections.abc import Callable
 from datetime import datetime, time
 from zoneinfo import ZoneInfo
 
@@ -16,10 +17,31 @@ from aira_live.i18n import t
 
 IST = ZoneInfo("Asia/Kolkata")
 SAFETY = 1.15
+UNITS = ("L", "pack", "jar", "box")  # catalog selling units with spoken labels (i18n keys units.<unit>[.one])
+DEFAULT_UNIT = "pack"                # what business.ledger and business.expiry use for a product with no unit
 
 
 def _num(x) -> str:
     return str(int(x)) if isinstance(x, float) and x.is_integer() else str(x)
+
+
+def amount(qty, unit: str | None, lang: str, fmt: Callable[[object], str] = _num) -> str:
+    """A quantity in the product's selling unit, spoken with that unit: "23 litres", "1 pack", "3 jars".
+
+    Stock, ledger, expiry and forecast numbers are in selling units (litres for milk and curd), so a bare
+    "23 Aavin Milk 500 ml" would be heard as 23 pouches when it is 46. An unknown unit is spoken as stored.
+    """
+    n = fmt(qty)
+    unit = unit or DEFAULT_UNIT
+    if unit not in UNITS:
+        return f"{n} {unit}"
+    return t(f"units.{unit}.one" if n == "1" else f"units.{unit}", lang, qty=n)
+
+
+def item(qty, unit: str | None, name: str, lang: str, fmt: Callable[[object], str] = _num) -> str:
+    """A quantity with its unit and the product name ("23 litres of Aavin Milk 500 ml"), in each language's
+    word order."""
+    return t("units.item", lang, amount=amount(qty, unit, lang, fmt), name=name)
 
 
 def say(d: dict, lang: str) -> str:
@@ -33,7 +55,7 @@ def say(d: dict, lang: str) -> str:
                  top=names.get(top, top) or "")
     orders = d.get("suggested_orders") or []
     if orders:
-        items = ", ".join(f"{_num(o['qty'])} {names.get(o['sku'], o['sku'])}" for o in orders)
+        items = ", ".join(item(o["qty"], o.get("unit"), names.get(o["sku"], o["sku"]), lang) for o in orders)
         text = f"{text} {t('insights.tomorrow_order', lang, items=items)}"
     return text
 
@@ -60,10 +82,10 @@ def summarize(sales: list[dict], products: dict[str, dict], inventory: dict[str,
 
     low = sorted(sku for sku, p in products.items() if on_hand(sku) <= float(p.get("reorderThreshold", 0)))
     suggestions = []
-    for sku in products:
+    for sku, p in products.items():
         qty = suggest_qty(forecasts.get(sku), on_hand(sku))
-        if qty > 0:
-            suggestions.append({"sku": sku, "qty": qty})
+        if qty > 0:  # qty is in the product's selling unit, so the unit travels with it
+            suggestions.append({"sku": sku, "qty": qty, "unit": p.get("unit") or DEFAULT_UNIT})
     return {
         "sales_count": len(completed),
         "revenue": sum(int(s.get("total", 0)) for s in completed),

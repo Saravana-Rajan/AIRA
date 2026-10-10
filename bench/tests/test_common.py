@@ -18,10 +18,28 @@ DEMO_SKUS = [
 ]
 
 
-def test_percentile_linear_interpolation():
-    assert common.percentile([100, 200, 300, 400], 50) == 250
+def test_percentile_nearest_rank_like_the_deck_table():
+    assert common.percentile([100, 200, 300, 400], 50) == 200
+    assert common.percentile([100, 200, 300, 400], 95) == 400
     assert common.percentile([100], 95) == 100
-    assert common.percentile([1, 2, 3, 4, 5, 6, 7, 8, 9, 10], 95) == pytest.approx(9.55)
+    assert common.percentile([1, 2, 3, 4, 5, 6, 7, 8, 9, 10], 95) == 10
+    assert common.percentile([5000, 1000], 50) == 1000   # spike decision: a real reading, not 3000
+
+
+def test_percentile_matches_the_vision_metrics_rule():
+    from aira_live.vision.metrics import latency_stats
+
+    ms = [812.0, 1430.5, 977.0, 2210.0, 1105.0, 3999.0, 640.0]
+    stats = latency_stats(ms)
+    assert common.percentile(ms, 50) == stats["latency_p50_ms"]
+    assert common.percentile(ms, 95) == stats["latency_p95_ms"]
+
+
+def test_percentile_rejects_out_of_range():
+    with pytest.raises(ValueError):
+        common.percentile([1, 2], 101)
+    with pytest.raises(ValueError):
+        common.percentile([1, 2], -1)
 
 
 def test_percentile_empty_raises():

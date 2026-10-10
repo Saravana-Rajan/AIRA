@@ -46,6 +46,35 @@ def test_date_disagreement_reported():
     assert any(d.startswith("date: ") for d in r.disagreements), r.disagreements
 
 
+def test_date_in_indic_digits_or_indian_order_matches_iso():
+    # Read B's prompt allows Tamil/Hindi digits; Indian bills print DD/MM/YYYY.
+    for b_date in ("௧௦/௧௦/௨௦௨௬", "10-10-2026", "10.10.26", "१०/१०/२०२६"):
+        r = merge_reads(read([CURD, MILK]), read([CURD, MILK], date=b_date))
+        assert r.agreed is True, (b_date, r.disagreements)
+    r = merge_reads(read([CURD, MILK], date="௨௦௨௬-௧௦-௧௦"), read([CURD, MILK]))
+    assert r.agreed is True, r.disagreements
+    assert r.date == "2026-10-10"
+
+
+def test_unparseable_date_kept_as_written_and_compared():
+    r = merge_reads(read([CURD, MILK], date="Oct 10"), read([CURD, MILK], date="Oct 10"))
+    assert r.agreed is True, r.disagreements
+    assert r.date == "Oct 10"
+    r = merge_reads(read([CURD, MILK], date="31/02/2026"), read([CURD, MILK], date="2026-02-28"))
+    assert r.agreed is False
+    assert any(d.startswith("date: ") for d in r.disagreements), r.disagreements
+
+
+def test_line_pairing_prefers_best_match_over_read_order():
+    milk = {"name": "Aavin Milk 1L", "qty": "10", "unit": "pack", "unit_price": "44", "line_total": "440"}
+    toned = {"name": "Aavin Milk 1L Toned", "qty": "5", "unit": "pack", "unit_price": "40", "line_total": "200"}
+    r = merge_reads(read([milk, toned], total="640"), read([toned], total="640"))
+    assert r.agreed is False
+    assert "line Aavin Milk 1L: only in one read" in r.disagreements, r.disagreements
+    assert not any(d.startswith("line 1 ") or d.startswith("line 2 ") for d in r.disagreements), r.disagreements
+    assert [ln.name for ln in r.lines] == ["Aavin Milk 1L", "Aavin Milk 1L Toned"]
+
+
 def test_qty_disagreement_is_reported_precisely():
     curd_b = dict(CURD, qty="32 L")
     r = merge_reads(read([CURD, MILK]), read([curd_b, MILK]))
@@ -94,10 +123,31 @@ def test_total_not_equal_to_sum_of_lines_flagged():
 
 
 def test_rupee_rounding_within_tolerance_is_not_an_error():
+    cone = {"name": "Arun Cone", "qty": "3", "unit": "pcs", "unit_price": "Rs. 33", "line_total": "100"}
+    r = merge_reads(read([cone], total="100"), read([cone], total="100"))  # 3 x 33 = 99, bill rounds to 100
+    assert r.agreed is True, r.disagreements
+
+
+def test_paise_unit_price_is_rounded_but_never_presented_as_agreed():
     cone = {"name": "Arun Cone", "qty": "3", "unit": "pcs", "unit_price": "Rs. 33.50", "line_total": "100"}
     r = merge_reads(read([cone], total="100"), read([cone], total="100"))
+    assert r.lines[0].unit_price == 34  # the frozen contract carries whole rupees, rounded half-up
+    assert r.agreed is False
+    assert r.disagreements == ["line 1 Arun Cone unit_price: 33.50 (rounded to 34)"]
+
+
+def test_paise_dealer_rate_is_flagged_so_no_phantom_discrepancy_is_agreed():
+    curd = {"name": "Sakthi Curd 500ml", "qty": "30", "unit": "pack", "unit_price": "22.50", "line_total": "675"}
+    r = merge_reads(read([curd], total="675"), read([curd], total="675"))
+    assert r.lines[0].line_total == 675 and r.lines[0].unit_price == 23
+    assert r.agreed is False
+    assert "line 1 Sakthi Curd 500ml unit_price: 22.50 (rounded to 23)" in r.disagreements
+
+
+def test_whole_rupee_price_written_with_paise_is_not_flagged():
+    curd = dict(CURD, unit_price="33.00")
+    r = merge_reads(read([curd, MILK]), read([curd, MILK]))
     assert r.agreed is True, r.disagreements
-    assert r.lines[0].unit_price == 34  # rupees, rounded half-up
 
 
 def test_indian_and_indic_formats_compare_equal():

@@ -89,15 +89,22 @@ async def reorder_suggest(product: str | None = None) -> dict:
         any_history = True
         qty = summary.suggest_qty(fc, on)
         if qty > 0:
-            suggestions.append({"sku": sku, "name": products.get(sku, {}).get("name", sku), "qty": qty,
+            product = products.get(sku, {})
+            # Stock, forecast and qty are all in the product's selling unit (litres for milk and curd).
+            suggestions.append({"sku": sku, "name": product.get("name", sku), "qty": qty,
+                                "unit": product.get("unit") or summary.DEFAULT_UNIT,
                                 "supplier": suppliers.get(sku), "forecast": fc, "on_hand": on})
     if not any_history:
         return _none(t("insights.not_enough_data", s.lang))
     if not suggestions:
         return _none(t("insights.nothing_to_order", s.lang))
+
+    def amount(x: dict, field: str) -> str:
+        return summary.amount(x[field], x["unit"], s.lang, _fmt)
+
     say = " ".join(
         t("insights.reorder_item" if x["supplier"] else "insights.reorder_item_no_supplier", s.lang,
-          name=x["name"], on_hand=_fmt(x["on_hand"]), forecast=_fmt(x["forecast"]), qty=x["qty"],
+          name=x["name"], on_hand=amount(x, "on_hand"), forecast=amount(x, "forecast"), qty=amount(x, "qty"),
           supplier=x["supplier"] or "")
         for x in suggestions)
     return {"say": say, "suggestions": suggestions, "next_tool": "order_create"}

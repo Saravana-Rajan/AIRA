@@ -5,8 +5,8 @@ then scores the results against bench/data/invoice/labels.json (spec section 7).
 
 Usage (from services/live):
     uv run python ../../bench/score_invoice.py --dry-run                     # offline: photos + labels only
-    uv run --with pillow python ../../bench/score_invoice.py --device "Pixel 7a"
-        # real Gemini calls, needs GEMINI_API_KEY; Pillow gives read B its enhanced copy, as in production
+    uv run python ../../bench/score_invoice.py --device "Pixel 7a"
+        # real Gemini calls, needs GEMINI_API_KEY; Pillow (a service dependency) gives read B its enhanced copy
     uv run python ../../bench/score_invoice.py --predictions ../../bench/results/invoice.json
         # re-score saved results offline
 
@@ -21,6 +21,7 @@ import json
 import os
 import sys
 from datetime import datetime, timezone
+from decimal import Decimal
 from importlib.util import find_spec
 from pathlib import Path
 
@@ -31,6 +32,7 @@ for _p in (BENCH, BENCH.parent / "services" / "live"):
 
 from common import frame_from_file, jpeg_size, load_labels, timed  # noqa: E402
 
+from aira_live.vision.invoice_merge import TOLERANCE  # noqa: E402
 from aira_live.vision.metrics import bench_csv_text, invoice_csv_rows, invoice_metrics, latency_stats  # noqa: E402
 
 REQUIRED = {"file", "total", "has_error"}
@@ -40,13 +42,15 @@ README = "bench/data/invoice/README.md"
 
 
 def _lines_add_up(label: dict) -> bool:
-    """True when the label has no lines, or its line totals add up to its total."""
+    """True when the label has no lines, or its line totals add up to its total within the reader's ₹1
+    tolerance. Decimal, not float: 110.10 + 220.20 must equal 330.30."""
     lines = label.get("lines") or []
     if not lines:
         return True
     try:
-        return sum(float(l["line_total"]) for l in lines) == float(label["total"])
-    except (KeyError, TypeError, ValueError):
+        line_sum = sum((Decimal(str(l["line_total"])) for l in lines), Decimal("0"))
+        return abs(line_sum - Decimal(str(label["total"]))) <= TOLERANCE
+    except (KeyError, TypeError, ArithmeticError):
         return False
 
 
@@ -109,11 +113,21 @@ async def predict(rows: list[dict], data_dir: Path) -> tuple[dict, dict, dict]:
 
 
 def load_predictions(path: Path) -> tuple[dict, dict]:
-    """Saved predictions: a {file: InvoiceRead dict} map, or a results file this script wrote."""
-    doc = json.loads(path.read_text(encoding="utf-8"))
-    if isinstance(doc, dict) and isinstance(doc.get("predictions"), dict) and "metrics" in doc:
-        return doc["predictions"], doc.get("latencies_ms") or {}
-    return doc, {}
+    """Saved predictions: a {file: InvoiceRead dict} map, or a results file this script wrote.
+    Raises ValueError for anything else, so a wrong file is never scored as "every bill missing"."""
+    try:
+        doc = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as e:
+        raise ValueError(f"{path} is not valid JSON ({e})") from None
+    lat: object = {}
+    if isinstance(doc, dict) and "metrics" in doc and "predictions" in doc:
+        doc, lat = doc["predictions"], doc.get("latencies_ms") or {}
+    if not isinstance(doc, dict) or not all(isinstance(p, dict) for p in doc.values()):
+        raise ValueError(f"{path} must map each bill's file name to its saved InvoiceRead object")
+    if not isinstance(lat, dict) or not all(
+            isinstance(ms, (int, float)) and not isinstance(ms, bool) for ms in lat.values()):
+        raise ValueError(f"{path}: latencies_ms must map file names to milliseconds")
+    return doc, lat
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -139,7 +153,11 @@ def main(argv: list[str] | None = None) -> int:
 
     errors: dict[str, str] = {}
     if args.predictions:
-        preds, lat = load_predictions(args.predictions)
+        try:
+            preds, lat = load_predictions(args.predictions)
+        except (OSError, ValueError) as e:
+            print(f"BAD PREDICTIONS: {e}")
+            return 1
     else:
         rep = check_dataset(labels, args.data)
         if args.dry_run or not rep["ready"]:
@@ -155,7 +173,7 @@ def main(argv: list[str] | None = None) -> int:
             return 1
         if find_spec("PIL") is None:
             print("warning: Pillow is not installed, so read B runs on the original photo instead of an "
-                  "enhanced copy. Run with: uv run --with pillow python ../../bench/score_invoice.py",
+                  "enhanced copy. Run `uv sync` in services/live to install it.",
                   file=sys.stderr)
         preds, lat, errors = asyncio.run(predict(labels, args.data))
 

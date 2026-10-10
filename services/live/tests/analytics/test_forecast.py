@@ -310,6 +310,33 @@ async def test_daily_demand_all_empty_in_mock(ledger, monkeypatch):
     assert ledger.streams == []
 
 
+def _mock_with_project(monkeypatch, project="demo-aira"):
+    """An operator's shell: ADC and GCP_PROJECT, but no Gemini key, so config says mock."""
+    monkeypatch.delenv("FIRESTORE_EMULATOR_HOST", raising=False)
+    monkeypatch.setattr(fc.config, "load",
+                        lambda: SimpleNamespace(mock=True, gcp_project=project, demo_shop_id=SHOP))
+
+
+@pytest.mark.asyncio
+async def test_ops_refresh_reads_in_mock_mode_when_firestore_is_configured(ledger, monkeypatch):
+    _mock_with_project(monkeypatch)
+    ledger.add(f"shops/{SHOP}/products/aavin_milk_1l", {"sku": "aavin_milk_1l"})
+    ledger.add_sales([sale("aavin_milk_1l", 2, TODAY - timedelta(days=i)) for i in range(1, 8)])
+    assert await fc.refresh_model() == {}                                   # the service in mock mode reads nothing
+    assert ledger.streams == []
+    assert await fc.refresh_model(ops=True) == {"aavin_milk_1l": 2.0}
+    _mock_with_project(monkeypatch, project=None)
+    fc.clear_cache()
+    assert await fc.refresh_model(ops=True) == {}                           # nothing configured: still no read
+
+
+def test_cli_prints_the_forecast_in_mock_mode(ledger, monkeypatch, capsys):
+    _mock_with_project(monkeypatch)
+    ledger.add_sales([sale("sakthi_curd_1l", 3, TODAY - timedelta(days=i)) for i in range(1, 8)])
+    assert fc._main([SHOP]) == 0
+    assert json.loads(capsys.readouterr().out) == {"sakthi_curd_1l": 3.0}
+
+
 @pytest.mark.asyncio
 async def test_cache_keeps_only_live_windows(ledger, monkeypatch):
     ledger.add_sales([sale("aavin_milk_1l", 2, TODAY - timedelta(days=i)) for i in range(1, 8)])

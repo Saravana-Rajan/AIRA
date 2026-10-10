@@ -10,8 +10,41 @@ from aira_live.analytics import summary as sm
 
 IST = ZoneInfo("Asia/Kolkata")
 
-PRODUCTS = {"sakthi_curd_1l": {"name": "Sakthi curd", "reorderThreshold": 5},
-            "aavin_milk_500ml": {"name": "Aavin milk", "reorderThreshold": 10}}
+# Units as in content/catalog/murugan_dairy.json: milk and curd are stocked, sold and forecast in litres.
+PRODUCTS = {"sakthi_curd_1l": {"name": "Sakthi curd", "unit": "L", "reorderThreshold": 5},
+            "aavin_milk_500ml": {"name": "Aavin milk", "unit": "L", "packSizeL": 0.5, "reorderThreshold": 10}}
+
+
+# ---------- spoken quantities always carry their selling unit ----------
+
+def test_amount_speaks_the_selling_unit():
+    assert sm.amount(23, "L", "en") == "23 litres"
+    assert sm.amount(1, "L", "en") == "1 litre"
+    assert sm.amount(3.5, "L", "en") == "3.5 litres"
+    assert sm.amount(6.0, "pack", "en") == "6 packs"
+    assert sm.amount(1, "box", "en") == "1 box" and sm.amount(2, "box", "en") == "2 boxes"
+    assert sm.amount(2, "jar", "en") == "2 jars"
+
+
+def test_amount_without_a_unit_uses_the_ledger_default_pack_and_never_drops_an_unknown_unit():
+    assert sm.amount(2, None, "en") == "2 packs"            # business.ledger stores products with no unit as packs
+    assert sm.amount(4, "crate", "en") == "4 crate"         # spoken as stored, not guessed
+
+
+def test_amount_in_tamil_and_hindi():
+    assert sm.amount(23, "L", "ta") == "23 லிட்டர்" and sm.amount(6, "pack", "ta") == "6 பாக்கெட்"
+    assert sm.amount(23, "L", "hi") == "23 लीटर" and sm.amount(6, "pack", "hi") == "6 पैकेट"
+
+
+def test_say_speaks_suggested_orders_in_litres_not_bare_numbers():
+    """23 is litres of 500 ml pouches (46 pouches): '23 Aavin Milk 500 ml' would be heard as 23 pouches."""
+    d = {"sales_count": 0, "names": {"aavin_milk_500ml": "Aavin Milk 500 ml", "aavin_ghee_200ml": "Aavin Ghee"},
+         "suggested_orders": [{"sku": "aavin_milk_500ml", "qty": 23, "unit": "L"},
+                              {"sku": "aavin_ghee_200ml", "qty": 2, "unit": "jar"}]}
+    assert sm.say(d, "en") == ("No sales recorded today yet. "
+                               "Suggested order for tomorrow: 23 litres of Aavin Milk 500 ml, 2 jars of Aavin Ghee.")
+    assert "Aavin Milk 500 ml 23 லிட்டர்" in sm.say(d, "ta")
+    assert "23 लीटर Aavin Milk 500 ml" in sm.say(d, "hi")
 
 
 def test_suggest_qty_rounds_up_with_safety_and_never_negative():
@@ -37,8 +70,14 @@ def test_summarize_counts_only_completed_sales():
     assert out["sales_count"] == 2 and out["revenue"] == 174
     assert out["top_sku"] == "sakthi_curd_1l" and out["qty_by_sku"]["sakthi_curd_1l"] == 3
     assert out["low_stock"] == ["sakthi_curd_1l"]
-    assert out["suggested_orders"] == [{"sku": "sakthi_curd_1l", "qty": 28}]
+    assert out["suggested_orders"] == [{"sku": "sakthi_curd_1l", "qty": 28, "unit": "L"}]
     assert out["open_discrepancies"] == 1
+
+
+def test_summarize_suggestion_without_a_product_unit_is_in_packs():
+    products = {"aavin_paneer_200g": {"name": "Aavin paneer", "reorderThreshold": 3}}
+    out = sm.summarize([], products, {}, {"aavin_paneer_200g": 3.0}, 0)
+    assert out["suggested_orders"] == [{"sku": "aavin_paneer_200g", "qty": 4, "unit": "pack"}]
 
 
 def test_summarize_empty_day():
@@ -132,7 +171,7 @@ async def test_today_reads_only_this_ist_day(monkeypatch, forecasts):
     out = await sm.today("murugan_dairy", now=now)
     assert out["sales_count"] == 1 and out["revenue"] == 120 and out["top_sku"] == "sakthi_curd_1l"
     assert out["open_discrepancies"] == 1 and out["low_stock"] == ["sakthi_curd_1l"]
-    assert out["suggested_orders"] == [{"sku": "sakthi_curd_1l", "qty": 28}]
+    assert out["suggested_orders"] == [{"sku": "sakthi_curd_1l", "qty": 28, "unit": "L"}]
     assert out["names"] == {"sakthi_curd_1l": "Sakthi curd", "aavin_milk_500ml": "Aavin milk"}
     # Single-field filters only: Firestore indexes them automatically, so no composite index is needed.
     assert sorted(fake.queries) == [("completedAt", ">="), ("state", "==")]

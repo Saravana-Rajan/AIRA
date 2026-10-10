@@ -1,7 +1,7 @@
 import pytest
 
 from aira_live.models import model_for
-from aira_live.vision.count import assess, count_in_frame
+from aira_live.vision.count import COUNT_PROMPT, COUNT_SCHEMA, MAX_ITEMS, assess, count_in_frame
 from aira_live.vision.gemini import VisionError
 
 
@@ -59,6 +59,78 @@ def test_overlapping_cluster_asks_to_spread_out():
     r = assess(items)
     assert r.needs_retake is True and r.aim_hint == "vision.aim.spread_out"
     assert r.count == 6 and r.confidence < 1.0
+
+
+def test_hidden_item_asks_to_spread_out_not_move_back():
+    items = grid(12)
+    items[6]["hidden"] = True                    # a centre pack partly behind another one
+    r = assess(items)
+    assert r.count == 12 and r.needs_retake is True and r.aim_hint == "vision.aim.spread_out"
+    assert r.confidence < 1.0
+
+
+def test_old_cut_flag_away_from_the_edge_is_treated_as_overlap():
+    items = grid(12)
+    items[6]["cut"] = True                       # centre point: the frame edge cannot be the cause
+    r = assess(items)
+    assert r.count == 12 and r.needs_retake is True and r.aim_hint == "vision.aim.spread_out"
+
+
+def test_edge_flag_asks_to_move_back_even_away_from_the_margin():
+    items = grid(5) + [{"point": [500, 900], "label": "pack", "edge": True}]
+    r = assess(items)
+    assert r.count == 6 and r.needs_retake is True and r.aim_hint == "vision.aim.move_back"
+
+
+def test_edge_cut_wins_over_hidden_items():
+    items = grid(5) + [{"point": [10, 500], "label": "pack", "edge": True}]
+    items[2]["hidden"] = True
+    assert assess(items).aim_hint == "vision.aim.move_back"
+
+
+def test_hidden_flag_as_string_false_is_not_hidden():
+    items = grid(3)
+    items[0]["hidden"] = "false"
+    items[1]["edge"] = "False"
+    r = assess(items)
+    assert r.needs_retake is False and r.aim_hint == ""
+
+
+def well_spaced(n):
+    """n points on a 10-wide grid, 90 apart and well inside the frame edge."""
+    return [{"point": [100 + (i // 10) * 90, 100 + (i % 10) * 90], "label": "pack"} for i in range(n)]
+
+
+def test_reply_at_the_item_cap_never_gives_a_count():
+    r = assess(well_spaced(MAX_ITEMS))           # the model stopped at the cap: more may be there
+    assert r.count is None and r.needs_retake is True and r.aim_hint == "vision.aim.hold_closer"
+    assert r.confidence == 0.0
+
+
+def test_reply_over_the_item_cap_never_gives_a_count():
+    r = assess(well_spaced(MAX_ITEMS + 5))
+    assert r.count is None and r.needs_retake is True and r.aim_hint == "vision.aim.hold_closer"
+
+
+def test_reply_just_under_the_item_cap_is_counted():
+    r = assess(well_spaced(MAX_ITEMS - 1))
+    assert r.count == MAX_ITEMS - 1 and r.needs_retake is False and r.aim_hint == ""
+
+
+def test_prompt_asks_for_separate_edge_and_hidden_flags_and_the_cap():
+    assert MAX_ITEMS == 80
+    assert f"no more than {MAX_ITEMS} items" in COUNT_PROMPT
+    for flag in ('"edge"', '"hidden"'):
+        assert flag in COUNT_PROMPT and flag in COUNT_SCHEMA
+    assert '"cut"' not in COUNT_PROMPT
+
+
+async def test_count_in_frame_at_the_cap_never_invents_a_count(fake_genai, frame):
+    import json
+
+    fake_genai(json.dumps(well_spaced(MAX_ITEMS)))
+    r = await count_in_frame(frame, "Aavin milk 500 ml pouch")
+    assert r.count is None and r.needs_retake is True and r.aim_hint == "vision.aim.hold_closer"
 
 
 def test_nothing_visible_returns_none():

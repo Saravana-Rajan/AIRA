@@ -3,13 +3,14 @@
 Source of truth: the Firestore doc ``config/runtime`` in database ``aira`` with the fields
 ``pointing_model``, ``count_model``, ``live_model`` (model ids) and ``whatsapp_enabled`` (bool).
 Values are cached for 60 s. A missing doc means "use the defaults"; a failed read keeps the last good
-values and retries after 10 s. Model overrides are only honoured when they name a model listed in
-``aira_live.models`` (``DEFAULTS`` or ``FALLBACKS``); anything else is ignored with one warning.
+values and retries after 10 s. A model override is only honoured when it names one of that role's own
+models in ``aira_live.models`` (its ``DEFAULTS`` or ``FALLBACKS`` entry), so the Live session can never be
+pointed at a non-Live model or ER-2 pointing at the Live model; anything else is ignored with one warning.
 
 Model priority (applied in ``models.model_for``): env ``AIRA_MODEL_<ROLE>`` > this doc > ``DEFAULTS``.
 
 Emergency switch (ER 2 -> the role's fallback in ``models.FALLBACKS``) from a shell with ADC and
-``GCP_PROJECT`` set::
+``GCP_PROJECT`` set (the CLI reads Firestore even when no Gemini key is set)::
 
     uv run python -m aira_live.remote_config show
     uv run python -m aira_live.remote_config set pointing_model fallback
@@ -86,18 +87,25 @@ def _to_bool(value: Any) -> bool | None:
     return None
 
 
-def _known_models() -> set[str]:
+def _role_models(field: str) -> set[str]:
+    """The models one field may name: its role's default and fallback (``live_model`` -> the Live model only)."""
     from aira_live import models  # local import: models.model_for imports this module
 
-    return set(models.DEFAULTS.values()) | set(models.FALLBACKS.values())
+    role = PARAM_ROLE[field]
+    return {m for m in (models.DEFAULTS.get(role), models.FALLBACKS.get(role)) if m}
+
+
+def _reachable() -> bool:
+    """Firestore is configured: an emulator, or a project (ADC), whatever the Gemini mock flag says."""
+    return bool(os.getenv("FIRESTORE_EMULATOR_HOST") or config.load().gcp_project)
 
 
 def _enabled() -> bool:
-    """Read Firestore only when it is reachable: an emulator, or a real project outside mock mode."""
+    """The running service reads Firestore only when it is reachable: an emulator, or a real project outside
+    mock mode. The ops CLI uses ``_reachable`` instead (``refresh(ops=True)``)."""
     if os.getenv("FIRESTORE_EMULATOR_HOST"):
         return True
-    settings = config.load()
-    return bool(settings.gcp_project) and not settings.mock
+    return _reachable() and not config.load().mock
 
 
 def _doc_ref():
@@ -112,14 +120,18 @@ def _stale(now: float | None = None) -> bool:
     return (time.monotonic() if now is None else now) - _fetched_at >= TTL_S
 
 
-async def refresh(force: bool = False) -> dict[str, Any]:
-    """Re-read ``config/runtime`` when the cache is older than 60 s (or always with ``force``)."""
+async def refresh(force: bool = False, *, ops: bool = False) -> dict[str, Any]:
+    """Re-read ``config/runtime`` when the cache is older than 60 s (or always with ``force``).
+
+    ``ops=True`` (the CLI) reads whenever Firestore is configured, even in mock mode: an operator's shell with
+    only ADC and ``GCP_PROJECT`` has no Gemini key, and must still see the real switch values.
+    """
     global _fetched_at
     now = time.monotonic()
     if not force and not _stale(now):
         return dict(_cache)
     try:
-        if not _enabled():
+        if not (_reachable() if ops else _enabled()):
             _fetched_at = now
             return dict(_cache)
         snap = await _doc_ref().get()
@@ -151,11 +163,12 @@ def _validated_model(field: str) -> str | None:
     value = _cache.get(field)
     if not isinstance(value, str) or not value:
         return None
-    if value in _known_models():
+    if value in _role_models(field):
         return value
     if (field, value) not in _warned:  # once per bad value, not on every model_for() call
         _warned.add((field, value))
-        log.warning("ignoring unknown model %r in config/runtime.%s", value, field)
+        log.warning("ignoring model %r in config/runtime.%s: not one of %s", value, field,
+                    sorted(_role_models(field)))
     return None
 
 
@@ -198,8 +211,9 @@ def _model_value(field: str, value: str) -> str:
         if not fallback:
             raise ValueError(f"{field} has no fallback model in aira_live.models.FALLBACKS")
         return fallback
-    if value not in _known_models():
-        raise ValueError(f"{value!r} is not a model listed in aira_live.models")
+    allowed = _role_models(field)
+    if value not in allowed:
+        raise ValueError(f"{value!r} is not a {PARAM_ROLE[field]} model; expected one of {', '.join(sorted(allowed))}")
     return value
 
 
@@ -221,7 +235,7 @@ async def set_value(field: str, value: Any) -> dict[str, Any]:
         if stored is None:
             raise ValueError(f"{value!r} is not a boolean (use true/false)")
     await _doc_ref().set({field: stored, "updated_at": datetime.now(timezone.utc)}, merge=True)
-    return await refresh(force=True)
+    return await refresh(force=True, ops=True)  # read back what was just written, mock mode or not
 
 
 def _main(argv: list[str]) -> int:
@@ -230,7 +244,7 @@ def _main(argv: list[str]) -> int:
         print(usage, file=sys.stderr)
         return 2
     if argv[0] == "show":
-        values = asyncio.run(refresh(force=True))
+        values = asyncio.run(refresh(force=True, ops=True))
     else:
         try:
             values = asyncio.run(set_value(argv[1], argv[2]))

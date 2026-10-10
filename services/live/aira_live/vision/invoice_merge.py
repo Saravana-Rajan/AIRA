@@ -8,12 +8,13 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from datetime import date as _date_cls
 from decimal import Decimal
 from difflib import SequenceMatcher
 from typing import Any
 
 from aira_live.vision.invoice_models import InvoiceLine, InvoiceRead
-from aira_live.vision.numbers import normalize_amount, parse_qty, rupees
+from aira_live.vision.numbers import normalize_amount, parse_qty, rupees, to_ascii_digits
 
 TOLERANCE = Decimal("1")      # ₹1 rounding tolerance
 NAME_MATCH = 0.75             # minimum similarity to pair lines across reads
@@ -72,6 +73,30 @@ def _text(value: Any) -> str | None:
     return s or None
 
 
+_ISO_DATE = re.compile(r"(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})")
+_INDIAN_DATE = re.compile(r"(\d{1,2})[-/.](\d{1,2})[-/.](\d{4}|\d{2})")
+
+
+def _date(value: Any) -> str | None:
+    """Bill date as ISO YYYY-MM-DD when it parses (Tamil/Devanagari digits, Indian DD/MM/YYYY order);
+    otherwise the text as written, so two reads still compare like for like."""
+    s = _text(value)
+    if s is None:
+        return None
+    s = to_ascii_digits(s)
+    if m := _ISO_DATE.fullmatch(s):
+        y, mo, d = m.groups()
+    elif m := _INDIAN_DATE.fullmatch(s):
+        d, mo, y = m.groups()
+        y = f"20{y}" if len(y) == 2 else y
+    else:
+        return s
+    try:
+        return _date_cls(int(y), int(mo), int(d)).isoformat()
+    except ValueError:  # e.g. 31/02: keep what was written; the other read decides agreement
+        return s
+
+
 def _parse(raw: Any) -> dict:
     raw = raw if isinstance(raw, dict) else {}
     lines: list[ParsedLine] = []
@@ -89,7 +114,7 @@ def _parse(raw: Any) -> dict:
         ))
     return {
         "supplier": _text(raw.get("supplier")),
-        "date": _text(raw.get("date")),
+        "date": _date(raw.get("date")),
         "handwritten": bool(raw.get("handwritten")),
         "lines": lines,
         "total": _amount(raw.get("total")),
@@ -99,22 +124,27 @@ def _parse(raw: Any) -> dict:
 def _match(a_lines: list[ParsedLine], b_lines: list[ParsedLine]) -> list[tuple[ParsedLine | None, ParsedLine | None]]:
     """Pair lines by name similarity so a different line order between reads is not a disagreement.
 
-    Pairs keep read A's order (index i+1 is read A's line number); lines only in read B come last.
+    Best-first over all candidate pairs, so a line never steals another line's exact partner just because
+    it comes earlier on the bill. Pairs keep read A's order (index i+1 is read A's line number); lines
+    only in read B come last.
     """
-    remaining = list(b_lines)
-    pairs: list[tuple[ParsedLine | None, ParsedLine | None]] = []
-    for la in a_lines:
-        best, best_score = None, 0.0
-        for lb in remaining:
-            score = _similar(la.name, lb.name)
-            if score > best_score:
-                best, best_score = lb, score
-        if best is not None and best_score >= NAME_MATCH:
-            remaining.remove(best)
-            pairs.append((la, best))
-        else:
-            pairs.append((la, None))
-    pairs.extend((None, lb) for lb in remaining)
+    candidates = sorted(
+        ((score, ia, ib)
+         for ia, la in enumerate(a_lines)
+         for ib, lb in enumerate(b_lines)
+         if (score := _similar(la.name, lb.name)) >= NAME_MATCH),
+        key=lambda c: (-c[0], c[1], c[2]),
+    )
+    partner: dict[int, int] = {}
+    taken_b: set[int] = set()
+    for _score, ia, ib in candidates:
+        if ia not in partner and ib not in taken_b:
+            partner[ia] = ib
+            taken_b.add(ib)
+    pairs: list[tuple[ParsedLine | None, ParsedLine | None]] = [
+        (la, b_lines[partner[ia]] if ia in partner else None) for ia, la in enumerate(a_lines)
+    ]
+    pairs.extend((None, lb) for ib, lb in enumerate(b_lines) if ib not in taken_b)
     return pairs
 
 
@@ -142,7 +172,8 @@ def arithmetic_issues(lines: list[ParsedLine], total: Decimal | None) -> list[st
 
 def _to_model(ln: ParsedLine, unit: str = "") -> InvoiceLine:
     # The interface fields are not optional; an unreadable value becomes 0 and is always listed in
-    # `disagreements`, so a result carrying a placeholder never has agreed=True.
+    # `disagreements`, so a result carrying a placeholder never has agreed=True. Money is whole rupees
+    # (frozen contract): a unit_price that rounding changed is listed in `disagreements` by merge_reads.
     return InvoiceLine(
         name=ln.name,
         qty=float(ln.qty) if ln.qty is not None else 0.0,
@@ -183,6 +214,11 @@ def merge_reads(raw_a: dict, raw_b: dict) -> InvoiceRead:
         # A unit seen by only one read is not a conflict; two different units are (30 L is not 30 packs).
         if la.unit and lb.unit and la.unit != lb.unit:
             dis.append(f"line {i} {la.name} unit: {la.unit} vs {lb.unit}")
+        # The frozen InvoiceLine carries whole rupees. A paise rate (30 x 22.50) would come back as 23, a
+        # price that is not on the bill, and qty x 23 = 690 is a phantom gap against the printed 675. So a
+        # rounded rate is never presented as agreed; consumers use line_total, never qty x unit_price.
+        if la.unit_price is not None and rupees(la.unit_price) != la.unit_price:
+            dis.append(f"line {i} {la.name} unit_price: {la.unit_price:.2f} (rounded to {rupees(la.unit_price)})")
         out_lines.append(_to_model(la, unit=la.unit or lb.unit))
 
     if a["total"] is None and b["total"] is None:

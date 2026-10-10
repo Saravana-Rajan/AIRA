@@ -1,7 +1,12 @@
 """Count packs in one frame (crate or shelf snapshot) with Gemini Robotics-ER 2 pointing.
 
-Points are [y, x] normalised 0-1000. Never invent a count: when nothing valid is seen the result is
-``count=None`` with ``needs_retake`` and an ``aim_hint`` i18n key (see ``vision/hints.py``).
+Points are [y, x] normalised 0-1000. Never invent a count: when nothing valid is seen, or the reply hits
+the item cap (so more packs may be in view), the result is ``count=None`` with ``needs_retake`` and an
+``aim_hint`` i18n key (see ``vision/hints.py``).
+
+Two different problems get two different hints: a pack cut off by the frame edge asks Murugan to move the
+phone back (``vision.aim.move_back``); a pack hidden behind another one, or packs bunched together, asks him
+to spread them out (``vision.aim.spread_out``). Moving back cannot fix an overlap.
 """
 from __future__ import annotations
 
@@ -17,6 +22,7 @@ DEDUPE_RADIUS = 12     # two points closer than this (0-1000 space) are the same
 OVERLAP_RADIUS = 35    # packs this close are probably stacked or overlapping
 EDGE_MARGIN = 25       # a point this close to the frame edge is probably a cut-off pack
 SPREAD_RATIO = 0.15    # overlapping pairs per pack above this ask Murugan to spread the packs out
+MAX_ITEMS = 80         # the prompt's reply cap; a reply this long may be truncated, so it is never a count
 
 
 class CountResult(BaseModel):
@@ -29,10 +35,11 @@ class CountResult(BaseModel):
 COUNT_PROMPT = (
     "You are counting stock for a blind shopkeeper. Point to EVERY individual {label} visible in this image, "
     "exactly one point per item, at the centre of each item. Do not point to anything else. "
-    'For each item set "cut": true if part of it is outside the image edge or hidden behind another item. '
-    "Points are [y, x] normalized to 0-1000. Return no more than 80 items."
+    'For each item set "edge": true if part of it is cut off by the image edge, and '
+    '"hidden": true if part of it is hidden behind another item. '
+    f"Points are [y, x] normalized to 0-1000. Return no more than {MAX_ITEMS} items."
 )
-COUNT_SCHEMA = '[{"point": [y, x], "label": "<label>", "cut": false}]'
+COUNT_SCHEMA = '[{"point": [y, x], "label": "<label>", "edge": false, "hidden": false}]'
 
 
 def _is_point(p: Any) -> bool:
@@ -40,7 +47,7 @@ def _is_point(p: Any) -> bool:
             and all(isinstance(v, (int, float)) and not isinstance(v, bool) and 0 <= v <= 1000 for v in p))
 
 
-def _is_cut(v: Any) -> bool:
+def _is_true(v: Any) -> bool:
     return v is True or (isinstance(v, str) and v.strip().lower() == "true")
 
 
@@ -50,8 +57,13 @@ def _dist(a: tuple[float, float], b: tuple[float, float]) -> float:
 
 def assess(items: list[dict]) -> CountResult:
     """Pure: raw model points -> deduped count, confidence and a retake hint key."""
+    if isinstance(items, list) and len(items) >= MAX_ITEMS:
+        # The model stopped at the cap, so packs past it were never pointed at. Ask for a closer view of
+        # part of the shelf or crate rather than speak a truncated number.
+        return CountResult(count=None, confidence=0.0, needs_retake=True, aim_hint="vision.aim.hold_closer")
     pts: list[tuple[float, float]] = []
-    cut_flags: list[bool] = []
+    edge_flags: list[bool] = []
+    hidden_flags: list[bool] = []
     for it in items if isinstance(items, list) else []:
         p = it.get("point") if isinstance(it, dict) else None
         if not _is_point(p):
@@ -61,17 +73,23 @@ def assess(items: list[dict]) -> CountResult:
             continue
         pts.append(q)
         near_edge = min(q[0], q[1], 1000 - q[0], 1000 - q[1]) < EDGE_MARGIN
-        cut_flags.append(_is_cut(it.get("cut")) or near_edge)
+        # An older reply shape uses one "cut" flag for both causes: near the edge it is an edge cut,
+        # anywhere else it can only be a pack hidden behind another one.
+        legacy_cut = _is_true(it.get("cut"))
+        edge = _is_true(it.get("edge")) or near_edge
+        edge_flags.append(edge)
+        hidden_flags.append(_is_true(it.get("hidden")) or (legacy_cut and not edge))
     n = len(pts)
     if n == 0:
         return CountResult(count=None, confidence=0.0, needs_retake=True, aim_hint="vision.aim.show_items")
     overlaps = sum(1 for i in range(n) for j in range(i + 1, n) if _dist(pts[i], pts[j]) < OVERLAP_RADIUS)
-    overlap_ratio = min(1.0, overlaps / n)
-    edge_ratio = sum(cut_flags) / n
+    hidden = sum(hidden_flags)
+    overlap_ratio = min(1.0, (overlaps + hidden) / n)
+    edge_ratio = sum(edge_flags) / n
     confidence = max(0.0, min(1.0, 1.0 - 0.6 * overlap_ratio - 0.4 * edge_ratio))
     if edge_ratio > 0:
         hint = "vision.aim.move_back"
-    elif overlap_ratio > SPREAD_RATIO:
+    elif hidden > 0 or overlap_ratio > SPREAD_RATIO:
         hint = "vision.aim.spread_out"
     else:
         hint = ""

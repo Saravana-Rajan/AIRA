@@ -270,6 +270,25 @@ def test_scorer_csv_feeds_the_deck_table(tmp_path, capsys):
     assert summary["invoice_check_latency"]["device"] == "Pixel 7a"
 
 
+@pytest.mark.parametrize("name", ["score_invoice", "score_cash"])
+@pytest.mark.parametrize("bad", [
+    "[1, 2]",                                   # a list, not a {file: prediction} map
+    '{"inv_001.jpg": "agreed"}',                # a prediction that is not an object
+    '{"metrics": {}, "predictions": [1]}',      # a results file whose predictions are not a map
+    "{not json",                                # not JSON at all
+])
+def test_rescoring_a_malformed_predictions_file_fails_cleanly(tmp_path, capsys, name, bad):
+    kind = "invoice" if name == "score_invoice" else "cash"
+    data = _dataset(tmp_path, kind, with_photos=False)
+    (tmp_path / "preds.json").write_text(bad, encoding="utf-8")
+    out_csv = tmp_path / f"{kind}.csv"
+    rc = _load_scorer(name).main(["--data", str(data), "--predictions", str(tmp_path / "preds.json"),
+                                  "--out", str(tmp_path / f"{kind}.json"), "--csv", str(out_csv)])
+    assert rc == 1
+    assert "BAD PREDICTIONS" in capsys.readouterr().out
+    assert not out_csv.exists()  # nothing half-scored reaches the deck table
+
+
 def test_score_invoice_without_labels_is_not_ready(tmp_path, capsys):
     rc = _load_scorer("score_invoice").main(["--data", str(tmp_path)])
     assert rc == 1
@@ -408,3 +427,31 @@ def test_scorers_never_mention_counterfeit_detection():
     for name in ("score_invoice.py", "score_cash.py"):
         text = (BENCH / name).read_text(encoding="utf-8").lower()
         assert "counterfeit" not in text and "fake note" not in text
+
+
+def _bill(lines, total):
+    return {"file": "x.jpg", "total": total, "has_error": False,
+            "lines": [{"name": f"item {i}", "line_total": lt} for i, lt in enumerate(lines)]}
+
+
+def test_label_with_paise_lines_adds_up():
+    mod = _load_scorer("score_invoice")
+    assert sum([110.1, 220.2]) != 330.3             # the float trap the check must not fall into
+    assert mod._lines_add_up(_bill([110.1, 220.2], 330.3)) is True
+    assert mod._lines_add_up(_bill([22.5, 44.35, 10.1], 76.95)) is True
+    assert mod._lines_add_up(_bill(["110.10", "220.20"], "330.30")) is True
+
+
+def test_label_lines_use_the_same_one_rupee_tolerance_as_the_reader():
+    mod = _load_scorer("score_invoice")
+    assert mod._lines_add_up(_bill([990, 480], 1470.5)) is True    # the bill rounded its total
+    assert mod._lines_add_up(_bill([990, 480], 1471)) is True
+    assert mod._lines_add_up(_bill([990, 480], 1475)) is False
+    assert mod._lines_add_up(_bill([990, "abc"], 1470)) is False
+    assert mod._lines_add_up({"file": "x.jpg", "total": 990, "has_error": False}) is True
+
+
+def test_dataset_check_does_not_flag_a_clean_paise_bill(tmp_path):
+    mod = _load_scorer("score_invoice")
+    rep = mod.check_dataset([_bill([10.1, 20.2], 30.3)], tmp_path)
+    assert rep["clean_lines_dont_add_up"] == []

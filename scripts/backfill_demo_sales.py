@@ -6,12 +6,17 @@ day. Rows are seeded and use fixed doc ids (backfill-<day>-<sku>), so a re-run o
 Only ledger history is written: inventory, sales and payment docs are not touched. The window ends yesterday
 (Asia/Kolkata), so today's live demo sales stay separate. Rows carry refType "demo_backfill".
 
-Reads GCP_PROJECT and FIRESTORE_DATABASE (default "aira") from flags, the environment or the repo's .env.
-Never writes to the "(default)" database.
+Safe by default: without a write flag it is a dry run and writes nothing.
+- --emulator writes to the Firestore emulator. The host comes from FIRESTORE_EMULATOR_HOST (environment or
+  the repo's .env), else 127.0.0.1:8085 (firebase.json), and is exported before the client is created.
+- The cloud needs BOTH an explicit --project and --yes-write-cloud. GCP_PROJECT from the environment or .env
+  never selects a cloud write, and a cloud write is refused while FIRESTORE_EMULATOR_HOST is set.
+FIRESTORE_DATABASE (default "aira") comes from --database, the environment or .env. Never writes to the
+"(default)" database.
 
   uv run --project services/live python scripts/backfill_demo_sales.py --dry-run
-  FIRESTORE_EMULATOR_HOST=127.0.0.1:8085 uv run --project services/live python scripts/backfill_demo_sales.py --project demo-aira
-  uv run --project services/live python scripts/backfill_demo_sales.py
+  uv run --project services/live python scripts/backfill_demo_sales.py --emulator
+  uv run --project services/live python scripts/backfill_demo_sales.py --project <id> --yes-write-cloud
 """
 from __future__ import annotations
 
@@ -34,6 +39,9 @@ DEFAULT_SHOP = "murugan_dairy"
 IST = ZoneInfo("Asia/Kolkata")
 REF_TYPE = "demo_backfill"
 BATCH_LIMIT = 500  # Firestore batched-write limit
+EMULATOR_HOST_ENV = "FIRESTORE_EMULATOR_HOST"
+DEFAULT_EMULATOR_HOST = "127.0.0.1:8085"  # firebase.json emulators.firestore.port
+EMULATOR_PROJECT = "demo-aira"  # a demo-* project id only ever exists in the emulator
 
 # Pouches / packs / jars / boxes sold on an ordinary weekday. A catalog product's `demoDailyBase` wins.
 DAILY_BASE: dict[str, float] = {
@@ -81,8 +89,10 @@ def generate(products: list[dict], days: int, end: date, seed: int,
             at = datetime.combine(day, time(minute // 60, minute % 60), IST).astimezone(timezone.utc)
             doc_id = f"backfill-{day.isoformat()}-{sku}"
             docs.append((f"shops/{shop_id}/ledger/{doc_id}", {
+                "id": doc_id,
                 "sku": sku,
                 "delta": -selling_units(product, packs),
+                "unit": product.get("unit", "pack"),
                 "reason": "SALE",
                 "refType": REF_TYPE,
                 "refId": f"backfill-{day.isoformat()}",
@@ -113,15 +123,37 @@ def load_env_file(path: Path) -> dict[str, str]:
     return values
 
 
-def target(project: str | None, database: str | None, env: Mapping[str, str]) -> tuple[str, str]:
-    """(project, database) from flags, else env GCP_PROJECT / FIRESTORE_DATABASE (default "aira")."""
-    project = project or env.get("GCP_PROJECT", "")
+def database_of(database: str | None, env: Mapping[str, str]) -> str:
+    """--database, else env FIRESTORE_DATABASE, else "aira". "(default)" is refused."""
     database = database or env.get("FIRESTORE_DATABASE") or DEFAULT_DATABASE
-    if not project:
-        raise ValueError("GCP_PROJECT is not set (env or .env) and --project was not given")
     if database == FORBIDDEN_DATABASE:
         raise ValueError('refusing to write to the "(default)" database; AIRA uses database "aira"')
-    return project, database
+    return database
+
+
+def target(project: str | None, database: str | None, env: Mapping[str, str], *, emulator: bool = False,
+           yes_write_cloud: bool = False) -> tuple[str, str, str | None]:
+    """(project, database, emulator host or None) for a write. ValueError when the write is not allowed.
+
+    Emulator: project from --project, else env GCP_PROJECT, else "demo-aira"; host from env
+    FIRESTORE_EMULATOR_HOST, else 127.0.0.1:8085. Cloud: only an explicit --project with --yes-write-cloud,
+    and never while FIRESTORE_EMULATOR_HOST is set (that run was meant for the emulator).
+    """
+    database = database_of(database, env)
+    if emulator and yes_write_cloud:
+        raise ValueError("choose --emulator or --yes-write-cloud, not both")
+    if emulator:
+        host = env.get(EMULATOR_HOST_ENV) or DEFAULT_EMULATOR_HOST
+        return project or env.get("GCP_PROJECT") or EMULATOR_PROJECT, database, host
+    if not yes_write_cloud:
+        raise ValueError("refusing to write: pass --emulator, or --project <id> --yes-write-cloud")
+    if not project:
+        raise ValueError("refusing to write to the cloud without --project "
+                         "(GCP_PROJECT from the environment or .env is not enough)")
+    if env.get(EMULATOR_HOST_ENV):
+        raise ValueError(f"refusing to write to the cloud while {EMULATOR_HOST_ENV} is set; "
+                         "use --emulator, or unset it")
+    return project, database, None
 
 
 def make_client(project: str, database: str) -> Any:
@@ -148,8 +180,10 @@ def _positive(value: str) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(description="Backfill demo SALE ledger rows into Firestore database 'aira'.")
-    ap.add_argument("--project", help="GCP project id (default: env GCP_PROJECT)")
+    ap = argparse.ArgumentParser(
+        description="Backfill demo SALE ledger rows into Firestore database 'aira'. Dry run unless "
+                    "--emulator, or --project with --yes-write-cloud, is given.")
+    ap.add_argument("--project", help="GCP project id; a cloud write also needs --yes-write-cloud")
     ap.add_argument("--database", help='Firestore database id (default: env FIRESTORE_DATABASE, else "aira")')
     ap.add_argument("--catalog", type=Path, default=DEFAULT_CATALOG)
     ap.add_argument("--shop", help="shop id (default: the catalog's shop.id)")
@@ -157,7 +191,12 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--end", type=date.fromisoformat, help="last day, YYYY-MM-DD (default: yesterday in IST)")
     ap.add_argument("--seed", type=int, default=2026)
     ap.add_argument("--env-file", type=Path, default=ROOT / ".env")
-    ap.add_argument("--dry-run", action="store_true", help="generate and count the rows; write nothing")
+    ap.add_argument("--dry-run", action="store_true", help="generate and count the rows; write nothing (default)")
+    mode = ap.add_mutually_exclusive_group()
+    mode.add_argument("--emulator", action="store_true",
+                      help=f"write to the Firestore emulator ({EMULATOR_HOST_ENV}, else {DEFAULT_EMULATOR_HOST})")
+    mode.add_argument("--yes-write-cloud", action="store_true",
+                      help="write to the real Firestore of --project (required for any cloud write)")
     ns = ap.parse_args(argv)
 
     catalog = json.loads(ns.catalog.read_text(encoding="utf-8"))
@@ -165,18 +204,25 @@ def main(argv: list[str] | None = None) -> int:
     end = ns.end or (datetime.now(IST).date() - timedelta(days=1))
     first = end - timedelta(days=ns.days - 1)
     docs = generate(catalog["products"], ns.days, end, ns.seed, shop_id=shop)
-    if ns.dry_run:
-        print(f"dry run: {len(docs)} SALE ledger rows for shops/{shop}, {first} to {end}; nothing written")
+    if ns.dry_run or not (ns.emulator or ns.yes_write_cloud):
+        print(f"dry run: {len(docs)} SALE ledger rows for shops/{shop}, {first} to {end}; nothing written. "
+              "To write, pass --emulator, or --project <id> --yes-write-cloud.")
         return 0
     env = {**load_env_file(ns.env_file), **os.environ}
     try:
-        project, database = target(ns.project, ns.database, env)
+        project, database, emulator_host = target(ns.project, ns.database, env, emulator=ns.emulator,
+                                                  yes_write_cloud=ns.yes_write_cloud)
     except ValueError as err:
         print(f"error: {err}", file=sys.stderr)
         return 2
+    if emulator_host:
+        # google-cloud-firestore reads only os.environ: a host that is only in .env must be exported, or the
+        # client would connect to the real project.
+        os.environ[EMULATOR_HOST_ENV] = emulator_host
     count = write(docs, make_client(project, database))
+    where = f"the emulator at {emulator_host}" if emulator_host else f"project '{project}'"
     print(f"backfilled {count} SALE ledger rows into shops/{shop}/ledger, {first} to {end}, "
-          f"Firestore database '{database}'")
+          f"Firestore database '{database}' in {where}")
     return 0
 
 
