@@ -7,7 +7,7 @@
 #                             Saravana-Rajan/AIRA on refs/heads/main may use it
 #   - Artifact Registry repo  aira              (docker, asia-south1) for the image built in the runner
 #   - service account         aira-deployer     with the minimum roles for .github/workflows/deploy.yml:
-#       roles/run.developer                    only on Cloud Run services named aira-* (IAM condition)
+#       roles/run.developer                    on the aira-live service only (service-level IAM)
 #       roles/artifactregistry.writer          on the Artifact Registry repo aira only: docker push
 #       roles/iam.serviceAccountUser           on aira-live only: deploy revisions that run as aira-live
 #       roles/firebasehosting.admin            firebase deploy --only hosting:aira-shop
@@ -17,7 +17,8 @@
 #
 # Usage: GCP_PROJECT=<project-id> bash infra/setup_github_deploy.sh   (GCP_PROJECT may come from .env)
 #        GITHUB_REPO=<owner>/<repo> overrides the repository (default Saravana-Rajan/AIRA).
-# Needs: gcloud logged in as a project owner, and infra/bootstrap.sh already run (aira-live exists).
+# Needs: gcloud logged in as a project owner, infra/bootstrap.sh already run (the aira-live service
+#        account exists) and the first deploy done by infra/deploy_live.sh (the aira-live service exists).
 # Then:  set the printed values as GitHub repository SECRETS (Settings > Secrets and variables >
 #        Actions > Secrets), plus the VITE_FIREBASE_* web-app config values. The repo is public:
 #        never use repository variables for these.
@@ -121,11 +122,17 @@ for role in \
   echo "    $role"
 done
 
-RUN_CONDITION="expression=resource.name.startsWith('projects/${GCP_PROJECT}/locations/${REGION}/services/aira-'),title=aira-services-only"
-gcloud projects add-iam-policy-binding "$GCP_PROJECT" \
-  --member="serviceAccount:$DEPLOYER_SA" --role=roles/run.developer \
-  --condition="$RUN_CONDITION" >/dev/null
-echo "    roles/run.developer (aira-* services only)"
+# run.developer on the aira-live service itself (its own IAM policy), never project-wide.
+# A project-level IAM condition on resource.name does not work here: the Cloud Run v1 API
+# names the service namespaces/<project>/services/aira-live, so the condition never matches.
+if gcloud run services describe aira-live --region "$REGION" --project "$GCP_PROJECT" >/dev/null 2>&1; then
+  gcloud run services add-iam-policy-binding aira-live --region "$REGION" \
+    --member="serviceAccount:$DEPLOYER_SA" --role=roles/run.developer \
+    --project "$GCP_PROJECT" >/dev/null
+  echo "    roles/run.developer on the aira-live service"
+else
+  echo "    aira-live does not exist yet: run infra/deploy_live.sh, then re-run this script" >&2
+fi
 
 gcloud artifacts repositories add-iam-policy-binding "$AR_REPO" --location="$REGION" \
   --member="serviceAccount:$DEPLOYER_SA" --role=roles/artifactregistry.writer \

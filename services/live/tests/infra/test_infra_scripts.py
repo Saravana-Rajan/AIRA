@@ -36,9 +36,13 @@ REQUIRED_DEPLOY_FLAGS = {
     "--max-instances",
     "--timeout",
     "--session-affinity",
-    "--set-secrets",
-    "--set-env-vars",
+    "--update-secrets",
+    "--update-env-vars",
 }
+SECRETS_FLAG = (
+    "--update-secrets GEMINI_API_KEY=aira-gemini-api-key:latest,AIRA_JOB_TOKEN=aira-job-token:latest,"
+    "WHATSAPP_VERIFY_TOKEN=aira-whatsapp-verify-token:latest"
+)
 CONDITION = "assertion.repository=='Saravana-Rajan/AIRA' && assertion.ref=='refs/heads/main'"
 
 # --- stub binaries -----------------------------------------------------------------
@@ -363,12 +367,15 @@ def test_deploy_workflow_tests_then_deploys_with_wif():
         "--max-instances 1",
         "--timeout 3600",
         "--session-affinity",
-        "--allow-unauthenticated",
-        "--set-secrets GEMINI_API_KEY=aira-gemini-api-key:latest",
-        "--set-env-vars FIRESTORE_DATABASE=aira,AIRA_DEMO_SHOP=murugan_dairy,AIRA_ALLOW_NO_TOKEN=1,"
+        SECRETS_FLAG,
+        "--update-env-vars FIRESTORE_DATABASE=aira,AIRA_DEMO_SHOP=murugan_dairy,AIRA_ALLOW_NO_TOKEN=1,AIRA_MOCK=0,"
         "GCP_PROJECT=${{ secrets.GCP_PROJECT }}",
     ):
         assert part in run_deploy, part
+    # --update-* keeps values added on the service later (WhatsApp tokens, supplier phones);
+    # public access is granted once on the service, and the deployer only holds run.developer.
+    for banned in ("--set-secrets", "--set-env-vars", "--allow-unauthenticated"):
+        assert banned not in run_deploy, banned
 
     [build] = [s for s in deploy["steps"] if s.get("run", "").strip() == "bash scripts/build_hosting.sh"]
     assert build["env"]["VITE_AIRA_LIVE_WS"].startswith("${{ steps.")
@@ -380,7 +387,7 @@ def test_deploy_workflow_tests_then_deploys_with_wif():
     assert all(v == f"${{{{ secrets.{k} }}}}" for k, v in firebase_env.items())
     assert any("gcloud run services describe aira-live" in r and "wss://" in r for r in runs)
     assert (
-        "npx firebase-tools@latest deploy --only hosting:aira-shop --project ${{ secrets.GCP_PROJECT }} --non-interactive"
+        "npx firebase-tools@15.33.0 deploy --only hosting:aira-shop --project ${{ secrets.GCP_PROJECT }} --non-interactive"
         in runs
     )
     order = [
@@ -396,7 +403,8 @@ def test_deploy_workflow_and_deploy_live_use_the_same_flags():
     script_flags = _flags(_deploy_live_command())
     assert REQUIRED_DEPLOY_FLAGS - {"--source"} | {"--image"} <= _flags(ci_cmd)
     # CI deploys the image it built in the runner; the hand-run deploy_live.sh deploys from source
-    assert script_flags - {"--source"} == _flags(ci_cmd) - {"--image"}
+    # deploy_live.sh is run once by the owner and also makes the service public
+    assert script_flags - {"--source", "--allow-unauthenticated"} == _flags(ci_cmd) - {"--image"}
 
 
 # --- dry runs against stubs -------------------------------------------------------------
@@ -479,11 +487,14 @@ def test_deploy_live_dry_run(tmp_path):
         "--max-instances 1",
         "--timeout 3600",
         "--session-affinity",
-        "--set-secrets GEMINI_API_KEY=aira-gemini-api-key:latest",
-        f"--set-env-vars FIRESTORE_DATABASE=aira,AIRA_DEMO_SHOP=murugan_dairy,AIRA_ALLOW_NO_TOKEN=1,GCP_PROJECT={PROJECT}",
+        SECRETS_FLAG,
+        f"--update-env-vars FIRESTORE_DATABASE=aira,AIRA_DEMO_SHOP=murugan_dairy,AIRA_ALLOW_NO_TOKEN=1,AIRA_MOCK=0,GCP_PROJECT={PROJECT}",
     ):
         assert part in deploy, part
-    assert _calls(calls, "curl", f"{RUN_URL}/healthz")
+    assert "--set-secrets" not in deploy and "--set-env-vars" not in deploy
+    # Cloud Run reserves some paths ending in "z", so the health check is /health
+    assert _calls(calls, "curl", f"{RUN_URL}/health")
+    assert not _calls(calls, "curl", f"{RUN_URL}/healthz")
     assert "wss://aira-live-abc123-el.a.run.app/ws" in proc.stdout
 
 
@@ -523,12 +534,13 @@ def test_setup_github_deploy_fresh(tmp_path):
     project_bindings = _calls(calls, f"projects add-iam-policy-binding {PROJECT}", deployer)
     project_roles = {m.group(1) for c in project_bindings for m in [re.search(r"--role=(\S+)", c)]}
     assert project_roles == {
-        "roles/run.developer",
         "roles/firebasehosting.admin",
         "roles/serviceusage.serviceUsageConsumer",
-    }
-    [run_dev] = [c for c in project_bindings if "roles/run.developer" in c]
-    assert "services/aira-" in run_dev, "run.developer is limited to aira-* services"
+    }, "no project-level Cloud Run role: IAM conditions on resource.name do not match Cloud Run v1 names"
+    # run.developer is granted on the aira-live service itself (service-level IAM policy)
+    assert _calls(
+        calls, "run services add-iam-policy-binding aira-live", "--region asia-south1", deployer, "roles/run.developer"
+    )
     assert _calls(
         calls,
         "artifacts repositories add-iam-policy-binding aira",

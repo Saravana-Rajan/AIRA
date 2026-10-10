@@ -262,13 +262,13 @@ def test_load_env_file(tmp_path):
     env_file = tmp_path / ".env"
     env_file.write_text(
         "# comment\n\nGCP_PROJECT=demo-aira\nexport FIRESTORE_DATABASE='aira'\n"
-        'SUPPLIER_PHONE_SAKTHI_VENDOR="+919800000001"\nEMPTY=\nnot a pair\n',
+        'SUPPLIER_SAKTHI_PHONE="+919800000001"\nEMPTY=\nnot a pair\n',
         encoding="utf-8",
     )
     assert seed_firestore.load_env_file(env_file) == {
         "GCP_PROJECT": "demo-aira",
         "FIRESTORE_DATABASE": "aira",
-        "SUPPLIER_PHONE_SAKTHI_VENDOR": "+919800000001",
+        "SUPPLIER_SAKTHI_PHONE": "+919800000001",
         "EMPTY": "",
     }
     assert seed_firestore.load_env_file(tmp_path / "missing.env") == {}
@@ -286,7 +286,7 @@ def test_main_seeds_database_aira_from_env(monkeypatch, tmp_path, capsys):
     monkeypatch.setenv("GCP_PROJECT", "demo-aira")
     monkeypatch.delenv("FIRESTORE_DATABASE", raising=False)
     env_file = tmp_path / ".env"
-    env_file.write_text("SUPPLIER_PHONE_SAKTHI_VENDOR=+919800000002\n", encoding="utf-8")
+    env_file.write_text("SUPPLIER_SAKTHI_PHONE=+919800000002\n", encoding="utf-8")
 
     assert seed_firestore.main(["--env-file", str(env_file)]) == 0
     assert calls == [("demo-aira", "aira")]

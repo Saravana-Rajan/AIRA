@@ -3,6 +3,7 @@
 #
 # Uses the same flags as .github/workflows/deploy.yml plus --allow-unauthenticated: the phone
 # app and the dashboard connect straight from the browser, so the service must be public.
+# --update-* (not --set-*) keeps env vars and secrets added on the service later.
 # Run it by hand once after infra/bootstrap.sh. After that every push to main redeploys through
 # GitHub Actions, and the public-access binding carries over to new revisions.
 #
@@ -46,8 +47,8 @@ gcloud run deploy "$SERVICE" \
   --max-instances 1 \
   --timeout 3600 \
   --session-affinity \
-  --set-secrets GEMINI_API_KEY=aira-gemini-api-key:latest \
-  --set-env-vars "FIRESTORE_DATABASE=aira,AIRA_DEMO_SHOP=murugan_dairy,AIRA_ALLOW_NO_TOKEN=1,GCP_PROJECT=${GCP_PROJECT}" \
+  --update-secrets GEMINI_API_KEY=aira-gemini-api-key:latest,AIRA_JOB_TOKEN=aira-job-token:latest,WHATSAPP_VERIFY_TOKEN=aira-whatsapp-verify-token:latest \
+  --update-env-vars "FIRESTORE_DATABASE=aira,AIRA_DEMO_SHOP=murugan_dairy,AIRA_ALLOW_NO_TOKEN=1,AIRA_MOCK=0,GCP_PROJECT=${GCP_PROJECT}" \
   --quiet
 
 DESCRIBE_JSON="$(gcloud run services describe "$SERVICE" --region "$REGION" --project "$GCP_PROJECT" --format=json)"
@@ -78,8 +79,9 @@ if [ "$MAX_SCALE" != "1" ]; then
   exit 1
 fi
 
-echo "==> healthz"
-curl -fsS "$URL/healthz"
+# Cloud Run reserves some paths ending in "z", so the health route is /health.
+echo "==> health"
+curl -fsS "$URL/health"
 echo
 echo "aira-live: $URL"
 echo "WebSocket: wss://${URL#https://}/ws"
