@@ -1,0 +1,15 @@
+node_modules/
+dist/
+.env
+.env.*
+!.env.example
+__pycache__/
+.pytest_cache/
+.venv/
+*.pyc
+.firebase/
+.DS_Store
+*.log
+.claude/
+# private benchmark media (faces, real UPI screens) — share via Cloud Storage, not git
+bench/data/private/

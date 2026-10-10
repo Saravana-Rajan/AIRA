@@ -1,0 +1,11 @@
+{
+  "name": "aira",
+  "private": true,
+  "workspaces": ["apps/*", "packages/*"],
+  "scripts": {
+    "test": "npm run -ws --if-present test",
+    "build": "npm run -ws --if-present build",
+    "typecheck": "npm run -ws --if-present typecheck"
+  },
+  "engines": { "node": ">=20" }
+}
