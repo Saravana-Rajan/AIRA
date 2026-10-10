@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AIRA</title>
+  <meta name="description" content="AIRA: a voice-first assistant that helps a blind shopkeeper run a small dairy shop alone.">
+  <link rel="icon" href="aira-logo-192.png">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg: #FFFFFF;
+      --surface: #F5F8FD;
+      --border: #E3E9F4;
+      --text: #0B1F4B;
+      --text-muted: #4A5A7A;
+      --brand-blue: #1F6FFF;
+      --ok: #16A34A;
+      --danger: #DC2626;
+      color-scheme: light;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      padding: 24px 16px;
+      background: var(--bg);
+      color: var(--text);
+      font: 16px/1.5 Inter, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    }
+    main {
+      width: 100%;
+      max-width: 480px;
+      padding: 32px 24px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 20px;
+      text-align: center;
+    }
+    img { width: 96px; height: 96px; }
+    h1 { margin: 12px 0 4px; font-size: 32px; letter-spacing: 0.04em; }
+    p { margin: 8px 0; color: var(--text-muted); }
+    .chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      margin-top: 16px;
+      padding: 6px 14px;
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      background: var(--bg);
+      color: var(--text);
+      font-weight: 600;
+      font-size: 14px;
+    }
+    .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--text-muted); }
+    .chip[data-state="ok"] .dot { background: var(--ok); }
+    .chip[data-state="down"] .dot { background: var(--danger); }
+  </style>
+</head>
+<body>
+  <main>
+    <img src="aira-logo-192.png" alt="">
+    <h1>AIRA</h1>
+    <p>A voice-first assistant that helps a blind shopkeeper run a small dairy shop alone.</p>
+    <p>The app is on its way. This page confirms the deploy pipeline works.</p>
+    <p class="chip" id="live" role="status" aria-live="polite" data-state="checking">
+      <span class="dot" aria-hidden="true"></span>
+      <span id="live-text">Checking the AIRA live service…</span>
+    </p>
+  </main>
+  <script>
+    const chip = document.getElementById("live");
+    const text = document.getElementById("live-text");
+    fetch("__AIRA_LIVE_HTTP__/health", { cache: "no-store" })
+      .then((r) => (r.ok ? r.json() : Promise.reject(r.status)))
+      .then((h) => {
+        chip.dataset.state = h.ok ? "ok" : "down";
+        text.textContent = h.ok ? "AIRA live service is up" : "AIRA live service is not healthy";
+      })
+      .catch(() => {
+        chip.dataset.state = "down";
+        text.textContent = "AIRA live service is not reachable";
+      });
+  </script>
+</body>
+</html>
