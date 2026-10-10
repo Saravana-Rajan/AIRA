@@ -28,26 +28,28 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
+      # Tests are skipped only while the code they cover does not exist yet. Once a workspace or
+      # services/live exists, a missing lockfile or a failing test stops the deploy.
       - name: Use Node 22
-        if: hashFiles('package-lock.json') != ''
+        if: hashFiles('apps/*/package.json', 'packages/*/package.json') != ''
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 22
           cache: npm
 
       - name: TypeScript workspaces
-        if: hashFiles('package-lock.json') != ''
+        if: hashFiles('apps/*/package.json', 'packages/*/package.json') != ''
         run: npm ci && npm test
 
       - name: Use uv
-        if: hashFiles('services/live/uv.lock') != ''
+        if: hashFiles('services/live/pyproject.toml') != ''
         uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
         with:
           enable-cache: true
           cache-dependency-glob: services/live/uv.lock
 
       - name: services/live
-        if: hashFiles('services/live/uv.lock') != ''
+        if: hashFiles('services/live/pyproject.toml') != ''
         working-directory: services/live
         run: uv sync --frozen && uv run pytest -q
 
@@ -84,6 +86,9 @@ jobs:
           docker push "$image"
           echo "image=$image" >> "$GITHUB_OUTPUT"
 
+      # --update-* (not --set-*) so env vars and secrets added on the service later, such as the
+      # WhatsApp tokens, survive every deploy. Public access was granted once on the service and
+      # carries over to new revisions; the deployer only holds run.developer on aira-live.
       - name: Deploy aira-live (Cloud Run)
         run: |
           gcloud run deploy aira-live \
@@ -91,13 +96,12 @@ jobs:
             --region "$REGION" \
             --project "$GCP_PROJECT" \
             --service-account "aira-live@$GCP_PROJECT.iam.gserviceaccount.com" \
-            --allow-unauthenticated \
             --min-instances 1 \
             --max-instances 1 \
             --timeout 3600 \
             --session-affinity \
-            --set-secrets GEMINI_API_KEY=aira-gemini-api-key:latest \
-            --set-env-vars "FIRESTORE_DATABASE=aira,AIRA_DEMO_SHOP=murugan_dairy,AIRA_ALLOW_NO_TOKEN=1,GCP_PROJECT=$GCP_PROJECT" \
+            --update-secrets GEMINI_API_KEY=aira-gemini-api-key:latest,AIRA_JOB_TOKEN=aira-job-token:latest,WHATSAPP_VERIFY_TOKEN=aira-whatsapp-verify-token:latest \
+            --update-env-vars "FIRESTORE_DATABASE=aira,AIRA_DEMO_SHOP=murugan_dairy,AIRA_ALLOW_NO_TOKEN=1,AIRA_MOCK=0,GCP_PROJECT=$GCP_PROJECT" \
             --quiet
 
       - name: Read the aira-live URL
@@ -133,4 +137,4 @@ jobs:
           fi
 
       - name: Deploy hosting (aira-shop)
-        run: npx --yes firebase-tools@latest deploy --only hosting:aira-shop --project "$GCP_PROJECT" --non-interactive
+        run: npx --yes firebase-tools@15.33.0 deploy --only hosting:aira-shop --project "$GCP_PROJECT" --non-interactive
