@@ -102,6 +102,8 @@
   "k2.order.mark_sent_q": "Did you send the order to {supplier}?",
   "k2.order.already": "That order was already sent.",
   "k2.order.vendor_replied": "{supplier} replied: {text}",
+  "k2.order.telegram_down": "The Telegram bot could not send it right now.",
+  "k2.order.vendor_replied_old": "About an earlier order, {supplier} replied: {text}",
   "k2.order.sent_demo": "Order sent to the demo {supplier}. The reply comes in a few seconds.",
   "k2.order.demo_vendor_replied": "Demo reply from {supplier}: {text}",
   "k2.demo_vendor.reply": "OK, delivery today at 6 pm.",

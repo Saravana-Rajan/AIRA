@@ -278,7 +278,11 @@ async def _say_discrepancies(s: Session, items: list[dict]) -> str:
 
 
 async def invoice_check(order_id: str) -> dict:
-    """Read the paper invoice twice and reconcile it with the order and the verified counts."""
+    """Read the paper invoice twice and reconcile it with the order and the verified counts.
+
+    order_id: "" (empty) for the latest open delivery, which is almost always right. Only pass an orderId that a
+    tool returned (delivery_start's orderId); never make one up from a supplier or product name.
+    """
     s = get_session()
     order = (await _repo.get_order(s.shop_id, order_id) if order_id
              else await _repo.latest_order(s.shop_id, INVOICE_STATES))

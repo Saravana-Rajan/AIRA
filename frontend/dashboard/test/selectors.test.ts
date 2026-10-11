@@ -143,7 +143,7 @@ describe("orderRows", () => {
   const deliveries: any[] = [
     { id: "d1", orderId: "o1", discrepancies: [{ sku: "sakthi_curd_1l", expected: 30, actual: 28 }, { field: "total", expected: 1500, actual: 1600 }] },
   ];
-  const rows = orderRows(orders, deliveries, suppliers, products);
+  const rows = orderRows(orders, deliveries, suppliers, products, NOW);
 
   it("ORDER_FLOW only uses states defined in the contracts", () => {
     for (const s of ORDER_FLOW) expect(ORDER_STATES).toContain(s);
@@ -336,7 +336,7 @@ describe("auditRows", () => {
     const rows = auditRows([
       { id: "a3", actor: "system", action: "expiry_check", refType: "inventory", refId: "x", outcome: "ok", at: "2026-10-10T12:35:00Z" } as any,
       { id: "a4", actor: "helper", action: "note", refType: "x", refId: "y", outcome: "ok", at: Date.UTC(2026, 9, 10, 3, 30) } as any,
-    ]);
+    ], NOW);
     expect(rows[0]).toMatchObject({ id: "a3", actorLabel: "System", actionText: "Expiry check", timeText: "6:05 pm" });
     expect(rows[1]).toMatchObject({ id: "a4", actorLabel: "helper", timeText: "9:00 am" });
   });
@@ -359,3 +359,20 @@ describe("stockRows and products changed by voice", () => {
     expect(skus).toContain("new_sku");
   });
 });
+
+describe("times on older rows carry their day", () => {
+  it("today shows the time, yesterday says so, older rows show the date", () => {
+    const rows = auditRows([
+      { id: "t", actor: "aira", action: "x", refType: "x", refId: "x", outcome: "ok", at: Date.UTC(2026, 9, 10, 5, 0) } as any,
+      { id: "y", actor: "aira", action: "x", refType: "x", refId: "x", outcome: "ok", at: Date.UTC(2026, 9, 9, 5, 0) } as any,
+      { id: "o", actor: "aira", action: "x", refType: "x", refId: "x", outcome: "ok", at: Date.UTC(2026, 9, 8, 5, 6) } as any,
+    ], NOW);
+    expect(rows.map((r) => r.timeText)).toEqual(["10:30 am", "Yesterday, 10:30 am", "8 Oct, 10:36 am"]);
+  });
+  it("an order last updated two days ago says the date", () => {
+    const [r] = orderRows([{ id: "o9", supplierId: "sakthi_vendor", items: [], state: "ORDER_PLACED",
+      updatedAt: Date.UTC(2026, 9, 8, 5, 6) }] as any[], [], [], products, NOW);
+    expect(r.updatedText).toBe("8 Oct, 10:36 am");
+  });
+});
+

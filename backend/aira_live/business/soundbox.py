@@ -26,8 +26,10 @@ _NEGATIVE_TOKENS = {"sent", "send", "debited", "debit", "deducted", "failed", "f
                     "not", "request", "requested", "transferred", "nahi", "nahin", "bheje", "bheja"}
 _NEGATIVE_PARTS = ("नहीं", "भेजे", "भेजा", "कटे", "कटा", "डेबिट", "असफल", "विफल", "फेल", "लंबित", "रद्द", "रिफंड",
                    "वापस", "अनुरोध",
-                   "இல்லை", "வில்லை", "அனுப்ப", "தோல்வி", "நிலுவை", "ரத்து", "திருப்பி", "டெபிட்", "பிடித்தம்",
+                   "இல்லை", "வில்லை", "அனுப்ப", "தோல்வி", "நிலுவை", "திருப்பி", "டெபிட்", "பிடித்தம்",
                    "கோரிக்கை")
+# "ரத்து" (cancelled) as a word of its own: inside "ஆயிரத்து" (thousand-and) it is part of a number.
+_CANCELLED_TA = fold("ரத்து")
 _FRACTION_TOKENS = {"paise", "paisa", "point", "dot", "half", "quarter"}
 _FRACTION_PARTS = ("पैसे", "पैसा", "दशमलव", "आधा", "பைசா", "புள்ளி")
 
@@ -88,8 +90,8 @@ def parse(transcript: str) -> SoundboxEvent | None:
     text = fold(normalize_digits(transcript)).lower()
     toks = tokens(text)
     tok_set = set(toks)
-    if _says(tok_set, text, _NEGATIVE_TOKENS, _NEGATIVE_PARTS):
-        return None                                     # sent / failed / not received / refund / request
+    if _says(tok_set, text, _NEGATIVE_TOKENS, _NEGATIVE_PARTS) or any(t.startswith(_CANCELLED_TA) for t in toks):
+        return None                                     # sent / failed / not received / refund / request / cancelled
     if _says(tok_set, text, _FRACTION_TOKENS, _FRACTION_PARTS):
         return None                                     # paise: cannot match a whole-rupee bill exactly
     if not _says(tok_set, text, _RECEIVED_TOKENS, _RECEIVED_PARTS):

@@ -124,6 +124,8 @@ for _w, _v in _TA_BIG.items():
     _TA[_w] = _W("big", _F(_v))
     for _c in _ta_comb(_w):
         _TA[_c] = _W("bigc", _F(_v))
+# Spoken Tamil: "நூத்தி இருபது" (120) is how a soundbox and a shopkeeper say நூற்றி இருபது.
+_TA.update({"நூத்தி": _W("comb", _F(100), 100), "நூத்து": _W("comb", _F(100), 100)})
 _TA.update({"கோடி": _W("big", _F(10**7)), "கோடியே": _W("bigc", _F(10**7)),
             "அரை": _W("half", _HALF), "ஒரு": _W("one", _F(1))})
 _TA = {fold(k): w for k, w in _TA.items()}
