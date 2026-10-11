@@ -72,3 +72,4 @@ Every AIRA feature, with its status and owner. Spec: `docs/superpowers/specs/202
 | Fridge temperature sensors | ○ |
 | Offline on-device LLM | ○ |
 | Native Android background service | ○ |
+| AIRA Shop Camera: CCTV/IP camera support (built, off by default; `docs/ops/cctv.md`) | ○ |

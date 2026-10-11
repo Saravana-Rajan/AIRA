@@ -35,6 +35,8 @@ DOC_ID = "runtime"
 MODEL_FIELDS = ("pointing_model", "count_model", "live_model")
 FLAG_FIELDS = ("whatsapp_enabled",)
 PARAMS = MODEL_FIELDS + FLAG_FIELDS
+CAMERAS_FIELD = "cameras"  # list of shop cameras (aira_live.cameras.config); default empty = off
+_KEPT = PARAMS + (CAMERAS_FIELD,)
 ROLE_PARAM = {"point": "pointing_model", "count": "count_model", "live": "live_model"}
 PARAM_ROLE = {v: k for k, v in ROLE_PARAM.items()}
 TTL_S = 60.0
@@ -63,7 +65,11 @@ def parse_doc(doc: dict | None) -> dict[str, Any]:
     """Keep only known, non-empty fields. Strings are stripped; bools/ints are kept as they are."""
     out: dict[str, Any] = {}
     for name, value in (doc or {}).items():
-        if name not in PARAMS or value is None:
+        if name not in _KEPT or value is None:
+            continue
+        if name == CAMERAS_FIELD:
+            if isinstance(value, list):
+                out[name] = value
             continue
         if isinstance(value, str):
             value = value.strip()
@@ -193,6 +199,14 @@ def flag(name: str, default: bool) -> bool:
     _kick()
     parsed = _to_bool(_cache.get(name))
     return default if parsed is None else parsed
+
+
+def cameras() -> list:
+    """The ``cameras`` list from ``config/runtime`` (raw entries; ``aira_live.cameras.config`` validates them).
+    Missing -> ``[]``: the shop-camera feature is off by default."""
+    _kick()
+    value = _cache.get(CAMERAS_FIELD)
+    return list(value) if isinstance(value, list) else []
 
 
 async def run_refresher() -> None:
