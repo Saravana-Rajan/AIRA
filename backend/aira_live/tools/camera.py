@@ -19,6 +19,7 @@ from typing import Any
 from aira_live.i18n import t
 from aira_live.prompt import LANG_NAME
 from aira_live.session import Session, get_session
+from aira_live.vision import observers
 from aira_live.vision.gemini import VisionError, generate_json, image_part
 from aira_live.vision.hints import HINT_KEYS
 
@@ -202,4 +203,7 @@ async def camera_ask(question: str) -> dict:
         return {"say": f"{t('cam.not_sure', s.lang)} {t(hint, s.lang)}", "answer": "", "kind": kind,
                 "objects": objects, "confidence": conf, "aim_hint": hint}
     say = _say_path(steps, objects, s.lang) if kind == "path" else _say_look(answer, steps, objects, s.lang)
+    # last-seen memory and other subscribers get the objects (text only); a failing observer never breaks the answer
+    await observers.on_vision_objects(s, objects, {"purpose": "ask", "question": question, "answer": answer,
+                                                   "confidence": conf})
     return {"say": say, "answer": answer, "guidance": steps, "kind": kind, "objects": objects, "confidence": conf}

@@ -48,7 +48,8 @@ def test_every_client_write_is_denied():
 
 
 DASHBOARD_COLLECTIONS = ["products", "inventory", "sales", "payments", "orders", "deliveries", "auditLogs"]
-SERVER_ONLY = ["suppliers", "msgIndex", "contactIndex", "proposals", "ledger", "prefs", "memoryEvents", "events"]
+SERVER_ONLY = ["suppliers", "msgIndex", "contactIndex", "proposals", "ledger", "prefs", "memoryEvents", "events", "memory",
+               "locations"]
 
 
 def test_only_the_demo_shop_is_readable():

@@ -167,6 +167,13 @@ RULES = (
         "product the shop already has: ask whether to add stock or a new product. Each of these waits for the "
         "owner's yes."
     ),
+    (
+        "12. For \"where are my keys / did you see my phone / where did I keep my glasses\", call memory_where. "
+        "Say where it was LAST SEEN (\"I last saw\"), never that it IS there. \"Forget everything\" or "
+        "\"forget my keys\": memory_forget. \"Stop remembering\" / \"start remembering\": memory_remembering. "
+        "\"Remember my walking stick\": memory_remembering with on=true and the item. For \"take me there\", "
+        "call camera_ask for the landmark, then product_find with the item."
+    ),
 )
 
 
