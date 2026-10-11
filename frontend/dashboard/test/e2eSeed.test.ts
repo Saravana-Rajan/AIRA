@@ -100,7 +100,7 @@ describe("demo shop seed for the e2e smoke test", () => {
     expect(o.isDiscrepancy).toBe(true);
     expect(o.stateLabel).toBe("Discrepancy");
     expect(o.discrepancyTexts).toEqual([expected.discrepancyText]);
-    expect(expected.discrepancyText).toBe(`${expected.curd.name}: expected 30, got 28`);
+    expect(expected.discrepancyText).toBe(`${expected.curd.name}: counted 28 L of 30 L ordered`);
     expect(o.vendorReply).toBe(expected.vendorReply);
   });
 

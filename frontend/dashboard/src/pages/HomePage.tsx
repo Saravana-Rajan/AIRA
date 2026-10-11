@@ -18,8 +18,9 @@ export function HomePage(props: {
   forecastLoading: boolean;
   resolveEvidence: ResolveEvidence;
 }) {
-  // A short list must never hide a delivery that does not match its order.
-  const orders = [...props.views.orders].sort((a, b) => Number(b.isDiscrepancy) - Number(a.isDiscrepancy));
+  // A short list must never hide a delivery that does not match its order (or a short count not yet reconciled).
+  const flagged = (o: (typeof props.views.orders)[number]) => o.isDiscrepancy || o.discrepancyTexts.length > 0;
+  const orders = [...props.views.orders].sort((a, b) => Number(flagged(b)) - Number(flagged(a)));
   return (
     <>
       <TodayPage summary={props.views.today} />

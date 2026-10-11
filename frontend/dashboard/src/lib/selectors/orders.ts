@@ -1,6 +1,6 @@
-import type { Delivery, Order, Product, Supplier } from "@aira/contracts";
+import type { Delivery, Discrepancy, Order, Product, Supplier } from "@aira/contracts";
 import { toMs, type Normalized } from "../normalize";
-import { formatTimeIST, stateLabel } from "../format";
+import { formatCount, formatPrice, formatQty, formatTimeIST, stateLabel } from "../format";
 
 /** The happy path shown as a timeline. DISCREPANCY is a branch drawn at DELIVERY_RECONCILED. */
 export const ORDER_FLOW = [
@@ -35,6 +35,67 @@ function deliveryAtText(at: unknown): string {
   return Number.isNaN(ms) ? "" : `${DAY_IST.format(ms)}, ${formatTimeIST(ms)}`;
 }
 
+/**
+ * A delivery discrepancy as backend/aira_live/business/reconcile.py writes it: the contract fields plus
+ * `kind`, and `name` (UNKNOWN_INVOICE_LINE) or `fields` (INVOICE_UNREADABLE). expected/actual mean different
+ * things per kind (ordered vs counted, agreed vs billed price, counted vs billed qty), so each kind gets its
+ * own sentence; a bare "expected X, got Y" made the demo delivery read as two lines that contradict.
+ */
+type DiscrepancyEntry = Discrepancy & { kind?: unknown; name?: unknown; fields?: unknown };
+
+/** The count comparisons. A kind-less entry (older shape) is the same comparison. */
+const COUNT_KINDS = new Set(["SHORT_DELIVERY", "OVER_DELIVERY"]);
+/** Same tolerance as reconcile.py's EPS: counts closer than this are equal. */
+const COUNT_EPS = 1e-6;
+
+const num = (v: unknown): number | null => (typeof v === "number" && Number.isFinite(v) ? v : null);
+const shown = (v: unknown): string | null =>
+  typeof v === "number" || typeof v === "boolean" ? String(v) : textOrNull(v);
+
+/** label: a product's name for its sku; qty: a quantity in that product's selling unit. */
+function discrepancyText(
+  x: DiscrepancyEntry, label: (sku: string, fallback?: unknown) => string, qty: (sku: string | null, n: number) => string,
+): string {
+  const sku = textOrNull(x.sku);
+  const who = sku ? label(sku, x.name) : (textOrNull(x.field) ?? textOrNull(x.name) ?? "item");
+  const exp = num(x.expected);
+  const act = num(x.actual);
+  const both = exp !== null && act !== null;
+  switch (x.kind) {
+    case "SHORT_DELIVERY":
+      return both ? `${who}: counted ${qty(sku, act)} of ${qty(sku, exp)} ordered` : `${who}: count does not match the order`;
+    case "OVER_DELIVERY":
+      return both ? `${who}: counted ${qty(sku, act)}, ordered ${qty(sku, exp)}` : `${who}: count does not match the order`;
+    case "UNORDERED_ITEM":
+      return act !== null ? `${who}: not ordered, ${qty(sku, act)} delivered` : `${who}: delivered but not ordered`;
+    case "INVOICE_UNREADABLE":
+      return "Bill unreadable: please check it again";
+    case "UNKNOWN_INVOICE_LINE": {
+      const line = textOrNull(x.name);
+      return line ? `Bill has an item not ordered: ${line}` : "Bill has an item that was not ordered";
+    }
+    case "PRICE_MISMATCH":
+      return both
+        ? `${who}: bill price ${formatPrice(act)}, agreed ${formatPrice(exp)}`
+        : `${who}: bill price does not match the agreed price`;
+    case "LINE_TOTAL_MISMATCH":
+      return both
+        ? `${who}: bill line total ${formatPrice(act)}, expected ${formatPrice(exp)}`
+        : `${who}: bill line total does not add up`;
+    case "INVOICE_QTY_MISMATCH":
+      // Both numbers are in the bill's units (a crate, say), which may not be the product's selling unit.
+      return both ? `${who}: bill says ${formatCount(act)}, counted ${formatCount(exp)}` : `${who}: bill quantity does not match the count`;
+    case "TOTAL_MISMATCH":
+      return both ? `Bill total ${formatPrice(act)}, lines add up to ${formatPrice(exp)}` : "Bill total does not match its lines";
+    default: {
+      const e = shown(x.expected);
+      const a = shown(x.actual);
+      const parts = [e !== null ? `expected ${e}` : null, a !== null ? `got ${a}` : null].filter(Boolean);
+      return parts.length ? `${who}: ${parts.join(", ")}` : `${who}: does not match`;
+    }
+  }
+}
+
 /** The order's deliveryBy ({text, at}) as one line: "6 am tomorrow (12 Oct, 6:00 am)". */
 export function deliveryByText(deliveryBy: unknown): string | null {
   if (typeof deliveryBy !== "object" || deliveryBy === null) return null;
@@ -53,6 +114,12 @@ export function orderRows(
   const supplierNames = new Map(suppliers.map((s) => [s.id, s.name]));
   const productName = (sku: string, fallback?: unknown) =>
     productNames.get(sku) ?? (typeof fallback === "string" && fallback ? fallback : sku);
+  const productUnits = new Map(products.map((p) => [p.id, p.unit]));
+  /** "28 L" for a catalog product; a bare number when the unit is unknown. */
+  const qty = (sku: string | null, n: number) => {
+    const unit = sku ? productUnits.get(sku) : undefined;
+    return unit ? formatQty(n, unit) : formatCount(n);
+  };
   const updated = (o: Normalized<Order>) => toMs(o.updatedAt);
 
   return [...orders]
@@ -63,10 +130,27 @@ export function orderRows(
       const stepIndex = isDiscrepancy
         ? ORDER_FLOW.indexOf("DELIVERY_RECONCILED")
         : ORDER_FLOW.indexOf(state as OrderFlowState);
-      const discrepancyTexts = deliveries
+      const orderNames = new Map((o.items ?? []).map((it) => [it.sku, it.name]));
+      const label = (sku: string, fallback?: unknown) => productName(sku, textOrNull(fallback) ?? orderNames.get(sku));
+      const texts = deliveries
         .filter((d) => d.orderId === o.id)
-        .flatMap((d) => d.discrepancies ?? [])
-        .map((x) => `${x.sku ? productName(x.sku) : (x.field ?? "item")}: expected ${String(x.expected)}, got ${String(x.actual)}`);
+        .flatMap((d) => {
+          const written = (d.discrepancies ?? []) as DiscrepancyEntry[];
+          // A count that differs from the order is shown even before reconcile writes it, but only once.
+          const covered = new Set(
+            written.filter((x) => typeof x.kind !== "string" || COUNT_KINDS.has(x.kind)).map((x) => x.sku),
+          );
+          const counts: DiscrepancyEntry[] = (d.items ?? []).flatMap((it) => {
+            const want = num(it.expectedQty);
+            const got = num(it.countedQty);
+            if (want === null || got === null || Math.abs(got - want) < COUNT_EPS || covered.has(it.sku)) return [];
+            const kind = got < want ? "SHORT_DELIVERY" : "OVER_DELIVERY";
+            return [{ kind, sku: it.sku, name: it.name, expected: want, actual: got }];
+          });
+          return [...counts, ...written];
+        })
+        .map((x) => discrepancyText(x, label, qty));
+      const discrepancyTexts = [...new Set(texts)];
       const updatedMs = updated(o);
       return {
         id: o.id,

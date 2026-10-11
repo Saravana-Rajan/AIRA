@@ -14,13 +14,30 @@ export function formatINR(rupees: number): string {
   return INR.format(Math.round(rupees));
 }
 
+const INR_PAISE = new Intl.NumberFormat("en-IN", {
+  style: "currency",
+  currency: "INR",
+  minimumFractionDigits: 2,
+  maximumFractionDigits: 2,
+});
+
+/** A price from a bill: whole rupees as formatINR, paise only when there are some ("₹24.50"). */
+export function formatPrice(rupees: number): string {
+  return Number.isInteger(rupees) ? formatINR(rupees) : INR_PAISE.format(rupees);
+}
+
 /** Selling units from the catalog: L (milk, curd), pack, jar (ghee), box (ice cream). */
 export type QtyUnit = ProductUnit;
 
 const PLURALS: Record<Exclude<QtyUnit, "L">, string> = { pack: "packs", jar: "jars", box: "boxes" };
 
+/** A bare count: whole numbers as they are, anything else to one decimal. */
+export function formatCount(qty: number): string {
+  return Number.isInteger(qty) ? String(qty) : qty.toFixed(1);
+}
+
 export function formatQty(qty: number, unit: QtyUnit): string {
-  const n = Number.isInteger(qty) ? String(qty) : qty.toFixed(1);
+  const n = formatCount(qty);
   if (unit === "L") return `${n} L`;
   if (qty === 1) return `${n} ${unit}`;
   return `${n} ${PLURALS[unit] ?? unit}`;

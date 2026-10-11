@@ -221,9 +221,32 @@ describe("ForecastPage", () => {
   });
 
   it("says so when no reorder is needed", () => {
-    const el = mount(<ForecastPage loading={false} items={[]} />);
-    expect(text(el)).toContain("No reorders needed right now");
+    const items = [
+      { sku: "s", name: "Sakthi curd 1 L", dailyDemand: 2.1, onHand: 40, suggestedOrder: 0 },
+      { sku: "m", name: "Aavin milk 500 ml", dailyDemand: 5, onHand: 60, suggestedOrder: 0 },
+    ];
+    const el = mount(<ForecastPage loading={false} items={items} />);
+    expect(text(el)).toContain("No reorders needed right now.");
+    expect(text(el)).not.toContain("Not enough sales yet");
     expect(text(el)).not.toContain("Demo history");
+  });
+
+  it("says there is not enough sales history yet when the forecast has no products", () => {
+    // aira-live leaves out every product with fewer than 3 days of sales, so an empty list is not "all stocked up".
+    const el = mount(<ForecastPage loading={false} items={[]} />);
+    expect(text(el)).toContain("Not enough sales yet to forecast.");
+    expect(text(el)).not.toContain("No reorders needed");
+  });
+
+  it("never says no reorders are needed while one is suggested", () => {
+    const items = [
+      { sku: "s", name: "Sakthi curd 1 L", dailyDemand: 26.4, onHand: 12, suggestedOrder: 30 },
+      { sku: "m", name: "Aavin milk 500 ml", dailyDemand: 5, onHand: 60, suggestedOrder: 0 },
+    ];
+    const el = mount(<ForecastPage loading={false} items={items} />);
+    expect(text(el)).not.toContain("No reorders needed");
+    expect(text(el)).not.toContain("Not enough sales yet");
+    expect(el.querySelectorAll("tbody tr")).toHaveLength(2);
   });
 
   it("says 'demo history' when backfilled demo sales feed the numbers", () => {
@@ -268,6 +291,15 @@ describe("overview cards stay short", () => {
     const el = mount(<HomePage views={views} forecast={null} forecastLoading={false} resolveEvidence={async () => null} />);
     const titles = [...el.querySelectorAll("article h3")].map((h) => text(h));
     expect(titles).toEqual(["Vendor 4", "Vendor 1", "Vendor 2"]);
+  });
+
+  it("the overview also puts a short count first while the delivery is still being checked", () => {
+    const short = { ...order(4), state: "DELIVERY_PENDING", stateLabel: "Delivery pending", stepIndex: 1, discrepancyTexts: ["Sakthi curd 1 L: counted 28 L of 30 L ordered"] };
+    const views = { stock: [], audit: [], orders: [order(1), order(2), order(3), short], today: { salesCount: 0, revenue: 0, revenueText: "₹0", topProduct: null, byMethod: { cash: 0, upi: 0 }, byMethodText: { cash: "₹0", upi: "₹0" } } };
+    const el = mount(<HomePage views={views} forecast={null} forecastLoading={false} resolveEvidence={async () => null} />);
+    const titles = [...el.querySelectorAll("article h3")].map((h) => text(h));
+    expect(titles).toEqual(["Vendor 4", "Vendor 1", "Vendor 2"]);
+    expect(text(el)).toContain("The delivery does not match the order");
   });
 
   it("shows no link when everything fits", () => {

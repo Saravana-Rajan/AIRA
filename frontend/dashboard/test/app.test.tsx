@@ -26,7 +26,14 @@ const DATA: ShopData = {
     { id: "o1", supplierId: "sakthi_vendor", items: [{ sku: "sakthi_curd_1l", qty: 30 }], state: "DISCREPANCY", vendorReply: "OK, delivery at 6 pm", idemKey: "k", createdAt: NOW, updatedAt: NOW },
   ] as never[],
   deliveries: [
-    { id: "d1", orderId: "o1", items: [], invoice: null, state: "DISCREPANCY", discrepancies: [{ sku: "sakthi_curd_1l", expected: 30, actual: 28 }] },
+    // the demo delivery as reconcile.py writes it: 30 ordered, 28 counted, the bill says 30
+    {
+      id: "d1", orderId: "o1", items: [{ sku: "sakthi_curd_1l", expectedQty: 30, countedQty: 28 }], invoice: null, state: "DISCREPANCY",
+      discrepancies: [
+        { kind: "SHORT_DELIVERY", sku: "sakthi_curd_1l", expected: 30, actual: 28 },
+        { kind: "INVOICE_QTY_MISMATCH", sku: "sakthi_curd_1l", expected: 28, actual: 30 },
+      ],
+    },
   ] as never[],
   suppliers: [{ id: "sakthi_vendor", name: "Sakthi curd vendor", phone: "", channel: "whatsapp", products: [] }] as never[],
   auditLogs: [{ id: "a1", actor: "aira", action: "sale_completed", refType: "sale", refId: "s1", outcome: "ok", at: NOW }] as never[],
@@ -76,7 +83,9 @@ describe("App", () => {
     expect(h2s(el)).toEqual(["Today", "Stock", "Orders & deliveries", "Forecast", "Audit trail"]);
     expect(findAllByText(el, "[role=status]", "Live")).toHaveLength(1);
     expect(text(el)).toContain("Arun Ice Cream Family Box");
-    expect(text(el)).toContain("Sakthi Curd 1 L: expected 30, got 28");
+    expect(findAllByText(el, "li", "Sakthi Curd 1 L: counted 28 L of 30 L ordered")).toHaveLength(1);
+    expect(findAllByText(el, "li", "Sakthi Curd 1 L: bill says 30, counted 28")).toHaveLength(1);
+    expect(text(el)).not.toMatch(/expected 28, got 30|undefined/);
     expect(findAllByText(el, "dd", "₹180").length).toBeGreaterThan(0);
     expect(text(el)).toContain("Forecast unavailable");
     expect(text(el)).toMatch(/Demo shop/);

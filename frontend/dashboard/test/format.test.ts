@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
-  formatINR, formatQty, IST_OFFSET_MS, startOfDayIST, daysUntil, formatTimeIST, stateLabel, expiryLabel,
+  formatINR, formatPrice, formatCount, formatQty, IST_OFFSET_MS, startOfDayIST, daysUntil, formatTimeIST, stateLabel, expiryLabel,
 } from "../src/lib/format";
 
 describe("formatINR", () => {
@@ -11,6 +11,22 @@ describe("formatINR", () => {
   });
   it("rounds to whole rupees", () => {
     expect(formatINR(59.6)).toBe("₹60");
+  });
+});
+
+describe("formatPrice", () => {
+  it("is formatINR for whole rupees and shows paise only when there are some", () => {
+    expect(formatPrice(1100)).toBe("₹1,100");
+    expect(formatPrice(110000)).toBe("₹1,10,000");
+    expect(formatPrice(24.5)).toBe("₹24.50");
+    expect(formatPrice(25.25)).toBe("₹25.25");
+  });
+});
+
+describe("formatCount", () => {
+  it("prints whole counts as they are and anything else to one decimal", () => {
+    expect(formatCount(30)).toBe("30");
+    expect(formatCount(2.333333)).toBe("2.3");
   });
 });
 

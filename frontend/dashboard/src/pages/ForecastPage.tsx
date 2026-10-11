@@ -3,6 +3,8 @@ import type { ForecastItem } from "../lib/forecast";
 /**
  * Reorder suggestions from aira-live (average daily sales vs stock on hand). `demoHistory` means backfilled
  * demo sales feed the numbers: the card says so, and never presents them as real shop sales.
+ * An empty list means no product has enough sales history yet (aira-live leaves out products with fewer
+ * than 3 days of sales), not that nothing needs reordering.
  */
 export function ForecastPage(props: { items: ForecastItem[] | null; loading: boolean; demoHistory?: boolean }) {
   const demo = props.demoHistory === true && !props.loading && props.items !== null;
@@ -17,6 +19,9 @@ export function ForecastPage(props: { items: ForecastItem[] | null; loading: boo
         <p role="note" class="notice">Demo history: these numbers come from backfilled demo sales, not real shop sales.</p>
       )}
       {!props.loading && props.items !== null && props.items.length === 0 && (
+        <p class="empty">Not enough sales yet to forecast.</p>
+      )}
+      {!props.loading && props.items !== null && props.items.length > 0 && props.items.every((f) => f.suggestedOrder <= 0) && (
         <p class="empty">No reorders needed right now.</p>
       )}
       {!props.loading && props.items !== null && props.items.length > 0 && (

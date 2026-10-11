@@ -101,7 +101,7 @@ export function buildDemoShop(nowMs, catalog = loadCatalog()) {
       data: {
         id: "e2e_delivery_1", orderId: "e2e_order_1",
         items: [{ sku: CURD, expectedQty: 30, countedQty: 28, method: "one_by_one", confidence: 0.93 }],
-        invoice: null, discrepancies: [{ sku: CURD, expected: 30, actual: 28 }], state: "DISCREPANCY",
+        invoice: null, discrepancies: [{ kind: "SHORT_DELIVERY", sku: CURD, expected: 30, actual: 28 }], state: "DISCREPANCY",
       },
     },
     {
@@ -164,7 +164,7 @@ export function buildDemoShop(nowMs, catalog = loadCatalog()) {
       upiText: rupees(iceLine.lineTotal),
       topProduct: top.name,
       supplierName: supplier.name,
-      discrepancyText: `${curd.name}: expected 30, got 28`,
+      discrepancyText: `${curd.name}: counted 28 L of 30 L ordered`,
       vendorReply: "OK, delivery at 6 pm",
       auditActions: ["Sale completed", "Order confirmed"],
       otherShopProduct: "Other shop product (must stay hidden)",

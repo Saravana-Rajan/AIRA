@@ -229,6 +229,100 @@ describe("orderRows", () => {
   });
 });
 
+// Every discrepancy kind the backend writes (backend/aira_live/business/reconcile.py), as one plain sentence.
+describe("orderRows discrepancy lines", () => {
+  const suppliers: any[] = [{ id: "sakthi_vendor", name: "Sakthi vendor" }];
+  const order: any = { id: "o1", supplierId: "sakthi_vendor", items: [{ sku: "sakthi_curd_1l", qty: 30 }], state: "DISCREPANCY", updatedAt: 1 };
+  const lines = (discrepancies: any[], items: any[] = []) =>
+    orderRows([order], [{ id: "d1", orderId: "o1", items, discrepancies }] as any[], suppliers, products)[0].discrepancyTexts;
+
+  it("the demo delivery (30 ordered, 28 counted, bill says 30) reads as two lines that agree", () => {
+    const t = lines(
+      [
+        { kind: "SHORT_DELIVERY", sku: "sakthi_curd_1l", expected: 30, actual: 28 },
+        { kind: "INVOICE_QTY_MISMATCH", sku: "sakthi_curd_1l", expected: 28, actual: 30 },
+      ],
+      [{ sku: "sakthi_curd_1l", expectedQty: 30, countedQty: 28 }],
+    );
+    expect(t).toEqual(["Sakthi curd 1 L: counted 28 L of 30 L ordered", "Sakthi curd 1 L: bill says 30, counted 28"]);
+  });
+
+  it("writes one plain sentence per kind, with names, units and rupees", () => {
+    expect(lines([{ kind: "OVER_DELIVERY", sku: "aavin_milk_500ml", expected: 20, actual: 24 }]))
+      .toEqual(["Aavin milk 500 ml: counted 24 packs, ordered 20 packs"]);
+    expect(lines([{ kind: "UNORDERED_ITEM", sku: "arun_icecream_box", expected: 0, actual: 4 }]))
+      .toEqual(["Arun ice cream box: not ordered, 4 boxes delivered"]);
+    expect(lines([{ kind: "INVOICE_UNREADABLE", fields: ["total", "lines"] }]))
+      .toEqual(["Bill unreadable: please check it again"]);
+    expect(lines([{ kind: "UNKNOWN_INVOICE_LINE", name: "Paneer 200 g" }]))
+      .toEqual(["Bill has an item not ordered: Paneer 200 g"]);
+    expect(lines([{ kind: "PRICE_MISMATCH", sku: "sakthi_curd_1l", expected: 50, actual: 55 }]))
+      .toEqual(["Sakthi curd 1 L: bill price ₹55, agreed ₹50"]);
+    expect(lines([{ kind: "LINE_TOTAL_MISMATCH", sku: "sakthi_curd_1l", expected: 1050, actual: 1100 }]))
+      .toEqual(["Sakthi curd 1 L: bill line total ₹1,100, expected ₹1,050"]);
+    expect(lines([{ kind: "INVOICE_QTY_MISMATCH", sku: "aavin_milk_500ml", expected: 20, actual: 24 }]))
+      .toEqual(["Aavin milk 500 ml: bill says 24, counted 20"]);
+    expect(lines([{ kind: "TOTAL_MISMATCH", expected: 105000, actual: 110000 }]))
+      .toEqual(["Bill total ₹1,10,000, lines add up to ₹1,05,000"]);
+  });
+
+  it("shows paise on a price only when there are some, so two different prices never read the same", () => {
+    expect(lines([{ kind: "PRICE_MISMATCH", sku: "aavin_milk_500ml", expected: 24.5, actual: 25.25 }]))
+      .toEqual(["Aavin milk 500 ml: bill price ₹25.25, agreed ₹24.50"]);
+  });
+
+  it("never prints undefined, whatever the entry is missing", () => {
+    const t = lines([
+      { kind: "UNKNOWN_INVOICE_LINE" },
+      { kind: "SOMETHING_NEW", sku: "sakthi_curd_1l" },
+      { kind: "SOMETHING_NEW", sku: "sakthi_curd_1l", expected: 3, actual: 4 },
+      { kind: "SHORT_DELIVERY", sku: "sakthi_curd_1l" },
+      { kind: "PRICE_MISMATCH", sku: "unknown_sku", expected: 50 },
+      { kind: "TOTAL_MISMATCH" },
+      {},
+    ]);
+    expect(t).toEqual([
+      "Bill has an item that was not ordered",
+      "Sakthi curd 1 L: does not match",
+      "Sakthi curd 1 L: expected 3, got 4",
+      "Sakthi curd 1 L: count does not match the order",
+      "unknown_sku: bill price does not match the agreed price",
+      "Bill total does not match its lines",
+      "item: does not match",
+    ]);
+    for (const line of t) expect(line).not.toMatch(/undefined|null|NaN|—/);
+  });
+
+  it("flags a count that differs from the order before any discrepancy is written", () => {
+    expect(lines([], [{ sku: "sakthi_curd_1l", expectedQty: 30, countedQty: 28 }]))
+      .toEqual(["Sakthi curd 1 L: counted 28 L of 30 L ordered"]);
+    expect(lines([], [{ sku: "aavin_milk_500ml", expectedQty: 20, countedQty: 24 }]))
+      .toEqual(["Aavin milk 500 ml: counted 24 packs, ordered 20 packs"]);
+    // not in the catalog: the item's own name, and no unit to guess
+    expect(lines([], [{ sku: "arun_cone", name: "Arun cone pack", expectedQty: 12, countedQty: 10 }]))
+      .toEqual(["Arun cone pack: counted 10 of 12 ordered"]);
+  });
+
+  it("says nothing about items not counted yet or counted right", () => {
+    expect(lines([], [
+      { sku: "sakthi_curd_1l", expectedQty: 30, countedQty: null },
+      { sku: "aavin_milk_500ml", expectedQty: 20, countedQty: 20 },
+    ])).toEqual([]);
+  });
+
+  it("never shows the same short count twice once the backend writes it", () => {
+    const items = [{ sku: "sakthi_curd_1l", expectedQty: 30, countedQty: 28 }];
+    expect(lines([{ kind: "SHORT_DELIVERY", sku: "sakthi_curd_1l", expected: 30, actual: 28 }], items))
+      .toEqual(["Sakthi curd 1 L: counted 28 L of 30 L ordered"]);
+    expect(lines([{ kind: "OVER_DELIVERY", sku: "sakthi_curd_1l", expected: 30, actual: 28 }], items)).toHaveLength(1);
+    // an older entry with no kind is the same count comparison
+    expect(lines([{ sku: "sakthi_curd_1l", expected: 30, actual: 28 }], items)).toEqual(["Sakthi curd 1 L: expected 30, got 28"]);
+    // a bill problem for the same product does not cover the count
+    expect(lines([{ kind: "PRICE_MISMATCH", sku: "sakthi_curd_1l", expected: 50, actual: 55 }], items))
+      .toEqual(["Sakthi curd 1 L: counted 28 L of 30 L ordered", "Sakthi curd 1 L: bill price ₹55, agreed ₹50"]);
+  });
+});
+
 describe("auditRows", () => {
   it("sorts newest first and humanises actor + action", () => {
     const rows = auditRows([
