@@ -1,8 +1,8 @@
 # AIRA demo script v2: "Sam's Day at Sunrise Dairy"
 
-Judge-facing demo and video script. It replaces the persona in `docs/ideas/04-demo-video-script.md`
+Judge-facing demo and video script. It replaces the persona in `shared/docs/ideas/04-demo-video-script.md`
 (owner **Sam**, shop **Sunrise Dairy**) and keeps the timings, the decision rule, the edit and upload
-steps, and the honesty rules from `docs/submission/video-checklist.md`. Where this file and the checklist
+steps, and the honesty rules from `shared/docs/submission/video-checklist.md`. Where this file and the checklist
 differ, the checklist wins on process (consent, export, upload); this file wins on lines and captions.
 
 This is a plan for people to follow. Nothing here records, uploads or sends anything.
@@ -11,14 +11,14 @@ This is a plan for people to follow. Nothing here records, uploads or sends anyt
 
 | Cut | Length | File (git-ignored) | When it is submitted |
 |---|---|---|---|
-| Main | 4:00 (240 s) hard ceiling, target 3:50 | `docs/submission/aira-demo.mp4` | Only with written approval from support (see the checklist's decision rule) |
-| Fallback | 2:55 (175 s) or less, strictly under 3:00 | `docs/submission/aira-demo-short.mp4` | The default |
+| Main | 4:00 (240 s) hard ceiling, target 3:50 | `shared/docs/submission/aira-demo.mp4` | Only with written approval from support (see the checklist's decision rule) |
+| Fallback | 2:55 (175 s) or less, strictly under 3:00 | `shared/docs/submission/aira-demo-short.mp4` | The default |
 
 **One story, real footage.** Sam is blind and runs Sunrise Dairy alone: Aavin milk, Sakthi curd, Arun
 ice cream. A phone on a chest mount, one earphone. Every scene shows the deployed app. No mockups, no
 scripted responses, no feature montage. Every ₹ amount below is a placeholder: use the shop's real prices
 on filming day and keep the arithmetic consistent across scenes. Every number on screen is
-**measured in bench/results** or is not shown.
+**measured in shared/bench/results** or is not shown.
 
 ## What the judges must take away
 
@@ -40,7 +40,7 @@ on filming day and keep the arithmetic consistent across scenes. Every number on
 
 | Role | Who | Notes |
 |---|---|---|
-| Sam (owner) | A blind participant, ideally a real blind shop owner | Written consent; face shown only when the face box is ticked (`docs/submission/user-validation/consent-form.md`) |
+| Sam (owner) | A blind participant, ideally a real blind shop owner | Written consent; face shown only when the face box is ticked (`shared/docs/submission/user-validation/consent-form.md`) |
 | Vendor (Sakthi curd) | A teammate | Phone B shows the Telegram chat; blur the chat name and number |
 | Customer 1 (cash) and Customer 2 (UPI) | Teammates or consenting volunteers | Customer 1 speaks Tamil; Customer 2 speaks English, so the language switch is natural |
 | Props | 28 Sakthi curd 1 L packs, a printed vendor bill for 30, a cashbox with slots, a UPI soundbox, a crate left on the floor for the bump guard | Count never shows 29 or 30; the delivery really has 28 |
@@ -50,7 +50,7 @@ on filming day and keep the arithmetic consistent across scenes. Every number on
 
 ## Main cut: 4:00 ceiling, target 3:50
 
-Timestamps follow the scene table in `docs/submission/video-checklist.md` (0:00–0:25, 0:25–0:55,
+Timestamps follow the scene table in `shared/docs/submission/video-checklist.md` (0:00–0:25, 0:25–0:55,
 0:55–1:40, 1:40–2:05, 2:05–2:55, 2:55–3:20, 3:20–3:40, 3:40–3:50). Scenes are split into shots inside those
 ranges. Every spoken line gets an English caption; Tamil lines get English subtitles.
 
@@ -117,7 +117,7 @@ it demonstrates the rule. Never dub a confident line over it.
 
 | Time | Shot | Spoken lines | On-screen caption |
 |---|---|---|---|
-| 3:40–3:47 | Sam behind the counter | Sam: *"Now I run my shop myself."* | Two or three numbers, each **measured in bench/results** and produced by `scripts/bench_table.py`: count accuracy, invoice discrepancy catch rate, sale time with vs without AIRA. A metric still `pending` is left out |
+| 3:40–3:47 | Sam behind the counter | Sam: *"Now I run my shop myself."* | Two or three numbers, each **measured in shared/bench/results** and produced by `shared/scripts/bench_table.py`: count accuracy, invoice discrepancy catch rate, sale time with vs without AIRA. A metric still `pending` is left out |
 | 3:47–3:50 | AIRA logo | (silence) | Participant quote, only with the quote box ticked; otherwise the logo alone |
 
 Spoken-line total stays inside 3:50 with transitions. If the shoot runs long, trim the middle of the count
@@ -138,13 +138,13 @@ the resulting timestamps.
 | 5 Guided sale + UPI | 50 | 40 | 1:25–2:05 | Hand guidance, the Tamil to English switch with the "70 languages" caption, the soundbox match | Spatial-memory save, shorter change scene |
 | 6 Alerts + reorder | 25 | 15 | 2:05–2:20 | One alert and the suggested order with "Not now" | The second alert |
 | 7 Proof of deployment | 20 | 10 | 2:20–2:30 | Dashboard, then one console shot (identifiers hidden) | The second console |
-| 8 Numbers + quote | 10 | 5 | 2:30–2:35 | One number measured in bench/results, or the quote | The rest |
+| 8 Numbers + quote | 10 | 5 | 2:30–2:35 | One number measured in shared/bench/results, or the quote | The rest |
 
 Total 155 s (2:35), plus up to 20 s of transitions, so 2:55 at most. Check it with:
 
 ```bash
-python3 scripts/check_submission.py --description docs/submission/description.txt \
-  --video docs/submission/aira-demo-short.mp4 --max-video 175
+python3 shared/scripts/check_submission.py --description shared/docs/submission/description.txt \
+  --video shared/docs/submission/aira-demo-short.mp4 --max-video 175
 ```
 
 Expect `OK    all checks passed` with no WARN line. The main cut is checked with `--max-video 240` and is
@@ -196,8 +196,8 @@ Title: "Built, next, and after"
 - Cash: AIRA reads the total. It never judges whether a note is genuine.
 - The count really is 28 of 30. The bill really says 30. Nothing is staged after the fact.
 - The forecast caption says it comes from Firestore sales data.
-- Numbers on screen come only from `bench/results/*.csv` through `scripts/bench_table.py`. Where a number
-  is needed and not yet measured, the slot reads "measured in bench/results" in this script and is left off
+- Numbers on screen come only from `shared/bench/results/*.csv` through `shared/scripts/bench_table.py`. Where a number
+  is needed and not yet measured, the slot reads "measured in shared/bench/results" in this script and is left off
   the screen in the cut.
 - Only features that exist in the live app the judges will open. The Shop Camera stays on the roadmap slide.
 - Console and phone shots: hide or blur the project ID, project number, project picker, URL bar, every
@@ -218,6 +218,6 @@ Title: "Built, next, and after"
 - [ ] The Shop Dashboard plus Cloud Run and Firestore shots are included, identifiers hidden.
 - [ ] Only "Sam" and "Sunrise Dairy" in the caption file; no older persona or shop name from earlier drafts.
 - [ ] All shown features exist in the live app the judges will open.
-- [ ] Numbers on screen are measured in bench/results; none are estimated.
+- [ ] Numbers on screen are measured in shared/bench/results; none are estimated.
 - [ ] Consent forms signed and stored off-repo.
-- [ ] `scripts/check_submission.py` passes for the cut being uploaded.
+- [ ] `shared/scripts/check_submission.py` passes for the cut being uploaded.

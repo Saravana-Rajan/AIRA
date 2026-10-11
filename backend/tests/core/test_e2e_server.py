@@ -26,7 +26,7 @@ def fresh_store():
 def test_health_and_ws_are_the_real_mock_service():
     client = TestClient(app)
     assert client.get("/health").json() == {"ok": True, "mock": True}
-    with client.websocket_connect("/ws") as ws:
+    with client.websocket_connect("/ws", headers={"Origin": "https://aira-shop.web.app"}) as ws:
         ws.send_json(HELLO)
         ready = ws.receive_json()
         assert ready["t"] == "ready" and ready["mock"] is True
@@ -50,7 +50,7 @@ def test_routes_refuse_outside_mock_mode(monkeypatch):
 
 def test_confirm_is_proposed_then_committed_by_the_backend_on_yes():
     client = TestClient(app)
-    with client.websocket_connect("/ws") as ws:
+    with client.websocket_connect("/ws", headers={"Origin": "https://aira-shop.web.app"}) as ws:
         ws.send_json(HELLO)
         ready = ws.receive_json()
         assert client.get("/e2e/sessions").json() == {"sessions": [ready["sessionId"]]}
@@ -76,7 +76,7 @@ def test_confirm_is_proposed_then_committed_by_the_backend_on_yes():
 
 def test_no_answer_rejects_and_never_commits():
     client = TestClient(app)
-    with client.websocket_connect("/ws") as ws:
+    with client.websocket_connect("/ws", headers={"Origin": "https://aira-shop.web.app"}) as ws:
         ws.send_json(HELLO); ws.receive_json()
         cid = client.post("/e2e/confirm", json={"kind": "payment", "prompt": "Pay?"}).json()["confirmId"]
         ws.receive_json()
@@ -88,7 +88,7 @@ def test_no_answer_rejects_and_never_commits():
 
 def test_count_reaches_the_phone():
     client = TestClient(app)
-    with client.websocket_connect("/ws") as ws:
+    with client.websocket_connect("/ws", headers={"Origin": "https://aira-shop.web.app"}) as ws:
         ws.send_json(HELLO); ws.receive_json()
         r = client.post("/e2e/count", json={"counted": 12, "expected": 30, "final": False})
         assert r.status_code == 200
