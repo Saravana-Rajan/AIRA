@@ -332,3 +332,29 @@ describe("DeviceCheck waits for AIRA to finish speaking", () => {
   });
 });
 
+
+describe("DeviceCheck when the server, not the camera, is the problem", () => {
+  it("offers to continue anyway, so a busy or unreachable server never locks the owner out", async () => {
+    const onPass = vi.fn();
+    act(() => {
+      render(<DeviceCheck lang="en" device="laptop" onPass={onPass} micTest={queue<MicResult>({ ok: true })}
+        cameraTest={queue<CameraResult>({ ok: false, problem: "unavailable" })} speak={() => undefined} />, root);
+    });
+    await settle();
+    const anyway = root.querySelector<HTMLButtonElement>("button.check__anyway");
+    expect(anyway).not.toBeNull();
+    expect(anyway!.textContent).toBe("Continue without the camera check");
+    act(() => { anyway!.click(); });
+    expect(onPass).toHaveBeenCalledTimes(1);
+  });
+
+  it("a real camera problem still blocks: no way on until the picture is fixed", async () => {
+    act(() => {
+      render(<DeviceCheck lang="en" device="laptop" onPass={() => undefined} micTest={queue<MicResult>({ ok: true })}
+        cameraTest={queue<CameraResult>({ ok: false, problem: "covered" })} speak={() => undefined} />, root);
+    });
+    await settle();
+    expect(root.querySelector("button.check__anyway")).toBeNull();
+    expect(goBtn()).toBeNull();
+  });
+});

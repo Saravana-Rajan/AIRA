@@ -96,5 +96,17 @@
 }
 .check__go-label { font-size: 28px; font-weight: 700; }
 .check__go-hint { font-size: var(--text-label); }
-.check__retry:focus-visible, .check__go:focus-visible { outline: var(--focus-ring); outline-offset: 3px; }
+.check__anyway {
+  align-self: flex-start;
+  font: inherit;
+  font-weight: 600;
+  background: var(--bg);
+  color: var(--text);
+  border: 2px solid var(--text);
+  border-radius: var(--radius-card);
+  padding: 10px 18px;
+  min-height: 48px;
+  cursor: pointer;
+}
+.check__retry:focus-visible, .check__go:focus-visible, .check__anyway:focus-visible { outline: var(--focus-ring); outline-offset: 3px; }
 @media (prefers-reduced-motion: reduce) { .check__meter span { transition: none; } }
