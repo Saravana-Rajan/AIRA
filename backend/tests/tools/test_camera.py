@@ -110,6 +110,21 @@ async def test_low_confidence_says_not_sure_and_gives_the_aim_hint(session, monk
     assert "Maybe" not in out["say"] and out["confidence"] == 0.2
 
 
+async def test_a_confident_answer_with_a_tip_is_still_spoken(session, monkeypatch):
+    """Seen live on a laptop: confidence 0.9, an answer, and a "show me the items" tip. The answer was thrown away."""
+    _script(monkeypatch, {"answer": "A person is in front of you.", "guidance": ["Hold up the item you want me to see."],
+                          "objects": [], "confidence": 0.9, "aim_hint": "vision.aim.show_items"})
+    out = await camera.camera_ask("what is in front of the camera?")
+    assert out["say"] == "A person is in front of you. Hold up the item you want me to see."
+
+
+async def test_a_confident_reply_with_nothing_to_say_is_still_not_sure(session, monkeypatch):
+    _script(monkeypatch, {"answer": "", "guidance": [], "objects": [], "confidence": 0.9,
+                          "aim_hint": "vision.aim.hold_closer"})
+    out = await camera.camera_ask("what's this?")
+    assert out["say"] == f"{t('cam.not_sure', 'en')} {t('vision.aim.hold_closer', 'en')}"
+
+
 async def test_unknown_aim_hint_falls_back_to_show_items(session, monkeypatch):
     _script(monkeypatch, {"answer": "", "guidance": [], "objects": [], "confidence": 0.1, "aim_hint": "bogus"})
     out = await camera.camera_ask("what's around?")

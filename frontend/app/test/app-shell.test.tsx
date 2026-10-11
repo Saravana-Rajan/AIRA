@@ -6,6 +6,7 @@ import { SURFACE_LABEL } from "../src/ui/Screen";
 import { initialScreen, type ScreenState } from "../src/ui/screenState";
 import { DEFAULT_SETTINGS } from "../src/core/settings";
 import type { AppView, WiredApp, WireOpts } from "../src/core/wire";
+import type { DeviceCheckProps } from "../src/check/DeviceCheck";
 
 let root: HTMLElement;
 beforeEach(() => { root = document.createElement("div"); document.body.appendChild(root); });
@@ -62,7 +63,7 @@ describe("localizeStatus", () => {
 describe("AppShell", () => {
   it("shows onboarding first and wires nothing before the Start tap", () => {
     const wire = vi.fn();
-    act(() => { render(<AppShell wire={wire} languages={["en"]} initial={{ ...DEFAULT_SETTINGS }} />, root); });
+    act(() => { render(<AppShell deviceCheck={null} wire={wire} languages={["en"]} initial={{ ...DEFAULT_SETTINGS }} />, root); });
     expect(startBtn()).not.toBeNull();
     expect(wire).not.toHaveBeenCalled();
   });
@@ -71,7 +72,7 @@ describe("AppShell", () => {
     const f = fakeWired();
     const wire = vi.fn((_o: WireOpts) => f.w);
     const onWired = vi.fn();
-    act(() => { render(<AppShell wire={wire} onWired={onWired} wsUrl="ws://x/ws" languages={["ta-IN"]} initial={{ ...DEFAULT_SETTINGS }} />, root); });
+    act(() => { render(<AppShell deviceCheck={null} wire={wire} onWired={onWired} wsUrl="ws://x/ws" languages={["ta-IN"]} initial={{ ...DEFAULT_SETTINGS }} />, root); });
     act(() => { startBtn().click(); });
     expect(wire).toHaveBeenCalledTimes(1);
     expect(wire.mock.calls[0][0]).toMatchObject({ wsUrl: "ws://x/ws", settings: { lang: "auto", shopId: "sunrise_dairy", onboarded: true } });
@@ -88,7 +89,7 @@ describe("AppShell", () => {
 
   it("redraws from the wired view and routes gestures to the wired handlers", () => {
     const f = fakeWired("ta");
-    act(() => { render(<AppShell wire={() => f.w} languages={["ta"]} initial={{ ...DEFAULT_SETTINGS }} />, root); });
+    act(() => { render(<AppShell deviceCheck={null} wire={() => f.w} languages={["ta"]} initial={{ ...DEFAULT_SETTINGS }} />, root); });
     act(() => { startBtn().click(); });
     act(() => { f.push({ screen: { ...initialScreen, status: { kind: "ready", label: "Ready" }, airaText: "வணக்கம்" } }); });
     expect(root.querySelector(".status-chip")!.textContent).toContain("தயார்");
@@ -104,7 +105,7 @@ describe("AppShell", () => {
 
   it("a mismatch cue in Tamil draws the Tamil chip and task card, not English", () => {
     const f = fakeWired("ta");
-    act(() => { render(<AppShell wire={() => f.w} languages={["ta"]} initial={{ ...DEFAULT_SETTINGS }} />, root); });
+    act(() => { render(<AppShell deviceCheck={null} wire={() => f.w} languages={["ta"]} initial={{ ...DEFAULT_SETTINGS }} />, root); });
     act(() => { startBtn().click(); });
     act(() => {
       f.push({ screen: {
@@ -123,7 +124,7 @@ describe("AppShell", () => {
   it("still shows the app when an extra onWired hook throws", () => {
     const f = fakeWired();
     const err = vi.spyOn(console, "error").mockImplementation(() => {});
-    act(() => { render(<AppShell wire={() => f.w} onWired={() => { throw new Error("camera module failed"); }} languages={["en"]} />, root); });
+    act(() => { render(<AppShell deviceCheck={null} wire={() => f.w} onWired={() => { throw new Error("camera module failed"); }} languages={["en"]} />, root); });
     act(() => { startBtn().click(); });
     expect(root.querySelector("button")!.getAttribute("aria-label")).toBe(SURFACE_LABEL);
     expect(err).toHaveBeenCalled();
@@ -132,7 +133,7 @@ describe("AppShell", () => {
 
   it("disposes the wiring when it unmounts", () => {
     const f = fakeWired();
-    act(() => { render(<AppShell wire={() => f.w} languages={["en"]} />, root); });
+    act(() => { render(<AppShell deviceCheck={null} wire={() => f.w} languages={["en"]} />, root); });
     act(() => { startBtn().click(); });
     act(() => { render(null, root); });
     expect(f.raw.dispose).toHaveBeenCalledTimes(1);
@@ -148,7 +149,7 @@ describe("AppShell: hands-free start", () => {
     f.raw.startListening = vi.fn(async () => true);
     const wire = vi.fn((_o: WireOpts) => f.w);
     const onWired = vi.fn();
-    act(() => { render(<AppShell wire={wire} onWired={onWired} autoStart languages={["ta-IN"]} initial={ONBOARDED} />, root); });
+    act(() => { render(<AppShell deviceCheck={null} wire={wire} onWired={onWired} autoStart languages={["ta-IN"]} initial={ONBOARDED} />, root); });
     await settle();
     expect(wire).toHaveBeenCalledTimes(1);
     expect(wire.mock.calls[0][0].settings).toMatchObject({ onboarded: true, shopId: "sunrise_dairy" });
@@ -165,7 +166,7 @@ describe("AppShell: hands-free start", () => {
     const second = fakeWired();
     second.raw.startListening = vi.fn(async () => true);
     const wire = vi.fn().mockReturnValueOnce(f.w).mockReturnValueOnce(second.w);
-    act(() => { render(<AppShell wire={wire} autoStart languages={["en"]} initial={ONBOARDED} />, root); });
+    act(() => { render(<AppShell deviceCheck={null} wire={wire} autoStart languages={["en"]} initial={ONBOARDED} />, root); });
     await settle();
     expect(f.raw.dispose).toHaveBeenCalledTimes(1); // the gesture-less wiring is thrown away
     expect(startBtn()).not.toBeNull();
@@ -183,7 +184,7 @@ describe("AppShell: hands-free start", () => {
     f.raw.startListening = vi.fn(async () => false);
     const second = fakeWired();
     const wire = vi.fn().mockReturnValueOnce(f.w).mockReturnValue(second.w);
-    act(() => { render(<AppShell wire={wire} autoStart languages={["en"]} initial={ONBOARDED} />, root); });
+    act(() => { render(<AppShell deviceCheck={null} wire={wire} autoStart languages={["en"]} initial={ONBOARDED} />, root); });
     await settle();
     act(() => { startBtn().click(); });
     expect(wire).toHaveBeenCalledTimes(2);
@@ -192,7 +193,7 @@ describe("AppShell: hands-free start", () => {
   it("the first launch ever still shows Start and wires nothing, even from the ?start=1 shortcut", async () => {
     const wire = vi.fn();
     const firstLaunch = { ...DEFAULT_SETTINGS, onboarded: false };
-    act(() => { render(<AppShell wire={wire} autoStart languages={["en"]} initial={firstLaunch} />, root); });
+    act(() => { render(<AppShell deviceCheck={null} wire={wire} autoStart languages={["en"]} initial={firstLaunch} />, root); });
     await settle();
     expect(startBtn()).not.toBeNull();
     expect(wire).not.toHaveBeenCalled();
@@ -201,9 +202,65 @@ describe("AppShell: hands-free start", () => {
 
   it("without the prop, a jsdom tab (not installed, no ?start=1) shows Start even when onboarded", async () => {
     const wire = vi.fn();
-    act(() => { render(<AppShell wire={wire} languages={["en"]} initial={ONBOARDED} />, root); });
+    act(() => { render(<AppShell deviceCheck={null} wire={wire} languages={["en"]} initial={ONBOARDED} />, root); });
     await settle();
     expect(startBtn()).not.toBeNull();
     expect(wire).not.toHaveBeenCalled();
+  });
+});
+
+describe("AppShell: the device check comes before the conversation", () => {
+  const ONBOARDED = { ...DEFAULT_SETTINGS, onboarded: true };
+  const settle = async () => { for (let i = 0; i < 10; i++) await act(async () => { await Promise.resolve(); }); };
+
+  function fakeCheck() {
+    const seen: { props: DeviceCheckProps | null; renders: number } = { props: null, renders: 0 };
+    const C = (p: DeviceCheckProps) => { seen.props = p; seen.renders++; return <div class="fake-check" />; };
+    return { C, seen };
+  }
+
+  it("the Start tap shows the check and wires nothing until the check passes", () => {
+    const f = fakeWired();
+    const wire = vi.fn((_o: WireOpts) => f.w);
+    const check = fakeCheck();
+    act(() => { render(<AppShell deviceCheck={check.C} wire={wire} languages={["ta-IN"]} initial={{ ...DEFAULT_SETTINGS }} />, root); });
+    act(() => { startBtn().click(); });
+    expect(root.querySelector(".fake-check")).not.toBeNull();
+    expect(wire).not.toHaveBeenCalled();
+    expect(check.seen.props).toMatchObject({ lang: "ta", autoContinue: false });
+    act(() => { check.seen.props!.onPass(); });
+    expect(wire).toHaveBeenCalledTimes(1);
+    expect(root.querySelector(".fake-check")).toBeNull();
+    expect(root.querySelector("button")!.getAttribute("aria-label")).toBe(SURFACE_LABEL);
+  });
+
+  it("a hands-free start runs the check first, then wires and listens on its own", async () => {
+    const f = fakeWired();
+    const wire = vi.fn((_o: WireOpts) => f.w);
+    const check = fakeCheck();
+    act(() => { render(<AppShell deviceCheck={check.C} wire={wire} autoStart languages={["en"]} initial={ONBOARDED} />, root); });
+    await settle();
+    expect(wire).not.toHaveBeenCalled();
+    expect(check.seen.props).toMatchObject({ autoContinue: true });
+    act(() => { check.seen.props!.onPass(); });
+    await settle();
+    expect(wire).toHaveBeenCalledTimes(1);
+    expect(f.raw.startListening).toHaveBeenCalledTimes(1);
+  });
+
+  it("after one pass, the fallback Start tap goes straight to the conversation", async () => {
+    const first = fakeWired();
+    first.raw.startListening = vi.fn(async () => false);       // the mic needs a tap after all
+    const second = fakeWired();
+    const wire = vi.fn().mockReturnValueOnce(first.w).mockReturnValueOnce(second.w);
+    const check = fakeCheck();
+    act(() => { render(<AppShell deviceCheck={check.C} wire={wire} autoStart languages={["en"]} initial={ONBOARDED} />, root); });
+    await settle();
+    act(() => { check.seen.props!.onPass(); });
+    await settle();
+    const rendersBefore = check.seen.renders;
+    act(() => { startBtn().click(); });
+    expect(wire).toHaveBeenCalledTimes(2);
+    expect(check.seen.renders).toBe(rendersBefore);             // not tested again on this page
   });
 });

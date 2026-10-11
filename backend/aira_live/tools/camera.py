@@ -212,7 +212,10 @@ async def camera_ask(question: str) -> dict:
          keys=sorted(k for k in data if k != "_model"), confidence=conf, raw_confidence=summarize(data.get("confidence")),
          objects=len(objects), raw_objects=len(raw_objects) if isinstance(raw_objects, list) else None,
          aim_hint=summarize(data.get("aim_hint")), answer=trunc(answer), steps=len(steps))
-    if conf < MIN_CONF or data.get("aim_hint"):
+    # A tip alone is not doubt: the model often adds one ("show me the items") while it is sure of what it sees
+    # (seen live: confidence 0.9, an answer, and a tip). It means "not sure" only when the model is unsure, or is
+    # sure but has nothing to say.
+    if conf < MIN_CONF or (data.get("aim_hint") and not answer and not objects):
         hint = _hint(data.get("aim_hint"))
         say = f"{t('cam.not_sure', s.lang)} {t(hint, s.lang)}"
         diag("camera_ask", stage="done", session=s.session_id, kind=kind, verdict="not_sure", confidence=conf,

@@ -1,5 +1,6 @@
 import "./app.css";
-import { useEffect, useState } from "preact/hooks";
+import { useEffect, useRef, useState } from "preact/hooks";
+import type { JSX } from "preact";
 import type { Lang } from "@aira/contracts";
 import { Onboarding, shopName } from "./Onboarding";
 import { Screen } from "./Screen";
@@ -12,6 +13,7 @@ import { langFromPhone, phoneLanguages } from "../core/lang";
 import { isInstalledLaunch, shouldAutoStart } from "../core/autostart";
 import type { Settings } from "../core/types";
 import { wireApp, type AppView, type WiredApp, type WireOpts } from "../core/wire";
+import { DeviceCheck, type DeviceCheckProps } from "../check/DeviceCheck";
 
 type LabelKey = keyof typeof LABELS;
 const BY_ENGLISH = new Map<string, LabelKey>(
@@ -82,6 +84,11 @@ type Props = {
    * installed app or `/?start=1`. The first launch ever always shows Start: the browser needs one gesture.
    */
   autoStart?: boolean;
+  /**
+   * The start-up device check shown between Start and the conversation (check/DeviceCheck.tsx): the mic must hear a
+   * voice and the AI must see through the camera before anything is wired. null skips it (tests of the wiring).
+   */
+  deviceCheck?: ((p: DeviceCheckProps) => JSX.Element) | null;
 };
 
 /** Best-effort local speech for the Start screen (no wiring yet); silent where blocked or unsupported. */
@@ -103,12 +110,17 @@ function sayLocal(text: string, lang: Lang, rate: number): void {
  * (status chip, voice orb, captions, task card) plus the screen-reader live region.
  * main.tsx only has to render <AppShell />.
  */
-export function AppShell({ wire = wireApp, wsUrl, connect, initial, languages, onWired, autoStart }: Props) {
+export function AppShell({ wire = wireApp, wsUrl, connect, initial, languages, onWired, autoStart, deviceCheck = DeviceCheck }: Props) {
   const [saved] = useState<Settings>(() => initial ?? loadSettings());
   const [w, setW] = useState<WiredApp | null>(null);
   const [settings, setSettings] = useState<Settings>(saved);
   // true once a gesture-less start was refused: Start is back, with a spoken "Tap anywhere to start"
   const [fallback, setFallback] = useState(false);
+  // Settings waiting for the device check to pass; auto = the hands-free start (no Start tap behind it).
+  const [pending, setPending] = useState<{ s: Settings; auto: boolean } | null>(null);
+  const checked = useRef(false); // passed once on this page: a later Start tap does not test again
+  const unmounted = useRef(false);
+  const Check = deviceCheck;
   const view = useWiredView(w);
 
   useEffect(() => () => { w?.dispose(); }, [w]);
@@ -130,28 +142,60 @@ export function AppShell({ wire = wireApp, wsUrl, connect, initial, languages, o
   // an earlier Start tap reopen it without a gesture (installed apps and Chrome's persisted permission do).
   // When it refuses (first launch after a browser reset, a cleared permission, a new phone) the gesture-less
   // wiring is thrown away and the Start screen comes back.
-  useEffect(() => {
-    const auto = autoStart ?? shouldAutoStart({ onboarded: saved.onboarded, search: location.search, installed: isInstalledLaunch() });
-    if (!auto || !saved.onboarded) return;
-    const wired = wireNow(saved);
-    let cancelled = false;
+  useEffect(() => () => { unmounted.current = true; }, []);
+
+  const autoWire = (s: Settings) => {
+    const wired = wireNow(s);
     void wired.startListening().then((ok) => {
-      if (cancelled || ok) return;
+      if (unmounted.current || ok) return;
       setW(null); // the [w] effect above disposes it
       setFallback(true);
       const lang = langFromPhone(languages ?? phoneLanguages());
-      sayLocal(STRINGS.tapToStart[lang], lang, saved.speechRate);
+      sayLocal(STRINGS.tapToStart[lang], lang, s.speechRate);
     });
-    return () => { cancelled = true; };
+  };
+
+  // Every start goes through the device check first, the hands-free one included (it continues on its own).
+  const begin = (s: Settings, auto: boolean) => {
+    if (!Check || checked.current) {
+      if (auto) autoWire(s);
+      else wireNow(s); // synchronous: still inside the tap
+      return;
+    }
+    setPending({ s, auto });
+  };
+
+  useEffect(() => {
+    const auto = autoStart ?? shouldAutoStart({ onboarded: saved.onboarded, search: location.search, installed: isInstalledLaunch() });
+    if (!auto || !saved.onboarded) return;
+    begin(saved, true);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- once, on mount
   }, []);
+
+  if (!w && pending && Check) {
+    const p = pending;
+    return (
+      <Check
+        lang={langFromPhone(languages ?? phoneLanguages())}
+        rate={p.s.speechRate}
+        wsUrl={wsUrl}
+        autoContinue={p.auto}
+        onPass={() => {
+          checked.current = true;
+          setPending(null);
+          if (p.auto) autoWire(p.s);
+          else wireNow(p.s); // inside the "Start talking" tap: the gesture the voice app needs
+        }}
+      />
+    );
+  }
 
   if (!w) {
     const onboarding = (
       <Onboarding
         initial={saved}
         languages={languages}
-        onDone={(s) => { wireNow(s); }} // synchronous: still inside the tap
+        onDone={(s) => { begin(s, false); }} // the check first; wiring stays synchronous inside a tap
       />
     );
     if (!fallback) return onboarding;

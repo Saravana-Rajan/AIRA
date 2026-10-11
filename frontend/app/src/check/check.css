@@ -1,0 +1,100 @@
+/* Start-up device check. LIGHT THEME ONLY; every colour comes from tokens.css.
+   Layout: the same phone-width column as onboarding. Header, the spoken line (large), two step cards
+   (microphone, camera) each with a status pill, then the "Start talking" button, which takes all the free
+   height so a blind owner can tap anywhere below the cards. */
+@import "../ui/tokens.css";
+
+.check {
+  box-sizing: border-box;
+  display: flex;
+  justify-content: center;
+  min-height: 100dvh;
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-size: var(--text-body);
+  line-height: 1.4;
+}
+.check *, .check *::before, .check *::after { box-sizing: inherit; }
+.check__col {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  width: 100%;
+  max-width: var(--phone-width);
+  padding: 20px var(--gutter) max(20px, env(safe-area-inset-bottom, 0px));
+}
+.check__head { display: flex; align-items: center; gap: 12px; }
+.check__logo { flex: none; }
+.check__title { margin: 0; font-size: 22px; line-height: 1.2; text-wrap: balance; }
+.check__line { margin: 0; font-size: var(--text-status); font-weight: 600; min-height: 2.6em; }
+.check__steps { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 12px; }
+.check__step {
+  --tone: var(--text-muted);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-left: 6px solid var(--tone);
+  border-radius: var(--radius-card);
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.check__step--checking { --tone: var(--brand-blue); }
+.check__step--passed { --tone: var(--ok); }
+.check__step--failed { --tone: var(--danger); }
+.check__row { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+.check__name { font-weight: 700; }
+.check__pill {
+  font-size: var(--text-label);
+  font-weight: 600;
+  color: var(--text);   /* the tone is in the border; text stays navy for contrast (the green fails AA as text) */
+  background: var(--bg);
+  border: 2px solid var(--tone);
+  border-radius: var(--radius-pill);
+  padding: 2px 12px;
+  white-space: nowrap;
+}
+.check__detail { margin: 0; color: var(--text); }
+.check__meter { height: 10px; border-radius: var(--radius-pill); background: var(--border); overflow: hidden; }
+.check__meter span { display: block; height: 100%; background: var(--brand-cyan); transition: width 80ms linear; }
+.check__preview {
+  border-radius: 16px;
+  overflow: hidden;
+  background: var(--border);
+  aspect-ratio: 4 / 3;
+  max-width: 100%;
+}
+.check__video { display: block; width: 100%; height: 100%; object-fit: cover; }
+.check__video--mirror { transform: scaleX(-1); }
+.check__retry, .check__go {
+  font: inherit;
+  border: 0;
+  border-radius: var(--radius-card);
+  cursor: pointer;
+}
+.check__retry {
+  align-self: flex-start;
+  background: var(--text);
+  color: var(--bg);
+  font-weight: 700;
+  padding: 12px 20px;
+  min-height: 48px;
+}
+.check__go {
+  flex: 1;
+  min-height: 160px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  gap: 8px;
+  background: var(--text);   /* navy: white text on brand blue misses 4.5:1 for the small hint line */
+  color: var(--bg);
+  padding: 20px;
+}
+.check__go-label { font-size: 28px; font-weight: 700; }
+.check__go-hint { font-size: var(--text-label); }
+.check__retry:focus-visible, .check__go:focus-visible { outline: var(--focus-ring); outline-offset: 3px; }
+@media (prefers-reduced-motion: reduce) { .check__meter span { transition: none; } }

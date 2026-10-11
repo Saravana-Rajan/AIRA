@@ -226,7 +226,8 @@ export function appKey(): string | undefined {
   }
 }
 
-function wsDefault(): string {
+/** VITE_AIRA_LIVE_WS, else ws://localhost:8080/ws. The start-up device check derives its HTTP address from it. */
+export function wsDefault(): string {
   try {
     return (import.meta as { env?: Record<string, string | undefined> }).env?.VITE_AIRA_LIVE_WS ?? DEFAULT_WS;
   } catch {
