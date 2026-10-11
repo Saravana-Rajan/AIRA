@@ -278,8 +278,13 @@ def test_firebase_json_single_hosting_site_and_aira_database():
     assert hosting["site"] == "aira-shop"
     assert hosting["public"] == "public"
     assert hosting["rewrites"] == [
+        {"source": "/dashboard", "destination": "/dashboard/index.html"},
         {"source": "/dashboard/**", "destination": "/dashboard/index.html"},
         {"source": "**", "destination": "/index.html"},
+    ]
+    # Capitalised dashboard paths redirect; the regex is case-sensitive so /dashboard/ never loops.
+    assert hosting["redirects"] == [
+        {"regex": "^/(DASHBOARD|Dashboard)(/.*)?$", "destination": "/dashboard/", "type": 301},
     ]
     firestore = cfg["firestore"]
     dbs = firestore if isinstance(firestore, list) else [firestore]

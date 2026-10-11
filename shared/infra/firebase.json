@@ -15,13 +15,13 @@
       "**/.DS_Store"
     ],
     "redirects": [
-      { "source": "/dashboard", "destination": "/dashboard/", "type": 301 },
-      { "source": "/DASHBOARD", "destination": "/dashboard/", "type": 301 },
-      { "source": "/DASHBOARD/**", "destination": "/dashboard/", "type": 301 },
-      { "source": "/Dashboard", "destination": "/dashboard/", "type": 301 },
-      { "source": "/Dashboard/**", "destination": "/dashboard/", "type": 301 }
+      { "regex": "^/(DASHBOARD|Dashboard)(/.*)?$", "destination": "/dashboard/", "type": 301 }
     ],
     "rewrites": [
+      {
+        "source": "/dashboard",
+        "destination": "/dashboard/index.html"
+      },
       {
         "source": "/dashboard/**",
         "destination": "/dashboard/index.html"
