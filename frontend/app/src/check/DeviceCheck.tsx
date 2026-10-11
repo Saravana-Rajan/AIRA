@@ -11,8 +11,8 @@ import { CHECK } from "../i18n/strings";
 import { captureFrame, startCamera } from "../camera/capture";
 import { appKey, wsDefault } from "../core/wire";
 import {
-  airaVoice, askAiAboutCamera, cameraInstruction, cameraLine, deviceKind, httpBase, micLine, playBlob,
-  speakLocalAsync, testMicrophone, type CameraResult, type DeviceKind, type MicResult,
+  airaVoice, askAiAboutCamera, cameraVoice, deviceKind, httpBase, instructionVoice, micVoice, playBlob,
+  speakLocalAsync, testMicrophone, voiceLine, type CameraResult, type DeviceKind, type MicResult, type VoiceLine,
 } from "./checks";
 
 type Step = "waiting" | "checking" | "passed" | "failed";
@@ -91,7 +91,6 @@ export function DeviceCheck(props: DeviceCheckProps) {
     () => airaVoice({ base: httpBase(wsUrl), key: appKey(), play: playBlob, fallback: speakLocalAsync }),
     [wsUrl],
   );
-  const speak = props.speak ?? voice.speak;
   const micTest = props.micTest ?? realMicTest;
   const cameraTest = props.cameraTest ?? realCameraTest(lang, device, wsUrl);
 
@@ -105,42 +104,43 @@ export function DeviceCheck(props: DeviceCheckProps) {
   const alive = useRef(true);
   const passedOnce = useRef(false);
 
-  /** Shows the line at once and resolves when it has been spoken. */
-  const say = async (text: string): Promise<void> => {
+  /** Shows the line at once and resolves when it has been spoken (AIRA's voice, or the test seam). */
+  const say = async (line: VoiceLine): Promise<void> => {
     if (!alive.current) return;
-    setLine(text);
-    await speak(text, lang, rate);
+    setLine(line.text);
+    if (props.speak) await props.speak(line.text, lang, rate);
+    else await voice.speak(line, lang, rate);
   };
 
   const runCamera = async () => {
     setCam("checking");
     setCamText(""); // the instruction is the spoken line at the top; the card only shows the result
-    await say(cameraInstruction(device, lang));
+    await say(instructionVoice(device, lang));
     if (!alive.current) return;
     const r = await cameraTest(preview.current);
     if (!alive.current) return;
-    const text = cameraLine(r, lang);
-    setCamText(text);
+    const result = cameraVoice(r, lang);
+    setCamText(result.text);
     setCam(r.ok ? "passed" : "failed");
-    await say(text);
+    await say(result);
     if (!r.ok || !alive.current) return;
     if (autoContinue) finish(); // AIRA has finished speaking, so the conversation's voice does not talk over it
-    else await say(CHECK.allGood[lang]);
+    else await say(voiceLine("allGood", lang));
   };
 
   const runMic = async () => {
     setMic("checking");
     setMicText("");
     // Listen only after the instruction has been spoken: AIRA's own voice must never pass the mic test.
-    await say(CHECK.micSay[lang]);
+    await say(voiceLine("micSay", lang));
     if (!alive.current) return;
     const r = await micTest((rms) => { if (alive.current) setLevel(rms); });
     if (!alive.current) return;
     setLevel(0);
-    const text = micLine(r, lang);
-    setMicText(text);
+    const result = micVoice(r, lang);
+    setMicText(result.text);
     setMic(r.ok ? "passed" : "failed");
-    if (!r.ok) return say(text);
+    if (!r.ok) return say(result);
     await runCamera();
   };
 
@@ -153,8 +153,9 @@ export function DeviceCheck(props: DeviceCheckProps) {
   useEffect(() => {
     alive.current = true;
     if (!props.speak) {                    // warm AIRA's voice for the lines that come next
-      voice.prefetch(cameraInstruction(device, lang), lang);
-      voice.prefetch(CHECK.allGood[lang], lang);
+      voice.prefetch(voiceLine("micSay", lang), lang);
+      voice.prefetch(instructionVoice(device, lang), lang);
+      voice.prefetch(voiceLine("allGood", lang), lang);
     }
     void runMic();
     return () => {

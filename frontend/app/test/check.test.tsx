@@ -284,12 +284,13 @@ describe("airaVoice", () => {
     const play = vi.fn(async () => undefined);
     const fallback = vi.fn(async () => undefined);
     const v = airaVoice({ base: "https://live.example", key: "k1", fetch: f as unknown as typeof fetch, play, fallback });
-    v.prefetch("Camera works.", "en");
-    await v.speak("Camera works.", "en", 1);
+    const line = { key: "camOk" as const, text: "Camera works. I can see a desk.", seen: "a desk" };
+    v.prefetch(line, "en");
+    await v.speak(line, "en", 1);
     expect(f).toHaveBeenCalledTimes(1);
     const [url, init] = f.mock.calls[0] as unknown as [string, RequestInit];
     expect(url).toBe("https://live.example/api/device-check/say");
-    expect(JSON.parse(init.body as string)).toEqual({ text: "Camera works.", lang: "en", key: "k1" });
+    expect(JSON.parse(init.body as string)).toEqual({ line: "camOk", lang: "en", seen: "a desk", key: "k1" });
     expect(play).toHaveBeenCalledWith(wav);
     expect(fallback).not.toHaveBeenCalled();
   });
@@ -302,13 +303,13 @@ describe("airaVoice", () => {
     ]) {
       const fallback = vi.fn(async () => undefined);
       const v = airaVoice({ base: "b", fetch: (async () => make()) as typeof fetch, play: async () => undefined, fallback });
-      await v.speak("Camera works.", "en", 1);
-      expect(fallback).toHaveBeenCalledWith("Camera works.", "en", 1);
+      await v.speak({ key: "micOk", text: "Microphone works." }, "en", 1);
+      expect(fallback).toHaveBeenCalledWith("Microphone works.", "en", 1);
     }
     const fallback = vi.fn(async () => undefined);
     const v = airaVoice({ base: "b", fetch: (async () => ok()) as typeof fetch,
       play: async () => { throw new Error("NotAllowedError"); }, fallback });
-    await v.speak("Camera works.", "en", 1);
+    await v.speak({ key: "micOk", text: "Microphone works." }, "en", 1);
     expect(fallback).toHaveBeenCalledTimes(1);
   });
 });
