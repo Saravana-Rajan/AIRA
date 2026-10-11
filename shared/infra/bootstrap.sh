@@ -140,7 +140,8 @@ fi
 
 echo "==> [7/7] Demo data"
 if [ "${SEED:-0}" = "1" ]; then
-  FIRESTORE_DATABASE="$DATABASE" GCP_PROJECT="$GCP_PROJECT" \
+  export GCP_PROJECT
+  FIRESTORE_DATABASE="$DATABASE" \
     uv run --project "$ROOT/backend" python "$ROOT/shared/scripts/seed_firestore.py" --project "$GCP_PROJECT"
 else
   echo "    skipped (SEED=1 seeds sunrise_dairy; it resets the demo stock)"
