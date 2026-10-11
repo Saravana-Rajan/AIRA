@@ -91,7 +91,7 @@ export const CHECK: Record<
   | "title" | "intro" | "micStep" | "camStep" | "waiting" | "checking" | "passed" | "failed"
   | "micSay" | "micOk" | "micBlocked" | "micMissing" | "micSilent" | "micTap"
   | "camLookLaptop" | "camLookPhone" | "camOk" | "camDark" | "camBlurry" | "camCovered" | "camBlank" | "camUnclear"
-  | "camBlocked" | "camOffline" | "camBusy" | "camUnavailable" | "allGood" | "startTalking" | "tryAgain",
+  | "camBlocked" | "camOffline" | "camBusy" | "camUnavailable" | "allGood" | "startTalking" | "tryAgain" | "continueAnyway",
   S
 > = {
   title:          { en: "Checking your microphone and camera", ta: "மைக் மற்றும் கேமராவைச் சரிபார்க்கிறோம்", hi: "माइक और कैमरा जाँच रहे हैं" },
@@ -123,4 +123,5 @@ export const CHECK: Record<
   allGood:        { en: "Microphone and camera work. Tap anywhere to start talking.", ta: "மைக்கும் கேமராவும் வேலை செய்கின்றன. பேசத் தொடங்க எங்கும் தட்டவும்.", hi: "माइक और कैमरा ठीक हैं। बात शुरू करने के लिए कहीं भी टैप करें।" },
   startTalking:   { en: "Start talking", ta: "பேசத் தொடங்கு", hi: "बात शुरू करें" },
   tryAgain:       { en: "Try again", ta: "மீண்டும் முயல்", hi: "दोबारा कोशिश करें" },
+  continueAnyway: { en: "Continue without the camera check", ta: "கேமரா சோதனை இல்லாமல் தொடரவும்", hi: "कैमरा जाँच के बिना आगे बढ़ें" },
 };

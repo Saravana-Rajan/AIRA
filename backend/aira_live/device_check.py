@@ -16,8 +16,9 @@ and nothing is stored.
 Guards, as for /ws (shared/docs/ops/security.md): the request must come from an allowed browser origin, carry the
 app key when ``AIRA_APP_KEY`` is set, and one address gets at most ``MAX_PER_MINUTE`` checks. All AI calls from both
 routes share ``MODEL_CALLS_PER_MINUTE``, so rotating addresses cannot buy unlimited model use, and the per-address
-counters drop stale addresses and never hold more than ``MAX_TRACKED_ADDRESSES``. The model's words are cleaned and
-cut short before they leave, because the app reads them aloud.
+counters drop stale addresses and, when full, push out the oldest one (never refusing a new person), so they never
+hold more than ``MAX_TRACKED_ADDRESSES``. A busy or failing check never locks the owner out: the app then offers to
+continue without it. The model's words are cleaned and cut short before they leave, because the app reads them aloud.
 """
 from __future__ import annotations
 
@@ -112,8 +113,8 @@ def _limited(ip: str, now: float | None = None, hits: dict[str, deque] | None = 
     if ip not in hits and len(hits) >= MAX_TRACKED_ADDRESSES:
         for stale in [a for a, q in hits.items() if not q or now - q[-1] > 60.0]:
             del hits[stale]
-        if len(hits) >= MAX_TRACKED_ADDRESSES:         # a flood of fresh addresses: refuse rather than grow
-            return True
+        while len(hits) >= MAX_TRACKED_ADDRESSES:      # a flood of fresh addresses: push out the oldest, never refuse
+            del hits[next(iter(hits))]
     q = hits.setdefault(ip, deque())
     while q and now - q[0] > 60.0:
         q.popleft()
@@ -219,7 +220,8 @@ async def camera_check(request: Request) -> JSONResponse:
         return _refuse(429, "busy")
     prompt = PROMPT.format(device=_DEVICE_HINT[device], lang=LANG_NAME[lang])
     try:
-        data = await generate_json("read", [image_part(image), prompt], SCHEMA, thinking="low", timeout_s=8.0)
+        # Seen live: the first answer of the day took over 8 s. The app waits up to 30 s for both tries.
+        data = await generate_json("read", [image_part(image), prompt], SCHEMA, thinking="low", timeout_s=12.0)
     except VisionError as exc:
         log.warning("device check: vision failed: %s", exc)
         diag("device_check", severity="WARNING", stage="error", device=device, message=trunc(str(exc), 200))

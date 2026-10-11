@@ -309,3 +309,27 @@ def test_the_server_reads_the_same_words_the_screen_shows():
         cat = json.loads((root / f"backend/aira_live/i18n/{lang}.json").read_text(encoding="utf-8"))
         for key in device_check.SPOKEN_LINES:
             assert cat[f"check.{key}"] == rows[key][i], (lang, key)
+
+
+def test_a_flood_of_fresh_addresses_never_locks_out_a_new_one():
+    """DoS guard: a full table pushes out the oldest address; it never refuses the next person."""
+    device_check.reset_limits()
+    for n in range(device_check.MAX_TRACKED_ADDRESSES):
+        device_check._limited(f"attacker-{n}", now=1.0)          # all fresh: none is stale yet
+    assert device_check._limited("shop-owner", now=1.5) is False
+    assert len(device_check._hits) <= device_check.MAX_TRACKED_ADDRESSES
+    device_check.reset_limits()
+
+
+async def test_the_camera_check_gives_a_slow_first_answer_enough_time(monkeypatch):
+    """Seen live: the first answer of the day took over 8 s, and the check failed twice at an 8 s limit."""
+    seen: list[float] = []
+
+    async def fake(role, parts, schema_hint, thinking="low", timeout_s=6.0):
+        seen.append(timeout_s)
+        return {"ok": True, "seen": "a desk", "problem": ""}
+
+    monkeypatch.setattr(device_check, "generate_json", fake)
+    monkeypatch.setattr(device_check, "image_part", lambda b64: ("image", b64))
+    assert (await post({"image": JPEG})).status_code == 200
+    assert seen[0] >= 12.0

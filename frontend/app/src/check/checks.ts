@@ -122,7 +122,8 @@ export interface CameraCheckOpts {
 export async function askAiAboutCamera(jpegB64: string, o: CameraCheckOpts): Promise<CameraResult> {
   const f = o.fetch ?? fetch;
   const ctrl = typeof AbortController === "undefined" ? null : new AbortController();
-  const timer = ctrl ? setTimeout(() => ctrl.abort(), o.timeoutMs ?? 20_000) : null;  // first call may wake the server
+  // The server may need to wake up, and its AI gets two tries of 12 s each.
+  const timer = ctrl ? setTimeout(() => ctrl.abort(), o.timeoutMs ?? 30_000) : null;
   try {
     const r = await f(`${o.base}/api/device-check/camera`, {
       method: "POST",
@@ -151,6 +152,11 @@ const CAM_LINE: Record<CameraProblem, keyof typeof CHECK> = {
   dark: "camDark", blurry: "camBlurry", covered: "camCovered", blank: "camBlank", unclear: "camUnclear",
   blocked: "camBlocked", offline: "camOffline", busy: "camBusy", unavailable: "camUnavailable",
 };
+
+/** The server could not judge the picture (busy, down, unreachable): not a camera fault, so it must not lock the owner out. */
+export function serverSideProblem(r: CameraResult): boolean {
+  return !r.ok && (r.problem === "busy" || r.problem === "unavailable" || r.problem === "offline");
+}
 
 /** What the owner hears and reads for a mic result. */
 export function micLine(r: MicResult, lang: Lang): string {

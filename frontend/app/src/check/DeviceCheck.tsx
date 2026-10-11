@@ -12,7 +12,7 @@ import { captureFrame, startCamera } from "../camera/capture";
 import { appKey, wsDefault } from "../core/wire";
 import {
   airaVoice, askAiAboutCamera, cameraVoice, deviceKind, httpBase, instructionVoice, micVoice, playBlob,
-  speakLocalAsync, testMicrophone, voiceLine, type CameraResult, type DeviceKind, type MicResult, type VoiceLine,
+  serverSideProblem, speakLocalAsync, testMicrophone, voiceLine, type CameraResult, type DeviceKind, type MicResult, type VoiceLine,
 } from "./checks";
 
 type Step = "waiting" | "checking" | "passed" | "failed";
@@ -100,6 +100,8 @@ export function DeviceCheck(props: DeviceCheckProps) {
   const [camText, setCamText] = useState("");
   const [line, setLine] = useState(CHECK.intro[lang]);
   const [level, setLevel] = useState(0);
+  // The check itself failed (server busy or down), not the camera: the owner may go on without it.
+  const [canSkipCamera, setCanSkipCamera] = useState(false);
   const preview = useRef<HTMLDivElement>(null);
   const alive = useRef(true);
   const passedOnce = useRef(false);
@@ -122,6 +124,7 @@ export function DeviceCheck(props: DeviceCheckProps) {
     const result = cameraVoice(r, lang);
     setCamText(result.text);
     setCam(r.ok ? "passed" : "failed");
+    setCanSkipCamera(serverSideProblem(r));
     await say(result);
     if (!r.ok || !alive.current) return;
     if (autoContinue) finish(); // AIRA has finished speaking, so the conversation's voice does not talk over it
@@ -205,6 +208,9 @@ export function DeviceCheck(props: DeviceCheckProps) {
             <div class="check__preview" ref={preview} hidden={cam === "waiting"} aria-hidden="true" />
             {cam === "failed" && (
               <button type="button" class="check__retry" onClick={() => { void runCamera(); }}>{CHECK.tryAgain[lang]}</button>
+            )}
+            {cam === "failed" && canSkipCamera && mic === "passed" && (
+              <button type="button" class="check__anyway" onClick={finish}>{CHECK.continueAnyway[lang]}</button>
             )}
           </li>
         </ol>
