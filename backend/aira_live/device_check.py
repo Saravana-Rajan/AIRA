@@ -220,8 +220,10 @@ async def camera_check(request: Request) -> JSONResponse:
         return _refuse(429, "busy")
     prompt = PROMPT.format(device=_DEVICE_HINT[device], lang=LANG_NAME[lang])
     try:
-        # Seen live: the first answer of the day took over 8 s. The app waits up to 30 s for both tries.
-        data = await generate_json("read", [image_part(image), prompt], SCHEMA, thinking="low", timeout_s=12.0)
+        # "Is this a working camera?" needs no top reader: the "verify" model (an older Flash generation) answered in
+        # 6 s where the "read" model took 11-26 s and failed the check twice (measured live, 11 Oct). 12 s per try;
+        # the app waits up to 30 s for both tries.
+        data = await generate_json("verify", [image_part(image), prompt], SCHEMA, thinking="low", timeout_s=12.0)
     except VisionError as exc:
         log.warning("device check: vision failed: %s", exc)
         diag("device_check", severity="WARNING", stage="error", device=device, message=trunc(str(exc), 200))
