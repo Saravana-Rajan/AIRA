@@ -1,7 +1,8 @@
 """Runtime switches without a redeploy (replaces Firebase Remote Config).
 
 Source of truth: the Firestore doc ``config/runtime`` in database ``aira`` with the fields
-``pointing_model``, ``count_model``, ``live_model`` (model ids) and ``whatsapp_enabled`` (bool).
+``pointing_model``, ``count_model``, ``live_model`` (model ids), ``whatsapp_enabled`` (bool), ``cameras`` (list)
+and ``languages`` (list of BCP-47 codes: overrides the shops' expected languages).
 Values are cached for 60 s. A missing doc means "use the defaults"; a failed read keeps the last good
 values and retries after 10 s. A model override is only honoured when it names one of that role's own
 models in ``aira_live.models`` (its ``DEFAULTS`` or ``FALLBACKS`` entry), so the Live session can never be
@@ -36,7 +37,9 @@ MODEL_FIELDS = ("pointing_model", "count_model", "live_model")
 FLAG_FIELDS = ("whatsapp_enabled",)
 PARAMS = MODEL_FIELDS + FLAG_FIELDS
 CAMERAS_FIELD = "cameras"  # list of shop cameras (aira_live.cameras.config); default empty = off
-_KEPT = PARAMS + (CAMERAS_FIELD,)
+LANGUAGES_FIELD = "languages"  # overrides every shop's expected languages (aira_live.i18n.expected)
+_LIST_FIELDS = (CAMERAS_FIELD, LANGUAGES_FIELD)
+_KEPT = PARAMS + _LIST_FIELDS
 ROLE_PARAM = {"point": "pointing_model", "count": "count_model", "live": "live_model"}
 PARAM_ROLE = {v: k for k, v in ROLE_PARAM.items()}
 TTL_S = 60.0
@@ -67,7 +70,7 @@ def parse_doc(doc: dict | None) -> dict[str, Any]:
     for name, value in (doc or {}).items():
         if name not in _KEPT or value is None:
             continue
-        if name == CAMERAS_FIELD:
+        if name in _LIST_FIELDS:
             if isinstance(value, list):
                 out[name] = value
             continue
@@ -207,6 +210,13 @@ def cameras() -> list:
     _kick()
     value = _cache.get(CAMERAS_FIELD)
     return list(value) if isinstance(value, list) else []
+
+
+def languages() -> list[str] | None:
+    """The ``languages`` override from ``config/runtime`` (BCP-47 codes), or ``None`` when the shop doc decides."""
+    _kick()
+    value = _cache.get(LANGUAGES_FIELD)
+    return [v for v in value if isinstance(v, str)] if isinstance(value, list) else None
 
 
 async def run_refresher() -> None:

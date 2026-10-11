@@ -25,14 +25,14 @@ describe("Onboarding", () => {
 
   it("writes its own labels in the phone's language (only a hint for the first line)", () => {
     mount({ onDone: () => {}, languages: ["ta-IN"] });
-    expect(startBtn().textContent).toContain("தொடங்கு");
+    expect(startBtn().textContent).toContain("தொடங்க தட்டவும்");
     expect(root.querySelector("main")!.getAttribute("lang")).toBe("ta");
     expect(root.textContent).toContain("எந்த மொழியிலும்");
   });
 
   it("falls back to English labels for a phone language it has no labels for", () => {
     mount({ onDone: () => {}, languages: ["ja-JP"] });
-    expect(startBtn().textContent).toContain("Start");
+    expect(startBtn().textContent).toContain("Tap to start");
     expect(root.querySelector("main")!.getAttribute("lang")).toBe("en");
     expect(root.textContent).toContain("any language");
   });
@@ -76,39 +76,43 @@ describe("Onboarding", () => {
     expect(document.activeElement).toBe(startBtn());
   });
 
-  it("keeps the whole screen inside one phone-width column with Start as the last thing in it", () => {
+  it("is one phone-width column: header, then Start, then the TalkBack row last", () => {
     mount({ onDone: () => {}, languages: ["en"] });
     const col = root.querySelector(".onboard > .onboard__col")!;
     expect(col).not.toBeNull();
-    expect(col.querySelector("h1")).not.toBeNull();
-    expect(col.querySelector("input[type=checkbox]")).not.toBeNull();
-    expect(col.lastElementChild).toBe(startBtn());
+    const kids = Array.from(col.children);
+    expect(kids.map((k) => k.tagName.toLowerCase())).toEqual(["header", "button", "label"]);
+    expect(kids[0].className).toBe("onboard__head");
+    expect(kids[0].querySelector("h1")!.textContent).toBe("AIRA");
+    expect(kids[0].querySelector("img")!.getAttribute("width")).toBe("40");
+    expect(kids[1]).toBe(startBtn());
+    expect(kids[2].className).toBe("tb-switch");
+    expect(kids[2].querySelector("input[type=checkbox]")).not.toBeNull();
     expect(startBtn().getAttribute("aria-labelledby")).toBe("aira-start-label");
     expect(startBtn().getAttribute("aria-describedby")).toBe("aira-start-hint");
   });
 
-  it("Start is a centred stack: gradient badge, then the title, then the subtitle", () => {
+  it("Start holds the voice-screen orb, then 'Tap to start', then one muted line", () => {
     mount({ onDone: () => {}, languages: ["en"] });
     const kids = Array.from(startBtn().children);
-    expect(kids.map((k) => k.className)).toEqual(["onboard__badge", "onboard__start-label", "onboard__start-hint"]);
-    const badge = kids[0];
-    expect(badge.getAttribute("aria-hidden")).toBe("true");
-    expect(badge.querySelector("svg.onboard__spark")).not.toBeNull();
+    expect(kids.map((k) => k.className)).toEqual(["onboard__orb", "onboard__start-label", "onboard__start-hint"]);
+    const orb = kids[0];
+    expect(orb.getAttribute("aria-hidden")).toBe("true");
+    expect(orb.querySelector(".orb .orb__core .orb__spark path")).not.toBeNull();
+    expect(orb.querySelectorAll(".orb__waves .orb__wave")).toHaveLength(3);
     expect(kids[1].id).toBe("aira-start-label");
-    expect(kids[1].textContent).toBe("Start");
+    expect(kids[1].textContent).toBe("Tap to start");
     expect(kids[2].id).toBe("aira-start-hint");
-    expect(kids[2].textContent).toBe("Turns on the microphone and camera.");
+    expect(kids[2].textContent).toBe("Turns on the microphone and camera. Speak any language. AIRA answers in yours.");
   });
 
-  it("the intro is one short line and the header is logo, name, shop", () => {
+  it("has no dark card and no separate intro paragraph: the hint lives inside Start", () => {
     mount({ onDone: () => {}, languages: ["en"] });
-    const intro = root.querySelectorAll(".onboard__intro");
-    expect(intro).toHaveLength(1);
-    expect(root.querySelector(".onboard__how")).toBeNull();
-    expect(root.querySelector(".onboard__any")).toBeNull();
-    expect(intro[0].textContent).toContain("Tap Start, then just talk.");
-    expect(intro[0].textContent).toContain("any language");
-    expect(root.querySelector(".onboard__head img")!.getAttribute("width")).toBe("48");
+    expect(root.querySelector(".onboard__intro")).toBeNull();
+    expect(root.querySelector(".onboard__badge")).toBeNull();
+    expect(root.querySelector(".onboard__card")).toBeNull();
+    expect(root.querySelectorAll("p")).toHaveLength(0);
+    expect(root.textContent!.split("any language")).toHaveLength(2); // said once, not twice
   });
 
   it("names the shop and labels every control for screen readers", () => {

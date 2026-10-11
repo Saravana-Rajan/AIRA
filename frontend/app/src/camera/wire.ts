@@ -13,8 +13,9 @@ import { startTiltHints } from "./tilt";
 import { createGuidanceSession } from "../guidance/session";
 import { trackFingertip } from "../guidance/hands";
 import { guideTo, stopTone } from "../guidance/tones";
-import { COOLDOWN_MS } from "../walk/bump";
+import { parseWalkingModeCommand, walkingMode } from "../walk/mode";
 import { startBumpGuard, type RunningBumpGuard } from "../walk/start";
+import { walkingModeText } from "../walk/strings";
 import { createCountUx, type CountProgress } from "./countUx";
 import { createOpenUrlHandler, defaultDial, defaultOpen } from "./openUrl";
 import { createCameraWiring } from "./wiring";
@@ -141,8 +142,8 @@ export function wireCameraAndGuidance(opts: WireOptions = {}): CameraWiring {
   return self;
 }
 
-/** How long the red "Stop!" chip stays up after a bump warning (one warning cooldown). */
-export const BUMP_CHIP_MS = COOLDOWN_MS;
+/** How long the red "Stop!" chip stays up after a bump warning: short, so it clears before the next look. */
+export const BUMP_CHIP_MS = 1200;
 
 /** The parts of the wired voice app this joins to. `WiredApp` (core/wire.ts) satisfies it. */
 export type WiredHooks = Pick<WiredApp, "onTalk" | "onStop" | "dispose" | "local" | "confirm">;
@@ -158,6 +159,10 @@ export interface PhoneWiring {
   guard: () => RunningBumpGuard | null;
   /** Settles once the bump guard has started, failed or been skipped. Never rejects. */
   ready: Promise<void>;
+  /** Walking mode (the persisted bump-guard switch, default on). Off ⇒ no "Stop!" at all. */
+  walkingMode: () => boolean;
+  /** Switches walking mode, persists it, tells the guard and says so (settings toggle, voice command). */
+  setWalkingMode: (on: boolean) => void;
   /** Stops the camera wiring, the bump guard and the camera stream. The app's own dispose also runs this. */
   dispose: () => void;
 }
@@ -165,8 +170,10 @@ export interface PhoneWiring {
 /**
  * Joins the camera to the wired voice app. Call it from AppShell's `onWired` hook, still inside the Start tap:
  * - answers request_frame, runs hand guidance, speaks live counts, opens allowlisted OPEN_URL links
- * - starts the always-on bump guard; it stays muted while the hand is near a guidance target, and the
- *   server may only raise its urgency; each warning shows the red "Stop!" chip
+ * - starts the bump guard; it warns only while the accelerometer says the owner is walking (approach-only
+ *   without a sensor), stays muted while the hand is near a guidance target, and the server may only raise
+ *   its urgency; each warning shows the red "Stop!" chip. Walking mode (persisted, default on) switches it
+ *   off entirely: `setWalkingMode`, or a server `state` message with summary "WALKING_MODE on|off"
  * - long-press also ends hand guidance; a double-tap opens a link the browser blocked
  *   (unless a confirm waits for its "yes")
  * - the app's dispose also stops all of this
@@ -180,8 +187,17 @@ export function wireCameraIntoApp(w: WiredHooks, opts: PhoneWireOptions = {}): P
   let chipTimer: ReturnType<typeof setTimeout> | null = null;
 
   const offNear = cam.onHandNear((n) => guard?.setHandNearTarget(n));
-  // The server may only RAISE urgency (`cue: "warn"`); nothing it sends can mute the guard.
-  const offServer = app.socket.on((m) => guard?.onServerMsg(m));
+  // The server may only RAISE urgency (`cue: "warn"`); nothing it sends can mute the guard, except the
+  // owner's own walking-mode command relayed as a `state` message ("WALKING_MODE on|off", like OPEN_URL).
+  const offServer = app.socket.on((m) => {
+    guard?.onServerMsg(m);
+    if (m.t === "state") {
+      const on = parseWalkingModeCommand(m.summary);
+      if (on !== null) walkingMode.set(on);
+    }
+  });
+  // Every switch (server, settings, voice) is confirmed aloud once; the guard follows the store itself.
+  const offMode = walkingMode.subscribe((on) => app.speak(walkingModeText(on, app.lang())));
 
   const onWarn = () => {
     w.local("bump");
@@ -214,6 +230,7 @@ export function wireCameraIntoApp(w: WiredHooks, opts: PhoneWireOptions = {}): P
     chipTimer = null;
     offNear();
     offServer();
+    offMode();
     try { guard?.dispose(); } catch (e) { report("bump guard dispose failed")(e); }
     guard = null;
     cam.unsubscribe();
@@ -233,5 +250,12 @@ export function wireCameraIntoApp(w: WiredHooks, opts: PhoneWireOptions = {}): P
     appDispose();
   };
 
-  return { cam, guard: () => guard, ready, dispose };
+  return {
+    cam,
+    guard: () => guard,
+    ready,
+    walkingMode: () => walkingMode.get(),
+    setWalkingMode: (on) => walkingMode.set(on),
+    dispose,
+  };
 }

@@ -30,6 +30,12 @@ describe("reduceScreen: status chip", () => {
     expect(final.userText).toBe("2 litres curd");
   });
 
+  it("an unclear user transcript (misheard language) is marked in the caption", () => {
+    const s = run(ready, { t: "transcript", role: "user", text: "¿Cuántos años tienes?", final: true, lang: "en", unclear: true });
+    expect(s.userText).toBe("¿Cuántos años tienes? (not clear)");
+    expect(run(ready, { t: "transcript", role: "user", text: "two curd", final: true, lang: "en" }).userText).toBe("two curd");
+  });
+
   it("AIRA transcript fills the AIRA caption and returns to Ready", () => {
     const s = run(ready, { t: "cue", cue: "thinking" }, { t: "transcript", role: "aira", text: "Sakthi curd 1 L, ₹60 each.", final: true });
     expect(s.airaText).toBe("Sakthi curd 1 L, ₹60 each.");

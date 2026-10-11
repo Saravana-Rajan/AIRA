@@ -49,6 +49,7 @@ from aira_live.contracts import (
 )
 from aira_live.frames import Frame
 from aira_live.i18n import t
+from aira_live.i18n.expected import shop_languages
 from aira_live.live_bridge import AdkLiveBackend, LiveBridge
 from aira_live.prompt import build_system_prompt
 from aira_live.session import Session, current_session
@@ -275,7 +276,8 @@ async def ws_endpoint(ws: WebSocket) -> None:
                     return
                 resumed, handle = sessions.take_ended(msg.resume)
                 session = Session(who.uid, who.shop_id, msg.lang, msg.verbosity, send,
-                                  session_id=msg.resume if resumed else None)
+                                  session_id=msg.resume if resumed else None,
+                                  languages=await shop_languages(who.shop_id))
                 lang = msg.lang
                 current_session.set(session)
                 sessions.register(session, ip=ip)
@@ -290,7 +292,7 @@ async def ws_endpoint(ws: WebSocket) -> None:
                 await send(CueMsg(cue="done"))
             elif isinstance(msg, TextMsg):
                 if session:  # typed text is a user turn too: AIRA follows its language
-                    lang = session.follow_lang(msg.text)  # sticky: only a clear sentence switches
+                    lang = session.follow_lang(msg.text, typed=True)  # sticky: only a clear sentence switches
                 if bridge:
                     await bridge.send_text(msg.text)
                 else:

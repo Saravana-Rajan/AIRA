@@ -50,6 +50,14 @@ describe("contract fixtures", () => {
     expect(withLang.every((m) => m.final === true)).toBe(true);
   });
 
+  it("a finished user transcript may be flagged unclear (a language the shop does not usually speak)", () => {
+    const unclear = server.filter((m) => m.t === "transcript" && m.unclear === true);
+    expect(unclear.length).toBe(1);
+    expect(unclear[0].role).toBe("user");
+    expect(unclear[0].final).toBe(true);
+    expect(isServerMsg({ t: "transcript", role: "user", text: "x", final: true, unclear: "yes" })).toBe(false);
+  });
+
   it("hello is valid without an idToken (no Firebase Auth)", () => {
     const hellos = client.filter((m) => m.t === "hello");
     expect(hellos.some((m) => m.idToken === undefined)).toBe(true);

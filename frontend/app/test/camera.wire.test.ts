@@ -34,6 +34,7 @@ import { trackFingertip } from "../src/guidance/hands";
 import { guideTo, stopTone } from "../src/guidance/tones";
 import { startBumpGuard } from "../src/walk/start";
 import { wireCameraAndGuidance, wireCameraIntoApp, BUMP_CHIP_MS, type CameraWiring } from "../src/camera/wire";
+import { walkingMode } from "../src/walk/mode";
 
 type Handler = (m: ServerMsg) => void;
 function fakeSocket() {
@@ -223,6 +224,7 @@ describe("wireCameraAndGuidance", () => {
 function fakeGuard() {
   return {
     setHandNearTarget: vi.fn(),
+    setWalkingMode: vi.fn(),
     onServerMsg: vi.fn(),
     dispose: vi.fn(),
   };
@@ -279,6 +281,10 @@ describe("wireCameraIntoApp", () => {
     h.onTip!({ x1000: 100, y1000: 900 });
     expect(g.setHandNearTarget).toHaveBeenLastCalledWith(false);
     p.dispose();
+  });
+
+  it("the Stop! chip clears within 1.5 s", () => {
+    expect(BUMP_CHIP_MS).toBeLessThanOrEqual(1500);
   });
 
   it("a bump warning shows the red Stop! chip, then clears it", async () => {
@@ -361,6 +367,27 @@ describe("wireCameraIntoApp", () => {
     resolve(g);
     await p.ready;
     expect(g.dispose).toHaveBeenCalledTimes(1);
+  });
+
+  it("a WALKING_MODE state message switches the persisted setting and says so; setWalkingMode does the same", async () => {
+    walkingMode.reset(null);
+    walkingMode.set(true);
+    guardStarter();
+    const { w } = fakeWired();
+    const p = wireCameraIntoApp(w as never, { devtools: false });
+    await p.ready;
+    socket.emit({ t: "state", entity: "order", id: "m1", state: "OK", summary: "WALKING_MODE off" });
+    expect(walkingMode.get()).toBe(false);
+    expect(p.walkingMode()).toBe(false);
+    expect(said).toEqual(["Walking mode off."]);
+    socket.emit({ t: "state", entity: "order", id: "m1", state: "OK", summary: "WALKING_MODE off" });   // resent: silent
+    expect(said).toEqual(["Walking mode off."]);
+    p.setWalkingMode(true);
+    expect(walkingMode.get()).toBe(true);
+    expect(said).toEqual(["Walking mode off.", "Walking mode on."]);
+    socket.emit({ t: "state", entity: "order", id: "o9", state: "ORDER_PLACED", summary: "Order placed" });
+    expect(said).toHaveLength(2);
+    p.dispose();
   });
 
   it("bumpGuard: false (demo page) never starts the detector", async () => {

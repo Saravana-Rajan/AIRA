@@ -150,6 +150,9 @@ class TranscriptMsg(_ServerWire):
     # The language AIRA detected from the speaker's last finished utterance (``i18n.detect_lang``: "ta", "ja",
     # "en", ...). The phone's labels follow it. Absent on partial transcripts and before anyone has spoken.
     lang: Optional[StrictStr] = None
+    # True on a finished user transcript that looks like a language the shop does not usually speak (shop doc
+    # ``languages``): probably misheard, so AIRA asks to repeat instead of answering it. The caption marks it.
+    unclear: Optional[StrictBool] = None
 
 
 class Burst(_ServerWire):

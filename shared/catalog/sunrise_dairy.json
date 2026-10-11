@@ -1,6 +1,7 @@
 {
   "note": "Prices are demo — verify locally against the pack MRP before filming. price and costPrice are integer rupees per selling unit: per litre for unit L (milk, curd), per pack/jar/box otherwise. Supplier phone numbers are read from .env via phoneEnv (E.164, e.g. +9198XXXXXXXX) and never committed.",
-  "shop": {"id": "sunrise_dairy", "name": "Sunrise Dairy", "city": "Chennai", "currency": "INR", "timezone": "Asia/Kolkata"},
+  "shop": {"id": "sunrise_dairy", "name": "Sunrise Dairy", "city": "Chennai", "currency": "INR", "timezone": "Asia/Kolkata",
+           "languages": ["ta", "en"]},
   "products": [
     {"sku": "aavin_milk_500ml", "name": "Aavin Milk 500 ml", "brand": "Aavin", "pack": "500 ml pouch",
      "unit": "L", "packSizeL": 0.5, "defaultPack": true,

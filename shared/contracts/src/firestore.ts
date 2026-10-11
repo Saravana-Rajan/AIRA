@@ -18,7 +18,11 @@ export function fsTimeToDate(t: FsTime): Date {
 export type I18nAliases = { ta: string[]; hi: string[]; en: string[] };
 
 /** shops/{shopId} */
-export interface Shop { name: string; ownerUid: string; city: string; currency: "INR"; timezone: "Asia/Kolkata" }
+export interface Shop {
+  name: string; ownerUid: string; city: string; currency: "INR"; timezone: "Asia/Kolkata";
+  /** Languages this shop usually speaks (BCP-47 codes, e.g. ["ta", "en"]). Guides, never limits, detection. */
+  languages?: string[];
+}
 
 /** shops/{shopId}/products/{sku} */
 export interface Product {
@@ -109,4 +113,6 @@ export interface ShopEvent { topic: EventTopic; payload: Record<string, unknown>
 /** config/runtime: runtime flags (replaces Remote Config). Every field is optional. */
 export interface RuntimeConfig {
   pointing_model?: string; count_model?: string; live_model?: string; whatsapp_enabled?: boolean;
+  /** Overrides every shop's expected languages (shops/{shopId}.languages). */
+  languages?: string[];
 }

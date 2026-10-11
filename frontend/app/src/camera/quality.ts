@@ -37,6 +37,22 @@ export function laplacianVariance(gray: Float32Array, w: number, h: number): num
   return Math.max(0, sumSq / n - mean * mean);
 }
 
+// Frame evidence for the tilt hints: a recent sharp, bright frame means the camera sees fine,
+// whatever the orientation sensor says.
+export const FRAME_GOOD_MS = 3000;
+let lastGoodFrameAt = Number.NEGATIVE_INFINITY;
+let lastBadFrameAt = Number.NEGATIVE_INFINITY;
+
+export function noteFrameQuality(hint: "dark" | "blurry" | null, now: number = Date.now()): void {
+  if (hint == null) lastGoodFrameAt = now;
+  else lastBadFrameAt = now;
+}
+
+/** True when the newest quality verdict was "fine" and it is at most FRAME_GOOD_MS old. */
+export function frameLooksGood(now: number = Date.now()): boolean {
+  return lastGoodFrameAt >= lastBadFrameAt && now - lastGoodFrameAt <= FRAME_GOOD_MS;
+}
+
 /** "dark" wins over "blurry": a dark frame is always low-contrast too. */
 export function qualityHint(gray: Float32Array, w: number, h: number): "dark" | "blurry" | null {
   if (meanLuma(gray) < DARK_LUMA) return "dark";

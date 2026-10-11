@@ -11,9 +11,11 @@ describe("announcer", () => {
     expect(shouldClientSpeak({ t: "confirm", id: "c1", kind: "order", prompt: "Order 30 L?" }, live)).toBe(false);
     expect(shouldClientSpeak({ t: "error", code: "network", say: "Network lost" }, live)).toBe(false);
   });
-  it("speaks confirm/error when no Live audio for >1 s, and always in mock sessions", () => {
+  it("speaks an error when no Live audio for >1 s, never a confirm (Live asks it), and everything in mock sessions", () => {
     const quiet = { ...live, msSinceLiveAudio: 1500 };
-    expect(shouldClientSpeak({ t: "confirm", id: "c1", kind: "order", prompt: "Order?" }, quiet)).toBe(true);
+    expect(shouldClientSpeak({ t: "error", code: "network", say: "Network lost" }, quiet)).toBe(true);
+    expect(shouldClientSpeak({ t: "confirm", id: "c1", kind: "order", prompt: "Order?" }, quiet)).toBe(false);
+    expect(shouldClientSpeak({ t: "confirm", id: "c1", kind: "order", prompt: "Order?" }, { ...quiet, mock: true })).toBe(true);
     expect(shouldClientSpeak({ t: "state", entity: "sale", id: "s1", state: "SALE_COMPLETED", summary: "Sale done" }, { ...live, mock: true })).toBe(true);
   });
   it("never speaks raw audio/transcript messages", () => {
@@ -116,12 +118,15 @@ describe("dispatcher", () => {
     dispatch({ t: "error", code: "internal", say: "Sorry" });
     expect(d.thinking.disarm).toHaveBeenCalledTimes(4);
   });
-  it("confirm sets pending state, plays warn earcon and speaks the prompt when Live is silent", () => {
+  it("confirm sets pending state and plays the warn earcon; the prompt is spoken only in a mock session", () => {
     const d = deps(); const dispatch = createDispatcher(d as any);
     dispatch({ t: "confirm", id: "c1", kind: "order", prompt: "Order 30 litres Sakthi curd?" });
     expect(d.confirm.pending).toEqual({ id: "c1", kind: "order" });
     expect(d.earcon).toHaveBeenCalledWith("warn");
-    expect(d.speak).toHaveBeenCalledWith("Order 30 litres Sakthi curd?");
+    expect(d.speak).not.toHaveBeenCalled(); // Live asks the question itself (prompt rule 1)
+    const m = { ...deps(), ctx: () => ({ mock: true, msSinceLiveAudio: Infinity, screenReaderMode: false }) };
+    createDispatcher(m as any)({ t: "confirm", id: "c2", kind: "order", prompt: "Order 30 litres Sakthi curd?" });
+    expect(m.speak).toHaveBeenCalledWith("Order 30 litres Sakthi curd?");
   });
   it("match/mismatch cues also fire matching haptics", () => {
     const d = deps(); const dispatch = createDispatcher(d as any);

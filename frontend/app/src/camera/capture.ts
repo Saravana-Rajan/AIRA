@@ -3,8 +3,9 @@
 // bump guard) reads frames through captureFrame / getVideo so only one stream exists.
 import type { ClientMsg, FramePurpose } from "@aira/contracts";
 import { app } from "../core/app";
-import { toGray, qualityHint } from "./quality";
+import { toGray, qualityHint, noteFrameQuality } from "./quality";
 import { overrideSource } from "./source";
+import { ensureBackCamera, type CameraFacing } from "./backCamera";
 
 export type FrameMsg = Extract<ClientMsg, { t: "frame" }>;
 export type CameraErrorCode = "permission" | "no_frame" | "no_canvas" | "too_large";
@@ -71,6 +72,12 @@ let starting: Promise<HTMLVideoElement> | null = null;
 let qualityListener: ((h: "dark" | "blurry") => void) | null = null;
 let qualityCounter = 0;
 let seq = 0;
+let facing: CameraFacing = "unknown";
+
+/** Which side the open camera faces. "user" means no back camera was found (callers may say so once). */
+export function cameraFacing(): CameraFacing {
+  return facing;
+}
 
 export function setQualityListener(fn: ((h: "dark" | "blurry") => void) | null): void {
   qualityListener = fn;
@@ -94,10 +101,15 @@ async function openCamera(): Promise<HTMLVideoElement> {
   let s: MediaStream;
   try {
     if (!navigator.mediaDevices?.getUserMedia) throw new Error("no getUserMedia");
-    s = await navigator.mediaDevices.getUserMedia({
-      video: { facingMode: { ideal: "environment" }, width: { ideal: 1280 }, height: { ideal: 720 } },
-      audio: false,
-    });
+    let storage: Storage | null = null;
+    try {
+      storage = globalThis.localStorage ?? null;
+    } catch {
+      storage = null;
+    }
+    const r = await ensureBackCamera(navigator.mediaDevices, storage);
+    s = r.stream;
+    facing = r.facing;
   } catch {
     throw new CameraError("permission");
   }
@@ -131,6 +143,7 @@ export function stopCamera(): void {
   stream?.getTracks().forEach((t) => t.stop());
   stream = null;
   video = null;
+  facing = "unknown";
   deps.source = null;
 }
 
@@ -151,6 +164,7 @@ export async function captureFrame(purpose: FramePurpose): Promise<FrameMsg> {
   if (qualityListener && ++qualityCounter % 3 === 0) {
     const img = ctx.getImageData(0, 0, w, h);
     const hint = qualityHint(toGray(img.data, w, h), w, h);
+    noteFrameQuality(hint);
     if (hint) qualityListener(hint);
   }
   let jpeg = await deps.encoder(canvas, JPEG_QUALITY);

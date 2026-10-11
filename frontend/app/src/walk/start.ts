@@ -8,6 +8,8 @@ import { getFrameSource } from "../camera/source";
 import type { BumpWarning } from "./bump";
 import { createDetector, type Detector } from "./detector";
 import { createBumpGuard, type BumpGuard } from "./guard";
+import { walkingMode } from "./mode";
+import { startMotionSensor, type MotionSensor } from "./motion";
 
 /** Detector input width; EfficientDet-Lite0 works at 320 px. */
 export const GRAB_W = 320;
@@ -36,23 +38,36 @@ export async function grabFrame(): Promise<{ frame: ImageBitmap; ts: number } | 
 
 export interface RunningBumpGuard extends BumpGuard {
   detector: Detector;
-  /** Stops the loop, the detector (worker) and the visibility listener. */
+  /** The accelerometer; `available: false` means approach-only warnings. */
+  motion: MotionSensor;
+  /** Stops the loop, the detector (worker), the motion sensor and the visibility listener. */
   dispose(): void;
 }
 
 export interface StartBumpGuardOptions {
   /** Tests / bench only. */
   detector?: Detector;
+  /** Tests / bench only: a fake accelerometer. */
+  motion?: MotionSensor;
   /** Told about each warning right after the vibration (e.g. the red "Stop!" chip). Errors here are ignored. */
   onWarn?: (w: BumpWarning) => void;
 }
 
-/** Starts the always-on bump guard. Pauses while the app is hidden. */
+/**
+ * Starts the always-on bump guard. Pauses while the app is hidden. Call it inside the Start tap: on iOS the
+ * motion permission prompt only shows from a user gesture (without it, size warnings stay off).
+ * The persisted walking-mode switch (walk/mode.ts) drives the guard; `setWalkingMode` on the result persists it.
+ */
 export async function startBumpGuard(opts: StartBumpGuardOptions = {}): Promise<RunningBumpGuard> {
+  // The permission request goes first, while the user gesture is still fresh.
+  const motionP = opts.motion ? Promise.resolve(opts.motion) : startMotionSensor();
   const detector = opts.detector ?? (await createDetector());
+  const motion = await motionP;
   const guard = createBumpGuard({
     grab: grabFrame,
     detector,
+    motion,
+    walkingMode: walkingMode.get(),
     vibrate: (p) => { try { navigator.vibrate?.(p); } catch { /* not supported */ } },
     earcon: () => app.earcon("warn"),
     speak: (s) => app.speak(s),
@@ -67,12 +82,22 @@ export async function startBumpGuard(opts: StartBumpGuardOptions = {}): Promise<
   });
   const onVisibility = () => (document.hidden ? guard.stop() : guard.start());
   document.addEventListener("visibilitychange", onVisibility);
+  const setMode = guard.setWalkingMode;   // the inner one: Object.assign below replaces it on `guard`
+  const offMode = walkingMode.subscribe(setMode);
   if (!document.hidden) guard.start();
   return Object.assign(guard, {
     detector,
+    motion,
+    /** Persists the switch (which also tells the guard through the subscription above). */
+    setWalkingMode(on: boolean) {
+      walkingMode.set(on);
+      setMode(on);
+    },
     dispose() {
       document.removeEventListener("visibilitychange", onVisibility);
+      offMode();
       guard.stop();
+      try { motion.stop(); } catch { /* already gone */ }
       detector.close();
     },
   });

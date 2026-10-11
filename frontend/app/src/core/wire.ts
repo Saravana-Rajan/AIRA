@@ -26,7 +26,17 @@ export const MIC_IDLE_MS = 30_000;
 /** The soft thinking sound repeats at this interval until AIRA answers. */
 export const THINKING_LOOP_MS = 1200;
 /** The same sentence handed to speak() twice within this window is announced or spoken once. */
-export const SPEAK_DEDUPE_MS = 3000;
+export const SPEAK_DEDUPE_MS = 10_000;
+/** A local line waits while AIRA's Live audio plays or is queued; one that waited this long is dropped. */
+export const SPEAK_STALE_MS = 8_000;
+/** Live audio that ended less than this long ago still counts as busy: the next chunk is usually in flight. */
+export const SPEAK_WAIT_GAP_MS = 400;
+const SPEAK_POLL_MS = 250;
+
+/** The identity of a spoken line: trimmed, lowercased, punctuation and symbols dropped, spaces collapsed. */
+export function normaliseSpeech(text: string): string {
+  return text.toLowerCase().replace(/[\p{P}\p{S}]+/gu, " ").replace(/\s+/g, " ").trim();
+}
 export const UID_KEY = "aira.uid";
 const DEFAULT_WS = "ws://localhost:8080/ws";
 
@@ -252,19 +262,50 @@ export function wireApp(opts: WireOpts): WiredApp {
   let mock = false;
 
   // ---- the app singleton ----
-  // No double speech: the confirm card, the AIRA caption and a notice can carry the same sentence within the
-  // same moment. The same text within SPEAK_DEDUPE_MS is announced (aria-live) or spoken (TTS) once; both
-  // stay visible on screen.
-  let lastSpoken: { text: string; at: number } | null = null;
+  // No double speech. Gemini Live is AIRA's voice; the phone's own speech only fills gaps:
+  // - a local line never talks over Live audio: while audio plays or is queued it waits, and only the newest
+  //   waiting line is spoken once the audio is idle (a line that waited SPEAK_STALE_MS is dropped);
+  // - the same sentence (ignoring case, punctuation and spacing) within SPEAK_DEDUPE_MS is spoken once;
+  // - screen-reader mode writes to the aria-live region only, never to speechSynthesis.
+  let lastSpoken: { key: string; at: number } | null = null;
+  let waiting: { text: string; at: number } | null = null;
+  let waitTimer: ReturnType<typeof setTimeout> | null = null;
+  const liveBusy = () => playback.msSinceAudio() < SPEAK_WAIT_GAP_MS;
+  const sayNow = (text: string) => {
+    const now = Date.now();
+    const key = normaliseSpeech(text);
+    if (!key) return;
+    if (lastSpoken && lastSpoken.key === key && now - lastSpoken.at < SPEAK_DEDUPE_MS) return;
+    lastSpoken = { key, at: now };
+    if (api.settings.screenReaderMode) env.announce(text);
+    else env.speech?.speak(text, uiLang, api.settings.speechRate);
+  };
+  const dropWaiting = () => {
+    waiting = null;
+    if (waitTimer) { clearTimeout(waitTimer); timers.delete(waitTimer); }
+    waitTimer = null;
+  };
+  const drainWaiting = () => {
+    waitTimer = null;
+    if (disposed || !waiting) return;
+    if (Date.now() - waiting.at > SPEAK_STALE_MS) { waiting = null; return; }
+    if (liveBusy()) {
+      const id = setTimeout(() => { timers.delete(id); drainWaiting(); }, SPEAK_POLL_MS);
+      timers.add(id);
+      waitTimer = id;
+      return;
+    }
+    const { text } = waiting;
+    waiting = null;
+    sayNow(text);
+  };
   const api = initApp({
     socket,
     settings,
-    speakImpl: (text, s) => {
-      const now = Date.now();
-      if (lastSpoken && lastSpoken.text === text && now - lastSpoken.at < SPEAK_DEDUPE_MS) return;
-      lastSpoken = { text, at: now };
-      if (s.screenReaderMode) env.announce(text);
-      else env.speech?.speak(text, uiLang, s.speechRate);
+    speakImpl: (text) => {
+      if (!liveBusy()) { sayNow(text); return; }
+      waiting = { text, at: Date.now() }; // the newest line replaces an older one: TTS would cancel it anyway
+      if (!waitTimer) drainWaiting();
     },
     earconImpl: (n) => { if (ctx) tryRun(() => env.playEarcon(ctx!, n)); },
     hapticImpl: (n) => tryRun(() => env.vibrate(n)),
@@ -329,7 +370,7 @@ export function wireApp(opts: WireOpts): WiredApp {
     earcon: (n) => api.earcon(n),
     haptic: (n) => api.haptic(n),
     speak: (t) => api.speak(t),
-    stopSpeech: () => env.speech?.cancel(),
+    stopSpeech: () => { dropWaiting(); env.speech?.cancel(); },
     ctx: () => ({ mock, msSinceLiveAudio: playback.msSinceAudio(), screenReaderMode: api.settings.screenReaderMode }),
     ui: (m) => setView(viewFor(m)),
   });
@@ -461,6 +502,7 @@ export function wireApp(opts: WireOpts): WiredApp {
     api.earcon("ack"); // < 150 ms acknowledgement, before anything async
     api.haptic("ack");
     playback.flush({ holdUntilResume: true }); // an explicit talk cuts AIRA off
+    dropWaiting();
     env.speech?.cancel();
     local("talk");
     thinking.arm();
@@ -470,6 +512,7 @@ export function wireApp(opts: WireOpts): WiredApp {
   const stop = () => {
     playback.flush({ holdUntilResume: true });
     thinking.disarm();
+    dropWaiting();
     env.speech?.cancel();
     stopMic();
     api.send({ t: "stop" });

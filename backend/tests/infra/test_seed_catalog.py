@@ -310,3 +310,17 @@ def test_main_fails_cleanly_without_a_project(monkeypatch, tmp_path, capsys):
     monkeypatch.setattr(seed_firestore, "make_client", lambda *a: pytest.fail("must not connect"))
     assert seed_firestore.main(["--env-file", str(tmp_path / "none.env")]) == 2
     assert "GCP_PROJECT" in capsys.readouterr().err
+
+
+# ---------- expected languages ----------
+def test_seed_shop_has_expected_languages():
+    assert CATALOG["shop"]["languages"] == ["ta", "en"]
+    docs = dict(seed_firestore.build_docs(CATALOG, {}))
+    assert docs[SHOP]["languages"] == ["ta", "en"]
+
+
+def test_schema_rejects_a_bad_language_code():
+    bad = copy.deepcopy(CATALOG)
+    bad["shop"]["languages"] = ["Tamil"]
+    with pytest.raises(jsonschema.ValidationError):
+        _validate(bad)

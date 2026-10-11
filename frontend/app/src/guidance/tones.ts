@@ -5,7 +5,8 @@ import { hintText } from "../i18n/camera";
 import { toneParams, vectorTo } from "./geometry";
 
 const BEEP_GAIN = 0.25;
-const SHOW_HAND_GAP_MS = 3000;
+/** "Show your hand" repeats at most once per 8 s while no fingertip is seen. */
+export const SHOW_HAND_GAP_MS = 8000;
 
 let ctx: AudioContext | null = null;
 let osc: OscillatorNode | null = null;
@@ -52,7 +53,7 @@ function setBeepRate(hz: number) {
   }, period);
 }
 
-/** Guide the hand to `target` ([y, x], 0–1000). A null tip ⇒ silence + "show your hand" (at most once per 3 s). */
+/** Guide the hand to `target` ([y, x], 0–1000). A null tip ⇒ silence + "show your hand" (at most once per 8 s). */
 export function guideTo(target: [number, number], tip: { x1000: number; y1000: number } | null): void {
   if (!tip) {
     stopTone();

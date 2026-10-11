@@ -63,14 +63,17 @@ describe("guideTo (Web Audio)", () => {
     expect(f.gain.gain.setValueAtTime).not.toHaveBeenCalled();
   });
 
-  it("no fingertip => silence and 'show your hand' at most once per 3 s", () => {
+  it("no fingertip => silence and 'show your hand' at most once per 8 s", () => {
     const f = fakeCtx();
     __setAudioContext(f.ctx as any);
     guideTo([500, 500], null);
     guideTo([500, 500], null);
     expect(app.speak).toHaveBeenCalledTimes(1);
     expect(app.speak).toHaveBeenCalledWith("Show your hand to the camera.");
-    vi.setSystemTime(103_001);
+    vi.setSystemTime(107_999);
+    guideTo([500, 500], null);
+    expect(app.speak).toHaveBeenCalledTimes(1);
+    vi.setSystemTime(108_001);
     guideTo([500, 500], null);
     expect(app.speak).toHaveBeenCalledTimes(2);
     expect(f.ctx.createOscillator).not.toHaveBeenCalled();

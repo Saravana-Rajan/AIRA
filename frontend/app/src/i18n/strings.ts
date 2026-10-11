@@ -76,11 +76,12 @@ export const LABELS: Record<
  * Onboarding screen (the one Start tap). There is no language picker: AIRA follows whoever speaks. The labels
  * here are written in the phone's language (only a hint for the first line), English for any other.
  */
-export const ONBOARDING: Record<"howTo" | "anyLanguage" | "talkback" | "talkbackHint" | "start" | "startHint", S> = {
+export const ONBOARDING: Record<"howTo" | "anyLanguage" | "talkback" | "talkbackHint" | "start" | "tapToStart" | "startHint", S> = {
   howTo:        { en: "Tap Start, then just talk.", ta: "தொடங்கு அழுத்தி, பேசுங்கள்.", hi: "शुरू करें दबाएँ, फिर बोलें।" },
   anyLanguage:  { en: "Speak any language. AIRA answers in yours.", ta: "எந்த மொழியிலும் பேசலாம். AIRA அதே மொழியில் பதில் சொல்லும்.", hi: "किसी भी भाषा में बोलें। AIRA उसी भाषा में जवाब देगा।" },
   talkback:     { en: "I use TalkBack", ta: "நான் TalkBack பயன்படுத்துகிறேன்", hi: "मैं TalkBack इस्तेमाल करता हूँ" },
   talkbackHint: { en: "AIRA's messages go to TalkBack.", ta: "AIRA செய்திகளை TalkBack படிக்கும்.", hi: "AIRA के संदेश TalkBack पढ़ेगा।" },
   start:        { en: "Start", ta: "தொடங்கு", hi: "शुरू करें" },
+  tapToStart:   { en: "Tap to start", ta: "தொடங்க தட்டவும்", hi: "शुरू करने के लिए टैप करें" },
   startHint:    { en: "Turns on the microphone and camera.", ta: "மைக், கேமரா இயக்கப்படும்.", hi: "माइक और कैमरा चालू होंगे।" },
 };

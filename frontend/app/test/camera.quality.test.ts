@@ -1,7 +1,7 @@
 // frontend/app/test/camera.quality.test.ts
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { toGray, meanLuma, laplacianVariance, qualityHint, DARK_LUMA, BLUR_VAR } from "../src/camera/quality";
-import { tiltHint, startTiltHints } from "../src/camera/tilt";
+import { toGray, meanLuma, laplacianVariance, qualityHint, noteFrameQuality, frameLooksGood, DARK_LUMA, BLUR_VAR, FRAME_GOOD_MS } from "../src/camera/quality";
+import { tiltHint, createTiltJudge, startTiltHints, TILT_HOLD_MS, TILT_HINT_GAP_MS } from "../src/camera/tilt";
 import { createHintSpeaker } from "../src/camera/hints";
 import { hintText, cueText, finalReadback, type HintKey, type CueWord } from "../src/i18n/camera";
 
@@ -48,38 +48,121 @@ describe("quality", () => {
 });
 
 describe("tilt", () => {
-  it("upright phone (beta≈90) must tilt down; pointing at floor must tilt up", () => {
-    expect(tiltHint(90)).toBe("tilt_down");
-    expect(tiltHint(70)).toBeNull();
-    expect(tiltHint(40)).toBe("tilt_up");
-    expect(tiltHint(null)).toBeNull();
-    expect(tiltHint(Number.NaN)).toBeNull();
+  // Chest mount, phone upright in portrait, back camera forward: beta ≈ 90, gamma ≈ 0.
+  it("upright chest mount (beta 90, roll 5) is fine; only clearly out-of-band readings get a direction", () => {
+    expect(tiltHint(90, 5)).toBeNull();
+    expect(tiltHint(70, 0)).toBeNull();
+    expect(tiltHint(110, -10)).toBeNull();
+    expect(tiltHint(60, 25)).toBeNull();
+    expect(tiltHint(120, -25)).toBeNull();
+    expect(tiltHint(10, 0)).toBe("tilt_up");     // lying flat, camera at the ceiling/floor
+    expect(tiltHint(140, 0)).toBe("tilt_down");  // leaning back over the shoulder
+  });
+  it("no sensor, no permission or a large roll means no tilt hint", () => {
+    expect(tiltHint(null, null)).toBeNull();
+    expect(tiltHint(Number.NaN, 0)).toBeNull();
+    expect(tiltHint(10, null)).toBe("tilt_up"); // gamma unknown is treated as small roll
+    expect(tiltHint(10, 40)).toBeNull();        // rolled sideways: reading unreliable, no key to say "straighten"
+  });
+
+  describe("createTiltJudge", () => {
+    it("upright chest pitch 90 / roll 5 never hints", () => {
+      let t = 0;
+      const j = createTiltJudge({ now: () => t });
+      const got: string[] = [];
+      for (; t <= 10_000; t += 100) { const h = j.sample(90, 5); if (h) got.push(h); }
+      expect(got).toEqual([]);
+    });
+    it("flat (pitch 10) for 2 s gives exactly one hint, repeated only after the gap", () => {
+      let t = 0;
+      const j = createTiltJudge({ now: () => t });
+      const got: Array<[number, string]> = [];
+      for (; t <= 2000; t += 100) { const h = j.sample(10, 0); if (h) got.push([t, h]); }
+      expect(got.length).toBe(1);
+      expect(got[0][1]).toBe("tilt_up");
+      expect(got[0][0]).toBeGreaterThanOrEqual(TILT_HOLD_MS);
+      for (; t <= TILT_HINT_GAP_MS - 1; t += 100) { expect(j.sample(10, 0)).toBeNull(); }
+      let again: string | null = null;
+      for (; t <= TILT_HINT_GAP_MS + TILT_HOLD_MS + 2000 && !again; t += 100) again = j.sample(10, 0);
+      expect(again).toBe("tilt_up");
+    });
+    it("a brief 0.5 s spike out of band gives no hint", () => {
+      let t = 0;
+      const j = createTiltJudge({ now: () => t });
+      const got: string[] = [];
+      for (; t < 3000; t += 100) { const h = j.sample(90, 0); if (h) got.push(h); }
+      for (; t < 3500; t += 100) { const h = j.sample(5, 0); if (h) got.push(h); }
+      for (; t < 8000; t += 100) { const h = j.sample(90, 0); if (h) got.push(h); }
+      expect(got).toEqual([]);
+    });
+    it("good frame quality suppresses a slight out-of-band tilt", () => {
+      let t = 0;
+      const j = createTiltJudge({ now: () => t, frameLooksGood: () => true });
+      const got: string[] = [];
+      for (; t <= 5000; t += 100) { const h = j.sample(50, 0); if (h) got.push(h); }
+      expect(got).toEqual([]);
+      // the same reading without frame evidence does hint
+      t = 0;
+      const k = createTiltJudge({ now: () => t, frameLooksGood: () => false });
+      const got2: string[] = [];
+      for (; t <= 5000; t += 100) { const h = k.sample(50, 0); if (h) got2.push(h); }
+      expect(got2).toEqual(["tilt_up"]);
+    });
+    it("no sensor reading gives no hint, however long", () => {
+      let t = 0;
+      const j = createTiltJudge({ now: () => t });
+      for (; t <= 5000; t += 100) expect(j.sample(null, null)).toBeNull();
+    });
   });
 
   describe("startTiltHints", () => {
     afterEach(() => { vi.useRealTimers(); });
-    const orient = (beta: number | null) => {
-      const e = new Event("deviceorientation") as Event & { beta: number | null };
+    const orient = (beta: number | null, gamma: number | null = 0) => {
+      const e = new Event("deviceorientation") as Event & { beta: number | null; gamma: number | null };
       Object.defineProperty(e, "beta", { value: beta });
+      Object.defineProperty(e, "gamma", { value: gamma });
       window.dispatchEvent(e);
     };
 
-    it("reports a bad tilt at most once per 3 s and stops after unsubscribe", () => {
+    it("hints only after a held bad tilt, at most once per gap, and stops after unsubscribe", () => {
       vi.useFakeTimers();
       vi.setSystemTime(0);
       const got: string[] = [];
       const stop = startTiltHints((h) => got.push(h));
-      orient(90);                      // first hint fires even at clock 0
-      orient(40);                      // throttled
-      orient(70);                      // fine, nothing to say
-      vi.setSystemTime(3001);
-      orient(40);
-      expect(got).toEqual(["tilt_down", "tilt_up"]);
-      stop();
-      vi.setSystemTime(10_000);
       orient(90);
-      expect(got).toEqual(["tilt_down", "tilt_up"]);
+      orient(10);                                   // a single flat sample is not enough
+      expect(got).toEqual([]);
+      for (let t = 100; t <= 2000; t += 100) { vi.setSystemTime(t); orient(10); }
+      expect(got).toEqual(["tilt_up"]);
+      for (let t = 2100; t <= 4000; t += 100) { vi.setSystemTime(t); orient(10); }
+      expect(got).toEqual(["tilt_up"]);             // still inside the gap
+      stop();
+      for (let t = 20_000; t <= 30_000; t += 100) { vi.setSystemTime(t); orient(10); }
+      expect(got).toEqual(["tilt_up"]);
     });
+    it("never hints without a sensor (no events) or with null readings", () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(0);
+      const got: string[] = [];
+      const stop = startTiltHints((h) => got.push(h));
+      for (let t = 0; t <= 5000; t += 100) { vi.setSystemTime(t); orient(null, null); }
+      expect(got).toEqual([]);
+      stop();
+    });
+  });
+});
+
+describe("frame evidence", () => {
+  it("a recent sharp, bright frame counts as good; dark or blurry does not; evidence expires", () => {
+    noteFrameQuality(null, 1000);
+    expect(frameLooksGood(1000)).toBe(true);
+    expect(frameLooksGood(1000 + FRAME_GOOD_MS)).toBe(true);
+    expect(frameLooksGood(1001 + FRAME_GOOD_MS)).toBe(false);
+    noteFrameQuality("dark", 5000);
+    expect(frameLooksGood(5000)).toBe(false);
+    noteFrameQuality(null, 6000);
+    noteFrameQuality("blurry", 6500);
+    expect(frameLooksGood(6500)).toBe(false);
   });
 });
 

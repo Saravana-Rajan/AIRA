@@ -12,3 +12,12 @@ export function bumpText(phrase: BumpPhrase, side: Side, lang: Lang): string {
   const table = phrase === "bump.stop" || side === "centre" ? STOP : side === "left" ? LEFT : RIGHT;
   return table[lang] ?? table.en;
 }
+
+const MODE_ON: Record<Lang, string> = { en: "Walking mode on.", ta: "நடை முறை ஆன்.", hi: "वॉकिंग मोड चालू।" };
+const MODE_OFF: Record<Lang, string> = { en: "Walking mode off.", ta: "நடை முறை ஆஃப்.", hi: "वॉकिंग मोड बंद।" };
+
+/** Spoken confirmation when walking mode is switched on / off. */
+export function walkingModeText(on: boolean, lang: Lang): string {
+  const table = on ? MODE_ON : MODE_OFF;
+  return table[lang] ?? table.en;
+}

@@ -11,6 +11,8 @@ Sinhala, Thai, Lao, Myanmar, Khmer, Hangul, Hiragana/Katakana, Han, Arabic, Cyri
 """
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 # (first code point, last code point, language code). Order matters only for ties, which the first entry wins.
 _SCRIPTS: tuple[tuple[int, int, str], ...] = (
     (0x0B80, 0x0BFF, "ta"),   # Tamil
@@ -143,13 +145,16 @@ def _new_language_weight(text: str, previous: str, candidate: str) -> int:
     """How strongly ``text`` speaks ``candidate`` rather than ``previous``: the letter-words (characters, for an
     unspaced script) that belong to ``candidate`` and are neither neutral nor a romanised Indic word."""
     weight = 0
+    latin = candidate == "en" or candidate in LATIN_LANGS
     for word, code in _letter_words(text):
         if code == "zh" and candidate == "ja":
             code = "ja"  # kanji inside a Japanese sentence
+        if code == "en" and latin:
+            code = candidate  # Latin letters: Spanish, Vietnamese, ... (latin_lang) or English
         if code != candidate:
             continue
         low = word.lower()
-        if candidate == "en" and (low in _NEUTRAL or (previous != "en" and low in ROMANISED_INDIC)):
+        if latin and (low in _NEUTRAL or (previous != "en" and low in ROMANISED_INDIC)):
             continue
         weight += len(word) if candidate in _UNSPACED else 1
     return weight
@@ -164,15 +169,154 @@ def follow_lang(text: str, previous: str, pending: str | None = None) -> tuple[s
       language from the previous utterance, or ``None``).
     Short replies (one or two words, confirmations, numbers) never change the language, and romanised Tamil
     or Hindi words ("amo", "paal", "haan") count as the current Indic language, never as English.
+    Without an expected-language list every language is allowed (``judge_lang`` adds the list). Never raises.
+    """
+    step = judge_lang(text, previous, pending)
+    return step.lang, step.pending
+
+
+# ---------- Latin-script languages ----------
+# Gemini's auto language detection sometimes hears short or accented English as Spanish or Portuguese and
+# transcribes a sentence the owner never said ("¿Eh? ¿Cuántos años tienes?"). A light guess tells those
+# transcripts apart from English so the session can treat them as "unclear" instead of switching.
+# Stop words are chosen to be rare in English and in romanised Tamil/Hindi; shared Romance words ("la", "de",
+# "que") count for every language that uses them, so the diacritics and punctuation decide the ties.
+LATIN_STOP_WORDS: dict[str, frozenset[str]] = {
+    "es": frozenset({
+        "el", "la", "los", "las", "de", "del", "que", "es", "un", "una", "por", "para", "con", "como", "pero",
+        "muy", "tiene", "tienes", "hay", "quiero", "quiere", "dónde", "donde", "qué", "cuánto", "cuántos",
+        "cuánta", "cuántas", "años", "hola", "gracias", "usted", "esta", "este", "esto", "eso", "aquí", "también",
+        "bien", "buenos", "buenas", "días", "señor", "señora", "leche", "litros", "cuesta", "dos", "tres", "sí",
+        "y", "eh",
+    }),
+    "pt": frozenset({
+        "o", "os", "a", "as", "da", "das", "do", "dos", "de", "que", "é", "um", "uma", "por", "para", "com",
+        "como", "mas", "muito", "tem", "você", "não", "está", "quanto", "quantos", "obrigado", "obrigada",
+        "olá", "onde", "aqui", "também", "bem", "bom", "dia", "leite", "hoje", "litros", "dois", "três", "e",
+    }),
+    "fr": frozenset({
+        "le", "la", "les", "des", "du", "de", "que", "est", "un", "une", "pour", "avec", "comme", "mais", "très",
+        "avez", "vous", "nous", "je", "suis", "combien", "où", "bonjour", "merci", "oui", "c'est", "pas", "lait",
+        "litres", "deux", "trois", "et", "aujourd'hui",
+    }),
+    "it": frozenset({
+        "il", "lo", "la", "gli", "le", "del", "della", "che", "è", "un", "una", "per", "con", "come", "ma",
+        "molto", "hai", "quanto", "quanti", "costa", "anni", "ciao", "grazie", "dove", "sono", "questo", "questa",
+        "latte", "litri", "due", "tre", "e", "oggi",
+    }),
+    "de": frozenset({
+        "der", "die", "das", "den", "dem", "des", "und", "ist", "ein", "eine", "nicht", "ich", "sie", "wir", "wie",
+        "viel", "wieviel", "wo", "danke", "hallo", "bitte", "milch", "ja", "nein", "haben", "liter", "zwei",
+        "drei", "heute",
+    }),
+    "id": frozenset({  # Indonesian and Malay
+        "saya", "mau", "ingin", "dua", "tiga", "berapa", "susu", "yang", "dan", "ini", "itu", "tidak", "ada",
+        "terima", "kasih", "apa", "di", "ke", "dari", "untuk", "hari", "harga", "liter", "nak", "awak",
+    }),
+    "vi": frozenset({
+        "tôi", "muốn", "hai", "ba", "của", "và", "không", "có", "bao", "nhiêu", "sữa", "cho", "xin", "chào",
+        "cảm", "ơn", "hộp", "chua", "này", "lít", "hôm", "nay",
+    }),
+    "fil": frozenset({
+        "ako", "ikaw", "ang", "ng", "mga", "po", "ba", "hindi", "oo", "gatas", "magkano", "salamat", "kumusta",
+        "ito", "iyan", "sa", "ay", "dalawa", "tatlo", "litro", "ngayon",
+    }),
+}
+# Letters and marks that point strongly (2) or weakly (1) at one language.
+_STRONG_MARKS: dict[str, str] = {"es": "ñ¿¡", "pt": "ãõ", "fr": "œ", "de": "ß", "vi": "ơưđăạảấầẩẫậắằẳẵặẹẻẽếềểễệỉịọỏốồổỗộớờởỡợụủứừửữựỳỵỷỹ"}
+_WEAK_MARKS: dict[str, str] = {"es": "áéíóú", "pt": "çáéíóúê", "fr": "çàèùâêîôûëé", "it": "àèìòù", "de": "äöü"}
+# Plain English stop words: when they outnumber the guess, the sentence is English with a stray accent.
+_ENGLISH: frozenset[str] = frozenset({
+    "the", "is", "are", "was", "how", "much", "many", "what", "where", "when", "which", "who", "do", "does", "you",
+    "i", "my", "we", "it", "this", "that", "these", "and", "for", "of", "to", "in", "on", "with", "have", "has",
+    "want", "need", "give", "me", "please", "today", "now", "one", "two", "three", "there", "here", "can",
+    "could", "will", "would", "not", "all", "any", "some", "get", "take", "put", "from", "at", "by",
+})
+LATIN_LANGS: frozenset[str] = frozenset(LATIN_STOP_WORDS)
+_LATIN_MIN_SCORE = 2
+
+
+def latin_lang(text: str) -> str | None:
+    """A guess at which non-English Latin-script language ``text`` is in, or ``None`` for English/unsure.
+
+    Evidence: inverted punctuation and language-specific letters (strong), accented letters (weak) and small
+    stop-word lists. A guess needs at least two points and more than the English stop words in the sentence.
     Never raises.
+    """
+    if not isinstance(text, str) or not text:
+        return None
+    low = text.lower()
+    # Whole tokens keep "c'est" and "avez-vous" together; letter runs split them for the plain stop words.
+    tokens = [w.strip(".,;:!?\"()¿¡") for w in low.split()]
+    tokens += [w for w, code in _letter_words(low) if code == "en"]
+    scores: dict[str, int] = {}
+    for lang, stop in LATIN_STOP_WORDS.items():
+        hits = sum(1 for w in set(tokens) if w in stop)
+        strong = 2 if any(ch in low for ch in _STRONG_MARKS.get(lang, "")) else 0
+        weak = 1 if any(ch in low for ch in _WEAK_MARKS.get(lang, "")) else 0
+        score = hits + strong + weak
+        if score:
+            scores[lang] = score
+    if not scores:
+        return None
+    best = max(scores, key=lambda k: (scores[k], -list(LATIN_STOP_WORDS).index(k)))
+    english = sum(1 for w in set(tokens) if w in _ENGLISH)
+    if scores[best] < _LATIN_MIN_SCORE or scores[best] <= english:
+        return None
+    return best
+
+
+# ---------- expected languages ----------
+UNEXPECTED_SENTENCES = 3  # consecutive full sentences in a language the shop does not usually speak: switch
+
+
+@dataclass(frozen=True)
+class LangStep:
+    """The outcome of one utterance: the session language, the streak carried to the next utterance, and
+    whether the transcript looked like a language the shop does not usually speak (``unclear``, ``heard``)."""
+
+    lang: str
+    pending: str | None = None
+    unclear: bool = False
+    heard: str | None = None
+    streak: int = 0
+
+
+def _normalise(codes) -> list[str]:
+    out: list[str] = []
+    for c in codes or ():
+        if isinstance(c, str):
+            base = c.strip().lower().split("-")[0]
+            if base and base not in out:
+                out.append(base)
+    return out
+
+
+def judge_lang(text: str, previous: str, pending: str | None = None, expected=None, streak: int = 0) -> LangStep:
+    """``follow_lang`` guided by the shop's expected languages.
+
+    ``expected`` (BCP-47 codes, or ``None`` for "any language") lists what the shop usually speaks. A full
+    sentence in another language is flagged ``unclear`` and never switches the session, unless
+    ``UNEXPECTED_SENTENCES`` consecutive full sentences come in it (``streak`` carries the count). Latin-script
+    transcripts are told apart with ``latin_lang`` so a misheard "¿Cuántos años tienes?" reads as Spanish,
+    not English. Never raises.
     """
     previous = previous or FALLBACK
     if not isinstance(text, str):
-        return previous, None
+        return LangStep(previous)
     candidate = detect_lang(text, previous)
+    if candidate == "en":
+        candidate = latin_lang(text) or "en"
     if candidate == previous:
-        return previous, None
+        return LangStep(previous)
     weight = _new_language_weight(text, previous, candidate)
+    allowed = _normalise(expected)
+    if allowed and candidate not in allowed:
+        streak = streak + 1 if weight >= SENTENCE_WORDS else 0
+        if streak >= UNEXPECTED_SENTENCES:
+            return LangStep(candidate)
+        return LangStep(previous, None, unclear=weight > 0, heard=candidate if weight > 0 else None,
+                        streak=streak)
     if weight >= SENTENCE_WORDS or (weight >= STREAK_WORDS and pending == candidate):
-        return candidate, None
-    return previous, candidate if weight >= STREAK_WORDS else None
+        return LangStep(candidate)
+    return LangStep(previous, candidate if weight >= STREAK_WORDS else None)

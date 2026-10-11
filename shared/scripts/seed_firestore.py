@@ -44,6 +44,7 @@ def build_docs(catalog: dict, env: Mapping[str, str]) -> list[tuple[str, dict]]:
         "city": shop["city"],
         "currency": shop.get("currency", "INR"),
         "timezone": shop.get("timezone", "Asia/Kolkata"),
+        "languages": list(shop.get("languages", ["ta", "en"])),
     })]
     for p in catalog["products"]:
         sku = p["sku"]

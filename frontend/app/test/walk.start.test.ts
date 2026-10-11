@@ -8,6 +8,10 @@ vi.mock("../src/core/app", () => ({ app: { earcon: vi.fn(), speak: vi.fn(), sett
 import { grabFrame, startBumpGuard } from "../src/walk/start";
 import { startCamera } from "../src/camera/capture";
 import { setFrameSource } from "../src/camera/source";
+import { walkingMode } from "../src/walk/mode";
+
+/** Fake motion sensor: the owner is walking. */
+const walkingSensor = { available: true, isWalking: () => true, stop: vi.fn() };
 
 const bitmap = { width: 320, height: 180, close: vi.fn() };
 
@@ -75,11 +79,13 @@ describe("startBumpGuard", () => {
       seen.push(`warn:${w.phrase}:vibrated=${vibrate.mock.calls.length}`);
       throw new Error("ui broke");
     });
-    const g = await startBumpGuard({ detector, onWarn });
+    const g = await startBumpGuard({ detector, onWarn, motion: walkingSensor });
     g.stop();
     const { app } = await import("../src/core/app");
     vi.mocked(app.speak).mockClear();
     g.process({ ts: 0, floor: null, dets: [{ label: "crate", score: 0.9, box: [300, 200, 800, 420] }] });
+    expect(seen).toEqual([]);                       // one frame is not enough
+    g.process({ ts: 125, floor: null, dets: [{ label: "crate", score: 0.9, box: [300, 200, 800, 420] }] });
     expect(seen).toEqual(["warn:bump.left_right:vibrated=1"]);
     expect(app.earcon).toHaveBeenCalledWith("warn");
     expect(app.speak).toHaveBeenCalledWith("Obstacle left");
@@ -87,5 +93,37 @@ describe("startBumpGuard", () => {
     g.dispose();
     err.mockRestore();
     vi.unstubAllGlobals();
+  });
+
+  it("without a motion sensor (jsdom) the guard runs approach-only and still starts", async () => {
+    const detector = { kind: "main" as const, detect: vi.fn(async (_f: unknown, ts: number) => ({ ts, dets: [], floor: null })), close: vi.fn() };
+    const { app } = await import("../src/core/app");
+    vi.mocked(app.earcon).mockClear();
+    const g = await startBumpGuard({ detector });
+    g.stop();
+    expect(g.motion.available).toBe(false);
+    const big = { label: "crate", score: 0.9, box: [300, 450, 800, 550] as [number, number, number, number] };
+    for (let i = 0; i < 6; i++) g.process({ ts: i * 125, floor: null, dets: [big] });
+    expect(app.earcon).not.toHaveBeenCalledWith("warn");
+    g.dispose();
+  });
+
+  it("walking mode: the persisted switch drives the guard, and setWalkingMode on the guard persists it", async () => {
+    const store = new Map<string, string>();
+    walkingMode.reset({ getItem: (k: string) => store.get(k) ?? null, setItem: (k: string, v: string) => { store.set(k, v); } } as unknown as Storage);
+    const detector = { kind: "main" as const, detect: vi.fn(async (_f: unknown, ts: number) => ({ ts, dets: [], floor: null })), close: vi.fn() };
+    const g = await startBumpGuard({ detector, motion: walkingSensor });
+    g.stop();
+    expect(g.isWalkingMode()).toBe(true);
+    walkingMode.set(false);
+    expect(g.isWalkingMode()).toBe(false);
+    g.setWalkingMode(true);
+    expect(walkingMode.get()).toBe(true);
+    expect(store.get("aira.walkingMode")).toBe("on");
+    g.dispose();
+    expect(walkingSensor.stop).toHaveBeenCalled();
+    walkingMode.set(false);
+    expect(g.isWalkingMode()).toBe(true);           // unsubscribed on dispose
+    walkingMode.reset(null);
   });
 });

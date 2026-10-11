@@ -12,6 +12,7 @@ import asyncio
 import base64
 import binascii
 import logging
+import time
 from collections import deque
 from contextlib import suppress
 from dataclasses import dataclass
@@ -20,7 +21,8 @@ from typing import TYPE_CHECKING, AsyncIterator, Awaitable, Callable, Literal, P
 from aira_live import safety
 from aira_live.contracts import AudioOutMsg, CueMsg, ErrorMsg, TranscriptMsg
 from aira_live.i18n import t
-from aira_live.prompt import last_catalog_facts
+from aira_live.prompt import last_catalog_facts, unclear_note
+from aira_live.session import NOTICE_DEDUPE_S, notice_key
 
 if TYPE_CHECKING:
     from aira_live.session import Session
@@ -28,6 +30,7 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 
 NOTICE_PREFIX = "[NOTICE FOR THE SHOPKEEPER]"
+_monotonic = time.monotonic  # tests swap in a clock
 
 EventKind = Literal["audio", "input_transcript", "output_transcript", "interrupted", "turn_complete",
                     "resumption_handle", "go_away"]
@@ -111,7 +114,8 @@ class LiveBridge:
         self._muted = False
         self._answering = False  # Live is speaking an answer that has not ended (turn_complete / interrupted)
         self._task: asyncio.Task | None = None
-        self._pending_text: list[str] = []
+        self._pending_text: list[tuple[str, float, bool]] = []  # (text, queued at, is a notice)
+        self._notices: dict[str, float] = {}  # notice key -> when AIRA was last told to say it
         self._in_partial = ""
         self._out_final: list[str] = []
         self._out_partial = ""
@@ -145,8 +149,11 @@ class LiveBridge:
         await backend.start(self.system_prompt, self.tools, self._handle)
         self._connected = True
         pending, self._pending_text = self._pending_text, []
-        for text in pending:
-            await self.send_text(text)
+        now = _monotonic()
+        for text, at, notice in pending:
+            if notice and now - at > NOTICE_DEDUPE_S:
+                continue  # a stale notice is not worth repeating after the reconnect
+            await self.send_text(text, _notice=notice)
 
     # ---------- phone -> Live ----------
     async def send_audio(self, pcm16_b64: str) -> None:
@@ -163,7 +170,7 @@ class LiveBridge:
         except Exception as exc:  # the pump notices a dead connection and reconnects
             log.debug("audio send failed: %s", exc)
 
-    async def send_text(self, text: str) -> None:
+    async def send_text(self, text: str, _notice: bool = False) -> None:
         """Typed text, notices and corrections. Queued while reconnecting and sent once Live is back."""
         if self._closed:
             return
@@ -172,21 +179,33 @@ class LiveBridge:
             # prompt. If the stopped answer is still streaming, the mute lifts when Live cuts or ends it.
             self._muted = False
         if not self._connected:
-            self._queue_text(text)
+            self._queue_text(text, _notice)
             return
         try:
             await self._backend.send_text(text)
         except Exception as exc:
             log.warning("text send failed, retrying after reconnect: %s", exc)
-            self._queue_text(text)
+            self._queue_text(text, _notice)
 
     async def speak_notice(self, text: str) -> None:
         """Have AIRA speak a vendor reply or an alert in the live audio (used by ``sessions.notify``).
 
         The text is a fixed line (English for a language without a catalog): Live says it in the language the
-        shopkeeper last spoke, so a notice is never dropped for want of a translation.
+        shopkeeper last spoke, so a notice is never dropped for want of a translation. The same notice within
+        ``NOTICE_DEDUPE_S`` seconds is told once: AIRA never says one line twice because a loop raised it twice.
         """
-        await self.send_text(f"{NOTICE_PREFIX} Tell the shopkeeper briefly, in the language he last spoke: {text}")
+        key = notice_key(text)
+        if not key:
+            return
+        now = _monotonic()
+        for stale in [k for k, at in self._notices.items() if now - at > NOTICE_DEDUPE_S]:
+            del self._notices[stale]
+        last = self._notices.get(key)
+        if last is not None and now - last <= NOTICE_DEDUPE_S:
+            return
+        self._notices[key] = now
+        await self.send_text(f"{NOTICE_PREFIX} Tell the shopkeeper briefly, in the language he last spoke: {text}",
+                             _notice=True)
 
     def hard_stop(self) -> None:
         """Long-press: drop the rest of the current answer (audio + captions).
@@ -196,8 +215,8 @@ class LiveBridge:
         """
         self._muted = True
 
-    def _queue_text(self, text: str) -> None:
-        self._pending_text.append(text)
+    def _queue_text(self, text: str, notice: bool = False) -> None:
+        self._pending_text.append((text, _monotonic(), notice))
         del self._pending_text[:-self.MAX_PENDING_TEXT]
 
     # ---------- Live -> phone ----------
@@ -276,17 +295,17 @@ class LiveBridge:
                 await s.send(TranscriptMsg(role="aira", text=ev.text, final=ev.final))
         elif ev.kind == "input_transcript":
             self._muted = False  # a new question has started
-            lang = None
+            lang = unclear = None
             if ev.final:
                 utterance, self._in_partial = ev.text or self._in_partial, ""
                 # AIRA follows the speaker: the catalog and the phone's labels switch with him, but only when he
                 # clearly speaks another language (sticky: "Amo" in Latin letters is still Tamil).
-                lang = s.follow_lang(utterance)
+                lang, unclear = await self._judge(utterance)
                 self._notify_listeners(utterance)
             else:
                 self._in_partial += ev.text
             if ev.text:
-                await s.send(TranscriptMsg(role="user", text=ev.text, final=ev.final, lang=lang))
+                await s.send(TranscriptMsg(role="user", text=ev.text, final=ev.final, lang=lang, unclear=unclear))
         elif ev.kind == "interrupted":
             # Live cut the answer (barge-in or a new prompt): the stopped answer is over, the next one is new.
             self._muted = self._answering = False
@@ -294,7 +313,7 @@ class LiveBridge:
         elif ev.kind == "turn_complete":
             if self._in_partial:  # the backend never marked the utterance final
                 utterance, self._in_partial = self._in_partial, ""
-                s.follow_lang(utterance)
+                await self._judge(utterance)
                 self._notify_listeners(utterance)
             if ev.more:  # the same answer goes on in another model turn
                 return
@@ -304,6 +323,17 @@ class LiveBridge:
             if ev.handle:
                 self._handle = ev.handle
         # "go_away" is handled by _pump (reconnect with the last handle).
+
+    async def _judge(self, utterance: str) -> tuple[str, bool | None]:
+        """Follow the speaker's language. A transcript in a language the shop does not usually speak (shop doc
+        ``languages``) is probably misheard: the session language stays, the model gets a note telling it to
+        ask for a repeat instead of answering, and the transcript is flagged ``unclear`` for the caption."""
+        step = self.session.judge(utterance)
+        if not step.unclear:
+            return step.lang, None
+        log.info("transcript looks like %s, outside the shop's languages; asking to repeat", step.heard)
+        await self.send_text(unclear_note(step.heard or "", step.lang))
+        return step.lang, True
 
     def _notify_listeners(self, text: str) -> None:
         text = text.strip()

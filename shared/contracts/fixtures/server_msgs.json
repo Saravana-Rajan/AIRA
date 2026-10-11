@@ -5,6 +5,7 @@
   {"t":"transcript","role":"user","text":"order 30 litres","final":false},
   {"t":"transcript","role":"user","text":"ரெண்டு தயிர் கொடுங்க","final":true,"lang":"ta"},
   {"t":"transcript","role":"user","text":"ヨーグルトを二つください","final":true,"lang":"ja"},
+  {"t":"transcript","role":"user","text":"¿Cuántos años tienes?","final":true,"lang":"en","unclear":true},
   {"t":"request_frame","purpose":"count","continuous":true},
   {"t":"request_frame","purpose":"invoice","burst":{"count":2,"intervalMs":400}},
   {"t":"request_frame","purpose":"guide","stop":true},

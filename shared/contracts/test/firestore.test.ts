@@ -79,6 +79,7 @@ const audit = {
 
 const shop = {
   name: "Sunrise Dairy", ownerUid: "u1", city: "Madurai", currency: "INR", timezone: "Asia/Kolkata",
+  languages: ["ta", "en"],
 } satisfies Shop;
 
 const memory = { id: "m1", type: "location", text: "curd is in fridge 2", at: ts } satisfies MemoryEvent;
@@ -92,7 +93,7 @@ const event = {
 } satisfies ShopEvent;
 
 const runtime = {
-  pointing_model: "gemini-robotics-er-2-preview", whatsapp_enabled: false,
+  pointing_model: "gemini-robotics-er-2-preview", whatsapp_enabled: false, languages: ["ta", "en"],
 } satisfies RuntimeConfig;
 
 describe("fsTimeToDate", () => {

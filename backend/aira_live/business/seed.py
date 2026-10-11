@@ -45,6 +45,7 @@ def _docs(catalog: dict, env: Mapping[str, str]) -> list[tuple[str, dict]]:
         "city": shop["city"],
         "currency": shop.get("currency", "INR"),
         "timezone": shop.get("timezone", "Asia/Kolkata"),
+        "languages": list(shop.get("languages", ["ta", "en"])),  # mirrors shared/scripts/seed_firestore.py
     })]
     for p in catalog["products"]:
         docs.append((paths.product(shop_id, p["sku"]), copy.deepcopy(p)))

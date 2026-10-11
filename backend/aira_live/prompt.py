@@ -6,6 +6,7 @@ switches when he switches; the hello language only picks the words of the very f
 from __future__ import annotations
 
 from aira_live.db import db
+from aira_live.i18n.expected import expected_languages
 
 # Names for the first-line hint (hello.lang, usually the phone's locale). Anything else reads as English.
 LANG_NAME = {
@@ -13,11 +14,47 @@ LANG_NAME = {
     "bn": "Bengali", "gu": "Gujarati", "pa": "Punjabi", "or": "Odia", "mr": "Marathi", "si": "Sinhala",
     "ja": "Japanese", "ko": "Korean", "zh": "Chinese", "th": "Thai", "vi": "Vietnamese", "id": "Indonesian",
     "ms": "Malay", "fil": "Filipino", "tl": "Filipino", "my": "Burmese", "km": "Khmer", "lo": "Lao",
+    "es": "Spanish", "pt": "Portuguese", "fr": "French", "it": "Italian", "de": "German", "ar": "Arabic",
+    "ru": "Russian", "el": "Greek", "he": "Hebrew",
 }
 
 
-def language_rule(lang: str) -> str:
-    """The one language rule: follow the speaker. ``lang`` is only the hint for the first line."""
+def lang_names(codes) -> str:
+    """"Tamil and English" / "Tamil, Hindi and English" for a list of codes (unknown codes read as English)."""
+    names: list[str] = []
+    for c in codes or ():
+        n = LANG_NAME.get(str(c).lower().split("-")[0], "English")
+        if n not in names:
+            names.append(n)
+    if not names:
+        return ""
+    return names[0] if len(names) == 1 else f"{', '.join(names[:-1])} and {names[-1]}"
+
+
+def expected_rule(languages) -> str:
+    """The shop's expected languages, named explicitly, and what to do with a transcript outside them."""
+    names = lang_names(languages)
+    if not names:
+        return ""
+    return (
+        f"This shop usually speaks {names}. Expect those. If a transcript seems to be another language, it is "
+        "probably misheard: ask to repeat in the current language. Switch to a new language only when the "
+        "speaker clearly keeps speaking it."
+    )
+
+
+def unclear_note(heard: str, current: str) -> str:
+    """The system note sent to Live when the last transcript looked like a language the shop does not speak."""
+    return (
+        f"[SYSTEM NOTE] The last transcript looks like {LANG_NAME.get(heard, heard)}, which this shop does not "
+        f"usually speak; it is probably misheard. Ask the owner to repeat in {LANG_NAME.get(current, 'English')}; "
+        "do not answer it."
+    )
+
+
+def language_rule(lang: str, languages=None) -> str:
+    """The one language rule: follow the speaker. ``lang`` is only the hint for the first line; ``languages``
+    (the shop's expected languages, ``i18n.expected``) names what to expect and how to treat the rest."""
     name = LANG_NAME.get(lang, "English")
     mix = f"{name}-English" if name != "English" else "Tamil-English"
     # Gemini's transcript sometimes writes an Indian-language word in Latin letters ("Amo" for ஆமா).
@@ -33,6 +70,7 @@ def language_rule(lang: str) -> str:
         f"English. Never ask which language. Until the speaker has spoken, use {name}. "
         "When a tool's 'say' text, a notice or a correction is written in another language, say it in the "
         "speaker's language."
+        + (f" {expected_rule(languages)}" if languages else "")
     )
 
 
@@ -101,7 +139,8 @@ RULES = (
     (
         "6. Messages starting with [NOTICE FOR THE SHOPKEEPER] or [CONFIRMATION] come from the system: relay or "
         "acknowledge them briefly. A message starting with \"Correction needed:\" comes from the safety checker: "
-        "correct yourself in one short sentence."
+        "correct yourself in one short sentence. A message starting with [SYSTEM NOTE] is an instruction from "
+        "the system: follow it and never read it out."
     ),
     (
         "7. For a customer sale, first call product_find with count_needed set to how many packs to pick, then "
@@ -139,7 +178,7 @@ def render_prompt(shop: dict, products: list[dict], suppliers: list[dict], lang:
     )
     lines = [
         intro,
-        f"{language_rule(lang)} {length}",
+        f"{language_rule(lang, expected_languages(shop))} {length}",
         "RULES:",
         *RULES,
         "PRODUCTS (sku: name, pack, price):",

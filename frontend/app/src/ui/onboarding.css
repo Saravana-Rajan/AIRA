@@ -1,17 +1,21 @@
 /* Onboarding: the one Start tap. LIGHT THEME ONLY; every colour comes from tokens.css.
-   Layout: ONE phone-width column (tokens.css --phone-width, 480 px) centred on the page. On a phone it
+   Layout: ONE phone-width column (tokens.css --phone-width, 480 px) centred on a white page. On a phone it
    is full width with the 16 px gutter; on anything wider it sits in the middle with a faint surface
-   frame, so a laptop sees a phone, not a page stretched edge to edge. Everything above Start is compact
-   (48 px logo, one-line intro, one TalkBack row). Start is the one bold thing: a navy card with the
-   brand gradient glowing through it, its badge / word / hint centred. On a phone it takes all the
-   remaining height (never under 220 px) so a blind owner finds it by touching the lower part of the
-   screen; on a laptop it is 240–280 px, so the frame never shows an empty slab. */
+   frame, so a laptop sees a phone, not a page stretched edge to edge.
+   Top to bottom: a compact header (40 px logo, AIRA, shop), the Start button and the TalkBack row.
+   Start is the whole middle of the screen and it is transparent: no card, no slab. It holds the same
+   glowing orb as the voice screen (app.css .orb, sized here by --orb-size and given its colour by
+   --state), "Tap to start" and one muted line. It takes every free pixel (flex 1), so a blind owner can
+   tap anywhere between the header and the TalkBack row. Pressing shrinks the orb a touch; the keyboard
+   focus ring is drawn just inside the column. The orb breathes slowly while idle (off under reduced
+   motion). The TalkBack switch is one row at the bottom, over the safe-area inset. */
 @import "./tokens.css";
 
 .onboard {
-  --onboard-title: clamp(26px, 7vw, 28px);
-  --onboard-start: clamp(30px, 8vw, 32px);
-  --onboard-shop: 16px;
+  --state: var(--brand-blue);
+  --onboard-title: 24px;
+  --onboard-shop: 15px;
+  --onboard-start: clamp(24px, 7vw, 26px);
   --onboard-hint: 15px;
   --onboard-radius: 24px;
   box-sizing: border-box;
@@ -52,9 +56,9 @@
   gap: 12px;
 }
 .onboard__logo {
-  width: 48px;
-  height: 48px;
-  border-radius: 14px;
+  width: 40px;
+  height: 40px;
+  border-radius: 12px;
 }
 .onboard__titles {
   display: flex;
@@ -63,7 +67,7 @@
 .onboard__title {
   margin: 0;
   font-size: var(--onboard-title);
-  font-weight: 800;
+  font-weight: 700;
   line-height: 1;
   letter-spacing: -0.02em;
 }
@@ -71,28 +75,78 @@
   margin-top: 3px;
   font-size: var(--onboard-shop);
   font-weight: 500;
+  line-height: 1.2;
   color: var(--text-muted);
 }
 
-/* One line: what to do, and that any language works. No picker: AIRA follows whoever speaks. */
-.onboard__intro {
-  margin: 14px 0 0;
-  max-width: 40ch;
-  font-size: 16px;
-  line-height: 1.45;
+/* ---------- Start: the orb and two lines, on the bare page ---------- */
+.onboard__start {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  /* every free pixel between the header and the TalkBack row */
+  flex: 1 1 auto;
+  width: 100%;
+  min-height: 300px;
+  margin: 0;
+  padding: 16px 8px;
+  border: 0;
+  border-radius: var(--onboard-radius);
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  text-align: center;
+  cursor: pointer;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+.onboard__start:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: -4px;
+}
+
+/* The orb from the voice screen, a little larger than there, breathing while it waits. */
+.onboard__orb {
+  --orb-size: clamp(150px, 46vw, 210px);
+  display: block;
+  margin-bottom: 20px;
+  transition: transform 120ms ease;
+}
+.onboard__orb .orb__core {
+  animation: onboard-idle 3.2s ease-in-out infinite;
+}
+.onboard__start:active .onboard__orb {
+  transform: scale(0.96);
+}
+@keyframes onboard-idle {
+  0%, 100% { transform: scale(1); box-shadow: 0 10px 40px -12px var(--state); }
+  50% { transform: scale(1.04); box-shadow: 0 12px 56px -8px var(--state); }
+}
+
+.onboard__start-label {
+  font-size: var(--onboard-start);
+  font-weight: 700;
+  line-height: 1.15;
+  letter-spacing: -0.01em;
+}
+.onboard__start-hint {
+  max-width: 30ch;
+  font-size: var(--onboard-hint);
+  line-height: 1.4;
   color: var(--text-muted);
 }
 
-/* ---------- TalkBack switch ---------- */
+/* ---------- TalkBack switch: the last row ---------- */
 .tb-switch {
   position: relative;
   display: flex;
   align-items: center;
   gap: 12px;
-  margin: 14px 0 16px;
-  padding: 12px 0;
+  margin: 8px 0 0;
+  padding: 14px 0 4px;
   border-top: 1px solid var(--border);
-  border-bottom: 1px solid var(--border);
   cursor: pointer;
 }
 .tb-switch .tb-switch__input {
@@ -144,72 +198,6 @@
   color: var(--text-muted);
 }
 
-/* ---------- Start: the navy card, content centred ---------- */
-.onboard__start {
-  position: relative;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 4px;
-  /* the rest of the phone screen, never a sliver */
-  flex: 1 1 auto;
-  width: 100%;
-  margin: 0;
-  min-height: 220px;
-  padding: 28px 24px;
-  border: 0;
-  border-radius: var(--onboard-radius);
-  background:
-    radial-gradient(120% 90% at 50% 110%, color-mix(in srgb, var(--brand-purple) 55%, transparent), transparent 60%),
-    radial-gradient(90% 70% at 15% -10%, color-mix(in srgb, var(--brand-blue) 45%, transparent), transparent 60%),
-    var(--text);
-  color: var(--bg);
-  font: inherit;
-  text-align: center;
-  cursor: pointer;
-  touch-action: manipulation;
-  -webkit-tap-highlight-color: transparent;
-  overflow: hidden;
-  isolation: isolate;
-  transition: transform 120ms ease, box-shadow 120ms ease;
-}
-.onboard__start:active {
-  transform: scale(0.985);
-  box-shadow: inset 0 0 0 999px color-mix(in srgb, var(--brand-blue) 22%, transparent);
-}
-.onboard__start:focus-visible {
-  outline: var(--focus-ring);
-  outline-offset: 4px;
-}
-.onboard__badge {
-  display: grid;
-  place-items: center;
-  width: 64px;
-  height: 64px;
-  margin-bottom: 12px;
-  border-radius: 50%;
-  background: var(--gradient);
-  color: var(--bg);
-  box-shadow: 0 10px 28px -10px color-mix(in srgb, var(--brand-purple) 70%, transparent);
-}
-.onboard__spark {
-  width: 34px;
-  height: 34px;
-}
-.onboard__start-label {
-  font-size: var(--onboard-start);
-  font-weight: 800;
-  line-height: 1.1;
-  letter-spacing: -0.01em;
-}
-.onboard__start-hint {
-  max-width: 28ch;
-  font-size: var(--onboard-hint);
-  line-height: 1.35;
-  color: color-mix(in srgb, var(--bg) 78%, var(--text));
-}
-
 /* ---------- wide screens: a framed phone in the middle ---------- */
 @media (min-width: 600px) {
   .onboard {
@@ -218,27 +206,26 @@
   }
   .onboard__col {
     flex: 0 1 auto;
-    min-height: 0;
-    padding: 28px 28px 28px;
+    /* a phone's worth of height, so Start still has room around the orb; shorter on a short window */
+    min-height: min(680px, calc(100dvh - 80px));
+    padding: 28px 28px 24px;
     border: 1px solid var(--border);
     border-radius: 32px;
-    background: var(--surface);
+    background: var(--bg);
     box-shadow: 0 24px 60px -32px color-mix(in srgb, var(--text) 28%, transparent);
-  }
-  .onboard__start {
-    flex: 0 0 auto;
-    min-height: 260px;
-    max-height: 280px;
   }
 }
 
 @media (prefers-reduced-motion: reduce) {
   .tb-switch__track,
   .tb-switch__knob,
-  .onboard__start {
+  .onboard__orb {
     transition: none;
   }
-  .onboard__start:active {
+  .onboard__orb .orb__core {
+    animation: none;
+  }
+  .onboard__start:active .onboard__orb {
     transform: none;
   }
 }

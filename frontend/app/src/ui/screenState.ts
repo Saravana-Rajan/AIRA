@@ -84,7 +84,10 @@ export function reduceScreen(s: ScreenState, m: ScreenInput): ScreenState {
     case "transcript": {
       // Captions are paired per turn: the owner speaking again starts a new turn, so the previous AIRA
       // reply leaves the screen and the next AIRA line shown is the answer to THIS "You" line.
-      const next = m.role === "user" ? { ...s, userText: m.text, airaText: "" } : { ...s, airaText: m.text };
+      // An unclear transcript (a language the shop does not usually speak, probably misheard) is marked so a
+      // sighted helper can see why AIRA asked to repeat.
+      const userText = m.unclear ? `${m.text} (not clear)` : m.text;
+      const next = m.role === "user" ? { ...s, userText, airaText: "" } : { ...s, airaText: m.text };
       if (holdsChip(s.status)) return next;
       if (m.role === "user") return { ...next, status: m.final ? THINKING : LISTENING };
       return { ...next, status: READY };

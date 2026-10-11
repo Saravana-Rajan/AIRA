@@ -20,12 +20,20 @@ _IPS: dict[str, str] = {}  # session_id -> client address (main.MAX_SESSIONS_PER
 # and the pending sale still belong to it) and its Live resumption handle.
 RESUME_WINDOW_S = 60.0
 _ENDED: dict[str, tuple[float, str | None]] = {}  # session_id -> (ended at, Live resumption handle)
+# session_id -> that session's sent-notice ledger (Session.notice_ledger), kept across a resume so a reconnect
+# never replays a notice the owner already heard. Pruned with ``_ENDED``.
+_LEDGERS: dict[str, dict[str, float]] = {}
 
 
 def register(session: Session, bridge: object | None = None, ip: str | None = None) -> None:
     _REG[session.session_id] = (session, bridge)
     if ip:
         _IPS[session.session_id] = ip
+    earlier = _LEDGERS.get(session.session_id)
+    if earlier is not None and earlier is not session.notice_ledger:  # a resumed session: continue its ledger
+        earlier.update(session.notice_ledger)
+        session.notice_ledger = earlier
+    _LEDGERS[session.session_id] = session.notice_ledger
 
 
 def count(ip: str | None = None) -> int:
@@ -40,6 +48,8 @@ def remember_ended(session_id: str, handle: str | None) -> None:
     now = time.monotonic()
     for stale in [sid for sid, (at, _) in _ENDED.items() if now - at > RESUME_WINDOW_S]:
         del _ENDED[stale]
+        if stale not in _REG:
+            _LEDGERS.pop(stale, None)
     _ENDED[session_id] = (now, handle)
 
 
@@ -76,10 +86,14 @@ async def notify(shop_id: str, text: str, cue: str = "ack") -> int:
 
     Each session gets the text as a caption plus an earcon. When it has a Live bridge, AIRA also says it in the
     live audio, in the language the owner last spoke. A session that fails (closed socket, dead bridge) is
-    logged, skipped and not counted.
+    logged, skipped and not counted. A session that already got the same notice within
+    ``session.NOTICE_DEDUPE_S`` seconds is skipped too: a loop may raise the same line again, the owner hears
+    it once.
     """
     n = 0
     for s, bridge in by_shop(shop_id):
+        if s.notice_is_repeat(text):
+            continue
         try:
             await s.send(TranscriptMsg(role="aira", text=text, final=True, lang=s.lang))
             await s.send(CueMsg(cue=cue))

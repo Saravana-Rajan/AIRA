@@ -1,6 +1,7 @@
 // frontend/app/test/walk.guard.test.ts — bump-guard detector loop (fakes for camera, detector, audio)
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { createBumpGuard, BUMP_INTERVAL_MS, DETECT_TIMEOUT_MS } from "../src/walk/guard";
+import { GLOBAL_COOLDOWN_MS } from "../src/walk/bump";
 
 type B = [number, number, number, number];
 const sq = (s: number, cx = 500, cy = 500): B => [cy - s / 2, cx - s / 2, cy + s / 2, cx + s / 2];
@@ -9,6 +10,7 @@ const res = (ts: number, boxes: B[], floor: number | null = null) =>
 
 function setup(over: Record<string, unknown> = {}) {
   let t = 0;
+  let walking = true;
   const calls: string[] = [];
   const said: string[] = [];
   const vibrations: number[][] = [];
@@ -22,19 +24,21 @@ function setup(over: Record<string, unknown> = {}) {
     lang: () => "en" as const,
     now: () => t,
     onLatency: (ms: number) => { latencies.push(ms); },
+    motion: { available: true, isWalking: () => walking },
     ...over,
   };
   const g = createBumpGuard(deps as any);
-  return { g, deps, calls, said, vibrations, latencies, at: (ms: number) => { t = ms; } };
+  return { g, deps, calls, said, vibrations, latencies, at: (ms: number) => { t = ms; }, setWalking: (w: boolean) => { walking = w; } };
 }
 
 afterEach(() => { vi.useRealTimers(); });
 
 describe("bump guard decisions", () => {
-  it("a crate approaching fast in the path: vibrate first, then earcon, then 'Stop' — within 150 ms", () => {
+  it("a crate approaching fast in the path, seen in 2 frames: vibrate first, then earcon, then 'Stop' — within 150 ms", () => {
     const s = setup();
-    s.at(5);  expect(s.g.process(res(0, [sq(100)]))).toBeNull();
-    s.at(270); const w = s.g.process(res(250, [sq(150)]));       // doubles in 0.5 s => TTC 0.75 s
+    s.at(5);   expect(s.g.process(res(0, [sq(100)]))).toBeNull();
+    s.at(260); expect(s.g.process(res(250, [sq(150)]))).toBeNull();   // doubles in 0.5 s => TTC 0.75 s, 1st frame
+    s.at(395); const w = s.g.process(res(375, [sq(175)]));             // 2nd consecutive frame confirms
     expect(w).not.toBeNull();
     expect(s.calls).toEqual(["vibrate", "earcon", "speak"]);
     expect(s.vibrations).toEqual([[80, 40, 80]]);
@@ -44,34 +48,90 @@ describe("bump guard decisions", () => {
     expect(s.latencies[0]).toBeLessThanOrEqual(150);
   });
 
-  it("a big box (open fridge door) to the left says 'Obstacle left' at once", () => {
+  it("a single-frame spike (one big box, then gone) gives no warning", () => {
     const s = setup();
-    s.at(10);
-    s.g.process(res(0, [[300, 200, 800, 420]]));
-    expect(s.said).toEqual(["Obstacle left"]);
-  });
-
-  it("things outside the walking path or far away stay silent", () => {
-    const s = setup();
-    s.g.process(res(0, [[300, 0, 800, 250], sq(80)]));
-    s.g.process(res(250, [[300, 0, 800, 260], sq(82)]));
+    s.g.process(res(0, [[300, 450, 800, 550]]));
+    s.g.process(res(125, []));
+    s.g.process(res(250, [[300, 450, 800, 550]]));
+    s.g.process(res(375, []));
     expect(s.calls).toEqual([]);
   });
 
-  it("cooldown 1.5 s per object", () => {
+  it("a big box (open fridge door) to the left while walking says 'Obstacle left' on the 2nd frame", () => {
+    const s = setup();
+    s.at(10);
+    s.g.process(res(0, [[300, 200, 800, 420]]));
+    expect(s.said).toEqual([]);
+    s.at(135);
+    s.g.process(res(125, [[300, 200, 800, 420]]));
+    expect(s.said).toEqual(["Obstacle left"]);
+  });
+
+  it("standing still at the counter with a big object in front: no warning, ever", () => {
+    const s = setup();
+    s.setWalking(false);
+    const big: B = [100, 300, 900, 700];
+    for (let i = 0; i < 40; i++) s.g.process(res(i * 125, [big]));
+    expect(s.calls).toEqual([]);
+    // and not even for a fast approach
+    s.g.process(res(6000, [sq(100)]));
+    s.g.process(res(6250, [sq(150)]));
+    s.g.process(res(6375, [sq(175)]));
+    expect(s.calls).toEqual([]);
+  });
+
+  it("no motion sensor: approach warnings still work, size-only warnings do not", () => {
+    const s = setup({ motion: { available: false, isWalking: () => false } });
+    const big: B = [300, 450, 800, 550];
+    for (let i = 0; i < 10; i++) s.g.process(res(i * 125, [big]));
+    expect(s.calls).toEqual([]);
+    s.g.process(res(6000, [sq(100)]));
+    s.g.process(res(6250, [sq(150)]));
+    s.g.process(res(6375, [sq(175)]));
+    expect(s.said).toEqual(["Stop"]);
+  });
+
+  it("no motion dep at all behaves like no sensor", () => {
+    const s = setup({ motion: undefined });
+    const big: B = [300, 450, 800, 550];
+    for (let i = 0; i < 10; i++) s.g.process(res(i * 125, [big]));
+    expect(s.calls).toEqual([]);
+  });
+
+  it("walking mode off: no warnings; on again: warnings return", () => {
+    const s = setup();
+    s.g.setWalkingMode(false);
+    expect(s.g.isWalkingMode()).toBe(false);
+    s.g.process(res(0, [sq(100)]));
+    s.g.process(res(250, [sq(150)]));
+    s.g.process(res(375, [sq(175)]));
+    expect(s.calls).toEqual([]);
+    s.g.setWalkingMode(true);
+    s.g.process(res(500, [sq(200)]));
+    s.g.process(res(625, [sq(225)]));
+    expect(s.said).toEqual(["Stop"]);
+  });
+
+  it("walking with an approaching object warns once, then nothing within 5 s (global cooldown)", () => {
     const s = setup();
     const big: B = [300, 450, 800, 550];
     s.g.process(res(0, [big]));
     s.g.process(res(125, [big]));
-    s.g.process(res(1400, [big]));
     expect(s.said).toEqual(["Stop"]);
-    s.g.process(res(1500, [big]));
+    const side: B = [300, 150, 800, 400];
+    for (let t = 250; t < 125 + GLOBAL_COOLDOWN_MS; t += 125) {
+      // a different object appearing inside the window is quiet too
+      s.g.process(res(t, t >= 3000 && t <= 3250 ? [big, side] : [big]));
+    }
+    expect(s.said).toEqual(["Stop"]);
+    s.g.process(res(125 + GLOBAL_COOLDOWN_MS, [big]));
     expect(s.said).toEqual(["Stop", "Stop"]);
   });
 
   it("one alert per frame even with several obstacles; 'Stop' wins over a side obstacle", () => {
     const s = setup();
     s.g.process(res(0, [[300, 150, 800, 400], [300, 450, 800, 550]]));
+    s.g.process(res(125, [[300, 150, 800, 400], [300, 450, 800, 550]]));
     expect(s.said).toEqual(["Stop"]);
     expect(s.vibrations).toHaveLength(1);
   });
@@ -80,9 +140,10 @@ describe("bump guard decisions", () => {
     const s = setup();
     s.g.setHandNearTarget(true);
     s.g.process(res(0, [[300, 450, 800, 550]]));
+    s.g.process(res(125, [[300, 450, 800, 550]]));
     expect(s.calls).toEqual([]);
     s.g.setHandNearTarget(false);
-    s.g.process(res(125, [[300, 450, 800, 550]]));
+    s.g.process(res(250, [[300, 450, 800, 550]]));
     expect(s.said).toEqual(["Stop"]);
   });
 
@@ -92,6 +153,7 @@ describe("bump guard decisions", () => {
       s.g.onServerMsg(m);
     }
     s.g.process(res(0, [[300, 450, 800, 550]]));
+    s.g.process(res(125, [[300, 450, 800, 550]]));
     expect(s.said).toEqual(["Stop"]);
 
     const u = setup();
@@ -100,21 +162,24 @@ describe("bump guard decisions", () => {
     // TTC ~1.5 s: silent normally, a warning while urgent
     u.g.process(res(1000, [sq(100)]));
     u.g.process(res(1250, [sq(120)]));
+    u.g.process(res(1375, [sq(130)]));
     expect(u.said).toEqual(["Stop"]);
   });
 
-  it("near-floor check: a sustained edge jump in the lower third says 'Stop'", () => {
+  it("near-floor check: a sustained edge jump in the lower third says 'Stop' while walking", () => {
     const s = setup();
     for (let i = 0; i < 5; i++) s.g.process(res(i * 125, [], 0.02));
     expect(s.calls).toEqual([]);
     s.g.process(res(625, [], 0.5));
     s.g.process(res(750, [], 0.5));
+    s.g.process(res(875, [], 0.5));
     expect(s.said).toEqual(["Stop"]);
   });
 
   it("speaks in the owner's language", () => {
     const s = setup({ lang: () => "ta" });
     s.g.process(res(0, [[300, 450, 800, 550]]));
+    s.g.process(res(125, [[300, 450, 800, 550]]));
     expect(s.said[0]).not.toBe("Stop");
     expect(s.said[0].length).toBeGreaterThan(0);
   });
@@ -165,15 +230,15 @@ describe("bump guard loop", () => {
 
   it("feeds detections from the loop into the decision (end to end)", async () => {
     vi.useFakeTimers();
-    const sizes = [100, 150, 200];
+    const sizes = [100, 150, 200, 250];
     let i = 0;
     const s = setup({
       now: () => Date.now(),
       grab: vi.fn(async () => ({ frame: {}, ts: Date.now() })),
-      detector: { detect: vi.fn(async (_f: unknown, ts: number) => res(ts, [sq(sizes[Math.min(i++, 2)])])) },
+      detector: { detect: vi.fn(async (_f: unknown, ts: number) => res(ts, [sq(sizes[Math.min(i++, 3)])])) },
     });
     s.g.start();
-    await vi.advanceTimersByTimeAsync(400);
+    await vi.advanceTimersByTimeAsync(600);
     s.g.stop();
     expect(s.said).toEqual(["Stop"]);
     expect(s.latencies[0]).toBeLessThanOrEqual(150);

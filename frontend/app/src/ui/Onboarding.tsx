@@ -5,6 +5,7 @@ import type { Settings } from "../core/types";
 import { langFromPhone, phoneLanguages } from "../core/lang";
 import { DEFAULT_SETTINGS, DEMO_SHOP_ID } from "../core/settings";
 import { ONBOARDING } from "../i18n/strings";
+import { VoiceOrb } from "./VoiceOrb";
 
 export { langFromPhone };
 
@@ -20,19 +21,19 @@ type Props = {
   languages?: readonly string[];
 };
 
-/** The four-point spark from the AIRA logo. */
-const SPARK = "M50 4 C54 34 66 46 96 50 C66 54 54 66 50 96 C46 66 34 54 4 50 C34 46 46 34 50 4 Z";
-
 /**
  * One big Start tap. That tap is the user gesture the browser needs to unlock audio, the mic,
  * the camera and the wake lock, so `onDone` must run its setup synchronously inside it.
  * There is nothing to pick: AIRA answers in whatever language the speaker uses, turn by turn. The labels on
  * this screen are written in the phone's language (English for one the app has no labels for), which is
- * also the hint for AIRA's very first line. Start takes focus, so a TalkBack user hears "Start" first and
- * can begin with one double-tap. The whole screen sits in one phone-width column (tokens.css
- * `--phone-width`), so a laptop shows a centred phone rather than a page stretched edge to edge.
- * The Start card is a centred stack (badge, "Start", one-line hint) that fills the rest of a phone
- * screen, so it is still one huge tap target without being an empty slab.
+ * also the hint for AIRA's very first line. Start takes focus, so a TalkBack user hears "Tap to start"
+ * first and can begin with one double-tap.
+ *
+ * Layout, top to bottom, in one phone-width column (tokens.css `--phone-width`): a compact header
+ * (logo, AIRA, shop), then the Start button, which is the whole middle of the screen on a white page:
+ * the same glowing orb as the voice screen (ui/VoiceOrb, styled by app.css), "Tap to start" and one
+ * muted line. It fills all the free height, so a blind owner can tap anywhere in the middle. The
+ * TalkBack switch is the last row, above the bottom safe area.
  */
 export function Onboarding({ onDone, initial, languages }: Props) {
   const base: Settings = { ...DEFAULT_SETTINGS, ...initial };
@@ -55,40 +56,37 @@ export function Onboarding({ onDone, initial, languages }: Props) {
   return (
     <main class="onboard" lang={lang}>
       <div class="onboard__col">
-      <header class="onboard__head">
-        <img class="onboard__logo" src="/icons/aira-logo-192.png" alt="" width={48} height={48} />
-        <span class="onboard__titles">
-          <h1 class="onboard__title">AIRA</h1>
-          <span class="onboard__shop">{shopName(base.shopId || DEMO_SHOP_ID)}</span>
-        </span>
-      </header>
-      <p class="onboard__intro">{t("howTo")} {t("anyLanguage")}</p>
+        <header class="onboard__head">
+          <img class="onboard__logo" src="/icons/aira-logo-192.png" alt="" width={40} height={40} />
+          <span class="onboard__titles">
+            <h1 class="onboard__title">AIRA</h1>
+            <span class="onboard__shop">{shopName(base.shopId || DEMO_SHOP_ID)}</span>
+          </span>
+        </header>
 
-      <label class="tb-switch">
-        <input class="tb-switch__input" type="checkbox" role="switch" checked={srMode} onChange={() => setSr(!srMode)} />
-        <span class="tb-switch__track" aria-hidden="true"><span class="tb-switch__knob" /></span>
-        <span class="tb-switch__text">
-          <span class="tb-switch__label">{t("talkback")}</span>
-          <span class="tb-switch__hint">{t("talkbackHint")}</span>
-        </span>
-      </label>
+        <button
+          ref={start}
+          type="button"
+          class="onboard__start"
+          aria-labelledby="aira-start-label"
+          aria-describedby="aira-start-hint"
+          onClick={finish}
+        >
+          <span class="onboard__orb" aria-hidden="true">
+            <VoiceOrb />
+          </span>
+          <span id="aira-start-label" class="onboard__start-label">{t("tapToStart")}</span>
+          <span id="aira-start-hint" class="onboard__start-hint">{t("startHint")} {t("anyLanguage")}</span>
+        </button>
 
-      <button
-        ref={start}
-        type="button"
-        class="onboard__start"
-        aria-labelledby="aira-start-label"
-        aria-describedby="aira-start-hint"
-        onClick={finish}
-      >
-        <span class="onboard__badge" aria-hidden="true">
-          <svg class="onboard__spark" viewBox="0 0 100 100" focusable="false">
-            <path d={SPARK} fill="currentColor" />
-          </svg>
-        </span>
-        <span id="aira-start-label" class="onboard__start-label">{t("start")}</span>
-        <span id="aira-start-hint" class="onboard__start-hint">{t("startHint")}</span>
-      </button>
+        <label class="tb-switch">
+          <input class="tb-switch__input" type="checkbox" role="switch" checked={srMode} onChange={() => setSr(!srMode)} />
+          <span class="tb-switch__track" aria-hidden="true"><span class="tb-switch__knob" /></span>
+          <span class="tb-switch__text">
+            <span class="tb-switch__label">{t("talkback")}</span>
+            <span class="tb-switch__hint">{t("talkbackHint")}</span>
+          </span>
+        </label>
       </div>
     </main>
   );
