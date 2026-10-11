@@ -61,7 +61,7 @@ export function wireCameraAndGuidance(opts: WireOptions = {}): CameraWiring {
     current.wiring.unsubscribe(); // a new WiredApp: never keep listening to the old socket
   }
 
-  const lang = () => app.settings.lang;
+  const lang = () => app.lang();
   const speak = (s: string) => app.speak(s);
   const hint = createHintSpeaker(speak, lang);
   setQualityListener((h) => hint(h));

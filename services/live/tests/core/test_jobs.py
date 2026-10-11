@@ -24,7 +24,7 @@ REAL_SCAN = jobs._scan  # captured before any fixture patches it
 @pytest.fixture
 def env(monkeypatch):
     calls = {"notify": [], "events": [], "scan": [], "today": [], "refresh": [], "shops": 0, "lang_of": []}
-    state = {"shops": [("murugan_dairy", "en")],
+    state = {"shops": [("sunrise_dairy", "en")],
              "alerts": [dict(CURD)],
              "summary": {"sales_count": 48, "revenue": 2860, "top_sku": "aavin_milk_500ml",
                          "qty_by_sku": {"aavin_milk_500ml": 30}, "low_stock": [], "open_discrepancies": 0,
@@ -149,14 +149,14 @@ def test_expiry_job_speaks_alerts_and_publishes(env):
     assert r.status_code == 200
     body = r.json()
     assert body["shops"] == 1 and body["alerts"] == 1 and body["notified_sessions"] == 1 and body["errors"] == 0
-    assert calls["scan"] == [("murugan_dairy", FIXED_TODAY)]
+    assert calls["scan"] == [("sunrise_dairy", FIXED_TODAY)]
     shop_id, text, cue = calls["notify"][0]
-    assert shop_id == "murugan_dairy" and cue == "warn"
+    assert shop_id == "sunrise_dairy" and cue == "warn"
     assert "6 litres of Sakthi curd" in text and "Expiring soon" in text
-    assert body["messages"] == [{"shop_id": "murugan_dairy", "say": text}]
+    assert body["messages"] == [{"shop_id": "sunrise_dairy", "say": text}]
     topic, payload = calls["events"][0]
     assert topic == "alerts"
-    assert payload["shop_id"] == "murugan_dairy" and payload["kind"] == "expiry"
+    assert payload["shop_id"] == "sunrise_dairy" and payload["kind"] == "expiry"
     assert payload["sku"] == "sakthi_curd_1l" and payload["message"] == text
     assert payload["days_left"] == 1 and payload["status"] == "expiring"
 
@@ -189,10 +189,10 @@ def test_expiry_job_speaks_the_unit_of_every_quantity(env):
 
 def test_expiry_job_units_in_tamil_and_hindi(env):
     c, calls, state = env
-    state["shops"] = [("murugan_dairy", "ta")]
+    state["shops"] = [("sunrise_dairy", "ta")]
     c.post("/jobs/expiry", headers=OK)
     assert "Sakthi curd 6 லிட்டர்" in calls["notify"][-1][1]
-    state["shops"] = [("murugan_dairy", "hi")]
+    state["shops"] = [("sunrise_dairy", "hi")]
     c.post("/jobs/expiry", headers=OK)
     assert "6 लीटर Sakthi curd" in calls["notify"][-1][1]
 
@@ -231,11 +231,11 @@ def test_expiry_job_quiet_when_nothing_expires(env):
 
 def test_expiry_job_one_failing_shop_does_not_stop_the_others(env):
     c, calls, state = env
-    state["shops"] = [("broken_shop", "en"), ("murugan_dairy", "en")]
+    state["shops"] = [("broken_shop", "en"), ("sunrise_dairy", "en")]
     state["scan_error_for"] = {"broken_shop"}
     body = c.post("/jobs/expiry", headers=OK).json()
     assert body["shops"] == 2 and body["errors"] == 1 and body["alerts"] == 1
-    assert [n[0] for n in calls["notify"]] == ["murugan_dairy"]
+    assert [n[0] for n in calls["notify"]] == ["sunrise_dairy"]
 
 
 def test_expiry_job_still_speaks_when_event_publish_fails(env, monkeypatch):
@@ -252,7 +252,7 @@ def test_expiry_job_still_speaks_when_event_publish_fails(env, monkeypatch):
 
 def test_expiry_job_single_shop_query_in_tamil(env):
     c, calls, _ = env
-    r = c.post("/jobs/expiry?shop_id=murugan_dairy&lang=ta", headers=OK)
+    r = c.post("/jobs/expiry?shop_id=sunrise_dairy&lang=ta", headers=OK)
     assert r.status_code == 200
     assert calls["shops"] == 0 and calls["lang_of"] == []  # did not list every shop or look up the language
     text = calls["notify"][0][1]
@@ -262,8 +262,8 @@ def test_expiry_job_single_shop_query_in_tamil(env):
 def test_expiry_job_single_shop_uses_the_shops_language(env):
     c, calls, state = env
     state["shop_lang"] = "hi"
-    c.post("/jobs/expiry?shop_id=murugan_dairy", headers=OK)
-    assert calls["lang_of"] == ["murugan_dairy"] and calls["shops"] == 0
+    c.post("/jobs/expiry?shop_id=sunrise_dairy", headers=OK)
+    assert calls["lang_of"] == ["sunrise_dairy"] and calls["shops"] == 0
     assert "एक्सपायर" in calls["notify"][0][1]
 
 
@@ -287,9 +287,9 @@ def test_day_summary_speaks_sales_revenue_and_top_seller(env):
     body = c.post("/jobs/day-summary", headers=OK).json()
     assert body["shops"] == 1 and body["notified_sessions"] == 1 and body["errors"] == 0
     shop_id, text, cue = calls["notify"][0]
-    assert shop_id == "murugan_dairy" and cue == "done"
+    assert shop_id == "sunrise_dairy" and cue == "done"
     assert "48" in text and "2860" in text and "Aavin milk" in text
-    assert body["messages"] == [{"shop_id": "murugan_dairy", "say": text}]
+    assert body["messages"] == [{"shop_id": "sunrise_dairy", "say": text}]
 
 
 def test_day_summary_adds_suggested_order_for_tomorrow(env):
@@ -309,7 +309,7 @@ def test_day_summary_no_sales(env):
 
 def test_day_summary_in_hindi(env):
     c, calls, state = env
-    state["shops"] = [("murugan_dairy", "hi")]
+    state["shops"] = [("sunrise_dairy", "hi")]
     c.post("/jobs/day-summary", headers=OK)
     text = calls["notify"][0][1]
     assert "बिक्री" in text and "48" in text
@@ -344,8 +344,8 @@ def test_forecast_refresh_calls_refresh_model(env):
 
 def test_forecast_refresh_for_one_shop(env):
     c, calls, _ = env
-    assert c.post("/jobs/forecast-refresh?shop_id=murugan_dairy", headers=OK).status_code == 200
-    assert calls["refresh"] == ["murugan_dairy"]
+    assert c.post("/jobs/forecast-refresh?shop_id=sunrise_dairy", headers=OK).status_code == 200
+    assert calls["refresh"] == ["sunrise_dairy"]
 
 
 # --- helpers -------------------------------------------------------------------------------------
@@ -364,18 +364,18 @@ def test_today_is_india_time():
 
 
 async def test_shops_in_mock_mode_is_the_demo_shop(monkeypatch):
-    monkeypatch.setattr(jobs.config, "load", lambda: SimpleNamespace(mock=True, demo_shop_id="murugan_dairy"))
-    assert await jobs._shops() == [("murugan_dairy", "en")]
-    assert await jobs._lang_of("murugan_dairy") == "en"
+    monkeypatch.setattr(jobs.config, "load", lambda: SimpleNamespace(mock=True, demo_shop_id="sunrise_dairy"))
+    assert await jobs._shops() == [("sunrise_dairy", "en")]
+    assert await jobs._lang_of("sunrise_dairy") == "en"
 
 
 async def test_shops_reads_language_from_firestore(monkeypatch, fake_db):
-    await fake_db.collection("shops").document("murugan_dairy").set({"name": "Murugan Dairy", "ownerUid": "u1"})
+    await fake_db.collection("shops").document("sunrise_dairy").set({"name": "Sunrise Dairy", "ownerUid": "u1"})
     await fake_db.collection("shops").document("other").set({"name": "Other", "lang": "hi"})
     await fake_db.collection("shops").document("bare").set({"name": "Bare", "ownerUid": "ghost", "lang": "fr"})
     await fake_db.collection("users").document("u1").set({"lang": "ta", "role": "owner"})
-    monkeypatch.setattr(jobs.config, "load", lambda: SimpleNamespace(mock=False, demo_shop_id="murugan_dairy"))
-    assert await jobs._shops() == [("bare", "en"), ("murugan_dairy", "ta"), ("other", "hi")]
+    monkeypatch.setattr(jobs.config, "load", lambda: SimpleNamespace(mock=False, demo_shop_id="sunrise_dairy"))
+    assert await jobs._shops() == [("bare", "en"), ("other", "hi"), ("sunrise_dairy", "ta")]
     assert await jobs._lang_of("other") == "hi"
     assert await jobs._lang_of("missing") == "en"
 
@@ -402,8 +402,8 @@ def test_expiry_job_with_the_real_scan(env, monkeypatch):
     from aira_live.business import store
 
     mem = store.MemoryStore()
-    mem.data["shops/murugan_dairy/products/sakthi_curd_1l"] = {"name": "Sakthi curd", "unit": "L"}
-    mem.data["shops/murugan_dairy/inventory/sakthi_curd_1l"] = {
+    mem.data["shops/sunrise_dairy/products/sakthi_curd_1l"] = {"name": "Sakthi curd", "unit": "L"}
+    mem.data["shops/sunrise_dairy/inventory/sakthi_curd_1l"] = {
         "onHand": 6, "batches": [{"batchId": "b1", "qty": 6, "expiryDate": "2026-10-14"}]}
     store.set_store(mem)
     monkeypatch.setattr(jobs, "_scan", REAL_SCAN)

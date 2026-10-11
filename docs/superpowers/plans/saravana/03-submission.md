@@ -38,7 +38,7 @@
 - So Task 7 **emails support@hack2skill.com on Oct 11**. **If there is no written approval for 4 minutes by Oct 16 18:00 IST, submit the ≤ 2:55 cut** (Task 7, Step 4).
 
 **Product and data:**
-- Product name **AIRA**. Demo shop **Murugan Dairy** (Aavin milk, Sakthi curd, Arun ice cream).
+- Product name **AIRA**. Demo shop **Sunrise Dairy** (Aavin milk, Sakthi curd, Arun ice cream).
 - Never claim counterfeit-note detection or real bank UPI integration. UPI is confirmed via the payment **soundbox** announcement.
 - Only cite numbers we have sources for:
   - ~12M kirana stores (Britannia A-Eye press coverage, 2025)
@@ -1134,7 +1134,7 @@ AIRA listens (Gemini Live), sees (Gemini Robotics-ER 2 and Gemini 3.8 Flash), re
 keeps exact books in deterministic code. It places supplier orders on WhatsApp, counts deliveries, checks bills,
 guides the owner's hand to the right product, checks cash and UPI soundbox payments, and warns about low stock
 and expiry. This is a meaningful use of Generative AI for accessibility and a functional prototype deployed on
-Google Cloud, built around one real shop: Murugan Dairy (Aavin milk, Sakthi curd, Arun ice cream).
+Google Cloud, built around one real shop: Sunrise Dairy (Aavin milk, Sakthi curd, Arun ice cream).
 
 ## Slide 4: Opportunities
 **How is it different from existing ideas?**
@@ -1174,7 +1174,7 @@ Caption: "One shop loop. Nothing changes state without evidence and the owner's 
   everything else is voice, earcons and vibration. Sample exchange:
   Owner: "Customer wants 2 litres curd." → AIRA: "Fridge 2, middle shelf, left… a little lower… that is
   Sakthi curd 1 litre. Take one more. Total ₹… " → soundbox "₹… received" → AIRA: "Payment matched. Sale done."
-- **Shop Dashboard (web):** header "Murugan Dairy — today"; tiles for Sales ₹ / Items sold / Low stock /
+- **Shop Dashboard (web):** header "Sunrise Dairy — today"; tiles for Sales ₹ / Items sold / Low stock /
   Discrepancies; tables for Stock (product, on hand, reorder level, expiry), Orders & deliveries (state),
   Audit trail (time, actor, action, evidence link).
 

@@ -44,6 +44,12 @@ describe("contract fixtures", () => {
     expect(valuesOf(server, "error", "code")).toEqual(new Set(ERROR_CODES));
   });
 
+  it("a finished user transcript carries the language AIRA detected (any code, not only the label languages)", () => {
+    const withLang = server.filter((m) => m.t === "transcript" && typeof m.lang === "string");
+    expect(withLang.length).toBeGreaterThan(0);
+    expect(withLang.every((m) => m.final === true)).toBe(true);
+  });
+
   it("hello is valid without an idToken (no Firebase Auth)", () => {
     const hellos = client.filter((m) => m.t === "hello");
     expect(hellos.some((m) => m.idToken === undefined)).toBe(true);
@@ -76,6 +82,8 @@ describe("contract fixtures", () => {
     expect(isServerMsg({ t: "state", entity: "customer", id: "x", state: "S", summary: "" })).toBe(false);
     expect(isServerMsg({ t: "error", code: "oops", say: "x" })).toBe(false);
     expect(isServerMsg({ t: "ready", sessionId: "s", resume: "s", mock: "true" })).toBe(false);
+    expect(isServerMsg({ t: "transcript", role: "user", text: "x", final: true, lang: 5 })).toBe(false);
+    expect(isServerMsg({ t: "transcript", role: "user", text: "x", final: true, lang: "ja" })).toBe(true);
   });
 
   it("parses raw socket text, returning null for bad JSON or invalid messages", () => {

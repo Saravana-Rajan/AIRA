@@ -17,7 +17,7 @@ _spec.loader.exec_module(seed_firestore)
 
 CATALOG = json.loads(CATALOG_PATH.read_text(encoding="utf-8"))
 SCHEMA = json.loads(SCHEMA_PATH.read_text(encoding="utf-8"))
-SHOP = "shops/murugan_dairy"
+SHOP = "shops/sunrise_dairy"
 
 UNITS = {
     "aavin_milk_500ml": "L",
@@ -107,8 +107,8 @@ def test_every_product_carries_its_pack_size():
 
 
 def test_shop_and_demo_note():
-    assert CATALOG["shop"]["id"] == "murugan_dairy"
-    assert CATALOG["shop"]["name"] == "Murugan Dairy"
+    assert CATALOG["shop"]["id"] == "sunrise_dairy"
+    assert CATALOG["shop"]["name"] == "Sunrise Dairy"
     assert "demo — verify locally" in CATALOG["note"]
 
 
@@ -150,7 +150,7 @@ def test_build_docs_writes_shop_products_inventory_and_suppliers():
     docs = dict(seed_firestore.build_docs(CATALOG, {}))
     assert len(docs) == 1 + 10 + 10 + 3
     shop = docs[SHOP]
-    assert shop["name"] == "Murugan Dairy"
+    assert shop["name"] == "Sunrise Dairy"
     assert shop["currency"] == "INR" and shop["timezone"] == "Asia/Kolkata"
     for p in CATALOG["products"]:
         assert docs[f"{SHOP}/products/{p['sku']}"] == p

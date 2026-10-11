@@ -69,7 +69,7 @@ describe("App", () => {
     const el = mount(<App listen={listen} loadForecast={async () => null} now={() => NOW} />);
     expect(findAllByText(el, "[role=status]", "Loading the shop's records…")).toHaveLength(1);
     expect(findAllByText(el, "[role=status]", "Connecting…")).toHaveLength(1);
-    expect(h.shopId).toBe("murugan_dairy");
+    expect(h.shopId).toBe("sunrise_dairy");
 
     push();
     await flush();
@@ -104,7 +104,7 @@ describe("App", () => {
     history.replaceState(null, "", "/dashboard/?shop=someone_else");
     const { listen, h } = fakeLive();
     mount(<App listen={listen} loadForecast={async () => null} now={() => NOW} />);
-    expect(h.shopId).toBe("murugan_dairy");
+    expect(h.shopId).toBe("sunrise_dairy");
   });
 
   it("updates in place when Firestore changes", () => {
@@ -139,7 +139,7 @@ describe("App", () => {
     expect(text(el.querySelector("tbody"))).toContain("Sakthi Curd 1 L");
     expect(text(el)).toContain("Demo history");
     expect(loadForecast).toHaveBeenCalledTimes(1);
-    expect(loadForecast).toHaveBeenCalledWith("murugan_dairy");
+    expect(loadForecast).toHaveBeenCalledWith("sunrise_dairy");
   });
 
   it("stops listening when it unmounts", () => {

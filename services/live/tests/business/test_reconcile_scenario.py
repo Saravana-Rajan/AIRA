@@ -6,7 +6,7 @@ import pytest
 from aira_live.business import reconcile
 from aira_live.vision.invoice import InvoiceLine, InvoiceRead
 
-SHOP = "murugan_dairy"
+SHOP = "sunrise_dairy"
 ORDER = [{"sku": "sakthi_curd_1l", "name": "Sakthi Curd 1 L", "qty": 30, "agreedPrice": 50}]
 # Both curd sizes on one order, with the order fields kanish/02 stores (qty and price in selling units: L).
 ORDER2 = [{"sku": "sakthi_curd_500ml", "name": "Sakthi Curd 500 ml", "qty": 10.0, "unit": "L", "agreedPrice": 52},

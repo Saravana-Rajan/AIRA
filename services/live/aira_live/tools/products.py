@@ -51,7 +51,7 @@ async def shop_products(shop_id: str) -> list[ProductRef]:
 async def location_remember(product: str, zone: str) -> dict:
     """Save where a product is kept, as confirmed by the owner, e.g. zone "fridge2/middle/left".
 
-    Pass the place in English words ("fridge two, middle shelf, left"); AIRA reads it back in the owner's language.
+    Pass the place in English words ("fridge two, middle shelf, left"); AIRA reads it back in the language the owner last spoke.
     """
     s = get_session()
     ref = await catalog_resolve(s.shop_id, product, s.lang)

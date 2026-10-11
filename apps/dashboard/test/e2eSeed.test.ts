@@ -49,11 +49,11 @@ describe("demo shop seed for the e2e smoke test", () => {
       expect(parts[0]).toBe("shops");
       expect([DEMO_SHOP_ID, OTHER_SHOP_ID]).toContain(parts[1]);
     }
-    expect(DEMO_SHOP_ID).toBe("murugan_dairy");
+    expect(DEMO_SHOP_ID).toBe("sunrise_dairy");
     expect(new Set(docs.map((d) => d.path)).size).toBe(docs.length);
   });
 
-  it("uses the real Murugan Dairy catalog for names, units and prices", () => {
+  it("uses the real Sunrise Dairy catalog for names, units and prices", () => {
     const catalog = loadCatalog();
     const curd = catalog.products.find((p) => p.sku === "sakthi_curd_1l")!;
     const seeded = docs.find((d) => d.path === `shops/${DEMO_SHOP_ID}/products/sakthi_curd_1l`)!;

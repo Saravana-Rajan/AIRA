@@ -26,7 +26,7 @@ def mk_session(sent=None):
     async def send(m):
         sent.append(m)
 
-    s = Session(uid="u1", shop_id="murugan_dairy", lang="en", verbosity="short", send=send)
+    s = Session(uid="u1", shop_id="sunrise_dairy", lang="en", verbosity="short", send=send)
     return s, sent
 
 
@@ -35,7 +35,7 @@ def test_settings_mock_without_key(monkeypatch):
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)
     monkeypatch.delenv("AIRA_DEMO_SHOP", raising=False)
     s = config.load()
-    assert s.mock is True and s.max_frame_b64 == 1_500_000 and s.demo_shop_id == "murugan_dairy"
+    assert s.mock is True and s.max_frame_b64 == 1_500_000 and s.demo_shop_id == "sunrise_dairy"
 
 
 def test_settings_real_key_and_mock_switch(monkeypatch):
@@ -231,13 +231,13 @@ async def test_session_context_and_notify():
     assert get_session() is s
     sessions.register(s)
     try:
-        n = await sessions.notify("murugan_dairy", "Sakthi vendor confirmed: delivery at 6 pm", cue="ack")
+        n = await sessions.notify("sunrise_dairy", "Sakthi vendor confirmed: delivery at 6 pm", cue="ack")
         assert n == 1 and sent[0].text.startswith("Sakthi vendor") and sent[1].cue == "ack"
         assert sent[0].role == "aira" and sent[0].final is True
         assert await sessions.notify("other-shop", "x") == 0
     finally:
         sessions.unregister(s)
-    assert await sessions.notify("murugan_dairy", "x") == 0
+    assert await sessions.notify("sunrise_dairy", "x") == 0
 
 
 async def test_notify_skips_a_broken_session():
@@ -246,10 +246,10 @@ async def test_notify_skips_a_broken_session():
     async def boom(m):
         raise ConnectionError("socket closed")
 
-    bad = Session(uid="u2", shop_id="murugan_dairy", lang="en", verbosity="short", send=boom)
+    bad = Session(uid="u2", shop_id="sunrise_dairy", lang="en", verbosity="short", send=boom)
     sessions.register(bad); sessions.register(good)
     try:
-        assert await sessions.notify("murugan_dairy", "Low stock", cue="warn") == 1
+        assert await sessions.notify("sunrise_dairy", "Low stock", cue="warn") == 1
         assert sent[-1].cue == "warn"
     finally:
         sessions.unregister(bad); sessions.unregister(good)

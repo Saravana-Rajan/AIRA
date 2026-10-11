@@ -147,6 +147,9 @@ class TranscriptMsg(_ServerWire):
     role: TranscriptRole
     text: StrictStr
     final: StrictBool
+    # The language AIRA detected from the speaker's last finished utterance (``i18n.detect_lang``: "ta", "ja",
+    # "en", ...). The phone's labels follow it. Absent on partial transcripts and before anyone has spoken.
+    lang: Optional[StrictStr] = None
 
 
 class Burst(_ServerWire):

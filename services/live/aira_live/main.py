@@ -5,8 +5,9 @@
 - ``WS /ws`` speaks the final protocol (``aira_live.contracts``):
   - ``hello`` is checked by ``auth.verify_hello`` (no Firebase Auth): tokenless phones always land in the demo
     shop, and with tokenless mode off the socket gets ``error/permission`` and is closed.
-  - Tokenless-mode guards (docs/ops/security.md): a browser Origin outside ``AIRA_ALLOWED_ORIGINS`` is refused
-    before the upgrade, and a hello over ``MAX_SESSIONS_PER_IP`` (or ``MAX_SESSIONS``) gets ``error/permission``.
+  - Guards (docs/ops/security.md): an upgrade whose Origin is missing or outside ``AIRA_ALLOWED_ORIGINS`` is
+    refused before the handshake, a hello whose ``idToken`` is not ``AIRA_APP_KEY`` gets ``error/permission``
+    (``auth.verify_hello``), and so does a hello over ``MAX_SESSIONS_PER_IP`` (or ``MAX_SESSIONS``).
   - Real mode: each session gets a ``LiveBridge`` to Gemini Live (``model_for("live")``). Mic audio and typed
     text go to Live; Live's audio, captions and cues come back through the bridge.
   - Mock mode: text is echoed, and audio is accepted and dropped.
@@ -45,7 +46,7 @@ from aira_live.contracts import (
     dump_server_msg,
 )
 from aira_live.frames import Frame
-from aira_live.i18n import t
+from aira_live.i18n import detect_lang, t
 from aira_live.live_bridge import AdkLiveBackend, LiveBridge
 from aira_live.prompt import build_system_prompt
 from aira_live.session import Session, current_session
@@ -58,9 +59,10 @@ log = logging.getLogger(__name__)
 # the dashboard's read-only HTTP API (api).
 OPTIONAL_ROUTERS: tuple[str, ...] = ("aira_live.jobs", "aira_live.messaging.webhooks", "aira_live.api")
 
-# Tokenless-mode guards (docs/ops/security.md). The service is public (--allow-unauthenticated), there is no
-# login, and it runs on one instance, so two small checks bound what a stranger with the URL can do:
-# - a browser page may open /ws (and call the HTTP API) only from an allowed origin;
+# Guards (docs/ops/security.md). The service is public (--allow-unauthenticated), there is no login, and it
+# runs on one instance. Three layers bound what a stranger with the URL can do:
+# - /ws (and the HTTP API) may be opened only from an allowed browser origin; a request without Origin is refused;
+# - the hello must carry the shared demo key AIRA_APP_KEY as idToken (auth.verify_hello);
 # - one address gets at most MAX_SESSIONS_PER_IP live sessions, and the service MAX_SESSIONS in all,
 #   which caps what can be spent on Gemini Live. The owner's one phone never reaches either limit.
 MAX_SESSIONS = 6
@@ -78,17 +80,20 @@ def allowed_origins() -> list[str]:
 
 
 def origin_allowed(origin: str | None) -> bool:
-    """A browser always sends Origin on a WebSocket upgrade; a request without one is not a web page, and
-    nothing in it can be checked, so it passes to the hello check like any other client."""
-    return origin is None or origin.rstrip("/") in allowed_origins()
+    """A browser always sends Origin on a WebSocket upgrade, and the app (a TWA on the hosting site) is a
+    browser, so an upgrade without an Origin, or with one off the list, is refused before the handshake."""
+    return bool(origin) and origin.rstrip("/") in allowed_origins()
 
 
 def client_ip(ws) -> str:
-    """The phone's address: the first X-Forwarded-For entry (Cloud Run's frontend sets it), else the peer."""
+    """The phone's address: the LAST X-Forwarded-For hop, else the peer.
+
+    Cloud Run's frontend appends the address it saw the connection come from; anything before it is whatever
+    the client chose to send, so the first entry can be forged and must never be the one that is capped."""
     forwarded = ws.headers.get("x-forwarded-for", "")
-    first = forwarded.split(",")[0].strip()
-    if first:
-        return first
+    hops = [h.strip() for h in forwarded.split(",") if h.strip()]
+    if hops:
+        return hops[-1]
     return ws.client.host if ws.client else "unknown"
 
 
@@ -205,8 +210,8 @@ def parse(raw: str | None, max_frame_b64: int):
 @app.websocket("/ws")
 async def ws_endpoint(ws: WebSocket) -> None:
     origin = ws.headers.get("origin")
-    if not origin_allowed(origin):  # a web page that is not the AIRA site: refused before the upgrade
-        log.warning("ws refused: origin %r is not in AIRA_ALLOWED_ORIGINS", origin)
+    if not origin_allowed(origin):  # not the AIRA site (or no Origin at all): refused before the upgrade
+        log.warning("ws refused: origin %r is missing or not in AIRA_ALLOWED_ORIGINS", origin)
         await ws.close(code=4403)
         return
     await ws.accept()
@@ -218,6 +223,8 @@ async def ws_endpoint(ws: WebSocket) -> None:
 
     session: Session | None = None
     bridge: LiveBridge | None = None  # real mode only
+    # The catalog for error lines before any hello: English, like every language without a catalog. Once the
+    # phone says hello this is its locale hint, and after that it follows whatever the speaker last used.
     lang = "en"
     try:
         while True:
@@ -262,10 +269,13 @@ async def ws_endpoint(ws: WebSocket) -> None:
                     bridge.hard_stop()
                 await send(CueMsg(cue="done"))
             elif isinstance(msg, TextMsg):
+                if session:  # typed text is a user turn too: AIRA follows its language
+                    session.lang = lang = detect_lang(msg.text, session.lang)
                 if bridge:
                     await bridge.send_text(msg.text)
                 else:
-                    await send(TranscriptMsg(role="aira", text=t("mock.echo", lang, text=msg.text), final=True))
+                    await send(TranscriptMsg(role="aira", text=t("mock.echo", lang, text=msg.text), final=True,
+                                             lang=session.lang if session else None))
             elif session is None:  # frames, confirmations, audio and events need a hello first
                 await send(ErrorMsg(code="unsupported", say=t("error.unsupported", lang)))
             elif isinstance(msg, AudioInMsg):

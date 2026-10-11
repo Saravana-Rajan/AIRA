@@ -6,7 +6,7 @@ This set measures how well AIRA counts packs in a crate or on a shelf. `bench/sc
 
 ## Take the photos
 
-- Take **20 photos** of crates and shelves at Murugan Dairy with the **chest-mounted phone** in its usual position.
+- Take **20 photos** of crates and shelves at Sunrise Dairy with the **chest-mounted phone** in its usual position.
 - Each photo shows **one product type** with a known number of packs, from **4 to 30**.
 - Mix the products:
   - mostly Aavin milk, Sakthi curd and Arun ice-cream boxes

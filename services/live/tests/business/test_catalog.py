@@ -8,7 +8,7 @@ import pytest
 from aira_live.business import catalog, seed
 from aira_live.business.store import MemoryStore, set_store
 
-SHOP = "murugan_dairy"
+SHOP = "sunrise_dairy"
 ROOT = Path(__file__).resolve().parents[4]
 CATALOG = ROOT / "content" / "catalog" / "murugan_dairy.json"
 ALL_SKUS = ["aavin_milk_500ml", "aavin_milk_1l", "sakthi_curd_500ml", "sakthi_curd_1l", "aavin_buttermilk_200ml",
@@ -225,7 +225,7 @@ def test_to_selling_units_does_not_mutate_the_product():
 # ---------- seeder ----------
 
 async def test_seed_writes_shop_products_and_suppliers(store):
-    assert (await store.get(f"shops/{SHOP}"))["name"] == "Murugan Dairy"
+    assert (await store.get(f"shops/{SHOP}"))["name"] == "Sunrise Dairy"
     curd = await store.get(f"shops/{SHOP}/products/sakthi_curd_1l")
     assert curd["price"] == 60 and curd["sku"] == "sakthi_curd_1l" and curd["unit"] == "L"
     assert (await store.get(f"shops/{SHOP}/suppliers/sakthi_vendor"))["channel"] == "telegram"

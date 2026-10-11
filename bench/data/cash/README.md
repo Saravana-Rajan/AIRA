@@ -45,7 +45,7 @@ Write one row per photo in `bench/data/cash/labels.json`. It starts as an empty 
 
 - `notes` lists every note **and coin** in the photo, as `denomination` (rupees) and `count`.
 - `total` is the true amount in whole rupees, and it must equal the sum of `notes`. The dry run checks this.
-- Set `overlapping` to `true` when notes overlap or are stacked so that some are partly hidden. On those photos AIRA should ask Murugan to spread the notes, not guess.
+- Set `overlapping` to `true` when notes overlap or are stacked so that some are partly hidden. On those photos AIRA should ask Sam to spread the notes, not guess.
 - `file` and `total` are required.
 
 ## Check, then run

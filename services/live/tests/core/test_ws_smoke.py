@@ -39,7 +39,7 @@ def _wav(path: Path, seconds: float = 0.2, rate: int = 16000, channels: int = 1,
 
 @pytest.fixture(autouse=True)
 def clean_env(monkeypatch):
-    for name in ("GEMINI_API_KEY", "AIRA_MOCK", "AIRA_ALLOW_NO_TOKEN", "AIRA_DEMO_SHOP"):
+    for name in ("GEMINI_API_KEY", "AIRA_MOCK", "AIRA_ALLOW_NO_TOKEN", "AIRA_DEMO_SHOP", "AIRA_APP_KEY"):
         monkeypatch.delenv(name, raising=False)
 
 
@@ -118,6 +118,17 @@ async def test_real_mode_answer_is_measured(server, real_mode):
     assert res.audio_bytes == 4800 and res.audio_seconds == pytest.approx(0.1)
     assert res.first_audio_ms is not None and 0 <= res.first_audio_ms < 5000
     assert res.ok
+
+
+async def test_smoke_sends_the_site_origin_and_the_app_key_from_env(server, real_mode, monkeypatch):
+    """The server refuses an upgrade without an allowed Origin, and a hello without AIRA_APP_KEY when one is set."""
+    monkeypatch.setenv("AIRA_APP_KEY", "k-secret")  # the server and the smoke read the same env
+    res = await ws_smoke.smoke(server, text=QUESTION, idle_s=0.4)
+    assert res.ready is not None and res.errors == []
+    res = await ws_smoke.smoke(server, text=QUESTION, idle_s=0.3, app_key="wrong")
+    assert res.ready is None and [m["code"] for m in res.errors] == ["permission"]
+    with pytest.raises(ws_smoke.websockets.InvalidHandshake):  # refused before the upgrade: HTTP 403, no socket
+        await ws_smoke.smoke(server, text=QUESTION, idle_s=0.3, origin="https://evil.example")
 
 
 async def test_refused_hello_is_reported(server, monkeypatch):

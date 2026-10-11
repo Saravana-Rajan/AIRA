@@ -29,8 +29,8 @@ def _fresh_catalog_facts(monkeypatch):
 
 # --- prompt -----------------------------------------------------------------------------------------------
 def test_render_prompt_has_shop_products_suppliers_language_and_rules():
-    p = render_prompt({"name": "Murugan Dairy"}, [CURD], [{"name": "Sakthi vendor", "channel": "whatsapp"}], "ta", "short")
-    assert "Murugan Dairy" in p and "sakthi_curd_1l" in p and "₹60" in p and "Sakthi vendor via whatsapp" in p
+    p = render_prompt({"name": "Sunrise Dairy"}, [CURD], [{"name": "Sakthi vendor", "channel": "whatsapp"}], "ta", "short")
+    assert "Sunrise Dairy" in p and "sakthi_curd_1l" in p and "₹60" in p and "Sakthi vendor via whatsapp" in p
     assert "Tamil" in p and "Tamil-English" in p
     low = p.lower()
     assert "read it back" in low and "confirm_action" in p
@@ -44,13 +44,13 @@ def test_render_prompt_has_shop_products_suppliers_language_and_rules():
 
 
 async def test_build_system_prompt_reads_firestore(fake_db):
-    shop = fake_db.collection("shops").document("murugan")
-    await shop.set({"name": "Murugan Dairy"})
+    shop = fake_db.collection("shops").document("sunrise")
+    await shop.set({"name": "Sunrise Dairy"})
     await shop.collection("products").document("aavin_milk_500ml").set(
         {"name": "milk", "brand": "Aavin", "unit": "pouch", "packSizeL": 0.5, "price": 30})
     await shop.collection("suppliers").document("sup1").set({"name": "Selvam (milk vendor)", "channel": "whatsapp"})
-    p = await build_system_prompt("murugan", "en", "short")
-    assert "Murugan Dairy" in p and "aavin_milk_500ml" in p and "0.5 L pouch" in p and "Selvam (milk vendor)" in p
+    p = await build_system_prompt("sunrise", "en", "short")
+    assert "Sunrise Dairy" in p and "aavin_milk_500ml" in p and "0.5 L pouch" in p and "Selvam (milk vendor)" in p
     assert "English" in p
 
 
@@ -60,7 +60,7 @@ def test_render_prompt_uses_catalog_pack_aliases_and_never_leaks_phone_numbers()
             "aliases": {"ta": ["அரை லிட்டர் பால்"], "en": ["half litre milk"]}}
     vendor = {"id": "aavin_vendor", "name": "Aavin vendor", "channel": "whatsapp", "phone": "+919800000000",
               "products": ["aavin_milk_500ml"], "aliases": {"ta": ["பால்காரர்"], "en": ["milkman"]}}
-    p = render_prompt({"name": "Murugan Dairy"}, [milk], [vendor], "ta", "detail")
+    p = render_prompt({"name": "Sunrise Dairy"}, [milk], [vendor], "ta", "detail")
     assert "Aavin Aavin" not in p and "500 ml pouch" in p and "₹44 per L" in p
     assert "அரை லிட்டர் பால்" in p and "பால்காரர்" in p and "half litre milk" not in p
     assert "Aavin vendor via whatsapp" in p and "aavin_milk_500ml" in p
@@ -69,7 +69,7 @@ def test_render_prompt_uses_catalog_pack_aliases_and_never_leaks_phone_numbers()
 
 
 def test_render_prompt_hindi_and_missing_price():
-    p = render_prompt({"name": "Murugan Dairy"}, [{"sku": "x_box", "name": "ice cream", "unit": "box"}], [], "hi", "short")
+    p = render_prompt({"name": "Sunrise Dairy"}, [{"sku": "x_box", "name": "ice cream", "unit": "box"}], [], "hi", "short")
     assert "Hindi" in p and "Hindi-English" in p and "₹None" not in p and "x_box" in p
 
 
@@ -96,12 +96,12 @@ def test_prompt_prices_are_allowed_numbers_via_catalog_facts():
 
 async def test_build_system_prompt_remembers_the_catalog_facts_it_rendered(fake_db):
     assert last_catalog_facts("nowhere") == {}
-    shop = fake_db.collection("shops").document("murugan_dairy")
-    await shop.set({"name": "Murugan Dairy"})
+    shop = fake_db.collection("shops").document("sunrise_dairy")
+    await shop.set({"name": "Sunrise Dairy"})
     await shop.collection("products").document("aavin_milk_500ml").set(
         {"name": "milk", "brand": "Aavin", "unit": "L", "packSizeL": 0.5, "price": 44})
-    await build_system_prompt("murugan_dairy", "en", "short")
-    facts = last_catalog_facts("murugan_dairy")
+    await build_system_prompt("sunrise_dairy", "en", "short")
+    facts = last_catalog_facts("sunrise_dairy")
     assert facts == {"catalog": {"aavin_milk_500ml": {"price": 44, "packSizeL": 0.5}}}
     assert safety.check_numbers("Aavin milk is ₹44 per litre, 0.5 litre pouch.", [facts]).ok
 
@@ -202,11 +202,11 @@ async def test_bridge_safety_check_allows_prices_from_the_prompt_catalog(fake_db
 
     from aira_live.live_bridge import LiveBridge, LiveEvent
 
-    shop = fake_db.collection("shops").document("murugan_dairy")
-    await shop.set({"name": "Murugan Dairy"})
+    shop = fake_db.collection("shops").document("sunrise_dairy")
+    await shop.set({"name": "Sunrise Dairy"})
     await shop.collection("products").document("aavin_milk_500ml").set(
         {"name": "milk", "brand": "Aavin", "unit": "L", "packSizeL": 0.5, "price": 44})
-    prompt = await build_system_prompt("murugan_dairy", "en", "short")
+    prompt = await build_system_prompt("sunrise_dairy", "en", "short")
 
     s, rec = mk_session()
     b = FakeBackend()

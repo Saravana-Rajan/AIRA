@@ -103,7 +103,7 @@ describe("Try AIRA landing page", () => {
     expect(t.optsSeen[0]).toMatchObject({ connect: false, wsUrl: "ws://test/ws" });
     expect(t.fake.env.requestPermissions).not.toHaveBeenCalled();
     expect(t.socket().connects).toHaveLength(1);
-    expect(t.socket().connects[0]).toMatchObject({ t: "hello", shopId: "murugan_dairy", lang: "en" });
+    expect(t.socket().connects[0]).toMatchObject({ t: "hello", shopId: "sunrise_dairy", lang: "en" });
     expect("idToken" in t.socket().connects[0]).toBe(false);
     expect(t.socket().connects[0].uid).toMatch(/^judge-/);
     expect($(".try-chip").textContent).toBe("Connecting…");

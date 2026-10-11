@@ -1,4 +1,4 @@
-"""Aim/retake hints spoken to Murugan.
+"""Aim/retake hints spoken to Sam.
 
 The sentences live in the shared i18n catalog (``aira_live/i18n/{en,ta,hi}.json``, keys ``vision.aim.*``).
 Vision results carry only the key (``aim_hint``); tools speak ``hint_text(result.aim_hint, session.lang)``,

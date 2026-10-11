@@ -1,5 +1,5 @@
 // End-to-end smoke test: the real dashboard (Vite dev server) against the Firestore emulator,
-// seeded with the Murugan Dairy demo story, checked with axe (no serious or critical WCAG 2.1 A/AA
+// seeded with the Sunrise Dairy demo story, checked with axe (no serious or critical WCAG 2.1 A/AA
 // violations). Run it with `node test/e2e/run.mjs`; without an emulator every test is skipped.
 import { test, expect } from "@playwright/test";
 import AxeBuilder from "@axe-core/playwright";

@@ -24,12 +24,12 @@ describe("forecastLoader", () => {
   it("fetches GET {base}/api/forecast?shop= when aira-live is configured", async () => {
     const fetchImpl = vi.fn(async () => new Response(JSON.stringify({ items: [] }), { status: 200 }));
     const load = forecastLoader({ VITE_AIRA_LIVE_WS: "wss://live.example/ws" }, fetchImpl as unknown as typeof fetch);
-    await expect(load("murugan_dairy")).resolves.toEqual({ items: [], demoHistory: false });
-    expect((fetchImpl.mock.calls[0] as unknown[])[0]).toBe("https://live.example/api/forecast?shop=murugan_dairy");
+    await expect(load("sunrise_dairy")).resolves.toEqual({ items: [], demoHistory: false });
+    expect((fetchImpl.mock.calls[0] as unknown[])[0]).toBe("https://live.example/api/forecast?shop=sunrise_dairy");
   });
   it("resolves null without any request when aira-live is not configured", async () => {
     const fetchImpl = vi.fn();
-    await expect(forecastLoader({}, fetchImpl as unknown as typeof fetch)("murugan_dairy")).resolves.toBeNull();
+    await expect(forecastLoader({}, fetchImpl as unknown as typeof fetch)("sunrise_dairy")).resolves.toBeNull();
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 });
@@ -44,9 +44,9 @@ describe("lazyListen", () => {
     });
     const onChange = vi.fn();
     const onStatus = vi.fn();
-    const stop = lazyListen(async () => ({ listenShop }) as never)("murugan_dairy", onChange, onStatus);
+    const stop = lazyListen(async () => ({ listenShop }) as never)("sunrise_dairy", onChange, onStatus);
     await flush();
-    expect(listenShop.mock.calls[0][0]).toBe("murugan_dairy");
+    expect(listenShop.mock.calls[0][0]).toBe("sunrise_dairy");
     expect(onStatus).toHaveBeenCalledWith("live");
     expect(onChange).toHaveBeenCalledWith({ products: [] });
     stop();
@@ -55,7 +55,7 @@ describe("lazyListen", () => {
 
   it("never subscribes when stopped before the module has loaded", async () => {
     const listenShop = vi.fn(() => () => {});
-    const stop = lazyListen(async () => ({ listenShop }) as never)("murugan_dairy", vi.fn(), vi.fn());
+    const stop = lazyListen(async () => ({ listenShop }) as never)("sunrise_dairy", vi.fn(), vi.fn());
     stop();
     await flush();
     expect(listenShop).not.toHaveBeenCalled();
@@ -65,12 +65,12 @@ describe("lazyListen", () => {
     const onStatus = vi.fn();
     lazyListen(async () => {
       throw new Error("projectId not provided");
-    })("murugan_dairy", vi.fn(), onStatus);
+    })("sunrise_dairy", vi.fn(), onStatus);
     await flush();
     expect(onStatus).toHaveBeenLastCalledWith("offline");
 
     const onStatus2 = vi.fn();
-    lazyListen(async () => ({ listenShop: () => { throw new Error("bad config"); } }) as never)("murugan_dairy", vi.fn(), onStatus2);
+    lazyListen(async () => ({ listenShop: () => { throw new Error("bad config"); } }) as never)("sunrise_dairy", vi.fn(), onStatus2);
     await flush();
     expect(onStatus2).toHaveBeenLastCalledWith("offline");
   });

@@ -5,7 +5,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Build the AIRA phone app core. Murugan, who is blind and wears the phone on his chest, should be able to:
+**Goal:** Build the AIRA phone app core. Sam, who is blind and wears the phone on his chest, should be able to:
 - start the app with one tap
 - talk to AIRA by double-tap
 - hear AIRA through his earphone, and interrupt it
@@ -199,7 +199,7 @@ export interface Settings {
   verbosity: Verbosity;
   screenReaderMode: boolean;
   speechRate: number; // 0.5–2.0, applies to client-spoken text
-  shopId: string;     // "demo-murugan-dairy" by default
+  shopId: string;     // "demo-sunrise-dairy" by default
   onboarded: boolean;
 }
 
@@ -233,7 +233,7 @@ export const DEFAULT_SETTINGS: Settings = {
   verbosity: "short",
   screenReaderMode: false,
   speechRate: 1,
-  shopId: "demo-murugan-dairy",
+  shopId: "demo-sunrise-dairy",
   onboarded: false,
 };
 
@@ -1254,7 +1254,7 @@ import { useState } from "preact/hooks";
 import type { Settings } from "../core/types";
 import { DEFAULT_SETTINGS } from "../core/settings";
 
-const SHOPS = [{ id: "demo-murugan-dairy", label: "Murugan Dairy (demo)" }];
+const SHOPS = [{ id: "demo-sunrise-dairy", label: "Sunrise Dairy (demo)" }];
 
 /** One big "Start" tap = the user gesture that unlocks audio, camera, mic and wake lock together. */
 export function Onboarding(props: { onDone(s: Settings): void }) {

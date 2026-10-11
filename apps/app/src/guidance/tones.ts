@@ -59,7 +59,7 @@ export function guideTo(target: [number, number], tip: { x1000: number; y1000: n
     const now = Date.now();
     if (now - lastShowHand >= SHOW_HAND_GAP_MS) {
       lastShowHand = now;
-      app.speak(hintText("show_hand", app.settings.lang));
+      app.speak(hintText("show_hand", app.lang()));
     }
     return;
   }

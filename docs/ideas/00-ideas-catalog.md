@@ -11,9 +11,9 @@ Every AIRA feature, with its status and owner. Spec: `docs/superpowers/specs/202
 | Idea | What | Status | Owner | Where specified |
 |---|---|---|---|---|
 | Voice supplier order | "Order 30 L Sakthi curd from the Sakthi vendor": read back, confirm, then send | ★ | Kanish (tool) · Saravana (Live) | spec §2 step 1 · `kanish/02` · `saravana/01` |
-| WhatsApp order (Cloud API) | Template `order_request` sent automatically; vendor reply via webhook, spoken to Murugan | ★ | Kanish | spec §4.2 · `kanish/02` |
+| WhatsApp order (Cloud API) | Template `order_request` sent automatically; vendor reply via webhook, spoken to Sam | ★ | Kanish | spec §4.2 · `kanish/02` |
 | Telegram order (optional) | Free bot channel for vendors who have started a chat with the AIRA bot | ● | Kanish | spec §4.2 · `kanish/02` |
-| Click-to-chat fallback | `wa.me` link with the order pre-typed; Murugan double-taps Send | ● | Kanish | spec §4.2 · `kanish/02` |
+| Click-to-chat fallback | `wa.me` link with the order pre-typed; Sam double-taps Send | ● | Kanish | spec §4.2 · `kanish/02` |
 | Live delivery count | Packs counted one by one (identify each pack) or by crate (snapshot count); read back and confirmed | ★ | Sarmitha (vision) · Kanish (tool) | spec §2 step 2 · `sarmitha/01` · `kanish/02` |
 | Delivery discrepancy | Records only verified stock; flags shortfalls (`DISCREPANCY`) | ★ | Kanish | spec §2 step 2 · `kanish/01` |
 | Invoice check | Two independent reads; code compares the bill with the order and the count | ★ | Sarmitha (read) · Kanish (reconcile) | spec §2 step 3 · `sarmitha/02` · `kanish/02` |
@@ -59,7 +59,7 @@ Every AIRA feature, with its status and owner. Spec: `docs/superpowers/specs/202
 | Pub/Sub + BigQuery analytics | Events → BigQuery history and forecasting | ● | Saravana | spec §4 · `saravana/02` |
 | Benchmarks | Count accuracy, invoice catch rate, cash accuracy, guidance time, soundbox parsing, latency, cost per sale | ★ | All (runner: Ishwarya) | spec §7 · `ishwarya/03` |
 | User validation | At least one blind participant, ideally a real blind shop owner; completion, errors, time, quotes | ★ | Saravana (logistics) | spec §7 · `saravana/03` |
-| Demo video | 4:00 maximum (target 3:50), "Murugan's Day" | ★ | Saravana (lead) · all | `docs/ideas/04-demo-video-script.md` · `saravana/03` |
+| Demo video | 4:00 maximum (target 3:50), "Sam's Day" | ★ | Saravana (lead) · all | `docs/ideas/04-demo-video-script.md` · `saravana/03` |
 
 ## Roadmap (spec §9)
 

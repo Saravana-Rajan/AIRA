@@ -8,7 +8,7 @@ let root: HTMLElement;
 const noop = () => {};
 
 function mount(state: ScreenState, level = 0) {
-  act(() => { render(<Screen state={state} level={level} shopName="Murugan Dairy" onTalk={noop} onStop={noop} />, root); });
+  act(() => { render(<Screen state={state} level={level} shopName="Sunrise Dairy" onTalk={noop} onStop={noop} />, root); });
 }
 const q = (sel: string) => root.querySelector(sel);
 
@@ -37,7 +37,7 @@ describe("Screen", () => {
     mount(initialScreen);
     const logo = q(".topbar img") as HTMLImageElement;
     expect(logo.getAttribute("src")).toBe("/icons/aira-logo-192.png");
-    expect(q(".topbar")!.textContent).toContain("Murugan Dairy");
+    expect(q(".topbar")!.textContent).toContain("Sunrise Dairy");
   });
 
   it("status chip shows the label and colours by state", () => {

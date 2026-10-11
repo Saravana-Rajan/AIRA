@@ -1,13 +1,13 @@
 import { describe, it, expect } from "vitest";
 import { DEMO_SHOP_ID, resolveAccess } from "../src/lib/access";
 
-// No Firebase Auth in this build: one owner, one shop. Visitors read murugan_dairy as its owner.
-const DEMO = { mode: "demo", shopId: "murugan_dairy", role: "owner" };
+// No Firebase Auth in this build: one owner, one shop. Visitors read sunrise_dairy as its owner.
+const DEMO = { mode: "demo", shopId: "sunrise_dairy", role: "owner" };
 const DENIED = { mode: "denied", reason: "No shop is linked to this account." };
 
 describe("resolveAccess", () => {
-  it("the demo shop is murugan_dairy", () => {
-    expect(DEMO_SHOP_ID).toBe("murugan_dairy");
+  it("the demo shop is sunrise_dairy", () => {
+    expect(DEMO_SHOP_ID).toBe("sunrise_dairy");
   });
   it("signed-out visitors always get the demo shop as its single owner", () => {
     expect(resolveAccess({ uid: null, userDoc: null, wantDemo: false })).toEqual(DEMO);

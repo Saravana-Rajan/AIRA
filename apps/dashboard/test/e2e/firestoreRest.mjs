@@ -39,7 +39,7 @@ export function toFields(obj) {
   return out;
 }
 
-/** Full resource name of a document path such as "shops/murugan_dairy/products/x". */
+/** Full resource name of a document path such as "shops/sunrise_dairy/products/x". */
 export function docName(projectId, databaseId, path) {
   const parts = String(path).split("/");
   if (parts.length % 2 !== 0 || parts.some((p) => p === "")) throw new Error(`Not a document path: "${path}"`);

@@ -26,7 +26,9 @@ export type ClientMsg =
 export type ServerMsg =
   | { t: "ready"; sessionId: string; resume: string; mock: boolean }
   | { t: "audio"; pcm24: string }
-  | { t: "transcript"; role: TranscriptRole; text: string; final: boolean }
+  // lang: the language AIRA detected from the speaker's last finished utterance (any code: "ta", "ja", "en",
+  // ...), so the app's labels can follow. Absent on partial transcripts and before anyone has spoken.
+  | { t: "transcript"; role: TranscriptRole; text: string; final: boolean; lang?: string }
   | { t: "request_frame"; purpose: FramePurpose; burst?: { count: number; intervalMs: number }; continuous?: boolean; stop?: boolean }
   | { t: "target"; frameId: string; label: string; point: Point; box?: Box; confidence: number }
   | { t: "count"; sku: string; counted: number; expected: number | null; final: boolean; confidence: number }
@@ -96,7 +98,7 @@ export function isServerMsg(x: unknown): x is ServerMsg {
     case "audio":
       return isStr(x.pcm24);
     case "transcript":
-      return inList(TRANSCRIPT_ROLES, x.role) && isStr(x.text) && isBool(x.final);
+      return inList(TRANSCRIPT_ROLES, x.role) && isStr(x.text) && isBool(x.final) && optional(x.lang, isStr);
     case "request_frame":
       return inList(FRAME_PURPOSES, x.purpose) && optional(x.burst, isBurst) &&
         optional(x.continuous, isBool) && optional(x.stop, isBool);

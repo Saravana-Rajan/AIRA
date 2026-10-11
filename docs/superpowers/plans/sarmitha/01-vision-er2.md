@@ -14,7 +14,7 @@
 **Goal:** Give AIRA reliable "eyes" for the shop. Build one shared Gemini helper, then three vision functions on top of it:
 
 - **count** packs in a crate or on a shelf
-- **identify** which product Murugan is holding
+- **identify** which product Sam is holding
 - **point** to a product so the app can guide his hand
 
 Then measure whether Gemini Robotics-ER 2 is fast and accurate enough, and switch to Flash if it isn't.
@@ -503,7 +503,7 @@ Expected: FAIL with `ModuleNotFoundError: No module named 'aira_live.vision.hint
 - [ ] **Step 3: Implement `services/live/aira_live/vision/hints.py`**
 
 ```python
-"""Aim/retake hints spoken to Murugan. Tools call hint_text(result.aim_hint, session.lang)."""
+"""Aim/retake hints spoken to Sam. Tools call hint_text(result.aim_hint, session.lang)."""
 
 HINTS: dict[str, dict[str, str]] = {
     "vision.aim.move_back": {
@@ -739,7 +739,7 @@ Expected: FAIL with `ModuleNotFoundError: No module named 'aira_live.vision.iden
 - [ ] **Step 3: Implement `services/live/aira_live/vision/identify.py`**
 
 ```python
-"""Which product is Murugan holding? ER 2 picks from a candidate list; code decides whether to trust it."""
+"""Which product is Sam holding? ER 2 picks from a candidate list; code decides whether to trust it."""
 from __future__ import annotations
 
 import json
@@ -910,7 +910,7 @@ Expected: FAIL with `ModuleNotFoundError: No module named 'aira_live.vision.poin
 - [ ] **Step 3: Implement `services/live/aira_live/vision/point.py`**
 
 ```python
-"""Point to one product so the app can guide Murugan's hand. [y, x] and boxes stay normalized 0–1000."""
+"""Point to one product so the app can guide Sam's hand. [y, x] and boxes stay normalized 0–1000."""
 from __future__ import annotations
 
 from pydantic import BaseModel
@@ -1008,7 +1008,7 @@ git commit -m "feat(vision): point_to with range/box validation for hand guidanc
 
 - [ ] **Step 1: Take the photos (D0 evening, real data)**
 
-1. Photograph **20 pack photos** with the chest-mounted phone, about 40–60 cm from the pack, like Murugan holding it up:
+1. Photograph **20 pack photos** with the chest-mounted phone, about 40–60 cm from the pack, like Sam holding it up:
    - 4 × each of `aavin_milk_500ml`, `aavin_milk_1l`, `sakthi_curd_500ml`, `sakthi_curd_1l`, `arun_icecream_box`
    - In each set of 4: 2 with the label facing the camera, 1 tilted, 1 in shop lighting.
 2. Save them as `bench/data/packs/p01.jpg` … `p20.jpg`.

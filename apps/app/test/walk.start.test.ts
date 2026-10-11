@@ -3,7 +3,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 const video = { readyState: 4, videoWidth: 1280, videoHeight: 720 };
 vi.mock("../src/camera/capture", () => ({ startCamera: vi.fn(async () => video) }));
-vi.mock("../src/core/app", () => ({ app: { earcon: vi.fn(), speak: vi.fn(), settings: { lang: "en" } } }));
+vi.mock("../src/core/app", () => ({ app: { earcon: vi.fn(), speak: vi.fn(), settings: { lang: "auto" }, lang: () => "en" } }));
 
 import { grabFrame, startBumpGuard } from "../src/walk/start";
 import { startCamera } from "../src/camera/capture";

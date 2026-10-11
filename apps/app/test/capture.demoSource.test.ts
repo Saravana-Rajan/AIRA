@@ -3,7 +3,7 @@
 // opening the camera, and fall back to the real camera after setFrameSource(null).
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 const { app } = vi.hoisted(() => ({
-  app: { send: vi.fn((_m: unknown) => true), speak: vi.fn(), earcon: vi.fn(), haptic: vi.fn(), settings: { lang: "en" } },
+  app: { send: vi.fn((_m: unknown) => true), speak: vi.fn(), earcon: vi.fn(), haptic: vi.fn(), settings: { lang: "auto" }, lang: () => "en" },
 }));
 vi.mock("../src/core/app", () => ({ app }));
 import { captureFrame, __setCaptureDeps, type FrameSource } from "../src/camera/capture";

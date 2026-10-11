@@ -15,10 +15,11 @@ class Settings:
     whatsapp_phone_id: str | None
     whatsapp_verify_token: str | None
     telegram_token: str | None
-    demo_shop_id: str = "murugan_dairy"
+    demo_shop_id: str = "sunrise_dairy"
     max_frame_b64: int = 1_500_000
     firestore_database: str = "aira"  # never "(default)"
-    allow_no_token: bool = False  # hello without idToken is accepted (no Firebase Auth)
+    allow_no_token: bool = False  # hello without a Firebase ID token is accepted (no Firebase Auth)
+    app_key: str | None = None  # shared demo key: when set, hello.idToken must equal it (docs/ops/security.md)
     job_token: str | None = None  # X-AIRA-Job-Token for /jobs/*
 
 
@@ -36,8 +37,9 @@ def load() -> Settings:
         whatsapp_phone_id=_env("WHATSAPP_PHONE_ID"),
         whatsapp_verify_token=_env("WHATSAPP_VERIFY_TOKEN"),
         telegram_token=_env("TELEGRAM_TOKEN"),
-        demo_shop_id=_env("AIRA_DEMO_SHOP") or "murugan_dairy",
+        demo_shop_id=_env("AIRA_DEMO_SHOP") or "sunrise_dairy",
         firestore_database=_env("FIRESTORE_DATABASE") or "aira",
         allow_no_token=os.getenv("AIRA_ALLOW_NO_TOKEN", "0") == "1",
+        app_key=_env("AIRA_APP_KEY"),
         job_token=_env("AIRA_JOB_TOKEN"),
     )

@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** a read-only, accessible web **Shop Dashboard** on Firebase Hosting that shows Murugan Dairy's live stock, today's sales, orders and deliveries (with discrepancies), the audit trail and reorder suggestions, in real time from Firestore. Judges can open the demo shop without signing in; a blind owner's family signs in with Google.
+**Goal:** a read-only, accessible web **Shop Dashboard** on Firebase Hosting that shows Sunrise Dairy's live stock, today's sales, orders and deliveries (with discrepancies), the audit trail and reorder suggestions, in real time from Firestore. Judges can open the demo shop without signing in; a blind owner's family signs in with Google.
 
 **Architecture:**
 - **Stack:** Vite + TypeScript + Preact SPA in `apps/dashboard`, using the Firebase modular SDK.
@@ -1066,7 +1066,7 @@ export function Layout(props: { access: Access; route: string; onSignIn(): void;
         )}
       </header>
       {props.access.mode === "demo" && (
-        <p role="status" class="banner">Demo shop (read-only): Murugan Dairy sample data.</p>
+        <p role="status" class="banner">Demo shop (read-only): Sunrise Dairy sample data.</p>
       )}
       <nav aria-label="Dashboard sections">
         <ul class="nav">
@@ -1465,7 +1465,7 @@ export default async function seed() {
     return d.toISOString().slice(0, 10);
   };
   const batch = db.batch();
-  batch.set(shop, { name: "Murugan Dairy (demo)", ownerUid: "demo-owner", city: "Chennai", currency: "INR", timezone: "Asia/Kolkata" });
+  batch.set(shop, { name: "Sunrise Dairy (demo)", ownerUid: "demo-owner", city: "Chennai", currency: "INR", timezone: "Asia/Kolkata" });
   // Demo prices only — not real MRP.
   batch.set(shop.collection("products").doc("sakthi_curd_1l"), { name: "Sakthi curd 1 L", brand: "Sakthi", unit: "L", packSizeL: 1, price: 60, costPrice: 50, reorderThreshold: 5, shelfLifeDays: 7, aliases: { ta: ["தயிர்"], hi: ["दही"], en: ["curd"] } });
   batch.set(shop.collection("products").doc("aavin_milk_500ml"), { name: "Aavin milk 500 ml", brand: "Aavin", unit: "pack", packSizeL: 0.5, price: 25, costPrice: 22, reorderThreshold: 10, shelfLifeDays: 2, aliases: { ta: ["பால்"], hi: ["दूध"], en: ["milk"] } });
@@ -1674,7 +1674,7 @@ npx firebase-tools deploy --only hosting:dashboard --project <project>
 curl -s -o /dev/null -w "%{http_code}\n" "https://<project>-dashboard.web.app/?demo=1"
 ```
 
-Expected: the deploy prints `Hosting URL: https://<project>-dashboard.web.app`, and `curl` prints `200`. Opening `/?demo=1` shows the Murugan Dairy demo stock (once Saravana's demo shop seed exists in production).
+Expected: the deploy prints `Hosting URL: https://<project>-dashboard.web.app`, and `curl` prints `200`. Opening `/?demo=1` shows the Sunrise Dairy demo stock (once Saravana's demo shop seed exists in production).
 
 - [ ] **Step 6: Commit**
 

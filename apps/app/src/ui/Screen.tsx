@@ -14,7 +14,7 @@ type Props = {
   /** Mic or speaker loudness, 0..1. */
   level?: number;
   shopName?: string;
-  /** Language of the on-screen hints and speaker names. Defaults to English. */
+  /** Language of the on-screen hints and speaker names: the one the speaker last used (English labels when not given). */
   lang?: Lang;
   /** A live delivery count, drawn as a bar on the task card. */
   progress?: CountProgress | null;

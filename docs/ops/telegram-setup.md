@@ -12,14 +12,15 @@ It takes about 15 minutes. Nothing here needs Meta approval.
 | Env var on `aira-live` | Comes from | Stored as |
 |---|---|---|
 | `TELEGRAM_TOKEN` | BotFather (step 1) | secret `aira-telegram-token` |
-| `TELEGRAM_WEBHOOK_SECRET` | already created and attached | secret `aira-telegram-webhook-secret` |
-| `AIRA_TELEGRAM_LINK_CODE` (optional) | you, only while moving a vendor to a new phone (step 5) | plain env var, removed afterwards |
+| `TELEGRAM_WEBHOOK_SECRET` | already created and attached; also tags the vendor links (step 4) | secret `aira-telegram-webhook-secret` |
 
 **Rules**
 
 - Never commit the token, a chat id, a phone number or the project id. Use `.env` locally (git-ignored) and
   Secret Manager in the cloud.
 - Never paste a secret into a command line, a chat or a doc. The commands below read secrets from stdin.
+- A vendor link is a credential (its tag is derived from the webhook secret). Send each link to its vendor
+  privately; never post one in a group, a doc or a screenshot.
 - `TELEGRAM_TOKEN` is **not** in `.github/workflows/deploy.yml` or `infra/deploy_live.sh`. Attach it on the
   service once (step 3); both deploys use `--update-secrets`, so later deploys keep it. Add it to `deploy.yml`
   only after the secret exists, or the deploy fails.
@@ -39,9 +40,9 @@ export PROJECT_ID=<PROJECT_ID>   # your Google Cloud project id. Never commit it
 ## 1. Create the bot with BotFather
 
 1. In Telegram, open **@BotFather** and send `/newbot`.
-2. Name: `AIRA Murugan Dairy`. Username: anything ending in `bot`, for example `AiraMuruganDairyBot`.
+2. Name: `AIRA Sunrise Dairy`. Username: anything ending in `bot`, for example `AiraSunriseDairyBot`.
 3. BotFather replies with the bot token (`123456789:AA...`). Keep it on the clipboard only until step 2.
-4. Optional: `/setdescription` → "Orders from Murugan Dairy. Press Start to receive them here."
+4. Optional: `/setdescription` → "Orders from Sunrise Dairy. Press Start to receive them here."
 
 ## 2. Store the token in Secret Manager
 
@@ -84,7 +85,9 @@ Check it took: `GET /health` still answers `{"ok":true,...}`, and the new revisi
 
 `scripts/telegram_setup.py` calls `setWebhook` (URL `<aira-live>/webhooks/telegram`, the secret header,
 `allowed_updates=["message"]`), then `getMe`, and prints one deep link per Telegram supplier in the catalog.
-It never prints the token.
+Each link is `?start=<supplier_id>.<tag>`, where `tag = HMAC-SHA256(TELEGRAM_WEBHOOK_SECRET, supplier_id)[:20]`.
+`aira-live` recomputes the tag from the same secret, so the secret in this shell must be the one attached to the
+service. The script never prints the token or the secret.
 
 ```bash
 URL="$(gcloud run services describe aira-live --region asia-south1 --project "$PROJECT_ID" --format='value(status.url)')"
@@ -97,43 +100,33 @@ Expected output:
 
 ```
 Webhook set: https://<aira-live host>/webhooks/telegram (allowed_updates: message, secret header on)
-Bot: @AiraMuruganDairyBot
-Send each vendor their link. They open it and press Start; AIRA then messages them orders there:
-  Aavin vendor (aavin_vendor): https://t.me/AiraMuruganDairyBot?start=aavin_vendor
-  Sakthi curd vendor (sakthi_vendor): https://t.me/AiraMuruganDairyBot?start=sakthi_vendor
-A linked vendor stays linked (first come). To move one to a new phone, set AIRA_TELEGRAM_LINK_CODE on aira-live and in this shell, then run this again for the re-link links.
+Bot: @AiraSunriseDairyBot
+Send each vendor their own link, privately (the link is the credential). They open it and press Start;
+AIRA then messages them orders there. A new phone opens the same link again; the old chat is unlinked:
+  Aavin vendor (aavin_vendor): https://t.me/AiraSunriseDairyBot?start=aavin_vendor.3f9c2a7e1b04d5c6e8a1
+  Sakthi curd vendor (sakthi_vendor): https://t.me/AiraSunriseDairyBot?start=sakthi_vendor.b71e0d4c9a2f6e5d3c08
 ```
 
-Run it again whenever the service URL changes. Setting the webhook turns `getUpdates` off, which is fine:
-AIRA only uses the webhook.
+(The tags above are examples; yours differ.) Run it again whenever the service URL changes. Setting the webhook
+turns `getUpdates` off, which is fine: AIRA only uses the webhook. Rotating `aira-telegram-webhook-secret`
+changes every tag: run step 4 again and resend the links.
 
 ## 5. Onboard each vendor (deep link)
 
-1. Send each vendor **their own** link from the output above, by any channel (SMS, WhatsApp, in person).
-2. The vendor opens it and presses **Start**. Telegram sends `/start <supplier_id>` to the webhook.
-3. `aira-live` checks that `<supplier_id>` is a supplier of the demo shop, stores the sender's chat id as
-   `telegramChatId` on `shops/murugan_dairy/suppliers/<supplier_id>` (database `aira`), and replies
-   "AIRA: you will receive Murugan Dairy orders here." Unknown ids are ignored, silently.
-4. **First come.** The supplier ids are in the public catalog, so once a chat is linked, a `/start` for that
-   supplier from any other chat is ignored (nothing written, no reply). The linked chat may press Start again.
-5. **Moving a vendor to a new phone** needs a one-time code:
-
-   ```bash
-   gcloud run services update aira-live --region asia-south1 --project "$PROJECT_ID" \
-     --update-env-vars AIRA_TELEGRAM_LINK_CODE=<a short random code>
-   AIRA_TELEGRAM_LINK_CODE=<the same code> TELEGRAM_TOKEN=... TELEGRAM_WEBHOOK_SECRET=... \
-     python3 scripts/telegram_setup.py "$URL"      # now also prints ?start=<supplier_id>-<code> links
-   ```
-
-   Send the vendor the re-link link (`/start <supplier_id>-<code>`). The new chat takes over and the old chat is
-   unlinked (its replies no longer count as the vendor's). Then remove the code again:
-
-   ```bash
-   gcloud run services update aira-live --region asia-south1 --project "$PROJECT_ID" \
-     --remove-env-vars AIRA_TELEGRAM_LINK_CODE
-   ```
-
-   With the code unset, no re-link is possible at all.
+1. Send each vendor **their own** link from the output above, privately (SMS, a direct WhatsApp message, in
+   person). The link is the credential: anyone who opens it becomes that vendor's chat.
+2. The vendor opens it and presses **Start**. Telegram sends `/start <supplier_id>.<tag>` to the webhook.
+3. `aira-live` recomputes the tag from `TELEGRAM_WEBHOOK_SECRET` and compares it in constant time, checks that
+   `<supplier_id>` is a supplier of the demo shop, stores the sender's chat id as `telegramChatId` on
+   `shops/sunrise_dairy/suppliers/<supplier_id>` (database `aira`), and replies
+   "AIRA: you will receive Sunrise Dairy orders here."
+4. **No tag, no link.** A `/start <supplier_id>` without the tag, with a wrong tag or with another supplier's tag
+   is ignored (nothing written, no reply), even when nobody is linked yet. Unknown ids are ignored the same way.
+   The linked chat may press Start again.
+5. **Moving a vendor to a new phone:** the vendor opens the same link on the new phone and presses Start. The
+   new chat takes over and the old chat is unlinked (its replies no longer count as the vendor's). To take a
+   link back from someone who should not have it, rotate `aira-telegram-webhook-secret`, run step 4 again and
+   resend the new links.
 
 Check in the Firestore console that the supplier doc now has `telegramChatId`. Never copy that id anywhere.
 
@@ -158,7 +151,7 @@ asks whether you sent it. Nothing fails silently; the order stays `DRAFT` until 
 | Webhook logs show `403` | The `X-Telegram-Bot-Api-Secret-Token` header does not match `TELEGRAM_WEBHOOK_SECRET`, or the secret is unset. Run step 4 again after fixing the service. |
 | Order falls back to click-to-chat | Listen to AIRA: "not on the AIRA Telegram bot yet" means the vendor has not opened their link. Check `telegramChatId` on the supplier doc. |
 | Replies never reach the owner | The reply must come from the chat that pressed Start. Check the Cloud Run logs for `POST /webhooks/telegram` with status `200`. |
-| Vendor's new phone presses Start and nothing happens | The supplier is already linked to the old chat. Use the re-link link with `AIRA_TELEGRAM_LINK_CODE` (step 5). |
+| Vendor presses Start and nothing happens, no reply | The link has no tag or a stale one (typed by hand, or from before a secret rotation). Run step 4 again and resend the link. |
 
 Sources: Telegram Bot API [setWebhook](https://core.telegram.org/bots/api#setwebhook),
 [deep linking](https://core.telegram.org/bots/features#deep-linking),

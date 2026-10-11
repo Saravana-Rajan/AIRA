@@ -2,7 +2,7 @@
 stock_query, expiry_check and the committers "supplier_pay.cash", "supplier_pay.upi", "sale.complete".
 
 The engine (catalog, ledger, sales, payments, money, soundbox, reconcile, expiry, outbox) runs for real on a
-MemoryStore seeded from the real Murugan Dairy catalog, with the foundation's confirm/session/ids. Only the cash
+MemoryStore seeded from the real Sunrise Dairy catalog, with the foundation's confirm/session/ids. Only the cash
 reader (Gemini), the Live transcript subscription, sessions.notify and the analytics publisher are faked. The phone
 is a fake that answers request_frame messages with queued frames.
 """
@@ -28,7 +28,7 @@ from aira_live.vision.cash import CashRead
 
 ROOT = Path(__file__).resolve().parents[4]
 CATALOG = ROOT / "content" / "catalog" / "murugan_dairy.json"
-SHOP = "murugan_dairy"
+SHOP = "sunrise_dairy"
 CURD = "sakthi_curd_1l"
 MILK = "aavin_milk_500ml"
 

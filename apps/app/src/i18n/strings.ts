@@ -19,7 +19,7 @@ export const STRINGS: Record<"offline" | "online" | "reconnecting" | "paused" | 
 /**
  * Short labels drawn on the screen (status chip, task card, caption speakers, idle hint). The screen reducer
  * writes the `en` text; AppShell.localizeStatus looks it up here by its English text (or by the `{n}` pattern
- * for the parameterised ones) and draws the owner's language.
+ * for the parameterised ones) and draws the language the speaker last used (English for one without labels).
  */
 export const LABELS: Record<
   | "connecting" | "ready" | "listening" | "thinking" | "counting" | "warning" | "offline" | "stop" | "you" | "aira"
@@ -65,19 +65,15 @@ export const LABELS: Record<
   },
 };
 
-/** Onboarding screen (the one Start tap). The labels follow the language picked on that screen. */
-export const ONBOARDING: Record<"howTo" | "language" | "talkback" | "talkbackHint" | "start" | "startHint", S> = {
-  howTo:        { en: "Pick a language, then tap Start.", ta: "மொழியைத் தேர்ந்தெடுத்து, தொடங்கு அழுத்துங்கள்.", hi: "भाषा चुनें, फिर शुरू करें दबाएँ।" },
-  language:     { en: "Language", ta: "மொழி", hi: "भाषा" },
+/**
+ * Onboarding screen (the one Start tap). There is no language picker: AIRA follows whoever speaks. The labels
+ * here are written in the phone's language (only a hint for the first line), English for any other.
+ */
+export const ONBOARDING: Record<"howTo" | "anyLanguage" | "talkback" | "talkbackHint" | "start" | "startHint", S> = {
+  howTo:        { en: "Tap Start, then just talk.", ta: "தொடங்கு அழுத்தி, பேசுங்கள்.", hi: "शुरू करें दबाएँ, फिर बोलें।" },
+  anyLanguage:  { en: "Speak any language. AIRA answers in yours.", ta: "எந்த மொழியிலும் பேசலாம். AIRA அதே மொழியில் பதில் சொல்லும்.", hi: "किसी भी भाषा में बोलें। AIRA उसी भाषा में जवाब देगा।" },
   talkback:     { en: "I use TalkBack", ta: "நான் TalkBack பயன்படுத்துகிறேன்", hi: "मैं TalkBack इस्तेमाल करता हूँ" },
   talkbackHint: { en: "AIRA's messages go to TalkBack.", ta: "AIRA செய்திகளை TalkBack படிக்கும்.", hi: "AIRA के संदेश TalkBack पढ़ेगा।" },
   start:        { en: "Start", ta: "தொடங்கு", hi: "शुरू करें" },
   startHint:    { en: "Turns on the microphone and camera.", ta: "மைக், கேமரா இயக்கப்படும்.", hi: "माइक और कैमरा चालू होंगे।" },
-};
-
-/** Each language in its own script, with the English name for a sighted helper. */
-export const LANG_NAMES: Record<Lang, { native: string; english: string }> = {
-  ta: { native: "தமிழ்", english: "Tamil" },
-  hi: { native: "हिन्दी", english: "Hindi" },
-  en: { native: "English", english: "English" },
 };

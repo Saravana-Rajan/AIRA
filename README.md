@@ -6,7 +6,7 @@ Google Cloud AI Builder Cup 2026 · Team Techjays · Theme: Sustainability &amp;
 
 **A**rtificial Intelligence: understands the world. · **I**ntelligent Interaction: communicates naturally. · **R**eal-world Guidance: helps users navigate. · **A**ccessibility: supports independence.
 
-AIRA is a voice-first assistant that lets a blind shopkeeper run a small shop alone. He wears a phone on his chest and one earphone. He talks, and AIRA listens, looks through the camera and answers in Tamil, Hindi or English. It orders stock from vendors, counts deliveries, checks bills and cash, guides his hand to the right product, confirms UPI payments and keeps the stock book. Gemini understands and sees. Plain, tested code does the maths and keeps the records in Firestore. Our demo shop is **Murugan Dairy**, which sells Aavin milk, Sakthi curd and Arun ice cream.
+AIRA is a voice-first assistant that lets a blind shopkeeper run a small shop alone. He wears a phone on his chest and one earphone. He talks, and AIRA listens, looks through the camera and answers in whatever language he spoke: Tamil, English, Hindi or any other, switching whenever he switches. It orders stock from vendors, counts deliveries, checks bills and cash, guides his hand to the right product, confirms UPI payments and keeps the stock book. Gemini understands and sees. Plain, tested code does the maths and keeps the records in Firestore. Our demo shop is **Sunrise Dairy**, which sells Aavin milk, Sakthi curd and Arun ice cream.
 
 ## Try it
 
@@ -18,7 +18,7 @@ AIRA is a voice-first assistant that lets a blind shopkeeper run a small shop al
 
 ## What AIRA does
 
-| # | Murugan says or does | AIRA does |
+| # | Sam says or does | AIRA does |
 |---|---|---|
 | 1 | "Order 30 litres Sakthi curd." | Reads the order back and waits for "yes" |
 | 2 | (after "yes") | Sends the order to the vendor on **WhatsApp** (Cloud API). Telegram is optional. A `wa.me` link is the fallback. The vendor's reply is spoken to him |

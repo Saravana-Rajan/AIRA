@@ -14,7 +14,7 @@ def session():
     async def send(m):
         sent.append(m)
 
-    s = Session(uid="u1", shop_id="murugan_dairy", lang="en", verbosity="short", send=send)
+    s = Session(uid="u1", shop_id="sunrise_dairy", lang="en", verbosity="short", send=send)
     s.sent = sent
     token = current_session.set(s)
     confirm.set_store(confirm.MemoryProposalStore())
@@ -66,11 +66,11 @@ async def test_proposal_is_stored_pending_then_committed(session):
 
     confirm.register_committer("test.sale", commit)
     p = await confirm.propose("sale", "Complete the sale?", {"saleId": "s1"}, "test.sale")
-    doc = await store.get("murugan_dairy", p["confirm_id"])
+    doc = await store.get("sunrise_dairy", p["confirm_id"])
     assert doc["status"] == "pending" and doc["committer"] == "test.sale" and doc["kind"] == "sale"
     assert doc["payload"] == {"saleId": "s1"} and doc["sessionId"] == session.session_id
     await confirm.resolve(p["confirm_id"], "yes")
-    doc = await store.get("murugan_dairy", p["confirm_id"])
+    doc = await store.get("sunrise_dairy", p["confirm_id"])
     assert doc["status"] == "committed" and doc["result"]["saleId"] == "s1"
 
 

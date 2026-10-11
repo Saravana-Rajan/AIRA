@@ -47,8 +47,8 @@ gcloud run deploy "$SERVICE" \
   --max-instances 1 \
   --timeout 3600 \
   --session-affinity \
-  --update-secrets GEMINI_API_KEY=aira-gemini-api-key:latest,AIRA_JOB_TOKEN=aira-job-token:latest,WHATSAPP_VERIFY_TOKEN=aira-whatsapp-verify-token:latest,TELEGRAM_WEBHOOK_SECRET=aira-telegram-webhook-secret:latest \
-  --update-env-vars "FIRESTORE_DATABASE=aira,AIRA_DEMO_SHOP=murugan_dairy,AIRA_ALLOW_NO_TOKEN=1,AIRA_MOCK=0,GCP_PROJECT=${GCP_PROJECT}" \
+  --update-secrets GEMINI_API_KEY=aira-gemini-api-key:latest,AIRA_JOB_TOKEN=aira-job-token:latest,WHATSAPP_VERIFY_TOKEN=aira-whatsapp-verify-token:latest,TELEGRAM_WEBHOOK_SECRET=aira-telegram-webhook-secret:latest,AIRA_APP_KEY=aira-app-key:latest \
+  --update-env-vars "FIRESTORE_DATABASE=aira,AIRA_DEMO_SHOP=sunrise_dairy,AIRA_ALLOW_NO_TOKEN=1,AIRA_MOCK=0,GCP_PROJECT=${GCP_PROJECT}" \
   --quiet
 
 DESCRIBE_JSON="$(gcloud run services describe "$SERVICE" --region "$REGION" --project "$GCP_PROJECT" --format=json)"

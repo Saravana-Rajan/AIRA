@@ -32,7 +32,7 @@ def published():
 
 @pytest.fixture
 async def store():
-    """MemoryStore seeded with the Murugan Dairy catalog (shop, products, suppliers) and installed as get_store()."""
+    """MemoryStore seeded with the Sunrise Dairy catalog (shop, products, suppliers) and installed as get_store()."""
     s = MemoryStore()
     set_store(s)
     await seed.seed_into(s, seed.load_catalog(CATALOG), env={})

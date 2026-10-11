@@ -1,6 +1,6 @@
 """Shared fixtures for the messaging tests (kanish/02). Everything is faked; no test reaches Meta or Telegram.
 
-The real engine (kanish/01) runs on a MemoryStore seeded from the real Murugan Dairy catalog. Supplier phones come
+The real engine (kanish/01) runs on a MemoryStore seeded from the real Sunrise Dairy catalog. Supplier phones come
 through the seed's own env mechanism (the catalog's ``phoneEnv`` names), never from git.
 """
 from pathlib import Path
@@ -12,7 +12,7 @@ from aira_live.business.store import MemoryStore, set_store
 
 ROOT = Path(__file__).resolve().parents[4]
 CATALOG = ROOT / "content" / "catalog" / "murugan_dairy.json"
-SHOP = "murugan_dairy"
+SHOP = "sunrise_dairy"
 SUPPLIER_PHONES = {
     "SUPPLIER_AAVIN_PHONE": "+919000000001",
     "SUPPLIER_SAKTHI_PHONE": "+919000000002",

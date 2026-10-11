@@ -153,7 +153,7 @@ def forecasts(monkeypatch):
     values: dict[str, float | None] = {}
 
     async def daily_demand(shop_id, sku):
-        assert shop_id == "murugan_dairy"
+        assert shop_id == "sunrise_dairy"
         return values.get(sku)
     monkeypatch.setattr(sm.forecast, "daily_demand", daily_demand)
     return values
@@ -174,11 +174,11 @@ async def test_today_reads_only_this_ist_day(monkeypatch, forecasts):
         },
         "orders": {"o1": {"state": "DISCREPANCY"}, "o2": {"state": "CLOSED"}},
     }
-    fake = _FakeDb({"murugan_dairy": shop})
+    fake = _FakeDb({"sunrise_dairy": shop})
     monkeypatch.setattr(sm, "db", lambda: fake)
     forecasts.update({"sakthi_curd_1l": 26.0, "aavin_milk_500ml": 20.0})
 
-    out = await sm.today("murugan_dairy", now=now)
+    out = await sm.today("sunrise_dairy", now=now)
     assert out["sales_count"] == 1 and out["revenue"] == 120 and out["top_sku"] == "sakthi_curd_1l"
     assert out["open_discrepancies"] == 1 and out["low_stock"] == ["sakthi_curd_1l"]
     assert out["suggested_orders"] == [{"sku": "sakthi_curd_1l", "qty": 28, "unit": "L"}]
@@ -194,26 +194,26 @@ async def test_today_utc_clock_still_uses_the_ist_day(monkeypatch, forecasts):
             "sales": {"s1": {"state": "SALE_COMPLETED", "total": 44,
                              "completedAt": datetime(2026, 10, 13, 0, 30, tzinfo=IST),
                              "items": [{"sku": "aavin_milk_500ml", "qty": 1}]}}}
-    monkeypatch.setattr(sm, "db", lambda: _FakeDb({"murugan_dairy": shop}))
-    out = await sm.today("murugan_dairy", now=now_utc)
+    monkeypatch.setattr(sm, "db", lambda: _FakeDb({"sunrise_dairy": shop}))
+    out = await sm.today("sunrise_dairy", now=now_utc)
     assert out["sales_count"] == 1 and out["revenue"] == 44
 
 
 async def test_today_carries_the_demo_history_flag(monkeypatch, forecasts):
     """Backfilled demo rows feeding the forecast make the day summary say "demo history" (summary.say)."""
     shop = {"products": PRODUCTS, "inventory": {}, "sales": {}, "orders": {}}
-    monkeypatch.setattr(sm, "db", lambda: _FakeDb({"murugan_dairy": shop}))
+    monkeypatch.setattr(sm, "db", lambda: _FakeDb({"sunrise_dairy": shop}))
 
     async def demo(shop_id):
-        assert shop_id == "murugan_dairy"
+        assert shop_id == "sunrise_dairy"
         return True
 
     monkeypatch.setattr(sm.forecast, "demo_history", demo)
-    assert (await sm.today("murugan_dairy"))["demo_history"] is True
+    assert (await sm.today("sunrise_dairy"))["demo_history"] is True
 
 
 async def test_today_without_forecast_suggests_nothing(monkeypatch, forecasts):
     shop = {"products": PRODUCTS, "inventory": {}, "sales": {}, "orders": {}}
-    monkeypatch.setattr(sm, "db", lambda: _FakeDb({"murugan_dairy": shop}))
-    out = await sm.today("murugan_dairy")
+    monkeypatch.setattr(sm, "db", lambda: _FakeDb({"sunrise_dairy": shop}))
+    out = await sm.today("sunrise_dairy")
     assert out["sales_count"] == 0 and out["suggested_orders"] == [] and out["top_sku"] is None

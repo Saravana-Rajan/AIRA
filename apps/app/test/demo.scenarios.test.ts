@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { SCENARIOS, DEMO_MEDIA_FILES, DAY_PARTS } from "../src/demo/scenarios";
 
 describe("demo scenarios", () => {
-  it("cover the whole Murugan Dairy loop, in order", () => {
+  it("cover the whole Sunrise Dairy loop, in order", () => {
     expect(SCENARIOS.map((s) => s.id)).toEqual([
       "order", "delivery-one", "delivery-crate", "invoice-ok", "invoice-wrong",
       "pay-vendor", "sale-guide", "sale-cash", "sale-upi", "summary",

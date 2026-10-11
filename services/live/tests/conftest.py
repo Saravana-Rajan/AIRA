@@ -38,7 +38,7 @@ def mk_session():
     """Factory for a Session whose ``send`` is a Recorder: ``s, rec = mk_session()``."""
     from aira_live.session import Session
 
-    def _make(shop: str = "murugan_dairy", lang: str = "en", verbosity: str = "short"):
+    def _make(shop: str = "sunrise_dairy", lang: str = "en", verbosity: str = "short"):
         rec = Recorder()
         return Session("u1", shop, lang, verbosity, rec), rec
 

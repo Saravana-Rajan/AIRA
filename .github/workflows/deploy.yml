@@ -1,7 +1,9 @@
 # Push to main of Saravana-Rajan/AIRA: run the tests, then deploy aira-live (Cloud Run) and the
 # aira-shop Hosting site. Keyless auth through Workload Identity Federation (infra/setup_github_deploy.sh).
 # Repository SECRETS (the repo is public; secrets are masked in logs):
-#   GCP_PROJECT, GCP_WIF_PROVIDER, GCP_DEPLOY_SA, VITE_FIREBASE_*.
+#   GCP_PROJECT, GCP_WIF_PROVIDER, GCP_DEPLOY_SA, VITE_FIREBASE_*, VITE_AIRA_APP_KEY (the shared demo
+#   key the app sends as hello.idToken; the same value is Secret Manager aira-app-key -> AIRA_APP_KEY on
+#   aira-live; docs/ops/security.md).
 # The aira-live image is built in the runner and pushed to Artifact Registry (no Cloud Build).
 name: Deploy
 
@@ -108,8 +110,8 @@ jobs:
             --max-instances 1 \
             --timeout 3600 \
             --session-affinity \
-            --update-secrets GEMINI_API_KEY=aira-gemini-api-key:latest,AIRA_JOB_TOKEN=aira-job-token:latest,WHATSAPP_VERIFY_TOKEN=aira-whatsapp-verify-token:latest,TELEGRAM_WEBHOOK_SECRET=aira-telegram-webhook-secret:latest \
-            --update-env-vars FIRESTORE_DATABASE=aira,AIRA_DEMO_SHOP=murugan_dairy,AIRA_ALLOW_NO_TOKEN=1,AIRA_MOCK=0,GCP_PROJECT=${{ secrets.GCP_PROJECT }} \
+            --update-secrets GEMINI_API_KEY=aira-gemini-api-key:latest,AIRA_JOB_TOKEN=aira-job-token:latest,WHATSAPP_VERIFY_TOKEN=aira-whatsapp-verify-token:latest,TELEGRAM_WEBHOOK_SECRET=aira-telegram-webhook-secret:latest,AIRA_APP_KEY=aira-app-key:latest \
+            --update-env-vars FIRESTORE_DATABASE=aira,AIRA_DEMO_SHOP=sunrise_dairy,AIRA_ALLOW_NO_TOKEN=1,AIRA_MOCK=0,GCP_PROJECT=${{ secrets.GCP_PROJECT }} \
             --quiet
 
       - name: Read the aira-live WebSocket URL
@@ -122,6 +124,7 @@ jobs:
       - name: Build the hosting bundle
         env:
           VITE_AIRA_LIVE_WS: ${{ steps.live.outputs.ws }}
+          VITE_AIRA_APP_KEY: ${{ secrets.VITE_AIRA_APP_KEY }}
           VITE_FIREBASE_API_KEY: ${{ secrets.VITE_FIREBASE_API_KEY }}
           VITE_FIREBASE_AUTH_DOMAIN: ${{ secrets.VITE_FIREBASE_AUTH_DOMAIN }}
           VITE_FIREBASE_PROJECT_ID: ${{ secrets.VITE_FIREBASE_PROJECT_ID }}

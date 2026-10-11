@@ -24,7 +24,7 @@ export function parseRoute(hash: string): Route | null {
   return ROUTES.find((r) => r.hash === hash)?.hash ?? "#/";
 }
 
-const SHOP_NAMES: Record<string, string> = { murugan_dairy: "Murugan Dairy" };
+const SHOP_NAMES: Record<string, string> = { sunrise_dairy: "Sunrise Dairy" };
 
 export function Layout(props: {
   access: Access;

@@ -1,7 +1,7 @@
 """Delivery tools (kanish/02 Task 4): delivery_start, delivery_count (one by one / crate), invoice_check and the
 committer "delivery.record_count".
 
-The engine (catalog, ledger, states, reconcile, outbox) runs for real on a MemoryStore seeded from the real Murugan
+The engine (catalog, ledger, states, reconcile, outbox) runs for real on a MemoryStore seeded from the real Sam
 Dairy catalog, with the foundation's confirm/session/ids. Only the vision calls (Gemini) and the analytics
 publisher are faked. The phone is a fake that answers request_frame messages with queued frames.
 """
@@ -28,7 +28,7 @@ from aira_live.vision.invoice import InvoiceLine, InvoiceRead
 
 ROOT = Path(__file__).resolve().parents[4]
 CATALOG = ROOT / "content" / "catalog" / "murugan_dairy.json"
-SHOP = "murugan_dairy"
+SHOP = "sunrise_dairy"
 CURD = "sakthi_curd_1l"
 GHEE = "aavin_ghee_500ml"
 

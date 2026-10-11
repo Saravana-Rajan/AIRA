@@ -3,7 +3,7 @@
 Routes (mounted by main.py through OPTIONAL_ROUTERS):
   GET  /webhooks/whatsapp   Meta verification handshake (hub.mode / hub.verify_token / hub.challenge)
   POST /webhooks/whatsapp   WhatsApp Cloud API message notifications
-  POST /webhooks/telegram   Telegram Bot API updates (vendor replies, and "/start <supplier_id>[-<code>]" onboarding)
+  POST /webhooks/telegram   Telegram Bot API updates (vendor replies, and "/start <supplier_id>.<tag>" onboarding)
 
 Telegram updates are accepted only with the X-Telegram-Bot-Api-Secret-Token header matching env
 TELEGRAM_WEBHOOK_SECRET (constant-time compare); with the secret unset every update is refused.
@@ -117,26 +117,39 @@ async def whatsapp_in(request: Request):
 
 
 # ---------------------------------------------------------------- Telegram
-# Vendor onboarding by deep link: the vendor opens https://t.me/<bot>?start=<supplier_id> and presses Start,
-# which sends "/start <supplier_id>". The sender's chat id becomes supplier.telegramChatId
+# Vendor onboarding by deep link: the vendor opens https://t.me/<bot>?start=<supplier_id>.<tag> and presses
+# Start, which sends "/start <supplier_id>.<tag>". The sender's chat id becomes supplier.telegramChatId
 # (scripts/telegram_setup.py prints the links; docs/ops/telegram-setup.md has the steps).
-# The supplier ids are public (content/catalog), so linking is first-come-only: once a chat is linked, only that
-# same chat may press Start again. Moving a vendor to a new phone needs the one-time code in env
-# AIRA_TELEGRAM_LINK_CODE, sent as "/start <supplier_id>-<code>"; with the code unset, no re-link is possible.
-START_RE = re.compile(r"^/start(?:@\w+)?\s+([a-z0-9_]{1,64})(?:-([A-Za-z0-9_-]{1,64}))?\s*$", re.IGNORECASE)
-LINK_CODE_ENV = "AIRA_TELEGRAM_LINK_CODE"
+# The supplier ids are public (content/catalog), so every link carries an unguessable tag:
+# HMAC-SHA256(TELEGRAM_WEBHOOK_SECRET, supplier_id), first 20 hex characters. A /start without the right tag
+# is ignored, including the very first one. The link is the credential: a new phone that opens it takes the
+# vendor over and the old chat is unlinked, so moving phones needs no extra code.
+START_RE = re.compile(r"^/start(?:@\w+)?\s+([a-z0-9_]{1,64})\.([0-9a-f]{20})\s*$", re.IGNORECASE)
+TAG_HEX = 20
 WELCOME = "AIRA: you will receive {shop} orders here."
 
 
-def start_param(supplier_id: str, code: str | None = None) -> str:
-    """The ``?start=`` value of a vendor's deep link: ``<supplier_id>``, or ``<supplier_id>-<code>`` to re-link."""
-    return f"{supplier_id}-{code}" if code else supplier_id
+def tagged_start_param(supplier_id: str, secret: str) -> str:
+    """``<supplier_id>.<tag>`` for a given webhook secret (shared with scripts/telegram_setup.py)."""
+    tag = hmac.new(secret.encode(), supplier_id.encode(), hashlib.sha256).hexdigest()[:TAG_HEX]
+    return f"{supplier_id}.{tag}"
 
 
-def _relink_allowed(code: str | None) -> bool:
-    """A linked supplier may move to another chat only with the configured one-time code (constant-time)."""
-    expected = os.getenv(LINK_CODE_ENV) or ""
-    return bool(expected) and bool(code) and hmac.compare_digest(code.encode(), expected.encode())
+def start_param(supplier_id: str) -> str:
+    """The ``?start=`` value of a vendor's deep link, tagged with the deployed TELEGRAM_WEBHOOK_SECRET."""
+    secret = os.getenv("TELEGRAM_WEBHOOK_SECRET")
+    if not secret:
+        raise RuntimeError("TELEGRAM_WEBHOOK_SECRET is not set: no vendor link can be made")
+    return tagged_start_param(supplier_id, secret)
+
+
+def _tag_ok(supplier_id: str, tag: str) -> bool:
+    """Constant-time check of the link tag. With no secret configured nothing links (the webhook is closed too)."""
+    secret = os.getenv("TELEGRAM_WEBHOOK_SECRET")
+    if not secret:
+        return False
+    expected = tagged_start_param(supplier_id, secret)
+    return hmac.compare_digest(f"{supplier_id}.{tag}".encode(), expected.encode())
 
 
 def _telegram_secret_ok(header: str | None) -> bool:
@@ -147,14 +160,17 @@ def _telegram_secret_ok(header: str | None) -> bool:
     return hmac.compare_digest((header or "").encode(), secret.encode())
 
 
-async def _link_supplier(chat_id: str, supplier_id: str, code: str | None) -> str | None:
-    """`/start <supplier_id>[-<code>]` from a known supplier of the demo shop: store the chat id and welcome the vendor.
+async def _link_supplier(chat_id: str, supplier_id: str, tag: str) -> str | None:
+    """`/start <supplier_id>.<tag>` from a known supplier of the demo shop: store the chat id and welcome the vendor.
 
-    Unknown ids are ignored (nothing is written, nothing is sent). The first chat to press Start owns the
-    supplier; it may press Start again, but another chat is ignored unless it brings the one-time re-link code
-    (``AIRA_TELEGRAM_LINK_CODE``). A re-link also unlinks the old chat, so it no longer speaks for the vendor.
-    The welcome is best effort: the link is kept even when Telegram refuses the message.
+    A wrong tag or an unknown id is ignored (nothing is written, nothing is sent). The chat holding the link
+    owns the supplier; when another chat opens the same link it takes over and the old chat is unlinked, so it
+    no longer speaks for the vendor. The welcome is best effort: the link is kept even when Telegram refuses
+    the message.
     """
+    if not _tag_ok(supplier_id, tag):
+        log.warning("telegram /start for %s ignored: bad link tag", supplier_id)
+        return None
     shop_id = config.load().demo_shop_id
     path = paths.supplier(shop_id, supplier_id)
     store = get_store()
@@ -163,9 +179,6 @@ async def _link_supplier(chat_id: str, supplier_id: str, code: str | None) -> st
         return None
     linked = doc.get("telegramChatId")
     if linked and linked != chat_id:
-        if not _relink_allowed(code):
-            log.warning("telegram /start for %s from another chat ignored (linked already)", supplier_id)
-            return None
         await _repo.unlink_contact("telegram", str(linked))
     await store.set(path, {**doc, "telegramChatId": chat_id, "telegramLinkedAt": now_iso()})
     await _repo.index_contact("telegram", chat_id, shop_id, supplier_id)
@@ -199,7 +212,7 @@ async def telegram_in(request: Request):
         if not m:
             return _ignored()
         try:
-            linked = await _link_supplier(chat_id, m.group(1).lower(), m.group(2))  # group 2: re-link code
+            linked = await _link_supplier(chat_id, m.group(1).lower(), m.group(2).lower())  # group 2: link tag
         except Exception:
             log.exception("telegram /start failed chat=%s", chat_id)
             linked = None

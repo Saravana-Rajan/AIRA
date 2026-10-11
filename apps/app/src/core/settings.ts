@@ -2,11 +2,12 @@ import { LANGS, type Lang } from "@aira/contracts";
 import type { Settings } from "./types";
 
 export const SETTINGS_KEY = "aira.settings";
-export const DEMO_SHOP_ID = "murugan_dairy";
+export const DEMO_SHOP_ID = "sunrise_dairy";
 
 /** Treat as read-only: copy it (`{ ...DEFAULT_SETTINGS }`) before changing anything. */
 export const DEFAULT_SETTINGS: Readonly<Settings> = {
-  lang: "en",
+  lang: "auto", // no default language: AIRA follows whoever speaks, turn by turn
+
   verbosity: "short",
   screenReaderMode: false,
   speechRate: 1,
@@ -36,7 +37,7 @@ export function loadSettings(store: Storage | null = defaultStore()): Settings {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return { ...DEFAULT_SETTINGS };
   const r = raw as Partial<Record<keyof Settings, unknown>>;
   return {
-    lang: (LANGS as readonly unknown[]).includes(r.lang) ? (r.lang as Lang) : DEFAULT_SETTINGS.lang,
+    lang: (LANGS as readonly unknown[]).includes(r.lang) ? (r.lang as Lang) : "auto",
     verbosity: r.verbosity === "detail" ? "detail" : "short",
     screenReaderMode: r.screenReaderMode === true,
     speechRate: clampRate(r.speechRate),

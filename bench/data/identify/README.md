@@ -1,6 +1,6 @@
 # Product photos for the identify benchmarks
 
-Two photo sets measure how well AIRA tells the 10 Murugan Dairy products apart:
+Two photo sets measure how well AIRA tells the 10 Sunrise Dairy products apart:
 
 | Set | Folder | Photos | Used by |
 |---|---|---|---|
@@ -11,7 +11,7 @@ Two photo sets measure how well AIRA tells the 10 Murugan Dairy products apart:
 
 ## How to shoot
 
-- Use the **chest-mounted phone** in its usual position, with the pack held up **40 to 60 cm** in front of the camera, the way Murugan holds it for the customer.
+- Use the **chest-mounted phone** in its usual position, with the pack held up **40 to 60 cm** in front of the camera, the way Sam holds it for the customer.
 - Save each photo as **JPEG** (`.jpg`), not HEIC or PNG. On an iPhone, go to Settings › Camera › Formats and choose "Most Compatible". The dry run rejects files that aren't JPEG.
 - Keep **no people** in the frame: no faces, and nothing beyond the hand holding the pack. Keep out UPI screens, phone numbers and customer details. If you can't avoid them, put the photo in `bench/data/private/`, which git ignores.
 - Use a **real pack** from the shop. If the 1 L pouch is out of stock, wait until it is back in.

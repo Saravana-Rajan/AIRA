@@ -5,6 +5,7 @@ import type { ClientMsg, CueName, Lang, ServerMsg } from "@aira/contracts";
 import { AiraSocket } from "../net/socket";
 import { OfflineQueue, defaultStore, type QueueStore } from "../net/offline-queue";
 import { initApp } from "./app";
+import { langFromPhone, phoneLanguages, uiLangFor } from "./lang";
 import { saveSettings } from "./settings";
 import { vibrate } from "./haptics";
 import { ThinkingTimer } from "./thinking";
@@ -60,6 +61,8 @@ export interface WireEnv {
   requestWakeLock(): void;
   /** Asks for mic and camera once, inside the Start tap, so later turns never prompt. */
   requestPermissions(): void;
+  /** The phone's locales: only the hint for AIRA's first line (`hello.lang`) and the labels before anyone speaks. */
+  languages: readonly string[];
 }
 
 /** Everything the screen draws. */
@@ -168,6 +171,7 @@ export function browserEnv(): WireEnv {
         .catch(() => md.getUserMedia({ audio: true }).then(release))
         .catch(() => { /* the mic start reports a block when the owner talks */ });
     },
+    languages: phoneLanguages(),
   };
 }
 
@@ -184,6 +188,21 @@ export function deviceUid(storage: Storage | null): string {
   const uid = `owner-${rand}`;
   try { storage?.setItem(UID_KEY, uid); } catch { /* keep it for this page only */ }
   return uid;
+}
+
+/**
+ * The shared demo key built in as VITE_AIRA_APP_KEY (docs/ops/security.md); undefined when not set.
+ * In the browser only import.meta.env exists; the process.env fallback is the test seam (vi.stubEnv).
+ */
+export function appKey(): string | undefined {
+  try {
+    const meta = (import.meta as { env?: Record<string, string | undefined> }).env?.VITE_AIRA_APP_KEY;
+    const proc = typeof process !== "undefined" ? process.env?.VITE_AIRA_APP_KEY : undefined;
+    const key = meta || proc;
+    return key ? key : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 function wsDefault(): string {
@@ -238,12 +257,16 @@ export function wireApp(opts: WireOpts): WiredApp {
       if (lastSpoken && lastSpoken.text === text && now - lastSpoken.at < SPEAK_DEDUPE_MS) return;
       lastSpoken = { text, at: now };
       if (s.screenReaderMode) env.announce(text);
-      else env.speech?.speak(text, s.lang, s.speechRate);
+      else env.speech?.speak(text, uiLang, s.speechRate);
     },
     earconImpl: (n) => { if (ctx) tryRun(() => env.playEarcon(ctx!, n)); },
     hapticImpl: (n) => tryRun(() => env.vibrate(n)),
+    langImpl: () => uiLang,
   });
-  const lang = (): Lang => api.settings.lang;
+  // No fixed language. The labels and local TTS start from the phone's locale (the hint sent as hello.lang)
+  // and then follow whatever language the server last heard the speaker use (transcript.lang).
+  let uiLang: Lang = settings.lang === "auto" ? langFromPhone(env.languages) : settings.lang;
+  const lang = (): Lang => uiLang;
 
   // ---- view state ----
   let view: AppView = {
@@ -252,7 +275,7 @@ export function wireApp(opts: WireOpts): WiredApp {
     progress: null,
     confirmPending: false,
     online: true,
-    lang: settings.lang,
+    lang: uiLang,
   };
   const subs = new Set<(v: AppView) => void>();
   const setView = (patch: Partial<AppView>) => {
@@ -269,6 +292,7 @@ export function wireApp(opts: WireOpts): WiredApp {
   const local = (event: LocalEvent["event"]) => setView({ screen: reduceScreen(view.screen, { t: "local", event }) });
 
   const viewFor = (m: ServerMsg): Partial<AppView> => {
+    if (m.t === "transcript" && m.lang) uiLang = uiLangFor(m.lang, uiLang); // follow the speaker's last turn
     const patch: Partial<AppView> = { screen: reduceScreen(view.screen, m) };
     if (m.t === "count") patch.progress = { counted: m.counted, expected: m.expected };
     else if (m.t === "confirm" || (m.t === "state" && m.entity !== "delivery" && !m.summary.startsWith("OPEN_URL "))) {
@@ -442,13 +466,15 @@ export function wireApp(opts: WireOpts): WiredApp {
   });
 
   if (opts.connect !== false) {
-    // No idToken: there is no Firebase Auth in this build (docs/ops/security.md). The server checks the
-    // page's Origin and caps sessions per address instead.
+    // idToken is the shared demo key VITE_AIRA_APP_KEY, not a user token: there is no Firebase Auth in this
+    // build (docs/ops/security.md). The server also checks the page's Origin and caps sessions per address.
+    const key = appKey();
     socket.connect({
       t: "hello",
       uid: deviceUid(env.storage),
+      ...(key ? { idToken: key } : {}),
       shopId: settings.shopId,
-      lang: settings.lang,
+      lang: uiLang, // only a hint for the first line; AIRA then follows the speaker
       verbosity: settings.verbosity,
       appVersion: APP_VERSION,
     });

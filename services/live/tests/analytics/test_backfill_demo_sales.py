@@ -60,7 +60,7 @@ def test_rows_are_sale_ledger_docs_with_fixed_ids():
     paths = [p for p, _ in docs]
     assert len(set(paths)) == len(paths)
     for path, data in docs:
-        assert path == f"shops/murugan_dairy/ledger/backfill-{ist_day(data).isoformat()}-{data['sku']}"
+        assert path == f"shops/sunrise_dairy/ledger/backfill-{ist_day(data).isoformat()}-{data['sku']}"
         assert set(data) == LEDGER_KEYS
         assert data["reason"] == "SALE" and data["delta"] < 0 and data["actor"] == "system"
         assert data["refType"] == bf.REF_TYPE == "demo_backfill" and data["idemKey"] == path.rsplit("/", 1)[1]
@@ -164,7 +164,7 @@ def test_write_commits_in_batches_of_at_most_500():
 @pytest.fixture
 def catalog(tmp_path):
     path = tmp_path / "catalog.json"
-    path.write_text(json.dumps({"shop": {"id": "murugan_dairy", "name": "Murugan Dairy", "city": "Chennai"},
+    path.write_text(json.dumps({"shop": {"id": "sunrise_dairy", "name": "Sunrise Dairy", "city": "Chennai"},
                                 "products": PRODUCTS, "suppliers": []}), encoding="utf-8")
     return path
 

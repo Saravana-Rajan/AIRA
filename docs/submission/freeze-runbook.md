@@ -21,7 +21,7 @@ The setup this runbook assumes (build overrides, sections 1 and 3a):
 
 - Backend: Cloud Run service `aira-live` in `asia-south1`. Min 1 and max 1 instance, timeout 3600 s, session affinity on.
 - Frontend: one Firebase Hosting site, `aira-shop`. The phone app is at `/` and the Shop Dashboard at `/dashboard/`.
-- Data: Firestore database `aira`, demo shop `murugan_dairy`.
+- Data: Firestore database `aira`, demo shop `sunrise_dairy`.
 - Deploys: only `.github/workflows/deploy.yml`, on every push to `main` of Saravana-Rajan/AIRA.
 
 On the laptop you need `git`, `gh` (signed in, with write access to the repo), `gcloud` (signed in as the project owner), `python3`, `uv`, `curl`, `ffprobe` (from ffmpeg) and `pdftotext` (from poppler).
@@ -55,7 +55,7 @@ test -n "$GCP_PROJECT" && echo "project set"
   ```bash
   git grep -n "$GCP_PROJECT"
   ```
-- [ ] The demo shop looks right. Open `https://aira-shop.web.app/dashboard/` and check the Murugan Dairy stock (Aavin milk, Sakthi curd, Arun ice cream). Only if rehearsals left it in a bad state, re-seed it. Read the docstring of `scripts/seed_firestore.py` first: it rewrites the demo shop's product, stock and supplier documents in database `aira`, never `(default)`.
+- [ ] The demo shop looks right. Open `https://aira-shop.web.app/dashboard/` and check the Sunrise Dairy stock (Aavin milk, Sakthi curd, Arun ice cream). Only if rehearsals left it in a bad state, re-seed it. Read the docstring of `scripts/seed_firestore.py` first: it rewrites the demo shop's product, stock and supplier documents in database `aira`, never `(default)`.
   ```bash
   uv run --project services/live python scripts/seed_firestore.py
   ```
@@ -208,7 +208,7 @@ Form: https://hack2skill.com/event/aibuildercup2026/dashboard/submissions, signe
 Judges evaluate the deployment as it works when they open it. An outage gets no retry.
 
 - [ ] No pushes to main: work can go on in branches and PRs, but nothing merges. No `firebase deploy` (or `npx firebase-tools deploy`), no traffic changes on `aira-live`, and no Firestore rules or index changes.
-- [ ] Never touch the Firestore `(default)` database. AIRA uses `aira`. Leave the `murugan_dairy` demo shop as submitted.
+- [ ] Never touch the Firestore `(default)` database. AIRA uses `aira`. Leave the `sunrise_dairy` demo shop as submitted.
 - [ ] `deploy.yml` stays disabled until after Nov 6. Check it every Monday:
   ```bash
   gh workflow list --all --repo Saravana-Rajan/AIRA

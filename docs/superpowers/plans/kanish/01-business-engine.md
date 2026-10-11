@@ -25,7 +25,7 @@
 
 - **Fixed demo IDs**, used everywhere (catalog, tests, prompts):
   - SKUs `aavin_milk_500ml`, `aavin_milk_1l`, `sakthi_curd_500ml`, `sakthi_curd_1l`, `arun_icecream_box`
-  - shop `murugan_dairy`
+  - shop `sunrise_dairy`
   - suppliers `aavin_vendor`, `sakthi_vendor`, `arun_distributor`
   - Supplier phone numbers come from `.env` (`SUPPLIER_PHONE_<SUPPLIER_ID_UPPER>`) through the seed script. Never commit them.
 - **Spoken hints use one mechanism only:** `aira_live.i18n.t(key, lang, **kw)`. Engine keys are namespaced `biz.*` and live in `aira_live/i18n/{en,ta,hi}.json`. No hard-coded user-facing sentences in the engine.
@@ -848,7 +848,7 @@ Prices are demo values: verify them against the local MRP before filming. Phones
 
 ```json
 {
-  "shop": {"id": "murugan_dairy", "name": "Murugan Dairy", "city": "Chennai", "currency": "INR", "timezone": "Asia/Kolkata"},
+  "shop": {"id": "sunrise_dairy", "name": "Sunrise Dairy", "city": "Chennai", "currency": "INR", "timezone": "Asia/Kolkata"},
   "demoPrices": true,
   "products": [
     {"sku": "aavin_milk_500ml", "name": "Aavin Toned Milk 500 ml", "brand": "Aavin", "pack": "500 ml pouch",
@@ -980,7 +980,7 @@ import pytest
 from aira_live.business import catalog, seed
 from aira_live.business.store import MemoryStore
 
-SHOP = "murugan_dairy"
+SHOP = "sunrise_dairy"
 CATALOG = Path(__file__).resolve().parents[4] / "content" / "catalog" / "murugan_dairy.json"
 
 
@@ -1006,7 +1006,7 @@ async def test_resolve_none(store, spoken):
 
 
 async def test_seed_writes_products_and_suppliers(store):
-    assert (await store.get(f"shops/{SHOP}"))["name"] == "Murugan Dairy"
+    assert (await store.get(f"shops/{SHOP}"))["name"] == "Sunrise Dairy"
     assert (await store.get(f"shops/{SHOP}/products/sakthi_curd_1l"))["price"] == 60
     assert (await store.get(f"shops/{SHOP}/suppliers/sakthi_vendor"))["channel"] == "whatsapp"
     assert (await store.get(f"shops/{SHOP}/suppliers/arun_distributor"))["channel"] == "call"
@@ -1185,7 +1185,7 @@ Expected: `17 passed`.
 git add content/catalog/murugan_dairy.json .env.example services/live/aira_live/business/catalog.py \
         services/live/aira_live/business/seed.py services/live/tests/business/conftest.py \
         services/live/tests/business/test_catalog.py services/live/aira_live/vision
-git commit -m "feat(business): Murugan Dairy seed catalog, ta/hi/en product + supplier resolution, env-based seeder"
+git commit -m "feat(business): Sunrise Dairy seed catalog, ta/hi/en product + supplier resolution, env-based seeder"
 ```
 
 ---
@@ -1222,7 +1222,7 @@ import pytest
 from aira_live.business import audit, expiry, ledger
 from aira_live.business.ledger import InsufficientStock
 
-SHOP = "murugan_dairy"
+SHOP = "sunrise_dairy"
 D0 = date(2026, 10, 12)
 CATALOG = Path(__file__).resolve().parents[4] / "content" / "catalog" / "murugan_dairy.json"
 
@@ -1595,7 +1595,7 @@ from aira_live.business.ledger import InsufficientStock
 from aira_live.business.payments import PaymentMismatch
 from aira_live.business.sales import SaleError
 
-SHOP = "murugan_dairy"
+SHOP = "sunrise_dairy"
 D0 = date(2026, 10, 12)
 
 
@@ -2076,7 +2076,7 @@ from aira_live.business import ledger, money, payments, reconcile, sales
 from aira_live.business.states import transition
 from aira_live.vision.invoice import InvoiceLine, InvoiceRead
 
-SHOP = "murugan_dairy"
+SHOP = "sunrise_dairy"
 ORDER = [{"sku": "sakthi_curd_1l", "name": "Sakthi Curd 1 L", "qty": 30, "agreedPrice": 50}]
 
 
@@ -2331,7 +2331,7 @@ gh pr create --base main --title "Business engine (states, ledger, sales, paymen
   | §2 steps 2–4 and 6–8 (engine side) | Tasks 4–6 |
 
   Tools, messaging and the dashboard are in `kanish/02` and `kanish/03`.
-- **Fixed IDs** (`murugan_dairy`, 5 SKUs, 3 suppliers) are used in the catalog and every test. Phones come only from env.
+- **Fixed IDs** (`sunrise_dairy`, 5 SKUs, 3 suppliers) are used in the catalog and every test. Phones come only from env.
 - **Cash/UPI only:** `payments.record` rejects anything but `cash`/`upi`, and `test_unknown_entity_raises` guards the state tables.
 - **Spoken hints:** the engine returns codes and exceptions; `hints.say` → `i18n.t` is the only way they are spoken. `test_every_hint_key_in_all_languages` keeps en/ta/hi complete.
 - **Cross-team:**

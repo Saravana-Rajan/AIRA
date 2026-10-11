@@ -7,6 +7,7 @@
 #
 # Build-time env read by Vite:
 #   VITE_AIRA_LIVE_WS   wss://<cloud-run-host>/ws   (the app falls back to ws://localhost:8080/ws)
+#   VITE_AIRA_APP_KEY   the shared demo key sent as hello.idToken (= AIRA_APP_KEY on aira-live; security.md)
 #   VITE_FIREBASE_*     Firebase web-app config used by the dashboard
 #
 # Usage: bash scripts/build_hosting.sh

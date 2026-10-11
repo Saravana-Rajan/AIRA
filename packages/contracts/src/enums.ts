@@ -60,7 +60,7 @@ export const EVENT_TOPICS = Object.freeze(["sales", "inventory-movements", "orde
 export type EventTopic = (typeof EVENT_TOPICS)[number];
 
 // Fixed demo data (identical in the catalog seed, vision prompts and tests).
-export const DEMO_SHOP_ID = "murugan_dairy";
+export const DEMO_SHOP_ID = "sunrise_dairy";
 export const DEMO_SKUS = Object.freeze([
   "aavin_milk_500ml", "aavin_milk_1l", "sakthi_curd_500ml", "sakthi_curd_1l", "aavin_buttermilk_200ml",
   "aavin_ghee_200ml", "aavin_ghee_500ml", "aavin_paneer_200g", "aavin_butter_100g", "arun_icecream_box",

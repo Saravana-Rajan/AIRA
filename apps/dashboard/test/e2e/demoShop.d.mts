@@ -1,6 +1,6 @@
 // Types for demoShop.mjs (plain ESM so Node and Playwright load it without a build step).
 
-export declare const DEMO_SHOP_ID: "murugan_dairy";
+export declare const DEMO_SHOP_ID: "sunrise_dairy";
 export declare const OTHER_SHOP_ID: string;
 
 /** A Firestore document to write: Date values become Timestamps, everything else is stored as is. */

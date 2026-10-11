@@ -1,6 +1,6 @@
 """Task 4: idempotent FIFO stock ledger, expiry scan, audit log and seeded starting stock.
 
-Uses the shared `store` (MemoryStore seeded with the Murugan Dairy catalog) and `published` (fake analytics
+Uses the shared `store` (MemoryStore seeded with the Sunrise Dairy catalog) and `published` (fake analytics
 publisher) fixtures from tests/business/conftest.py.
 """
 import asyncio
@@ -15,7 +15,7 @@ from aira_live.business import audit, expiry, ledger, seed
 from aira_live.business.ledger import InsufficientStock
 from aira_live.business.store import MemoryStore, set_store
 
-SHOP = "murugan_dairy"
+SHOP = "sunrise_dairy"
 D0 = date(2026, 10, 12)
 CATALOG = Path(__file__).resolve().parents[4] / "content" / "catalog" / "murugan_dairy.json"
 

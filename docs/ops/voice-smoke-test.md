@@ -84,7 +84,7 @@ Expected:
 - All 5 runs end `OK`.
 - A final line `p50 first-audio latency: M ms over 5 runs`. Copy it into the results table (section 8).
 
-`ws_smoke` sends `hello` without a token, as the app does. The deployed service accepts it because it runs with `AIRA_ALLOW_NO_TOKEN=1`. The service always serves the demo shop `murugan_dairy`, whatever `shopId` the client sends.
+`ws_smoke` connects as the app does: with the hosting site's `Origin` (`--origin`; the server refuses an upgrade without an allowed one) and a `hello` whose `idToken` is the shared demo key from env `AIRA_APP_KEY` (`gcloud secrets versions access latest --secret aira-app-key`; never on the command line; `docs/ops/security.md`). The deployed service accepts it because it runs with `AIRA_ALLOW_NO_TOKEN=1`. The service always serves the demo shop `sunrise_dairy`, whatever `shopId` the client sends.
 
 ## 6. Step 4: the phone
 
@@ -143,7 +143,8 @@ The rest of `tests/core/test_ws_smoke.py` runs offline in every `uv run pytest`.
 
 | Symptom | Likely cause |
 |---|---|
-| `error` `permission` right after `hello`, then the socket closes | The server runs in real mode without `AIRA_ALLOW_NO_TOKEN=1` |
+| `error` `permission` right after `hello`, then the socket closes | The server runs in real mode without `AIRA_ALLOW_NO_TOKEN=1`, or `AIRA_APP_KEY` in your shell differs from the service's (secret `aira-app-key`) |
+| `cannot reach ... HTTP 403` before any message | The `Origin` was refused: pass `--origin` with one of the server's `AIRA_ALLOWED_ORIGINS` |
 | `ready` with `"mock": true` on Cloud Run | `GEMINI_API_KEY` isn't mounted (secret `aira-gemini-api-key`) |
 | `error` `network` right after `ready` | Live didn't start. Check `GEMINI_API_KEY`, Firestore access (`GCP_PROJECT`, ADC, database `aira`) and the server log |
 | `no ready from the server` | Wrong URL. Use the `/ws` path, and `wss://` for Cloud Run |

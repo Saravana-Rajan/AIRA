@@ -19,14 +19,14 @@ describe("settings", () => {
 
   it("returns defaults when nothing is stored", () => {
     expect(loadSettings(store)).toEqual(DEFAULT_SETTINGS);
-    expect(DEFAULT_SETTINGS.shopId).toBe("murugan_dairy");
-    expect(DEMO_SHOP_ID).toBe("murugan_dairy");
+    expect(DEFAULT_SETTINGS.shopId).toBe("sunrise_dairy");
+    expect(DEMO_SHOP_ID).toBe("sunrise_dairy");
   });
 
   it("returns a fresh copy so callers cannot mutate the defaults", () => {
     const s = loadSettings(store);
     s.lang = "ta";
-    expect(DEFAULT_SETTINGS.lang).toBe("en");
+    expect(DEFAULT_SETTINGS.lang).toBe("auto"); // no default language: AIRA follows the speaker
   });
 
   it("round-trips and clamps speechRate to 0.5–2", () => {
@@ -39,7 +39,7 @@ describe("settings", () => {
   });
 
   it("round-trips every field", () => {
-    const s = { lang: "hi" as const, verbosity: "detail" as const, screenReaderMode: true, speechRate: 1.25, shopId: "murugan_dairy", onboarded: true };
+    const s = { lang: "hi" as const, verbosity: "detail" as const, screenReaderMode: true, speechRate: 1.25, shopId: "sunrise_dairy", onboarded: true };
     saveSettings(s, store);
     expect(loadSettings(store)).toEqual(s);
     expect(store.getItem(SETTINGS_KEY)).not.toBeNull();
@@ -49,7 +49,9 @@ describe("settings", () => {
     store.setItem("aira.settings", "{not json");
     expect(loadSettings(store)).toEqual(DEFAULT_SETTINGS);
     store.setItem("aira.settings", JSON.stringify({ lang: "fr" }));
-    expect(loadSettings(store).lang).toBe("en");
+    expect(loadSettings(store).lang).toBe("auto");
+    store.setItem("aira.settings", JSON.stringify({ lang: "auto" }));
+    expect(loadSettings(store).lang).toBe("auto");
   });
 
   it("falls back per field for bad types and non-finite rates", () => {
@@ -90,6 +92,19 @@ describe("haptics", () => {
 });
 
 describe("app singleton", () => {
+  it("app.lang() follows what the wiring reports (the language the server last detected)", () => {
+    let current: "ta" | "hi" | "en" = "ta";
+    initApp({
+      socket: { send: () => false } as any,
+      settings: { ...DEFAULT_SETTINGS },
+      speakImpl: vi.fn(), earconImpl: vi.fn(), hapticImpl: vi.fn(),
+      langImpl: () => current,
+    });
+    expect(app.lang()).toBe("ta");
+    current = "en";
+    expect(app.lang()).toBe("en");
+  });
+
   it("initApp fills the exported `app` object with the interface methods", () => {
     const sent: unknown[] = [];
     const speakImpl = vi.fn(), earconImpl = vi.fn(), hapticImpl = vi.fn();
@@ -104,8 +119,9 @@ describe("app singleton", () => {
     app.earcon("match"); app.haptic("done"); app.speak("hello");
     expect(earconImpl).toHaveBeenCalledWith("match");
     expect(hapticImpl).toHaveBeenCalledWith("done");
-    expect(speakImpl).toHaveBeenCalledWith("hello", expect.objectContaining({ lang: "en" }));
+    expect(speakImpl).toHaveBeenCalledWith("hello", expect.objectContaining({ lang: "auto" }));
     expect(typeof app.settings.lang).toBe("string");
+    expect(app.lang()).toBe("en"); // "auto" with no speaker yet: English labels
   });
 
   it("reads the current settings and socket at call time", () => {
@@ -118,6 +134,7 @@ describe("app singleton", () => {
     app.settings = { ...app.settings, lang: "hi" };
     app.speak("namaste");
     expect(speakImpl).toHaveBeenCalledWith("namaste", expect.objectContaining({ lang: "hi" }));
+    expect(app.lang()).toBe("hi");
 
     const sent: unknown[] = [];
     app.socket = { send: (m: unknown) => { sent.push(m); return true; } } as any;

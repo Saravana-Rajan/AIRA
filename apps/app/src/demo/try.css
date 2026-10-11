@@ -1,5 +1,5 @@
 /* "Try AIRA" judge demo page. LIGHT THEME ONLY (overrides §6): every colour is a tokens.css variable.
-   Layout: a quiet hero (full logo + tagline), then Murugan's day as a timeline on the left and the
+   Layout: a quiet hero (full logo + tagline), then Sam's day as a timeline on the left and the
    live demo (stage, AIRA's log, confirm, talk/type) pinned on the right. The timeline is the one
    bold device: the scenes really are a sequence, so they sit on a line in the order they happen.
    Every selector is scoped under .try because Vite bundles this file with the phone app's CSS. */

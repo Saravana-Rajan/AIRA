@@ -13,7 +13,7 @@ from aira_live.vision.gemini import VisionError
 from aira_live.vision.identify import IdentifyResult, ProductRef
 from aira_live.vision.point import TargetResult
 
-MURUGAN_CATALOG = Path(__file__).resolve().parents[4] / "content" / "catalog" / "murugan_dairy.json"
+SUNRISE_CATALOG = Path(__file__).resolve().parents[4] / "content" / "catalog" / "murugan_dairy.json"
 
 CURD = ProductRef(sku="sakthi_curd_1l", name="Sakthi curd", brand="Sakthi", pack="1 L")
 MILK = ProductRef(sku="aavin_milk_500ml", name="Aavin milk", brand="Aavin", pack="500 ml")
@@ -601,30 +601,30 @@ async def test_product_find_twice_replaces_the_first_guidance(find):
     assert first.active is False and guidance.active(find).ref == MILK
 
 
-# --- end to end over the real Murugan Dairy catalog --------------------------------------------------------------
+# --- end to end over the real Sunrise Dairy catalog --------------------------------------------------------------
 
 
 @pytest.fixture
-async def murugan(fake_db, session, spoken, no_run, monkeypatch):
-    data = seed.load_catalog(MURUGAN_CATALOG)
+async def sunrise(fake_db, session, spoken, no_run, monkeypatch):
+    data = seed.load_catalog(SUNRISE_CATALOG)
     store = MemoryStore()
     await seed.seed_into(store, data, env={})
     for p in data["products"]:
-        fake_db.store[("shops", "murugan_dairy", "products", p["sku"])] = dict(p)
+        fake_db.store[("shops", "sunrise_dairy", "products", p["sku"])] = dict(p)
     set_store(store)
-    session.shop_id = "murugan_dairy"
+    session.shop_id = "sunrise_dairy"
     monkeypatch.setattr(products, "get_session", lambda: session)
     monkeypatch.setattr(products.spatial, "_utcnow", lambda: NOW)
     yield session
     set_store(None)
 
 
-async def test_find_and_pick_two_curd_real_catalog(murugan, fake_db, spoken, monkeypatch):
-    _location(fake_db, "sakthi_curd_1l", shop="murugan_dairy")
+async def test_find_and_pick_two_curd_real_catalog(sunrise, fake_db, spoken, monkeypatch):
+    _location(fake_db, "sakthi_curd_1l", shop="sunrise_dairy")
     out = await products.product_find("Sakthi curd 1 litre", count_needed=2)
     assert out["found"] is True and out["sku"] == "sakthi_curd_1l" and out["stale"] is False
     assert out["say"].startswith("Sakthi Curd 1 L: last recorded on fridge 2, middle shelf, left.")
-    loop = guidance.active(murugan)
+    loop = guidance.active(sunrise)
     assert len(loop.candidates) == 10
 
     labels = []
@@ -640,17 +640,17 @@ async def test_find_and_pick_two_curd_real_catalog(murugan, fake_db, spoken, mon
 
     monkeypatch.setattr(guidance, "point_to", point)
     monkeypatch.setattr(guidance, "identify_product", ident)
-    murugan.frames.add(_frame("g1", 100.0))
+    sunrise.frames.add(_frame("g1", 100.0))
     assert await loop.step() is True
-    assert labels == ["Sakthi Curd 1 L"] and murugan.sent[-1].t == "target"
+    assert labels == ["Sakthi Curd 1 L"] and sunrise.sent[-1].t == "target"
     for _ in range(3):
-        await guidance.handle_client_event(murugan, "fingertip_in_target", {})
+        await guidance.handle_client_event(sunrise, "fingertip_in_target", {})
     assert spoken == [
         ("This is Aavin Milk 500 ml, not Sakthi Curd 1 L.", "mismatch"),
         ("Sakthi Curd 1 L ✓. Take 1 more.", "match"),
         ("Sakthi Curd 1 L ✓. That's all 2.", "match"),
     ]
-    assert guidance.active(murugan) is None
+    assert guidance.active(sunrise) is None
 
 
 # --- registry -------------------------------------------------------------------------------------------------------

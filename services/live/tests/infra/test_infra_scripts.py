@@ -41,7 +41,8 @@ REQUIRED_DEPLOY_FLAGS = {
 }
 SECRETS_FLAG = (
     "--update-secrets GEMINI_API_KEY=aira-gemini-api-key:latest,AIRA_JOB_TOKEN=aira-job-token:latest,"
-    "WHATSAPP_VERIFY_TOKEN=aira-whatsapp-verify-token:latest,TELEGRAM_WEBHOOK_SECRET=aira-telegram-webhook-secret:latest"
+    "WHATSAPP_VERIFY_TOKEN=aira-whatsapp-verify-token:latest,TELEGRAM_WEBHOOK_SECRET=aira-telegram-webhook-secret:latest,"
+    "AIRA_APP_KEY=aira-app-key:latest"
 )
 CONDITION = "assertion.repository=='Saravana-Rajan/AIRA' && assertion.ref=='refs/heads/main'"
 
@@ -368,7 +369,7 @@ def test_deploy_workflow_tests_then_deploys_with_wif():
         "--timeout 3600",
         "--session-affinity",
         SECRETS_FLAG,
-        "--update-env-vars FIRESTORE_DATABASE=aira,AIRA_DEMO_SHOP=murugan_dairy,AIRA_ALLOW_NO_TOKEN=1,AIRA_MOCK=0,"
+        "--update-env-vars FIRESTORE_DATABASE=aira,AIRA_DEMO_SHOP=sunrise_dairy,AIRA_ALLOW_NO_TOKEN=1,AIRA_MOCK=0,"
         "GCP_PROJECT=${{ secrets.GCP_PROJECT }}",
     ):
         assert part in run_deploy, part
@@ -385,6 +386,9 @@ def test_deploy_workflow_tests_then_deploys_with_wif():
         "VITE_FIREBASE_STORAGE_BUCKET", "VITE_FIREBASE_MESSAGING_SENDER_ID", "VITE_FIREBASE_APP_ID",
     }
     assert all(v == f"${{{{ secrets.{k} }}}}" for k, v in firebase_env.items())
+    # the shared demo key the app sends as hello.idToken (docs/ops/security.md); the service holds the same
+    # value as AIRA_APP_KEY from the Secret Manager secret aira-app-key
+    assert build["env"]["VITE_AIRA_APP_KEY"] == "${{ secrets.VITE_AIRA_APP_KEY }}"
     assert any("gcloud run services describe aira-live" in r and "wss://" in r for r in runs)
     assert (
         "npx firebase-tools@15.33.0 deploy --only hosting:aira-shop --project ${{ secrets.GCP_PROJECT }} --non-interactive"
@@ -488,7 +492,7 @@ def test_deploy_live_dry_run(tmp_path):
         "--timeout 3600",
         "--session-affinity",
         SECRETS_FLAG,
-        f"--update-env-vars FIRESTORE_DATABASE=aira,AIRA_DEMO_SHOP=murugan_dairy,AIRA_ALLOW_NO_TOKEN=1,AIRA_MOCK=0,GCP_PROJECT={PROJECT}",
+        f"--update-env-vars FIRESTORE_DATABASE=aira,AIRA_DEMO_SHOP=sunrise_dairy,AIRA_ALLOW_NO_TOKEN=1,AIRA_MOCK=0,GCP_PROJECT={PROJECT}",
     ):
         assert part in deploy, part
     assert "--set-secrets" not in deploy and "--set-env-vars" not in deploy

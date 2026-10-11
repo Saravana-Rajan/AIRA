@@ -31,7 +31,7 @@ def _business(monkeypatch, name: str):
 
 @pytest.fixture
 def session(mk_session):
-    s, _ = mk_session(shop="murugan_dairy", lang="en")
+    s, _ = mk_session(shop="sunrise_dairy", lang="en")
     tok = current_session.set(s)
     yield s
     current_session.reset(tok)
@@ -42,8 +42,8 @@ def shop(monkeypatch, fake_db):
     """The demo shop in a FakeFirestore; tests fill in forecasts and stock per SKU."""
     fake_db.store.update({
         # Sold, stocked and forecast in litres, as in content/catalog/murugan_dairy.json.
-        "shops/murugan_dairy/products/sakthi_curd_1l": {"name": "Sakthi curd", "unit": "L", "reorderThreshold": 5},
-        "shops/murugan_dairy/suppliers/sakthi_vendor": {"name": "Sakthi vendor", "products": ["sakthi_curd_1l"]},
+        "shops/sunrise_dairy/products/sakthi_curd_1l": {"name": "Sakthi curd", "unit": "L", "reorderThreshold": 5},
+        "shops/sunrise_dairy/suppliers/sakthi_vendor": {"name": "Sakthi vendor", "products": ["sakthi_curd_1l"]},
     })
     state = {"db": fake_db, "forecast": {}, "on_hand": {}, "on_hand_calls": [], "demo_history": False}
 
@@ -86,7 +86,7 @@ async def test_day_summary_speaks_counts(monkeypatch, session):
                     names={"aavin_milk_500ml": "Aavin milk", "sakthi_curd_1l": "Sakthi curd"})
     monkeypatch.setattr(insights.summary, "today", fake_today)
     out = await insights.day_summary()
-    assert seen["shop"] == "murugan_dairy"
+    assert seen["shop"] == "sunrise_dairy"
     assert out["say"] == ("Today: 48 sales, ₹2860. Top seller: Aavin milk. "
                           "Suggested order for tomorrow: 30 litres of Sakthi curd.")
     assert out["sales_count"] == 48 and out["suggested_orders"][0]["qty"] == 30
@@ -136,7 +136,7 @@ async def test_reorder_suggest_low_stock_suggests_order(shop, session):
                                    "supplier": "Sakthi vendor", "forecast": 26.0, "on_hand": 2.0}]
     assert out["say"] == ("Sakthi curd: 2 litres left, you sell about 26 litres a day. "
                           "Order 28 litres from Sakthi vendor?")
-    assert shop["on_hand_calls"] == [("murugan_dairy", "sakthi_curd_1l")]
+    assert shop["on_hand_calls"] == [("sunrise_dairy", "sakthi_curd_1l")]
 
 
 async def test_reorder_suggest_says_when_the_history_is_demo_data(shop, session):
@@ -151,7 +151,7 @@ async def test_reorder_suggest_says_when_the_history_is_demo_data(shop, session)
 
 async def test_reorder_suggest_half_litre_pouches_are_spoken_in_litres(shop, session):
     """Milk 500 ml is stocked and forecast in litres: 'Order 20' would be heard as 20 pouches, not 40."""
-    shop["db"].store["shops/murugan_dairy/products/aavin_milk_500ml"] = {
+    shop["db"].store["shops/sunrise_dairy/products/aavin_milk_500ml"] = {
         "name": "Aavin Milk 500 ml", "unit": "L", "packSizeL": 0.5, "reorderThreshold": 5}
     shop["forecast"]["aavin_milk_500ml"] = 20.0
     shop["on_hand"]["aavin_milk_500ml"] = 3.0
@@ -162,7 +162,7 @@ async def test_reorder_suggest_half_litre_pouches_are_spoken_in_litres(shop, ses
 
 
 async def test_reorder_suggest_product_without_a_unit_is_spoken_in_packs(shop, session):
-    shop["db"].store["shops/murugan_dairy/products/aavin_paneer_200g"] = {"name": "Aavin paneer"}
+    shop["db"].store["shops/sunrise_dairy/products/aavin_paneer_200g"] = {"name": "Aavin paneer"}
     shop["forecast"]["aavin_paneer_200g"] = 1.0
     out = await insights.reorder_suggest()
     assert "Aavin paneer: 0 packs left, you sell about 1 pack a day. Order 2 packs?" in out["say"]
@@ -184,7 +184,7 @@ async def test_reorder_suggest_stock_fine(shop, session):
 
 
 async def test_reorder_suggest_without_supplier_does_not_say_from(shop, session):
-    del shop["db"].store["shops/murugan_dairy/suppliers/sakthi_vendor"]
+    del shop["db"].store["shops/sunrise_dairy/suppliers/sakthi_vendor"]
     shop["forecast"]["sakthi_curd_1l"] = 25.8
     out = await insights.reorder_suggest()
     assert out["suggestions"][0]["supplier"] is None
@@ -193,7 +193,7 @@ async def test_reorder_suggest_without_supplier_does_not_say_from(shop, session)
 
 
 async def test_reorder_suggest_skips_products_without_history(shop, session):
-    shop["db"].store["shops/murugan_dairy/products/aavin_ghee_200ml"] = {"name": "Aavin ghee"}
+    shop["db"].store["shops/sunrise_dairy/products/aavin_ghee_200ml"] = {"name": "Aavin ghee"}
     shop["forecast"]["sakthi_curd_1l"] = 26.0
     out = await insights.reorder_suggest()
     assert [x["sku"] for x in out["suggestions"]] == ["sakthi_curd_1l"]
@@ -201,7 +201,7 @@ async def test_reorder_suggest_skips_products_without_history(shop, session):
 
 
 async def test_reorder_suggest_one_product(monkeypatch, shop, session):
-    shop["db"].store["shops/murugan_dairy/products/aavin_milk_500ml"] = {"name": "Aavin milk", "reorderThreshold": 10}
+    shop["db"].store["shops/sunrise_dairy/products/aavin_milk_500ml"] = {"name": "Aavin milk", "reorderThreshold": 10}
     shop["forecast"].update({"sakthi_curd_1l": 26.0, "aavin_milk_500ml": 40.0})
     spoken = []
 
@@ -212,7 +212,7 @@ async def test_reorder_suggest_one_product(monkeypatch, shop, session):
 
     out = await insights.reorder_suggest("aavin milk")
     assert [x["sku"] for x in out["suggestions"]] == ["aavin_milk_500ml"]
-    assert spoken == [("murugan_dairy", "aavin milk", "en")]
+    assert spoken == [("sunrise_dairy", "aavin milk", "en")]
 
     out = await insights.reorder_suggest("rasmalai")
     assert out == {"say": "I couldn't find rasmalai in your shop.", "suggestions": [], "next_tool": None}

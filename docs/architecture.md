@@ -76,7 +76,7 @@ flowchart LR
 
 | Role | Model | Job |
 |---|---|---|
-| `live` | `gemini-3.8-live` | Listens, speaks, can be interrupted, calls tools. Tamil, Hindi, English |
+| `live` | `gemini-3.8-live` | Listens, speaks, can be interrupted, calls tools. Answers in the language of the last utterance and switches with the speaker; no default language |
 | `point`, `count` | `gemini-robotics-er-2-preview` | Finds a product in the frame, counts packs, checks the pack in his hand |
 | fallback for `point`, `count` | `gemini-3.8-flash` | Used when ER 2 is slow or failing |
 | `read` | `gemini-3.8-flash` | Invoice and cash: read A |
@@ -93,12 +93,12 @@ The protocol is defined twice and kept in sync: `packages/contracts/src/messages
 
 ## Order-to-sale sequence
 
-Murugan talks to the app. The app streams his voice over `/ws` to `aira-live`, which streams it to Gemini Live. To keep the diagram short, arrows from Murugan go straight to `aira-live`, and arrows back to him are spoken replies.
+Sam talks to the app. The app streams his voice over `/ws` to `aira-live`, which streams it to Gemini Live. To keep the diagram short, arrows from Sam go straight to `aira-live`, and arrows back to him are spoken replies.
 
 ```mermaid
 sequenceDiagram
   autonumber
-  actor M as Murugan
+  actor M as Sam
   participant A as AIRA app
   participant S as aira-live
   participant L as Gemini Live
@@ -192,7 +192,7 @@ Notes on the sequence:
 
 ## Data model
 
-Firestore database `aira`. The demo shop is `shops/murugan_dairy`. Types are in `packages/contracts/src/firestore.ts`.
+Firestore database `aira`. The demo shop is `shops/sunrise_dairy`. Types are in `packages/contracts/src/firestore.ts`.
 
 ```
 shops/{shopId}                     name, ownerUid, city, currency "INR", timezone "Asia/Kolkata"

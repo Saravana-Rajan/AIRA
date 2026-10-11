@@ -12,7 +12,7 @@ import pytest
 from aira_live.analytics import forecast as fc
 
 IST = ZoneInfo("Asia/Kolkata")
-SHOP = "murugan_dairy"
+SHOP = "sunrise_dairy"
 TODAY = date(2026, 10, 13)
 BACKFILL = Path(__file__).resolve().parents[4] / "scripts" / "backfill_demo_sales.py"
 

@@ -4,7 +4,7 @@ Points are [y, x] normalised 0-1000. Never invent a count: when nothing valid is
 the item cap (so more packs may be in view), the result is ``count=None`` with ``needs_retake`` and an
 ``aim_hint`` i18n key (see ``vision/hints.py``).
 
-Two different problems get two different hints: a pack cut off by the frame edge asks Murugan to move the
+Two different problems get two different hints: a pack cut off by the frame edge asks Sam to move the
 phone back (``vision.aim.move_back``); a pack hidden behind another one, or packs bunched together, asks him
 to spread them out (``vision.aim.spread_out``). Moving back cannot fix an overlap.
 """
@@ -21,7 +21,7 @@ from aira_live.vision.gemini import generate_json, image_part
 DEDUPE_RADIUS = 12     # two points closer than this (0-1000 space) are the same pack
 OVERLAP_RADIUS = 35    # packs this close are probably stacked or overlapping
 EDGE_MARGIN = 25       # a point this close to the frame edge is probably a cut-off pack
-SPREAD_RATIO = 0.15    # overlapping pairs per pack above this ask Murugan to spread the packs out
+SPREAD_RATIO = 0.15    # overlapping pairs per pack above this ask Sam to spread the packs out
 MAX_ITEMS = 80         # the prompt's reply cap; a reply this long may be truncated, so it is never a count
 
 

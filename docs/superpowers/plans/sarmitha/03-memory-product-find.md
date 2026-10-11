@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Give AIRA a durable shop memory: where each product sits, what happened today, and the owner's preferences. On top of it, build the `product_find` / `product_identify` / `location_remember` tools. Murugan says "2 litres curd", and AIRA says where the curd was last recorded, guides his hand to it with live pointing, and checks the pack he touches: "Sakthi curd 1 L ✓. Take 1 more."
+**Goal:** Give AIRA a durable shop memory: where each product sits, what happened today, and the owner's preferences. On top of it, build the `product_find` / `product_identify` / `location_remember` tools. Sam says "2 litres curd", and AIRA says where the curd was last recorded, guides his hand to it with live pointing, and checks the pack he touches: "Sakthi curd 1 L ✓. Take 1 more."
 
 **Architecture:**
 - Three small memory modules (`memory/spatial.py`, `memory/episodic.py`, `memory/prefs.py`) read and write Firestore under `shops/{shopId}/…`, exactly as spec §5.

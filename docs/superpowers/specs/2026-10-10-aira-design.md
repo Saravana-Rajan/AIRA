@@ -20,7 +20,7 @@ It is **not** a chatbot or a billing app. It connects five things:
 - what the **business records** say
 - what AIRA **remembers** across days
 
-**First shop:** *Murugan Dairy*. Murugan is blind and sells a full dairy range: **milk, curd, buttermilk, ghee, paneer and butter** (Aavin and Sakthi), plus **Arun ice cream** boxes.
+**First shop:** *Sunrise Dairy*. Sam is blind and sells a full dairy range: **milk, curd, buttermilk, ghee, paneer and butter** (Aavin and Sakthi), plus **Arun ice cream** boxes.
 
 **Why it matters:**
 
@@ -38,9 +38,9 @@ It is **not** a chatbot or a billing app. It connects five things:
 
 No system runs the full owner loop: order → delivery count → invoice check → pay vendor → guided sale → payment check → stock → reorder.
 
-## 2. The core loop: Murugan's day
+## 2. The core loop: Sam's day
 
-| # | Moment | Murugan | AIRA |
+| # | Moment | Sam | AIRA |
 |---|---|---|---|
 | 1 | **Order stock** | "I need 30 litres Sakthi curd, order from the Sakthi vendor." | Reads the order back and confirms it. After "yes", sends a **WhatsApp order** to the vendor. The vendor's reply is spoken: "Delivery at 6 pm." State: `ORDER_PLACED` |
 | 2 | **Delivery arrives** | Puts the packs into the fridge one by one, or a crate at a time | **Counts live**: "…28, 29, 30 ✓", or "28 counted. 2 short?" Records only the **verified** quantity. State: `DELIVERY_RECONCILED` or `DISCREPANCY` |
@@ -136,10 +136,10 @@ ER 2 returns text only, so all speech comes from Gemini Live. Model IDs live **o
 
 1. **Primary: WhatsApp Business Cloud API** (Meta).
    - A pre-approved utility template `order_request` ("New order from {{shop}}: {{items}}. Please confirm delivery time.") is sent to the vendor's number.
-   - Vendor replies arrive at the **webhook** `POST /webhooks/whatsapp` on aira-live. They are stored on the order and spoken to Murugan.
+   - Vendor replies arrive at the **webhook** `POST /webhooks/whatsapp` on aira-live. They are stored on the order and spoken to Sam.
    - The hackathon uses Meta's **free test number**, with vendor numbers registered as test recipients. Production carries a small per-message fee; verify current Meta pricing.
 2. **Optional: Telegram Bot API.** Free and automatic, but only for vendors who have started a chat with the AIRA bot.
-3. **Fallback:** a WhatsApp click-to-chat link (`https://wa.me/<number>?text=<order>`). It opens WhatsApp with the message pre-typed, and Murugan double-taps Send.
+3. **Fallback:** a WhatsApp click-to-chat link (`https://wa.me/<number>?text=<order>`). It opens WhatsApp with the message pre-typed, and Sam double-taps Send.
 
 ## 5. Data model (Firestore — system of record)
 
@@ -231,7 +231,7 @@ idempotency/{idemKey}             result, at   (dedupe for retried tool calls)
 **Video ≤ 4:00 (target 3:50).**
 
 - The rules text says "3 to 4 minute video". The form label says "up to 3 minutes" and the template says "3 Minutes"; the team chose 4 minutes. Confirm with the organiser (support@hack2skill.com) before upload.
-- Real footage of Murugan's day, one story:
+- Real footage of Sam's day, one story:
 
 | Time | Scene |
 |---|---|
@@ -289,7 +289,7 @@ idempotency/{idemKey}             result, at   (dedupe for retried tool calls)
 | A real blind shopkeeper (or blind participant) running the loop | Impact, UX | Task completion, errors caught and time, plus a quote in the video |
 | Measured numbers | Technical | Count accuracy, invoice discrepancy catch rate, cash accuracy, soundbox parse accuracy, sale time with vs without AIRA, latency, cost per sale |
 | A live link that never breaks | Technical | Demo mode with sample media, warm Cloud Run, Remote Config fallback to Flash, uptime alerts |
-| One clear story, real footage | Innovation, UX | Murugan's day in a real dairy shop; no mockups |
+| One clear story, real footage | Innovation, UX | Sam's day in a real dairy shop; no mockups |
 | Rubric words in the deck and description | All (AI pre-screen) | Name Firebase, Firestore, Cloud Run and Gemini, plus "meaningful Gen AI", "scalability", "impact" and "originality" |
 
 **Honest estimate:**

@@ -10,7 +10,7 @@ import pytest
 
 from aira_live.analytics import events
 
-SHOP = "murugan_dairy"
+SHOP = "sunrise_dairy"
 SALE = {"shop_id": SHOP, "sale_id": "x", "sku": "sakthi_curd_1l", "qty": 2}
 ALERT = {"shop_id": SHOP, "kind": "low_stock", "message": "m"}
 

@@ -22,7 +22,7 @@ const PARAMETERISED: Array<{ key: "short" | "extra" | "counted"; re: RegExp }> =
   { key: "counted", re: /^(.+) counted$/ },
 ];
 
-/** One English label from the reducer in the owner's language; unknown text stays as sent. */
+/** One English label from the reducer in the language the speaker last used; unknown text stays as sent. */
 export function localizeLabel(label: string, lang: Lang): string {
   const k = BY_ENGLISH.get(label);
   if (k) return LABELS[k][lang];

@@ -75,13 +75,13 @@ async def notify(shop_id: str, text: str, cue: str = "ack") -> int:
     """Speak ``text`` to every live session of a shop; returns how many got it.
 
     Each session gets the text as a caption plus an earcon. When it has a Live bridge, AIRA also says it in the
-    live audio, in the owner's language. A session that fails (closed socket, dead bridge) is logged, skipped and
-    not counted.
+    live audio, in the language the owner last spoke. A session that fails (closed socket, dead bridge) is
+    logged, skipped and not counted.
     """
     n = 0
     for s, bridge in by_shop(shop_id):
         try:
-            await s.send(TranscriptMsg(role="aira", text=text, final=True))
+            await s.send(TranscriptMsg(role="aira", text=text, final=True, lang=s.lang))
             await s.send(CueMsg(cue=cue))
             if bridge is not None:
                 await bridge.speak_notice(text)

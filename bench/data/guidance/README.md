@@ -6,7 +6,7 @@ This set measures how long it takes from the start of `product_find` guidance un
 
 ## Collecting the real trials
 
-1. Stock the demo fridge with the Murugan Dairy range (Aavin milk, Sakthi curd, Arun ice cream), with look-alike packs next to each other.
+1. Stock the demo fridge with the Sunrise Dairy range (Aavin milk, Sakthi curd, Arun ice cream), with look-alike packs next to each other.
 2. The participant is a blind person or a blindfolded teammate. Say which in the deck.
 3. Run 20 trials with the app bench runner (`ishwarya/03`). Mix the products and move the packs between trials.
 4. For each trial, the runner records:

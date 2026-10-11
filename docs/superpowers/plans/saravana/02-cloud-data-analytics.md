@@ -18,12 +18,12 @@
 - locked-down Firestore rules and indexes
 - every business event flowing through Pub/Sub into BigQuery
 - a demand forecast (BigQuery ML ARIMA_PLUS with a 7-day moving-average fallback) that powers `day_summary` and `reorder_suggest`
-- scheduled expiry and day-summary jobs that speak to Murugan and alert his family over FCM
+- scheduled expiry and day-summary jobs that speak to Sam and alert his family over FCM
 - a Remote Config model switch
 - CI/CD, uptime monitoring and a budget alert
 
 **Architecture:**
-- **Firestore** is the system of record. The server writes through the Admin SDK, so rules deny every client write; clients only read their own shop, and the `murugan_dairy` demo shop is readable by any signed-in user for judges.
+- **Firestore** is the system of record. The server writes through the Admin SDK, so rules deny every client write; clients only read their own shop, and the `sunrise_dairy` demo shop is readable by any signed-in user for judges.
 - **Events:**
   - Services publish small JSON events to five Pub/Sub topics *after* their Firestore transaction commits.
   - **BigQuery subscriptions** (`--use-table-schema`) land those events in dataset `aira` with no extra code.
@@ -59,7 +59,7 @@
 - **Firestore is the system of record.**
   - All writes come from the server (Admin SDK). Client rules allow **reads only**.
   - Ledger documents are append-only: `business.ledger` never updates or deletes them.
-- Shop data lives under `shops/{shopId}/…`, with field names exactly as in spec §5. The demo shop id is `murugan_dairy` (judge-readable); demo SKUs: `aavin_milk_500ml`, `aavin_milk_1l`, `sakthi_curd_500ml`, `sakthi_curd_1l`, `arun_icecream_box`.
+- Shop data lives under `shops/{shopId}/…`, with field names exactly as in spec §5. The demo shop id is `sunrise_dairy` (judge-readable); demo SKUs: `aavin_milk_500ml`, `aavin_milk_1l`, `sakthi_curd_500ml`, `sakthi_curd_1l`, `arun_icecream_box`.
 - **Model IDs** live only in `services/live/aira_live/models.py`. Remote Config values are validated against `models.DEFAULTS` / `models.FALLBACKS`.
 - **Pub/Sub topics are exactly:** `sales`, `inventory-movements`, `orders`, `discrepancies`, `alerts`.
   - Each maps to BigQuery table `aira.<topic with - → _>`.
@@ -130,7 +130,7 @@ services/live/
 **Interfaces:**
 - Consumes: spec §5 collection layout; `users/{uid}` has `shopId`, `role` ∈ {owner, family, demo}.
 - Produces:
-  - **Rule contract:** members read `shops/{shopId}/**`; any signed-in user reads `shops/murugan_dairy/**`; no client writes anywhere; users read only their own `users/{uid}` and `users/{uid}/fcmTokens/*`.
+  - **Rule contract:** members read `shops/{shopId}/**`; any signed-in user reads `shops/sunrise_dairy/**`; no client writes anywhere; users read only their own `users/{uid}` and `users/{uid}/fcmTokens/*`.
   - **Composite indexes:** `ledger(sku ASC, at DESC)`, `sales(state ASC, createdAt DESC)`, `orders(state ASC, updatedAt DESC)`, `payments(refType ASC, refId ASC)`, `users(shopId ASC, role ASC)`.
   - **Cross-team requirement (Kanish):** `business.sales.create` sets `createdAt`, and `complete` sets `completedAt`. Both are server timestamps; Task 4 queries `createdAt`.
 
@@ -181,10 +181,10 @@ import { doc, getDoc, setDoc, updateDoc, deleteDoc } from "firebase/firestore";
 import { beforeAll, afterAll, beforeEach, describe, it } from "vitest";
 
 let env: RulesTestEnvironment;
-// private_shop = a normal member-only shop; murugan_dairy = the judge-readable demo shop.
+// private_shop = a normal member-only shop; sunrise_dairy = the judge-readable demo shop.
 const P = "shops/private_shop/products/sakthi_curd_1l";
 const L = "shops/private_shop/ledger/t1";
-const DEMO = "shops/murugan_dairy/products/aavin_milk_500ml";
+const DEMO = "shops/sunrise_dairy/products/aavin_milk_500ml";
 
 beforeAll(async () => {
   env = await initializeTestEnvironment({
@@ -204,7 +204,7 @@ beforeEach(async () => {
     await setDoc(doc(db, "shops/private_shop"), { name: "Private Shop" });
     await setDoc(doc(db, P), { name: "Sakthi curd", price: 60 });
     await setDoc(doc(db, L), { sku: "sakthi_curd_1l", delta: 30, reason: "DELIVERY" });
-    await setDoc(doc(db, "shops/murugan_dairy"), { name: "Murugan Dairy" });
+    await setDoc(doc(db, "shops/sunrise_dairy"), { name: "Sunrise Dairy" });
     await setDoc(doc(db, DEMO), { name: "Aavin milk" });
     await setDoc(doc(db, "idempotency/k1"), { result: {} });
   });
@@ -216,7 +216,7 @@ describe("shop reads", () => {
   it("owner reads own shop product", async () => { await assertSucceeds(getDoc(doc(as("owner1"), P))); });
   it("family reads ledger", async () => { await assertSucceeds(getDoc(doc(as("family1"), L))); });
   it("stranger cannot read another shop", async () => { await assertFails(getDoc(doc(as("stranger"), P))); });
-  it("any signed-in user (judge, no users doc) reads the demo shop murugan_dairy", async () => {
+  it("any signed-in user (judge, no users doc) reads the demo shop sunrise_dairy", async () => {
     await assertSucceeds(getDoc(doc(as("judge-anon"), DEMO)));
   });
   it("unauthenticated cannot read the demo shop", async () => {
@@ -230,7 +230,7 @@ describe("shop reads", () => {
 describe("no client writes", () => {
   it("no client can create/update/delete ledger", async () => {
     const db = as("owner1");
-    await assertFails(setDoc(doc(db, "shops/murugan/ledger/t2"), { sku: "x", delta: -1 }));
+    await assertFails(setDoc(doc(db, "shops/sunrise/ledger/t2"), { sku: "x", delta: -1 }));
     await assertFails(updateDoc(doc(db, L), { delta: 99 }));
     await assertFails(deleteDoc(doc(db, L)));
   });
@@ -267,8 +267,8 @@ service cloud.firestore {
         && get(userPath()).data.shopId == shopId
         && get(userPath()).data.role in ['owner', 'family', 'demo'];
     }
-    // murugan_dairy is the public demo shop judges open from the deployed link (anonymous auth).
-    function canReadShop(shopId) { return (signedIn() && shopId == 'murugan_dairy') || isMember(shopId); }
+    // sunrise_dairy is the public demo shop judges open from the deployed link (anonymous auth).
+    function canReadShop(shopId) { return (signedIn() && shopId == 'sunrise_dairy') || isMember(shopId); }
 
     // Users: read own doc + own FCM tokens. All writes go through aira-live (Admin SDK).
     match /users/{uid} {
@@ -652,7 +652,7 @@ Run:
 
 ```bash
 chmod +x infra/pubsub_bigquery.sh && PROJECT=<id> ./infra/pubsub_bigquery.sh
-gcloud pubsub topics publish sales --message='{"shop_id":"murugan_dairy","sale_id":"smoke-1","sku":"sakthi_curd_1l","qty":2,"unit_price":60,"line_total":120,"method":"cash","ts":"2026-10-11T10:00:00Z"}'
+gcloud pubsub topics publish sales --message='{"shop_id":"sunrise_dairy","sale_id":"smoke-1","sku":"sakthi_curd_1l","qty":2,"unit_price":60,"line_total":120,"method":"cash","ts":"2026-10-11T10:00:00Z"}'
 sleep 20 && bq query --use_legacy_sql=false 'SELECT sale_id, qty FROM aira.sales WHERE sale_id="smoke-1"'
 ```
 
@@ -679,7 +679,7 @@ git commit -m "feat(analytics): Pub/Sub event publishing with BigQuery subscript
   - `content/catalog/murugan_dairy.json` (Kanish) with the shape below. **Cross-team requirement (Kanish):** the catalog must have exactly this top-level shape.
 
     ```json
-    {"shop": {"id": "murugan_dairy", "name": "Murugan Dairy", "city": "Chennai"},
+    {"shop": {"id": "sunrise_dairy", "name": "Sunrise Dairy", "city": "Chennai"},
      "products": [{"sku": "...", "name": "...", "brand": "...", "unit": "L|pack|box", "packSizeL": 1.0,
                    "price": 0, "costPrice": 0, "reorderThreshold": 0, "shelfLifeDays": 0,
                    "aliases": {"ta": [], "hi": [], "en": []}, "demoDailyBase": 0}],
@@ -743,7 +743,7 @@ def test_choose_none_without_history():
 async def test_daily_demand_returns_none_in_mock(monkeypatch):
     from types import SimpleNamespace
     monkeypatch.setattr(fc.config, "load", lambda: SimpleNamespace(mock=True, gcp_project=None))
-    assert await fc.daily_demand("murugan_dairy", "sakthi_curd_1l") is None
+    assert await fc.daily_demand("sunrise_dairy", "sakthi_curd_1l") is None
 ```
 
 ```python
@@ -765,7 +765,7 @@ def test_deterministic_and_complete_for_all_fixed_skus():
     a = bf.generate(PRODUCTS, days=30, end=date(2026, 10, 10), seed=7)
     b = bf.generate(PRODUCTS, days=30, end=date(2026, 10, 10), seed=7)
     assert a == b and len(a) == 150
-    assert {r["sku"] for r in a} == set(FIXED_SKUS) and {r["shop_id"] for r in a} == {"murugan_dairy"}
+    assert {r["sku"] for r in a} == set(FIXED_SKUS) and {r["shop_id"] for r in a} == {"sunrise_dairy"}
 
 
 def test_daily_base_covers_fixed_skus():
@@ -794,7 +794,7 @@ SCRIPT = Path(__file__).resolve().parents[2] / "scripts" / "seed_firestore.py"
 spec = importlib.util.spec_from_file_location("seed", SCRIPT)
 seed = importlib.util.module_from_spec(spec); spec.loader.exec_module(seed)
 CATALOG = {
-    "shop": {"id": "murugan_dairy", "name": "Murugan Dairy", "city": "Chennai"},
+    "shop": {"id": "sunrise_dairy", "name": "Sunrise Dairy", "city": "Chennai"},
     "products": [{"sku": "sakthi_curd_1l", "name": "Sakthi curd", "price": 60, "reorderThreshold": 5, "demoDailyBase": 26}],
     "suppliers": [{"id": "sakthi_vendor", "name": "Sakthi vendor", "phone": "+910000000000", "channel": "whatsapp", "products": ["sakthi_curd_1l"]}],
     "inventory": [{"sku": "sakthi_curd_1l", "onHand": 4, "batches": [{"batchId": "b1", "qty": 4, "expiryDate": "2026-10-12"}]}],
@@ -802,13 +802,13 @@ CATALOG = {
 
 
 def test_plan_writes_paths_and_no_demo_only_fields():
-    writes = dict(seed.plan_writes(CATALOG, "murugan_dairy"))
-    shop = writes["shops/murugan_dairy"]
-    assert shop["name"] == "Murugan Dairy" and shop["timezone"] == "Asia/Kolkata"
-    assert writes["shops/murugan_dairy/products/sakthi_curd_1l"]["price"] == 60
-    assert "demoDailyBase" not in writes["shops/murugan_dairy/products/sakthi_curd_1l"]
-    assert writes["shops/murugan_dairy/suppliers/sakthi_vendor"]["channel"] == "whatsapp"
-    assert writes["shops/murugan_dairy/inventory/sakthi_curd_1l"]["onHand"] == 4
+    writes = dict(seed.plan_writes(CATALOG, "sunrise_dairy"))
+    shop = writes["shops/sunrise_dairy"]
+    assert shop["name"] == "Sunrise Dairy" and shop["timezone"] == "Asia/Kolkata"
+    assert writes["shops/sunrise_dairy/products/sakthi_curd_1l"]["price"] == 60
+    assert "demoDailyBase" not in writes["shops/sunrise_dairy/products/sakthi_curd_1l"]
+    assert writes["shops/sunrise_dairy/suppliers/sakthi_vendor"]["channel"] == "whatsapp"
+    assert writes["shops/sunrise_dairy/inventory/sakthi_curd_1l"]["onHand"] == 4
 ```
 
 - [ ] **Step 2: Run the tests to verify they fail**
@@ -925,7 +925,7 @@ if __name__ == "__main__":
 
 ```python
 """Generate 30 days of plausible demo sales and stream them into BigQuery aira.sales.
-Usage: uv run python scripts/backfill_demo_sales.py --catalog ../../content/catalog/murugan_dairy.json --shop murugan_dairy --project $PROJECT"""
+Usage: uv run python scripts/backfill_demo_sales.py --catalog ../../content/catalog/murugan_dairy.json --shop sunrise_dairy --project $PROJECT"""
 from __future__ import annotations
 
 import argparse
@@ -945,7 +945,7 @@ DAILY_BASE = {
 }
 
 
-def generate(products: list[dict], days: int, end: date, seed: int, shop_id: str = "murugan_dairy") -> list[dict]:
+def generate(products: list[dict], days: int, end: date, seed: int, shop_id: str = "sunrise_dairy") -> list[dict]:
     rng = random.Random(seed)
     rows: list[dict] = []
     for i in range(days, 0, -1):
@@ -966,7 +966,7 @@ def generate(products: list[dict], days: int, end: date, seed: int, shop_id: str
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--catalog", required=True)
-    ap.add_argument("--shop", default="murugan_dairy")
+    ap.add_argument("--shop", default="sunrise_dairy")
     ap.add_argument("--project", required=True)
     ap.add_argument("--days", type=int, default=30)
     args = ap.parse_args()
@@ -984,8 +984,8 @@ if __name__ == "__main__":
 - [ ] **Step 5: Implement `services/live/scripts/seed_firestore.py`**
 
 ```python
-"""Seed a shop (default: the judge-readable `murugan_dairy` demo shop) from content/catalog/*.json.
-Usage: uv run python scripts/seed_firestore.py --catalog ../../content/catalog/murugan_dairy.json --shop murugan_dairy --project $PROJECT
+"""Seed a shop (default: the judge-readable `sunrise_dairy` demo shop) from content/catalog/*.json.
+Usage: uv run python scripts/seed_firestore.py --catalog ../../content/catalog/murugan_dairy.json --shop sunrise_dairy --project $PROJECT
 Emulator: FIRESTORE_EMULATOR_HOST=127.0.0.1:8085 uv run python scripts/seed_firestore.py ... --project demo-aira"""
 from __future__ import annotations
 
@@ -1014,7 +1014,7 @@ def plan_writes(catalog: dict, shop_id: str) -> list[tuple[str, dict]]:
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--catalog", required=True)
-    ap.add_argument("--shop", default="murugan_dairy")
+    ap.add_argument("--shop", default="sunrise_dairy")
     ap.add_argument("--project", required=True)
     args = ap.parse_args()
     from google.cloud import firestore
@@ -1042,14 +1042,14 @@ Run:
 
 ```bash
 cd services/live
-uv run python scripts/seed_firestore.py --catalog ../../content/catalog/murugan_dairy.json --shop murugan_dairy --project "$PROJECT"
-uv run python scripts/backfill_demo_sales.py --catalog ../../content/catalog/murugan_dairy.json --shop murugan_dairy --project "$PROJECT"
+uv run python scripts/seed_firestore.py --catalog ../../content/catalog/murugan_dairy.json --shop sunrise_dairy --project "$PROJECT"
+uv run python scripts/backfill_demo_sales.py --catalog ../../content/catalog/murugan_dairy.json --shop sunrise_dairy --project "$PROJECT"
 GCP_PROJECT="$PROJECT" uv run python -m aira_live.analytics.forecast --refresh
-GCP_PROJECT="$PROJECT" GEMINI_API_KEY=x uv run python -c "import asyncio; from aira_live.analytics.forecast import daily_demand; print(asyncio.run(daily_demand('murugan_dairy','sakthi_curd_1l')))"
+GCP_PROJECT="$PROJECT" GEMINI_API_KEY=x uv run python -c "import asyncio; from aira_live.analytics.forecast import daily_demand; print(asyncio.run(daily_demand('sunrise_dairy','sakthi_curd_1l')))"
 ```
 
 Expected:
-- `seeded N docs into shops/murugan_dairy`
+- `seeded N docs into shops/sunrise_dairy`
 - `inserted 30×(#products) rows`
 - `demand_arima refreshed`
 - a positive float near that SKU's `demoDailyBase` (for example `25.8`)
@@ -1132,7 +1132,7 @@ from aira_live.session import current_session
 
 @pytest.fixture
 def session():
-    tok = current_session.set(SimpleNamespace(shop_id="murugan_dairy", lang="en", session_id="s1"))
+    tok = current_session.set(SimpleNamespace(shop_id="sunrise_dairy", lang="en", session_id="s1"))
     yield
     current_session.reset(tok)
 
@@ -1376,9 +1376,9 @@ Then register both tools in `aira_live/tools/__init__.py`: add `from aira_live.t
 Run: `cd services/live && uv run pytest -q tests/analytics/test_summary.py tests/test_insights.py`
 Expected: `7 passed`.
 
-- [ ] **Step 7: Try it through the harness against the seeded `murugan_dairy` demo shop**
+- [ ] **Step 7: Try it through the harness against the seeded `sunrise_dairy` demo shop**
 
-Run: `cd services/live && GCP_PROJECT="$PROJECT" uv run python -m aira_live.devtools.call_tool reorder_suggest --args '{}' --shop murugan_dairy`
+Run: `cd services/live && GCP_PROJECT="$PROJECT" uv run python -m aira_live.devtools.call_tool reorder_suggest --args '{}' --shop sunrise_dairy`
 Expected: JSON with `"next_tool": "order_create"` and at least one suggestion whose `qty > 0` (the backfill created history), plus a `say` like `Sakthi curd: 4 left, you sell about 25.8 a day. Order 26 from Sakthi vendor?`.
 
 - [ ] **Step 8: Commit**
@@ -1426,7 +1426,7 @@ from aira_live import jobs
 def client(monkeypatch):
     calls = {"notify": [], "fcm": [], "events": []}
 
-    async def shops(): return [("murugan_dairy", "en")]
+    async def shops(): return [("sunrise_dairy", "en")]
     async def scan(shop_id, today): return [{"sku": "sakthi_curd_1l", "name": "Sakthi curd", "qty": 6, "daysLeft": 1}]
     async def notify(shop_id, text, cue="ack"):
         calls["notify"].append((shop_id, text, cue)); return 1
@@ -1464,7 +1464,7 @@ def test_expiry_job_speaks_alerts_and_publishes(client, monkeypatch):
     r = c.post("/jobs/expiry", headers={"Authorization": "Bearer ok"})
     assert r.status_code == 200 and r.json() == {"shops": 1, "alerts": 1}
     assert "Sakthi curd" in calls["notify"][0][1] and calls["notify"][0][2] == "warn"
-    assert calls["fcm"][0][0] == "murugan_dairy"
+    assert calls["fcm"][0][0] == "sunrise_dairy"
     assert calls["events"][0][0] == "alerts" and calls["events"][0][1]["kind"] == "expiry"
 ```
 
@@ -1494,7 +1494,7 @@ def test_register_stores_token_for_verified_uid(monkeypatch):
 async def test_send_to_family_returns_zero_without_tokens(monkeypatch):
     async def none(shop_id): return []
     monkeypatch.setattr(fcm, "family_tokens", none)
-    assert await fcm.send_to_family("murugan_dairy", "t", "b") == 0
+    assert await fcm.send_to_family("sunrise_dairy", "t", "b") == 0
 ```
 
 - [ ] **Step 2: Run the tests to verify they fail**

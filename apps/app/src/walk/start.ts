@@ -56,7 +56,7 @@ export async function startBumpGuard(opts: StartBumpGuardOptions = {}): Promise<
     vibrate: (p) => { try { navigator.vibrate?.(p); } catch { /* not supported */ } },
     earcon: () => app.earcon("warn"),
     speak: (s) => app.speak(s),
-    lang: () => app.settings.lang,
+    lang: () => app.lang(),
     now: () => performance.now(),
     onLatency: (ms, w) => {
       latencyLog.push({ atMs: Date.now(), latencyMs: Math.round(ms), phrase: w.phrase });

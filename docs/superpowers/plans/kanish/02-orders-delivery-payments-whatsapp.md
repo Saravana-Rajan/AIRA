@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Make Murugan's shop loop work end to end through Gemini Live tools:
+**Goal:** Make Sam's shop loop work end to end through Gemini Live tools:
 - order stock by voice and send it to the vendor on WhatsApp, with the vendor's reply spoken back
 - count the delivery live
 - check the paper invoice against the order and the count
@@ -56,7 +56,7 @@
   - After saving a delivery that has discrepancies, call `outbox.discrepancies(shop_id, delivery_id, result)`.
   - Never publish analytics directly.
 - **Fixed demo data:**
-  - shop id `murugan_dairy` (env `AIRA_DEMO_SHOP`)
+  - shop id `sunrise_dairy` (env `AIRA_DEMO_SHOP`)
   - SKUs: `aavin_milk_500ml`, `aavin_milk_1l`, `sakthi_curd_500ml`, `sakthi_curd_1l`, `aavin_buttermilk_200ml`, `aavin_ghee_200ml`, `aavin_ghee_500ml`, `aavin_paneer_200g`, `aavin_butter_100g`, `arun_icecream_box`
   - suppliers `aavin_vendor`, `sakthi_vendor`, `arun_distributor`
 - **All speech goes through `aira_live.i18n.t(key, session.lang, ...)`.**
@@ -173,7 +173,7 @@ from aira_live.frames import Frame, FrameStore
 
 ROOT = Path(__file__).resolve().parents[4]
 CATALOG = ROOT / "content" / "catalog" / "murugan_dairy.json"
-SHOP = "murugan_dairy"
+SHOP = "sunrise_dairy"
 TODAY = date(2026, 10, 12)
 PHONES = {"aavin_vendor": "+919000000001", "sakthi_vendor": "+919000000002", "arun_distributor": "+919000000003"}
 
@@ -333,8 +333,8 @@ def test_phone_normalization_and_links():
 
 
 def test_order_text_lists_quantities_and_units():
-    assert clicktochat.order_text("Murugan Dairy", ORDER["items"]) == (
-        "New order from Murugan Dairy: 30 L Sakthi Curd 1 L, 25 pack Aavin Paneer 200 g. "
+    assert clicktochat.order_text("Sunrise Dairy", ORDER["items"]) == (
+        "New order from Sunrise Dairy: 30 L Sakthi Curd 1 L, 25 pack Aavin Paneer 200 g. "
         "Please confirm delivery time.")
 
 
@@ -356,7 +356,7 @@ async def test_send_template_builds_graph_request(monkeypatch):
         seen.update(url=str(req.url), auth=req.headers["authorization"], body=json.loads(req.content))
         return httpx.Response(200, json={"messages": [{"id": "wamid.ABC"}]})
 
-    mid = await whatsapp.send_template("+919000000002", "Murugan Dairy", "30 L Sakthi Curd 1 L",
+    mid = await whatsapp.send_template("+919000000002", "Sunrise Dairy", "30 L Sakthi Curd 1 L",
                                        transport=httpx.MockTransport(handler))
     assert mid == "wamid.ABC"
     assert seen["url"] == "https://graph.facebook.com/v21.0/123/messages"
@@ -364,7 +364,7 @@ async def test_send_template_builds_graph_request(monkeypatch):
     assert seen["body"]["to"] == "919000000002"
     tpl = seen["body"]["template"]
     assert tpl["name"] == "order_request"
-    assert [p["text"] for p in tpl["components"][0]["parameters"]] == ["Murugan Dairy", "30 L Sakthi Curd 1 L"]
+    assert [p["text"] for p in tpl["components"][0]["parameters"]] == ["Sunrise Dairy", "30 L Sakthi Curd 1 L"]
 
 
 async def test_hello_world_template_has_no_components(monkeypatch):
@@ -375,7 +375,7 @@ async def test_hello_world_template_has_no_components(monkeypatch):
         seen["body"] = json.loads(req.content)
         return httpx.Response(200, json={"messages": [{"id": "wamid.H"}]})
 
-    await whatsapp.send_template("9000000002", "Murugan Dairy", "x", transport=httpx.MockTransport(handler))
+    await whatsapp.send_template("9000000002", "Sunrise Dairy", "x", transport=httpx.MockTransport(handler))
     assert seen["body"]["template"] == {"name": "hello_world", "language": {"code": "en_US"}}
 
 
@@ -383,7 +383,7 @@ async def test_send_template_http_error_raises(monkeypatch):
     _env(monkeypatch)
     transport = httpx.MockTransport(lambda req: httpx.Response(401, json={"error": {"message": "bad token"}}))
     with pytest.raises(whatsapp.WhatsAppError):
-        await whatsapp.send_template("9000000002", "Murugan Dairy", "x", transport=transport)
+        await whatsapp.send_template("9000000002", "Sunrise Dairy", "x", transport=transport)
 
 
 async def test_send_order_whatsapp_success_indexes_message(store, monkeypatch):
@@ -391,7 +391,7 @@ async def test_send_order_whatsapp_success_indexes_message(store, monkeypatch):
     monkeypatch.setattr(whatsapp, "configured", lambda: True)
 
     async def fake_send(to, shop_name, items_text, **kw):
-        assert (to, shop_name) == ("+919000000002", "Murugan Dairy")
+        assert (to, shop_name) == ("+919000000002", "Sunrise Dairy")
         return "wamid.1"
 
     monkeypatch.setattr(whatsapp, "send_template", fake_send)
@@ -411,7 +411,7 @@ async def test_send_order_falls_back_to_click_to_chat(store, monkeypatch):
     monkeypatch.setattr(whatsapp, "send_template", failing)
     res = await messaging.send_order(SHOP, await supplier_doc(store, "sakthi_vendor"), ORDER)
     assert res["channel"] == "whatsapp_link"
-    assert res["fallbackUrl"].startswith("https://wa.me/919000000002?text=New%20order%20from%20Murugan%20Dairy")
+    assert res["fallbackUrl"].startswith("https://wa.me/919000000002?text=New%20order%20from%20Sunrise%20Dairy")
 
 
 async def test_send_order_flag_off_uses_click_to_chat(store, monkeypatch):
@@ -683,7 +683,7 @@ Expected: `9 passed`.
 ```bash
 cd services/live
 WHATSAPP_TOKEN=... WHATSAPP_PHONE_ID=... WHATSAPP_TEMPLATE=hello_world \
-uv run python -c "import asyncio; from aira_live.messaging import whatsapp; print(asyncio.run(whatsapp.send_template('+91XXXXXXXXXX','Murugan Dairy','test')))"
+uv run python -c "import asyncio; from aira_live.messaging import whatsapp; print(asyncio.run(whatsapp.send_template('+91XXXXXXXXXX','Sunrise Dairy','test')))"
 ```
 
 Expected: a `wamid.` id is printed.
@@ -990,7 +990,7 @@ Verify the payload fields against https://developers.facebook.com/docs/whatsapp/
 
 ```python
 # services/live/aira_live/messaging/webhooks.py
-"""Vendor replies → order.vendorReply, spoken to Murugan via sessions.notify.
+"""Vendor replies → order.vendorReply, spoken to Sam via sessions.notify.
 Always 200 for unknown senders or malformed bodies (Meta retries non-200 responses); 403 only for bad auth."""
 import hashlib
 import hmac
@@ -1409,7 +1409,7 @@ This needs the Firestore emulator or the dev project, seeded with `uv run python
 ```bash
 cd services/live
 uv run python -m aira_live.devtools.call_tool order_create \
-  --args '{"supplier":"sakthi vendor","items":[{"product":"sakthi curd","qty":30,"unit":"L"}]}' --shop murugan_dairy
+  --args '{"supplier":"sakthi vendor","items":[{"product":"sakthi curd","qty":30,"unit":"L"}]}' --shop sunrise_dairy
 ```
 
 Expected: a `confirm` message whose prompt starts with "Order 30 L", and a returned `confirm_id`. Resolve it with `confirm_action`; your test phone gets the WhatsApp order, or the `OPEN_URL` fallback is printed.
@@ -1451,7 +1451,7 @@ git commit -m "feat(tools): order_create with read-back + WhatsApp send committe
   - an absence (a frame without that SKU) was seen since the last counted pack, **and** at least 1.2 s have passed.
 - A pack held continuously never counts twice.
 - A one-frame flicker of less than 1.2 s is ignored.
-- Murugan is told: "show each pack, then lower it". Every new count is spoken through `CountMsg`, and the final number is read back for a "yes".
+- Sam is told: "show each pack, then lower it". Every new count is spoken through `CountMsg`, and the final number is read back for a "yes".
 
 - [ ] **Step 1: Create the vision models if Sarmitha's files are not merged yet**
 
@@ -1957,9 +1957,9 @@ You need Sarmitha's vision merged and real photos of a curd crate and a bill.
 
 ```bash
 cd services/live
-uv run python -m aira_live.devtools.call_tool delivery_start --args '{}' --shop murugan_dairy
+uv run python -m aira_live.devtools.call_tool delivery_start --args '{}' --shop sunrise_dairy
 uv run python -m aira_live.devtools.call_tool delivery_count --args '{"sku":"aavin_ghee_500ml","mode":"crate"}' \
-  --image ~/aira-photos/ghee_crate_a.jpg --image ~/aira-photos/ghee_crate_b.jpg --shop murugan_dairy
+  --image ~/aira-photos/ghee_crate_a.jpg --image ~/aira-photos/ghee_crate_b.jpg --shop sunrise_dairy
 ```
 
 Expected: a read-back prompt with the jar count, or a spoken aim hint.
@@ -2544,13 +2544,13 @@ git commit -m "feat(tools): supplier/customer payments (cash checked, UPI soundb
 
 **Interfaces:**
 - Consumes: everything from Tasks 1–5, on the real `kanish/01` engine with `MemoryStore`.
-- Produces: a regression test of Murugan's whole loop. The demo script on the phone follows the same order.
+- Produces: a regression test of Sam's whole loop. The demo script on the phone follows the same order.
 
 - [ ] **Step 1: Write the end-to-end test**
 
 ```python
 # services/live/tests/k2/test_e2e_loop.py
-"""Murugan's loop on the real engine (MemoryStore). Only vision, WhatsApp and the soundbox listener are faked."""
+"""Sam's loop on the real engine (MemoryStore). Only vision, WhatsApp and the soundbox listener are faked."""
 import asyncio
 
 import aira_live.messaging as messaging
@@ -2570,7 +2570,7 @@ from .conftest import SHOP, use_call
 CURD = "sakthi_curd_1l"
 
 
-async def test_murugan_full_loop(store, session, proposals, notified, published, monkeypatch):
+async def test_sunrise_full_loop(store, session, proposals, notified, published, monkeypatch):
     start = await ledger.on_hand(SHOP, CURD)
     product = await store.get(paths.product(SHOP, CURD))
 
@@ -2694,7 +2694,7 @@ Expected: all tests pass, including `tests/business` from `kanish/01`. If anythi
 
 ```bash
 git add services/live/tests/k2/test_e2e_loop.py
-git commit -m "test(k2): Murugan's full loop end to end on the real engine"
+git commit -m "test(k2): Sam's full loop end to end on the real engine"
 git push -u origin kanish/orders-delivery-payments
 gh pr create --base main --title "kanish/02: orders, WhatsApp, delivery count, invoice, payments, sales" \
   --body "Implements docs/superpowers/plans/kanish/02-orders-delivery-payments-whatsapp.md. tests/k2: 52 passed."

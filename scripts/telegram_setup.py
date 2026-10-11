@@ -8,17 +8,20 @@ Usage (from the repo root, after the bot token is attached to the service; docs/
 What it does:
   1. setWebhook(url=<aira-live>/webhooks/telegram, secret_token=TELEGRAM_WEBHOOK_SECRET, allowed_updates=["message"])
   2. getMe, to learn the bot's username
-  3. prints https://t.me/<username>?start=<supplier_id> for every supplier whose catalog channel is "telegram"
-Send each vendor their link. When they press Start, aira-live stores their chat id on the supplier doc
-(messaging/webhooks.py) and replies "AIRA: you will receive Murugan Dairy orders here." Linking is first-come:
-the supplier ids are public, so once a chat is linked another chat cannot take the vendor over. To move a vendor
-to a new phone, set AIRA_TELEGRAM_LINK_CODE on aira-live and send the re-link form ?start=<supplier_id>-<code>
-(printed here when AIRA_TELEGRAM_LINK_CODE is in the environment).
+  3. prints https://t.me/<username>?start=<supplier_id>.<tag> for every supplier whose catalog channel is
+     "telegram", where <tag> = HMAC-SHA256(TELEGRAM_WEBHOOK_SECRET, supplier_id)[:20] (the same tag
+     aira_live.messaging.webhooks checks, so the secret here must be the one attached to aira-live)
+Send each vendor their link, privately: the link is the credential. When they press Start, aira-live stores
+their chat id on the supplier doc and replies "AIRA: you will receive Sunrise Dairy orders here." A /start
+without the right tag is ignored, so nobody can link a vendor from the public supplier id alone. A vendor who
+changes phones opens the same link again on the new phone; the old chat is unlinked.
 
-The token is read from the environment and never printed, not even inside an error message.
+The token and the secret are read from the environment and never printed, not even inside an error message.
 """
 from __future__ import annotations
 
+import hashlib
+import hmac
 import json
 import os
 import sys
@@ -31,6 +34,7 @@ ROOT = Path(__file__).resolve().parents[1]
 CATALOG = ROOT / "content" / "catalog" / "murugan_dairy.json"
 API = "https://api.telegram.org/bot{token}/{method}"
 TIMEOUT_S = 15.0
+TAG_HEX = 20  # keep equal to aira_live.messaging.webhooks.TAG_HEX
 
 Http = Callable[[str, dict | None], dict]
 
@@ -86,16 +90,20 @@ def get_me(token: str, http: Http = _http) -> str:
     return str(username)
 
 
-def start_param(supplier_id: str, code: str | None = None) -> str:
-    """The ``?start=`` value of a vendor's link: ``<supplier_id>`` for the first link, ``<supplier_id>-<code>`` to
-    move a linked vendor to a new phone (aira_live.messaging.webhooks checks the code against
-    AIRA_TELEGRAM_LINK_CODE)."""
-    return f"{supplier_id}-{code}" if code else supplier_id
+def start_param(supplier_id: str, secret: str) -> str:
+    """The ``?start=`` value of a vendor's link: ``<supplier_id>.<tag>``, tag = HMAC-SHA256(secret, id)[:20].
+
+    ``secret`` is TELEGRAM_WEBHOOK_SECRET as attached to aira-live; aira_live.messaging.webhooks recomputes the
+    tag and ignores any /start that does not carry it."""
+    if not secret:
+        raise SetupError("TELEGRAM_WEBHOOK_SECRET is empty: no vendor link can be made")
+    tag = hmac.new(secret.encode(), supplier_id.encode(), hashlib.sha256).hexdigest()[:TAG_HEX]
+    return f"{supplier_id}.{tag}"
 
 
-def deep_links(username: str, catalog: dict, code: str | None = None) -> list[tuple[str, str, str]]:
-    """(supplier_id, name, https://t.me/<username>?start=<param>) per telegram supplier, in catalog order."""
-    return [(s["id"], s.get("name", s["id"]), f"https://t.me/{username}?start={start_param(s['id'], code)}")
+def deep_links(username: str, catalog: dict, secret: str) -> list[tuple[str, str, str]]:
+    """(supplier_id, name, https://t.me/<username>?start=<id>.<tag>) per telegram supplier, in catalog order."""
+    return [(s["id"], s.get("name", s["id"]), f"https://t.me/{username}?start={start_param(s['id'], secret)}")
             for s in catalog.get("suppliers", []) if s.get("channel") == "telegram"]
 
 
@@ -124,17 +132,10 @@ def main(argv: list[str] | None = None, env: Mapping[str, str] | None = None, ht
     catalog = json.loads(Path(catalog_path).read_text(encoding="utf-8"))
     print(f"Webhook set: {url} (allowed_updates: message, secret header on)")
     print(f"Bot: @{username}")
-    print("Send each vendor their link. They open it and press Start; AIRA then messages them orders there:")
-    for sid, name, link in deep_links(username, catalog):
+    print("Send each vendor their own link, privately (the link is the credential). They open it and press Start;")
+    print("AIRA then messages them orders there. A new phone opens the same link again; the old chat is unlinked:")
+    for sid, name, link in deep_links(username, catalog, secret):
         print(f"  {name} ({sid}): {link}")
-    code = env.get("AIRA_TELEGRAM_LINK_CODE")
-    if code:
-        print("Re-link links (a vendor moving to a new phone; AIRA_TELEGRAM_LINK_CODE must be set on aira-live):")
-        for sid, name, link in deep_links(username, catalog, code):
-            print(f"  {name} ({sid}): {link}")
-    else:
-        print("A linked vendor stays linked (first come). To move one to a new phone, set AIRA_TELEGRAM_LINK_CODE "
-              "on aira-live and in this shell, then run this again for the re-link links.")
     return 0
 
 

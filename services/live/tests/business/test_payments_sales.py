@@ -7,7 +7,7 @@ from aira_live.business.ledger import InsufficientStock
 from aira_live.business.payments import PaymentMismatch
 from aira_live.business.sales import SaleError
 
-SHOP = "murugan_dairy"
+SHOP = "sunrise_dairy"
 D0 = date(2026, 10, 12)
 
 

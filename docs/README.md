@@ -2,7 +2,7 @@
 
 ![AIRA logo](../assets/logo/aira-logo.png)
 
-**AIRA**: a voice-first assistant that lets a blind person run a small shop alone. First shop: *Murugan Dairy* (Aavin milk, Sakthi curd, Arun ice cream).
+**AIRA**: a voice-first assistant that lets a blind person run a small shop alone. First shop: *Sunrise Dairy* (Aavin milk, Sakthi curd, Arun ice cream).
 
 - **Repo:** https://github.com/Saravana-Rajan/AIRA
 - **Event:** Google Cloud AI Builder Cup 2026 · Theme: Sustainability & Social Impact
@@ -21,7 +21,7 @@
 |---|---|
 | [00-ideas-catalog.md](ideas/00-ideas-catalog.md) | Every AIRA feature with status (★ demo · ● build · ○ roadmap · ✕ dropped), owner and where it's specified |
 | [01-pitch.md](ideas/01-pitch.md) | The pitch, why it matters, and the business model |
-| [02-murugan-day.md](ideas/02-murugan-day.md) | Murugan's day at his dairy shop, step by step |
+| [02-murugan-day.md](ideas/02-murugan-day.md) | Sam's day at his dairy shop, step by step |
 | [03-judges-qa.md](ideas/03-judges-qa.md) | Likely judge questions with our answers |
 | [04-demo-video-script.md](ideas/04-demo-video-script.md) | The 3:50 shot list, filming method, consent and schedule |
 

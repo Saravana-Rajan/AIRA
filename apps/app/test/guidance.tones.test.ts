@@ -1,6 +1,6 @@
 // apps/app/test/guidance.tones.test.ts
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-vi.mock("../src/core/app", () => ({ app: { speak: vi.fn(), settings: { lang: "en" } } }));
+vi.mock("../src/core/app", () => ({ app: { speak: vi.fn(), settings: { lang: "auto" }, lang: () => "en" } }));
 import { app } from "../src/core/app";
 import { guideTo, stopTone, __setAudioContext } from "../src/guidance/tones";
 

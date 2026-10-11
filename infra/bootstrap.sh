@@ -10,7 +10,7 @@
 #   5. Lets the Cloud Build service account build Cloud Run source deploys (roles/run.builder).
 #   6. Adds Firebase to the project, creates the Hosting site aira-shop and deploys the
 #      Firestore rules + indexes (infra/firestore.rules, infra/firestore.indexes.json) to "aira".
-#   7. Optional, SEED=1: seeds the demo shop murugan_dairy with scripts/seed_firestore.py.
+#   7. Optional, SEED=1: seeds the demo shop sunrise_dairy with scripts/seed_firestore.py.
 #      Off by default because re-seeding resets the demo stock.
 #
 # Deliberately NOT set up: Pub/Sub, BigQuery, Cloud Scheduler, Remote Config, Firebase Auth, FCM.
@@ -143,7 +143,7 @@ if [ "${SEED:-0}" = "1" ]; then
   FIRESTORE_DATABASE="$DATABASE" GCP_PROJECT="$GCP_PROJECT" \
     uv run --project "$ROOT/services/live" python "$ROOT/scripts/seed_firestore.py" --project "$GCP_PROJECT"
 else
-  echo "    skipped (SEED=1 seeds murugan_dairy; it resets the demo stock)"
+  echo "    skipped (SEED=1 seeds sunrise_dairy; it resets the demo stock)"
 fi
 
 echo

@@ -61,7 +61,7 @@ Every Live tool is wrapped by `tool_runtime.wrap_tool`. The wrapper sets `curren
 2. **Long-press stop mid-answer** → no further audio from that answer reaches the phone, and the next question is answered normally. Test: Task 4.
 3. **GoAway or a dropped Live connection** → the bridge reconnects with the last resumption handle, sends `cue: "reconnect"`, and soundbox listeners still fire afterwards. Test: Task 4.
 4. **AIRA says a money/stock number that no tool returned** (e.g. "₹600" when the sale total is ₹60) → `cue: "warn"` + a corrective instruction to the model. Tests: Task 3 (unit) and Task 4 (integration).
-5. **An anonymous (judge) token sent with `shopId: "murugan"`** is forced into the demo shop. An owner token for a different shop is refused with `error: permission`. Test: Task 5.
+5. **An anonymous (judge) token sent with `shopId: "sunrise"`** is forced into the demo shop. An owner token for a different shop is refused with `error: permission`. Test: Task 5.
 
 Also tested in Task 5: every client `event` (e.g. `fingertip_in_target`) reaches `guidance.handle_client_event`, and `stop_guidance` runs on `stop` **and** on disconnect.
 
@@ -262,7 +262,7 @@ def fake_db(monkeypatch):
 def mk_session():
     from aira_live.session import Session
 
-    def _make(shop: str = "murugan", lang: str = "en"):
+    def _make(shop: str = "sunrise", lang: str = "en"):
         rec = Recorder()
         return Session("u1", shop, lang, "short", rec), rec
 
@@ -523,7 +523,7 @@ async def test_double_yes_commits_exactly_once(fake_db, mk_session):
         )
         assert len(calls) == 1 and calls[0] == {"qty": 30}
         assert r1 == r2 == {"ok": True, "say": "Order sent to Sakthi vendor."}
-        doc = fake_db.store[f"shops/murugan/proposals/{p['confirm_id']}"]
+        doc = fake_db.store[f"shops/sunrise/proposals/{p['confirm_id']}"]
         assert doc["status"] == "committed"
     finally:
         current_session.reset(token)
@@ -700,8 +700,8 @@ CURD = {"sku": "sakthi_curd_1l", "name": "curd", "brand": "Sakthi", "unit": "pou
 
 
 def test_render_prompt_has_shop_products_suppliers_language_and_rules():
-    p = render_prompt({"name": "Murugan Dairy"}, [CURD], [{"name": "Sakthi vendor", "channel": "whatsapp"}], "ta", "short")
-    assert "Murugan Dairy" in p and "sakthi_curd_1l" in p and "₹60" in p and "Sakthi vendor via whatsapp" in p
+    p = render_prompt({"name": "Sunrise Dairy"}, [CURD], [{"name": "Sakthi vendor", "channel": "whatsapp"}], "ta", "short")
+    assert "Sunrise Dairy" in p and "sakthi_curd_1l" in p and "₹60" in p and "Sakthi vendor via whatsapp" in p
     assert "Tamil" in p and "Tamil-English" in p
     low = p.lower()
     assert "read it back" in low and "confirm_action" in p
@@ -711,13 +711,13 @@ def test_render_prompt_has_shop_products_suppliers_language_and_rules():
 
 
 async def test_build_system_prompt_reads_firestore(fake_db):
-    shop = fake_db.collection("shops").document("murugan")
-    await shop.set({"name": "Murugan Dairy"})
+    shop = fake_db.collection("shops").document("sunrise")
+    await shop.set({"name": "Sunrise Dairy"})
     await shop.collection("products").document("aavin_milk_500ml").set(
         {"name": "milk", "brand": "Aavin", "unit": "pouch", "packSizeL": 0.5, "price": 30})
     await shop.collection("suppliers").document("sup1").set({"name": "Selvam (milk vendor)", "channel": "whatsapp"})
-    p = await build_system_prompt("murugan", "en", "short")
-    assert "Murugan Dairy" in p and "aavin_milk_500ml" in p and "0.5 L pouch" in p and "Selvam (milk vendor)" in p
+    p = await build_system_prompt("sunrise", "en", "short")
+    assert "Sunrise Dairy" in p and "aavin_milk_500ml" in p and "0.5 L pouch" in p and "Selvam (milk vendor)" in p
     assert "English" in p
 
 
@@ -1421,7 +1421,7 @@ git commit -m "feat(live): LiveBridge with barge-in, hard stop, resumption recon
   - Sarmitha's `aira_live.tools.guidance.handle_client_event(session, name, data)` and `stop_guidance(session)`, both async and imported lazily.
 - Produces:
   - `sessions.register(session, bridge=None)`, `attach_bridge(session_id, bridge)`, `unregister(session_id)`, `by_shop(shop_id)`, and `async notify(shop_id, text, cue="ack") -> int` (exact interface name).
-  - `auth.AuthResult(uid, shop_id, role)`, `auth.AuthError`, `auth.DEMO_SHOP` (env `AIRA_DEMO_SHOP`, default `"murugan_dairy"`), and `async auth.verify_hello(id_token, uid, shop_id, mock) -> AuthResult`.
+  - `auth.AuthResult(uid, shop_id, role)`, `auth.AuthError`, `auth.DEMO_SHOP` (env `AIRA_DEMO_SHOP`, default `"sunrise_dairy"`), and `async auth.verify_hello(id_token, uid, shop_id, mock) -> AuthResult`.
   - `app.state.backend_factory`: a `Callable[[Session], LiveBackend]` that tests override.
 
 - [ ] **Step 1: Write the failing test `tests/test_sessions_auth_main.py`**
@@ -1454,7 +1454,7 @@ def test_client_events_and_stop_reach_guidance_hooks(monkeypatch, fake_db):
     monkeypatch.setitem(sys.modules, "aira_live.tools.guidance",
                         SimpleNamespace(handle_client_event=handle_client_event, stop_guidance=stop_guidance))
     with TestClient(main_mod.app).websocket_connect("/ws") as ws:
-        ws.send_json({"t": "hello", "uid": "u1", "shopId": "murugan", "lang": "en",
+        ws.send_json({"t": "hello", "uid": "u1", "shopId": "sunrise", "lang": "en",
                       "verbosity": "short", "appVersion": "0.1.0"})
         sid = ws.receive_json()["sessionId"]
         ws.send_json({"t": "event", "name": "fingertip_in_target", "data": {"label": "Sakthi curd"}})
@@ -1478,7 +1478,7 @@ def test_broken_guidance_hook_never_closes_the_socket(monkeypatch, fake_db):
     monkeypatch.setitem(sys.modules, "aira_live.tools.guidance",
                         SimpleNamespace(handle_client_event=boom, stop_guidance=boom))
     with TestClient(main_mod.app).websocket_connect("/ws") as ws:
-        ws.send_json({"t": "hello", "uid": "u1", "shopId": "murugan", "lang": "en",
+        ws.send_json({"t": "hello", "uid": "u1", "shopId": "sunrise", "lang": "en",
                       "verbosity": "short", "appVersion": "0.1.0"})
         ws.receive_json()
         ws.send_json({"t": "event", "name": "fingertip_in_target", "data": {}})
@@ -1487,8 +1487,8 @@ def test_broken_guidance_hook_never_closes_the_socket(monkeypatch, fake_db):
 
 
 async def test_notify_reaches_every_live_session_of_that_shop_only(mk_session):
-    s1, r1 = mk_session(shop="murugan")
-    s2, r2 = mk_session(shop="murugan")
+    s1, r1 = mk_session(shop="sunrise")
+    s2, r2 = mk_session(shop="sunrise")
     s3, r3 = mk_session(shop="other")
     spoken = []
 
@@ -1500,7 +1500,7 @@ async def test_notify_reaches_every_live_session_of_that_shop_only(mk_session):
     sessions.register(s2)
     sessions.register(s3)
     try:
-        n = await sessions.notify("murugan", "Sakthi vendor confirmed: delivery at 6 pm.")
+        n = await sessions.notify("sunrise", "Sakthi vendor confirmed: delivery at 6 pm.")
         assert n == 2 and spoken == ["Sakthi vendor confirmed: delivery at 6 pm."]
         assert [m.t for m in r1.msgs] == ["cue", "transcript"] and r1.msgs[1].text.startswith("Sakthi vendor")
         assert r3.msgs == []
@@ -1511,23 +1511,23 @@ async def test_notify_reaches_every_live_session_of_that_shop_only(mk_session):
 
 async def test_anonymous_token_is_forced_into_demo_shop(monkeypatch, fake_db):
     monkeypatch.setattr(auth, "_verify", lambda tok: {"uid": "anon1", "firebase": {"sign_in_provider": "anonymous"}})
-    r = await auth.verify_hello("tok", uid="anon1", shop_id="murugan", mock=False)
+    r = await auth.verify_hello("tok", uid="anon1", shop_id="sunrise", mock=False)
     assert r.shop_id == auth.DEMO_SHOP and r.role == "demo" and r.uid == "anon1"
 
 
 async def test_owner_token_must_match_the_shop(monkeypatch, fake_db):
-    await fake_db.collection("users").document("u9").set({"shopId": "murugan", "role": "owner"})
+    await fake_db.collection("users").document("u9").set({"shopId": "sunrise", "role": "owner"})
     monkeypatch.setattr(auth, "_verify", lambda tok: {"uid": "u9", "firebase": {"sign_in_provider": "phone"}})
-    assert (await auth.verify_hello("tok", "u9", "murugan", mock=False)).role == "owner"
+    assert (await auth.verify_hello("tok", "u9", "sunrise", mock=False)).role == "owner"
     with pytest.raises(auth.AuthError):
         await auth.verify_hello("tok", "u9", "other_shop", mock=False)
 
 
 async def test_missing_token_allowed_only_in_mock_or_dev_flag(monkeypatch, fake_db):
-    assert (await auth.verify_hello(None, "dev", "murugan", mock=True)).shop_id == auth.DEMO_SHOP
+    assert (await auth.verify_hello(None, "dev", "sunrise", mock=True)).shop_id == auth.DEMO_SHOP
     monkeypatch.delenv("AIRA_ALLOW_NO_TOKEN", raising=False)
     with pytest.raises(auth.AuthError):
-        await auth.verify_hello(None, "dev", "murugan", mock=False)
+        await auth.verify_hello(None, "dev", "sunrise", mock=False)
 
 
 def test_ws_real_mode_wires_bridge_audio_and_transcripts(monkeypatch, fake_db):
@@ -1546,19 +1546,19 @@ def test_ws_real_mode_wires_bridge_audio_and_transcripts(monkeypatch, fake_db):
     main_mod.app.state.backend_factory = lambda session: fb
     try:
         with TestClient(main_mod.app).websocket_connect("/ws") as ws:
-            ws.send_json({"t": "hello", "uid": "u1", "idToken": "tok", "shopId": "murugan", "lang": "en",
+            ws.send_json({"t": "hello", "uid": "u1", "idToken": "tok", "shopId": "sunrise", "lang": "en",
                           "verbosity": "short", "appVersion": "0.1.0"})
             ready = ws.receive_json()
             assert ready["t"] == "ready" and ready["mock"] is False
-            assert fb.system_prompt == "prompt for murugan"
+            assert fb.system_prompt == "prompt for sunrise"
             ws.send_json({"t": "audio", "pcm16": base64.b64encode(b"\x00\x01").decode()})
             deadline = time.time() + 2
             while not fb.sent_audio and time.time() < deadline:
                 time.sleep(0.01)
             assert fb.sent_audio == [b"\x00\x01"]
-            fb.push(LiveEvent("output_transcript", text="Hello Murugan.", final=True))
+            fb.push(LiveEvent("output_transcript", text="Hello Sam.", final=True))
             msg = ws.receive_json()
-            assert msg == {"t": "transcript", "role": "aira", "text": "Hello Murugan.", "final": True}
+            assert msg == {"t": "transcript", "role": "aira", "text": "Hello Sam.", "final": True}
             ws.send_json({"t": "stop"})
             assert ws.receive_json() == {"t": "cue", "cue": "done"}
     finally:
@@ -1625,7 +1625,7 @@ from typing import Literal
 
 from aira_live.db import db
 
-DEMO_SHOP = os.getenv("AIRA_DEMO_SHOP", "murugan_dairy")
+DEMO_SHOP = os.getenv("AIRA_DEMO_SHOP", "sunrise_dairy")
 
 
 class AuthError(Exception):
@@ -1936,7 +1936,7 @@ async def run(argv: list[str]) -> int:
     ap.add_argument("--args", default="{}")
     ap.add_argument("--image", action="append", default=[])
     ap.add_argument("--purpose")
-    ap.add_argument("--shop", default=os.getenv("AIRA_DEMO_SHOP", "murugan_dairy"))
+    ap.add_argument("--shop", default=os.getenv("AIRA_DEMO_SHOP", "sunrise_dairy"))
     ap.add_argument("--lang", default="en", choices=["en", "ta", "hi"])
     ap.add_argument("--confirm", choices=["yes", "no"])
     ns = ap.parse_args(argv)
@@ -2027,7 +2027,7 @@ async def main(url: str, wav_path: str, shop: str) -> None:
 
 
 if __name__ == "__main__":
-    asyncio.run(main(sys.argv[1], sys.argv[2], sys.argv[3] if len(sys.argv) > 3 else "murugan_dairy"))
+    asyncio.run(main(sys.argv[1], sys.argv[2], sys.argv[3] if len(sys.argv) > 3 else "sunrise_dairy"))
 ```
 
 - [ ] **Step 6: Run the manual smoke test** with real keys and the demo shop seeded by the foundation

@@ -30,6 +30,8 @@ log = logging.getLogger(__name__)
 IST = ZoneInfo("Asia/Kolkata")
 TOKEN_HEADER = "X-AIRA-Job-Token"
 LANGS = ("ta", "hi", "en")
+# The catalog for an alert's fixed line when no live session says what the owner last spoke. AIRA still
+# speaks the alert in the language he last used: sessions.notify hands the line to Live with that instruction.
 DEFAULT_LANG = "en"
 Lang = Literal["ta", "hi", "en"]
 SHOP_ID = r"^[A-Za-z0-9_-]{1,64}$"  # a Firestore doc id with no "/" (no path injection)
@@ -68,7 +70,8 @@ def _known_lang(value) -> str | None:
 
 
 async def _shop_lang(client, data: dict) -> str:
-    """The owner's language (``users/{ownerUid}.lang``), then the shop doc's ``lang``, then English."""
+    """The catalog for the alert's fixed line: ``users/{ownerUid}.lang``, then the shop doc's ``lang``, then
+    English. Only the wording of the line: a live session speaks it in whatever language the owner last used."""
     owner = data.get("ownerUid")
     if owner:
         user = await client.collection("users").document(owner).get()

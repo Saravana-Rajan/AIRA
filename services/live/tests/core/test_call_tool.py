@@ -161,9 +161,9 @@ async def test_says_which_mode_it_runs_in_on_stderr(monkeypatch, capsys):
     await call_tool.run(["day_summary"])
     assert "mock mode" in capsys.readouterr().err
     monkeypatch.setenv("GEMINI_API_KEY", "test-key")
-    await call_tool.run(["day_summary", "--shop", "murugan_dairy"])
+    await call_tool.run(["day_summary", "--shop", "sunrise_dairy"])
     err = capsys.readouterr().err
-    assert "REAL mode" in err and "murugan_dairy" in err
+    assert "REAL mode" in err and "sunrise_dairy" in err
 
 
 def test_load_tools_is_the_live_registry():

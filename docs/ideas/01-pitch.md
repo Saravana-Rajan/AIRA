@@ -25,14 +25,14 @@
 
 ## The solution: one loop, end to end
 
-Murugan runs **Murugan Dairy**, selling Aavin milk, Sakthi curd and Arun ice cream. He wears a **chest-mounted phone** and one earphone. AIRA covers the full day:
+Sam runs **Sunrise Dairy**, selling Aavin milk, Sakthi curd and Arun ice cream. He wears a **chest-mounted phone** and one earphone. AIRA covers the full day:
 
 1. **Order stock by voice.** "Order 30 litres Sakthi curd." AIRA confirms and sends a **WhatsApp order**, then speaks the vendor's reply.
 2. **Check the delivery live.** As packs go into the fridge, AIRA **counts** them and records only what's verified: "28 counted, 2 short."
 3. **Check the vendor's bill.** Two independent reads, then **code** compares the bill with the order and the count: "Bill says 32 L, 30 arrived."
 4. **Pay the vendor.** AIRA guides him to the cashbox and checks the notes in his hand. The total is computed in code.
 5. **Remember where things are.** "This is the curd shelf" is saved as spatial memory.
-6. **Guided sale.** A customer says "2 litres curd". AIRA guides Murugan's **hand** to the right pack and verifies it ("Sakthi curd 1 L ✓"), then gives the price.
+6. **Guided sale.** A customer says "2 litres curd". AIRA guides Sam's **hand** to the right pack and verifies it ("Sakthi curd 1 L ✓"), then gives the price.
 7. **Payment.**
    - **Cash:** AIRA checks the notes and calculates the change in code.
    - **UPI:** AIRA **listens to the payment soundbox** ("₹60 received") and matches the amount.

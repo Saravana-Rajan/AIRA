@@ -24,13 +24,13 @@ class FakeWS {
 }
 
 const SETTINGS: Settings = {
-  lang: "en", verbosity: "short", screenReaderMode: false, speechRate: 1, shopId: "murugan_dairy", onboarded: true,
+  lang: "en", verbosity: "short", screenReaderMode: false, speechRate: 1, shopId: "sunrise_dairy", onboarded: true,
 };
 
 function wireRealApp(): FakeWS {
   const socket = new AiraSocket("ws://x", { WebSocketImpl: FakeWS as unknown as typeof WebSocket });
   initApp({ socket, settings: SETTINGS, speakImpl: () => {}, earconImpl: () => {}, hapticImpl: () => {} });
-  socket.connect({ t: "hello", uid: "owner", shopId: "murugan_dairy", lang: "en", verbosity: "short", appVersion: "0.1.0" });
+  socket.connect({ t: "hello", uid: "owner", shopId: "sunrise_dairy", lang: "en", verbosity: "short", appVersion: "0.1.0" });
   const ws = FakeWS.last!;
   ws.open();
   return ws;

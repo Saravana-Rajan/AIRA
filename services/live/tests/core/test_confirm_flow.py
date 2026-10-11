@@ -18,7 +18,7 @@ from aira_live.tool_runtime import wrap_tool
 from aira_live.tools import TOOL_FUNCS, TOOLS_BY_NAME
 from aira_live.tools.core import confirm_action
 
-SHOP = "murugan_dairy"
+SHOP = "sunrise_dairy"
 PROMPT = "Order 30 L Sakthi curd from Sakthi vendor?"
 SENT = "Order sent to Sakthi vendor."
 

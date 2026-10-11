@@ -61,8 +61,8 @@ describe("emulator REST calls", () => {
   it("targets the demo project and the aira database", () => {
     expect(E2E_PROJECT).toMatch(/^demo-/); // demo-* projects never reach a real Firebase project
     expect(E2E_DATABASE).toBe("aira");
-    expect(docName("demo-aira", "aira", "shops/murugan_dairy")).toBe(
-      "projects/demo-aira/databases/aira/documents/shops/murugan_dairy",
+    expect(docName("demo-aira", "aira", "shops/sunrise_dairy")).toBe(
+      "projects/demo-aira/databases/aira/documents/shops/sunrise_dairy",
     );
   });
 
@@ -76,8 +76,8 @@ describe("emulator REST calls", () => {
     await commitDocs({
       ...target,
       docs: [
-        { path: "shops/murugan_dairy", data: { name: "Murugan Dairy" } },
-        { path: "shops/murugan_dairy/inventory/sakthi_curd_1l", data: { onHand: 28 } },
+        { path: "shops/sunrise_dairy", data: { name: "Sunrise Dairy" } },
+        { path: "shops/sunrise_dairy/inventory/sakthi_curd_1l", data: { onHand: 28 } },
       ],
       fetchImpl,
     });
@@ -88,10 +88,10 @@ describe("emulator REST calls", () => {
     expect((init.headers as Record<string, string>).Authorization).toBe("Bearer owner");
     const body = JSON.parse(String(init.body));
     expect(body.writes).toEqual([
-      { update: { name: "projects/demo-aira/databases/aira/documents/shops/murugan_dairy", fields: { name: { stringValue: "Murugan Dairy" } } } },
+      { update: { name: "projects/demo-aira/databases/aira/documents/shops/sunrise_dairy", fields: { name: { stringValue: "Sunrise Dairy" } } } },
       {
         update: {
-          name: "projects/demo-aira/databases/aira/documents/shops/murugan_dairy/inventory/sakthi_curd_1l",
+          name: "projects/demo-aira/databases/aira/documents/shops/sunrise_dairy/inventory/sakthi_curd_1l",
           fields: { onHand: { integerValue: "28" } },
         },
       },

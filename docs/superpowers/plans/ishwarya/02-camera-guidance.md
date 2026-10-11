@@ -1,6 +1,6 @@
 # AIRA: Camera Capture and Hand Guidance (Ishwarya · 02) Implementation Plan
 
-> **Addendum (2026-10-10): Shop-floor bump guard (spec §2, "always on"). Add it as an extra task.** While Murugan walks inside the shop, the chest camera watches the path ahead ON THE PHONE (no network):
+> **Addendum (2026-10-10): Shop-floor bump guard (spec §2, "always on"). Add it as an extra task.** While Sam walks inside the shop, the chest camera watches the path ahead ON THE PHONE (no network):
 > - **Detector:** MediaPipe Object Detector (EfficientDet-Lite0 int8, ~5–10 Hz in a Web Worker). Add a simple "near-floor obstacle" check on the lower third of the frame, for crates on the floor.
 > - **Trigger:** an object is in the walking path (centre 40% of the frame) and either its box grows fast (time-to-contact < 1.2 s) or it fills more than 35% of the frame height. Then:
 >   1. vibrate pattern `warn` (`navigator.vibrate([80,40,80])`)

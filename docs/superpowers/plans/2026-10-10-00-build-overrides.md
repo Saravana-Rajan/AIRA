@@ -7,7 +7,7 @@ The plans were written before the team made its final setup decisions. When a pl
 | Plan says | Build this instead |
 |---|---|
 | Firestore `(default)` database | Database id **`aira`** everywhere. `aira_live.db.db()` returns `firestore.AsyncClient(project=GCP_PROJECT, database=os.getenv("FIRESTORE_DATABASE", "aira"))`. Firebase SDK clients use `getFirestore(app, "aira")`. Firestore rules/indexes target database `aira` only. **Never touch `(default)`** |
-| Firebase Auth (anonymous auth, ID tokens) | **No Firebase Auth.** The app sends `hello` without `idToken`. The server accepts it when `AIRA_ALLOW_NO_TOKEN=1` (set in the deployed service) and uses `AIRA_DEMO_SHOP=murugan_dairy`, role `owner`. Keep `auth.verify_hello` but make "no token + AIRA_ALLOW_NO_TOKEN=1" return `AuthResult(uid, "murugan_dairy", "owner")` |
+| Firebase Auth (anonymous auth, ID tokens) | **No Firebase Auth.** The app sends `hello` without `idToken`. The server accepts it when `AIRA_ALLOW_NO_TOKEN=1` (set in the deployed service) and uses `AIRA_DEMO_SHOP=sunrise_dairy`, role `owner`. Keep `auth.verify_hello` but make "no token + AIRA_ALLOW_NO_TOKEN=1" return `AuthResult(uid, "sunrise_dairy", "owner")` |
 | Firebase Remote Config | **No Remote Config.** Keep the module `aira_live/remote_config.py` and its function names (`flag`, `get_override`, `override_for_role`, `refresh`). They read the Firestore doc `config/runtime` in database `aira` (fields `pointing_model`, `count_model`, `live_model`, `whatsapp_enabled`) with a 60 s cache, falling back to defaults when the doc is missing |
 | Pub/Sub topics, BigQuery, BigQuery ML, Pub/Sub→BigQuery subscriptions | **None.** Keep `aira_live.analytics.events.publish(topic, payload)`; it appends `{topic, payload, ts}` to Firestore `shops/{shop_id}/events/{autoId}` and returns the doc id (returns `"mock"` in mock mode). `analytics.forecast.daily_demand(shop_id, sku)` = the 7-day moving average of SALE ledger deltas from Firestore (None if fewer than 3 days of data). `analytics.summary.today` reads Firestore |
 | Cloud Scheduler jobs | **None.** Keep the `/jobs/expiry`, `/jobs/day-summary` and `/jobs/forecast-refresh` endpoints, callable manually or by the app at startup ("morning check"). There's no OIDC requirement: protect them with header `X-AIRA-Job-Token` = env `AIRA_JOB_TOKEN` |
@@ -21,7 +21,7 @@ The plans were written before the team made its final setup decisions. When a pl
 | Cloud Run | Service `aira-live`, `--min-instances 1 --max-instances 1 --timeout 3600 --session-affinity`, service account `aira-live@<project>.iam.gserviceaccount.com` |
 | Bubblewrap APK build | Write `apps/app/twa/twa-manifest.json` + `apps/app/twa/README.md` (build steps). **Do not run Bubblewrap**: no JDK is installed yet |
 
-**The project ID is NEVER committed.** Scripts and code read `GCP_PROJECT` from env or `.env`. The demo shop id is `murugan_dairy`.
+**The project ID is NEVER committed.** Scripts and code read `GCP_PROJECT` from env or `.env`. The demo shop id is `sunrise_dairy`.
 
 ## 2. Folder structure (keep it clean — no stray files)
 
@@ -52,7 +52,7 @@ docs/                   unchanged layout
 **`.github/workflows/deploy.yml`**, on push to `main`:
 1. **Run the tests**, the same as `ci.yml`.
 2. **Authenticate:** `google-github-actions/auth@v2` with `workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}` and `service_account: ${{ vars.GCP_DEPLOY_SA }}`. No JSON key.
-3. **Deploy the backend:** `google-github-actions/setup-gcloud@v2` → `gcloud run deploy aira-live --source services/live --region asia-south1 --project ${{ vars.GCP_PROJECT }}` with the §1 flags, `--set-secrets GEMINI_API_KEY=aira-gemini-api-key:latest` and `--set-env-vars FIRESTORE_DATABASE=aira,AIRA_DEMO_SHOP=murugan_dairy,AIRA_ALLOW_NO_TOKEN=1,GCP_PROJECT=${{ vars.GCP_PROJECT }}`.
+3. **Deploy the backend:** `google-github-actions/setup-gcloud@v2` → `gcloud run deploy aira-live --source services/live --region asia-south1 --project ${{ vars.GCP_PROJECT }}` with the §1 flags, `--set-secrets GEMINI_API_KEY=aira-gemini-api-key:latest` and `--set-env-vars FIRESTORE_DATABASE=aira,AIRA_DEMO_SHOP=sunrise_dairy,AIRA_ALLOW_NO_TOKEN=1,GCP_PROJECT=${{ vars.GCP_PROJECT }}`.
 4. **Build the hosting bundle:** `bash scripts/build_hosting.sh`, with `VITE_AIRA_LIVE_WS` = `wss://<cloud-run-host>/ws` read from `gcloud run services describe`, plus the `VITE_FIREBASE_*` repository variables.
 5. **Deploy hosting:** `npx firebase-tools deploy --only hosting:aira-shop --project ${{ vars.GCP_PROJECT }} --non-interactive`, using the same WIF credentials.
 
@@ -98,7 +98,7 @@ Use `${{ secrets.X }}` everywhere. **Never** use `vars.`.
    - **Build the image in the runner (NOT Cloud Build):**
      `docker build -t asia-south1-docker.pkg.dev/${{ secrets.GCP_PROJECT }}/aira/aira-live:${{ github.sha }} services/live`
      Then `docker push` the same tag.
-   - **Deploy:** `gcloud run deploy aira-live --image <that tag> --region asia-south1 --project ${{ secrets.GCP_PROJECT }} --service-account aira-live@${{ secrets.GCP_PROJECT }}.iam.gserviceaccount.com --min-instances 1 --max-instances 1 --timeout 3600 --session-affinity --allow-unauthenticated --set-secrets GEMINI_API_KEY=aira-gemini-api-key:latest --set-env-vars FIRESTORE_DATABASE=aira,AIRA_DEMO_SHOP=murugan_dairy,AIRA_ALLOW_NO_TOKEN=1,GCP_PROJECT=${{ secrets.GCP_PROJECT }}`
+   - **Deploy:** `gcloud run deploy aira-live --image <that tag> --region asia-south1 --project ${{ secrets.GCP_PROJECT }} --service-account aira-live@${{ secrets.GCP_PROJECT }}.iam.gserviceaccount.com --min-instances 1 --max-instances 1 --timeout 3600 --session-affinity --allow-unauthenticated --set-secrets GEMINI_API_KEY=aira-gemini-api-key:latest --set-env-vars FIRESTORE_DATABASE=aira,AIRA_DEMO_SHOP=sunrise_dairy,AIRA_ALLOW_NO_TOKEN=1,GCP_PROJECT=${{ secrets.GCP_PROJECT }}`
    - **Hosting:**
      - `WS_HOST=$(gcloud run services describe aira-live --region asia-south1 --project ... --format='value(status.url)' | sed 's#https://##')`.
      - `VITE_AIRA_LIVE_WS=wss://$WS_HOST/ws` + the `VITE_FIREBASE_*` secrets → `bash scripts/build_hosting.sh`.
@@ -197,7 +197,7 @@ The owner uses AIRA by voice, but judges, family and helpers see the screen. UX 
 - Respect `prefers-reduced-motion`.
 
 **Dashboard (`/dashboard`):**
-- A clean header with the logo, "Murugan Dairy", and a live indicator dot.
+- A clean header with the logo, "Sunrise Dairy", and a live indicator dot.
 - Cards: **Today** (sales, revenue, top product) · **Stock** (table with low-stock and expiry badges) · **Orders & Deliveries** (state timeline, vendor replies, discrepancies in red) · **Audit trail**.
 - Responsive: 1 column on a phone, 2–3 on a laptop.
 - WCAG AA contrast, keyboard focus rings, Lighthouse accessibility ≥ 95.

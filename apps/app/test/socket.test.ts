@@ -13,7 +13,7 @@ class FakeWS {
   close() { this.readyState = 3; this.onclose?.(); }
   open() { this.readyState = 1; this.onopen?.(); }
 }
-const HELLO = { t: "hello", uid: "u", shopId: "murugan_dairy", lang: "en", verbosity: "short", appVersion: "0.1.0" } as const;
+const HELLO = { t: "hello", uid: "u", shopId: "sunrise_dairy", lang: "en", verbosity: "short", appVersion: "0.1.0" } as const;
 
 afterEach(() => { vi.useRealTimers(); });
 

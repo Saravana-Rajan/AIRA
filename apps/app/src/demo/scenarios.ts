@@ -4,7 +4,7 @@ export interface Scenario {
   id: string;
   title: string;
   blurb: string;
-  /** Sent as a `text` message, exactly as Murugan would say it. */
+  /** Sent as a `text` message, exactly as Sam would say it. */
   prompt: string;
   media?: { kind: ScenarioMediaKind; src: string };
 }
@@ -41,7 +41,7 @@ export interface DayPart {
   scenarioIds: string[];
 }
 
-/** Murugan's day in three parts, for grouping the scene cards on the landing page. */
+/** Sam's day in three parts, for grouping the scene cards on the landing page. */
 export const DAY_PARTS: DayPart[] = [
   { id: "stock", title: "Morning: stock comes in",
     scenarioIds: ["order", "delivery-one", "delivery-crate", "invoice-ok", "invoice-wrong", "pay-vendor"] },

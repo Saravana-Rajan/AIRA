@@ -3,12 +3,26 @@ import type { ClientMsg } from "@aira/contracts";
 import { demoHello, demoUid, DEMO_SHOP_ID } from "../src/demo/hello";
 import { connectDemo, demoWireOpts } from "../src/demo/connectDemo";
 
-describe("demo hello (overrides §1: no Firebase Auth, shop murugan_dairy)", () => {
+describe("demo hello (overrides §1: no Firebase Auth, shop sunrise_dairy)", () => {
   it("joins the seeded demo shop without an ID token", () => {
     const h = demoHello("0.1.0", "judge-abc");
-    expect(h).toEqual({ t: "hello", uid: "judge-abc", shopId: "murugan_dairy", lang: "en", verbosity: "short", appVersion: "0.1.0" });
+    expect(h).toEqual({ t: "hello", uid: "judge-abc", shopId: "sunrise_dairy", lang: "en", verbosity: "short", appVersion: "0.1.0" });
     expect("idToken" in h).toBe(false);
-    expect(DEMO_SHOP_ID).toBe("murugan_dairy");
+  });
+
+  it("the hello language is only a hint for the first line: the judge's browser locale, English otherwise", () => {
+    expect(demoHello("0.1.0", "judge-abc", ["ta-IN"]).lang).toBe("ta");
+    expect(demoHello("0.1.0", "judge-abc", ["ja-JP"]).lang).toBe("en");
+  });
+
+  it("carries the build-time app key as idToken when VITE_AIRA_APP_KEY is set", () => {
+    vi.stubEnv("VITE_AIRA_APP_KEY", "k-demo-key");
+    try {
+      expect(demoHello("0.1.0", "judge-abc").idToken).toBe("k-demo-key");
+    } finally {
+      vi.unstubAllEnvs();
+    }
+    expect(DEMO_SHOP_ID).toBe("sunrise_dairy");
   });
 
   it("keeps one judge uid per tab and survives blocked storage", () => {
@@ -33,7 +47,7 @@ describe("connectDemo", () => {
     };
     await connectDemo("0.1.0", socket);
     expect(calls).toEqual(["close", "connect"]);
-    expect(hello).toMatchObject({ t: "hello", shopId: "murugan_dairy", lang: "en", appVersion: "0.1.0" });
+    expect(hello).toMatchObject({ t: "hello", shopId: "sunrise_dairy", lang: "en", appVersion: "0.1.0" });
     expect(hello!.uid).toMatch(/^judge-/);
   });
 
@@ -47,7 +61,7 @@ describe("demoWireOpts", () => {
     const o = demoWireOpts("ws://test/ws");
     expect(o.connect).toBe(false);
     expect(o.wsUrl).toBe("ws://test/ws");
-    expect(o.settings).toMatchObject({ shopId: "murugan_dairy", lang: "en", verbosity: "short", onboarded: true });
+    expect(o.settings).toMatchObject({ shopId: "sunrise_dairy", lang: "auto", verbosity: "short", onboarded: true });
     // The owner's saved settings and offline ops on this browser are never touched.
     expect(o.env?.storage).toBeNull();
     expect(await o.env!.queueStore!().all()).toEqual([]);

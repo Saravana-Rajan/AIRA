@@ -1,6 +1,6 @@
 # AIRA — instructions for Claude Code
 
-**What we're building:** AIRA is a voice-first assistant that lets a **blind shopkeeper run a small shop alone**. The setup is a chest-mounted phone, one earphone, Gemini Live, Gemini Robotics-ER 2, Firebase/Firestore and Cloud Run. The demo shop is *Murugan Dairy*, selling Aavin milk, Sakthi curd and Arun ice cream.
+**What we're building:** AIRA is a voice-first assistant that lets a **blind shopkeeper run a small shop alone**. The setup is a chest-mounted phone, one earphone, Gemini Live, Gemini Robotics-ER 2, Firebase/Firestore and Cloud Run. The demo shop is *Sunrise Dairy*, selling Aavin milk, Sakthi curd and Arun ice cream.
 
 **Read first:**
 

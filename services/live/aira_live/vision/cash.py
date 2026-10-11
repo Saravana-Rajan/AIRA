@@ -1,4 +1,4 @@
-"""Read the cash in Murugan's hand twice, with different output shapes; code agrees and totals.
+"""Read the cash in Sam's hand twice, with different output shapes; code agrees and totals.
 
 Read A (role "read") groups the money by denomination. Read B (role "verify", a different model
 generation) lists every piece on its own. Both look at the same original colour frame, because note

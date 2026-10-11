@@ -59,21 +59,21 @@ afterEach(() => {
 
 describe("listenShop", () => {
   it("listens under shops/{shopId} with single-field queries only (no composite indexes)", () => {
-    const stop = listenShop("murugan_dairy", () => {}, () => NOW);
+    const stop = listenShop("sunrise_dairy", () => {}, () => NOW);
     const paths = live().map((s) => s.q.path).sort();
     expect(paths).toEqual([
-      "shops/murugan_dairy/auditLogs",
-      "shops/murugan_dairy/deliveries",
-      "shops/murugan_dairy/inventory",
-      "shops/murugan_dairy/orders",
-      "shops/murugan_dairy/payments",
-      "shops/murugan_dairy/payments",
-      "shops/murugan_dairy/products",
-      "shops/murugan_dairy/sales",
-      "shops/murugan_dairy/sales",
+      "shops/sunrise_dairy/auditLogs",
+      "shops/sunrise_dairy/deliveries",
+      "shops/sunrise_dairy/inventory",
+      "shops/sunrise_dairy/orders",
+      "shops/sunrise_dairy/payments",
+      "shops/sunrise_dairy/payments",
+      "shops/sunrise_dairy/products",
+      "shops/sunrise_dairy/sales",
+      "shops/sunrise_dairy/sales",
     ]);
     // suppliers (vendor phones, Telegram chat ids) is server-only in infra/firestore.rules: never subscribed
-    expect(paths).not.toContain("shops/murugan_dairy/suppliers");
+    expect(paths).not.toContain("shops/sunrise_dairy/suppliers");
     for (const s of live()) {
       const fields = new Set(s.q.constraints.filter((c) => c.field).map((c) => c.field));
       expect(fields.size, s.q.path).toBeLessThanOrEqual(1);
@@ -83,18 +83,18 @@ describe("listenShop", () => {
   });
 
   it("filters sales and payments from the start of the IST day, for Timestamp and ISO-string times", () => {
-    const stop = listenShop("murugan_dairy", () => {}, () => NOW);
-    const salesTs = subFor("shops/murugan_dairy/sales", isTs);
-    const salesIso = subFor("shops/murugan_dairy/sales", isIso);
+    const stop = listenShop("sunrise_dairy", () => {}, () => NOW);
+    const salesTs = subFor("shops/sunrise_dairy/sales", isTs);
+    const salesIso = subFor("shops/sunrise_dairy/sales", isIso);
     expect(salesTs.q.constraints).toEqual([{ kind: "where", field: "completedAt", op: ">=", value: { kind: "ts", ms: START } }]);
     // Strings compare as text, so the ISO bound starts a day early to cover any UTC offset; selectors cut the exact IST day.
     expect(salesIso.q.constraints).toEqual([{ kind: "where", field: "completedAt", op: ">=", value: new Date(START - DAY).toISOString() }]);
-    expect(whereValue(subFor("shops/murugan_dairy/payments", isTs))).toEqual({ kind: "ts", ms: START });
-    expect(subFor("shops/murugan_dairy/payments", isIso).q.constraints[0].field).toBe("createdAt");
-    expect(subFor("shops/murugan_dairy/orders").q.constraints).toEqual([
+    expect(whereValue(subFor("shops/sunrise_dairy/payments", isTs))).toEqual({ kind: "ts", ms: START });
+    expect(subFor("shops/sunrise_dairy/payments", isIso).q.constraints[0].field).toBe("createdAt");
+    expect(subFor("shops/sunrise_dairy/orders").q.constraints).toEqual([
       { kind: "orderBy", field: "updatedAt", dir: "desc" }, { kind: "limit", n: 20 },
     ]);
-    expect(subFor("shops/murugan_dairy/auditLogs").q.constraints).toEqual([
+    expect(subFor("shops/sunrise_dairy/auditLogs").q.constraints).toEqual([
       { kind: "orderBy", field: "at", dir: "desc" }, { kind: "limit", n: 100 },
     ]);
     stop();
@@ -103,17 +103,17 @@ describe("listenShop", () => {
   it("waits for every first snapshot (no half-loaded 'Low stock' flash), then emits normalised, de-duplicated data", () => {
     const onChange = vi.fn();
     const onStatus = vi.fn();
-    const stop = listenShop("murugan_dairy", onChange, () => NOW, onStatus);
+    const stop = listenShop("sunrise_dairy", onChange, () => NOW, onStatus);
     expect(onStatus).toHaveBeenLastCalledWith("connecting");
 
-    subFor("shops/murugan_dairy/products").next(snap([["sakthi_curd_1l", { sku: "sakthi_curd_1l", name: "Sakthi Curd 1 L" }]]));
+    subFor("shops/sunrise_dairy/products").next(snap([["sakthi_curd_1l", { sku: "sakthi_curd_1l", name: "Sakthi Curd 1 L" }]]));
     const sale = { id: "s1", state: "SALE_COMPLETED", total: 60, completedAt: { toMillis: () => NOW } };
-    subFor("shops/murugan_dairy/sales", isTs).next(snap([["s1", sale]]));
-    subFor("shops/murugan_dairy/sales", isIso).next(snap([["s1", sale], ["s2", { id: "s2", completedAt: "2026-10-10T05:00:00+00:00" }]]));
-    deliverAll(["shops/murugan_dairy/products", "shops/murugan_dairy/sales@ts", "shops/murugan_dairy/sales@iso", "shops/murugan_dairy/inventory"]);
+    subFor("shops/sunrise_dairy/sales", isTs).next(snap([["s1", sale]]));
+    subFor("shops/sunrise_dairy/sales", isIso).next(snap([["s1", sale], ["s2", { id: "s2", completedAt: "2026-10-10T05:00:00+00:00" }]]));
+    deliverAll(["shops/sunrise_dairy/products", "shops/sunrise_dairy/sales@ts", "shops/sunrise_dairy/sales@iso", "shops/sunrise_dairy/inventory"]);
     expect(onChange).not.toHaveBeenCalled();
 
-    subFor("shops/murugan_dairy/inventory").next(snap([["sakthi_curd_1l", { onHand: 28, batches: [] }]]));
+    subFor("shops/sunrise_dairy/inventory").next(snap([["sakthi_curd_1l", { onHand: 28, batches: [] }]]));
     expect(onChange).toHaveBeenCalledTimes(1);
     expect(onStatus).toHaveBeenLastCalledWith("live");
     const d: ShopData = onChange.mock.calls[0][0];
@@ -124,7 +124,7 @@ describe("listenShop", () => {
     expect(d.orders).toEqual([]);
 
     // Later changes stream straight through.
-    subFor("shops/murugan_dairy/inventory").next(snap([["sakthi_curd_1l", { onHand: 26, batches: [] }]]));
+    subFor("shops/sunrise_dairy/inventory").next(snap([["sakthi_curd_1l", { onHand: 26, batches: [] }]]));
     expect(onChange).toHaveBeenCalledTimes(2);
     expect((onChange.mock.calls[1][0] as ShopData).inventory[0].onHand).toBe(26);
     stop();
@@ -133,10 +133,10 @@ describe("listenShop", () => {
   it("reports offline when a listener fails, and still shows the collections that loaded", () => {
     const onChange = vi.fn();
     const onStatus = vi.fn();
-    const stop = listenShop("murugan_dairy", onChange, () => NOW, onStatus);
-    subFor("shops/murugan_dairy/auditLogs").error(new Error("permission-denied"));
+    const stop = listenShop("sunrise_dairy", onChange, () => NOW, onStatus);
+    subFor("shops/sunrise_dairy/auditLogs").error(new Error("permission-denied"));
     expect(onStatus).toHaveBeenLastCalledWith("offline");
-    deliverAll(["shops/murugan_dairy/auditLogs"]);
+    deliverAll(["shops/sunrise_dairy/auditLogs"]);
     expect(onChange).toHaveBeenCalledTimes(1);
     expect((onChange.mock.calls[0][0] as ShopData).auditLogs).toEqual([]);
     expect(onStatus).toHaveBeenLastCalledWith("offline");
@@ -145,12 +145,12 @@ describe("listenShop", () => {
 
   it("reports offline while snapshots come only from the local cache, and live again once the server answers", () => {
     const onStatus = vi.fn();
-    const stop = listenShop("murugan_dairy", () => {}, () => NOW, onStatus);
+    const stop = listenShop("sunrise_dairy", () => {}, () => NOW, onStatus);
     deliverAll();
     expect(onStatus).toHaveBeenLastCalledWith("live");
-    subFor("shops/murugan_dairy/products").next(snap([], true));
+    subFor("shops/sunrise_dairy/products").next(snap([], true));
     expect(onStatus).toHaveBeenLastCalledWith("offline");
-    subFor("shops/murugan_dairy/products").next(snap([], false));
+    subFor("shops/sunrise_dairy/products").next(snap([], false));
     expect(onStatus).toHaveBeenLastCalledWith("live");
     stop();
   });
@@ -158,7 +158,7 @@ describe("listenShop", () => {
   it("stop() unsubscribes every listener and nothing fires afterwards", () => {
     vi.useFakeTimers();
     const onChange = vi.fn();
-    const stop = listenShop("murugan_dairy", onChange, () => NOW);
+    const stop = listenShop("sunrise_dairy", onChange, () => NOW);
     const all = [...h.subs];
     stop();
     expect(all.every((s) => s.unsubscribed)).toBe(true);
@@ -170,7 +170,7 @@ describe("listenShop", () => {
     vi.useFakeTimers();
     let now = NOW;
     const onChange = vi.fn();
-    const stop = listenShop("murugan_dairy", onChange, () => now);
+    const stop = listenShop("sunrise_dairy", onChange, () => now);
     deliverAll();
     const first = [...h.subs];
     const untilMidnight = START + DAY - NOW;
@@ -180,10 +180,10 @@ describe("listenShop", () => {
     vi.advanceTimersByTime(1010);
     expect(first.every((s) => s.unsubscribed)).toBe(true);
     expect(live()).toHaveLength(first.length);
-    expect(whereValue(subFor("shops/murugan_dairy/sales", isTs))).toEqual({ kind: "ts", ms: START + DAY });
+    expect(whereValue(subFor("shops/sunrise_dairy/sales", isTs))).toEqual({ kind: "ts", ms: START + DAY });
     // The page keeps showing the last data while the new listeners load.
     const calls = onChange.mock.calls.length;
-    subFor("shops/murugan_dairy/sales", isTs).next(snap([]));
+    subFor("shops/sunrise_dairy/sales", isTs).next(snap([]));
     expect(onChange.mock.calls.length).toBe(calls + 1);
     stop();
   });

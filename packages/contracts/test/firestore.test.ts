@@ -78,7 +78,7 @@ const audit = {
 } satisfies AuditLog;
 
 const shop = {
-  name: "Murugan Dairy", ownerUid: "u1", city: "Madurai", currency: "INR", timezone: "Asia/Kolkata",
+  name: "Sunrise Dairy", ownerUid: "u1", city: "Madurai", currency: "INR", timezone: "Asia/Kolkata",
 } satisfies Shop;
 
 const memory = { id: "m1", type: "location", text: "curd is in fridge 2", at: ts } satisfies MemoryEvent;
@@ -88,7 +88,7 @@ const prefs = {
 } satisfies ShopPrefs;
 
 const event = {
-  topic: "sales", payload: { shop_id: "murugan_dairy", sale_id: "sl1", sku: "sakthi_curd_1l", qty: 2 }, ts,
+  topic: "sales", payload: { shop_id: "sunrise_dairy", sale_id: "sl1", sku: "sakthi_curd_1l", qty: 2 }, ts,
 } satisfies ShopEvent;
 
 const runtime = {

@@ -31,7 +31,7 @@ const noop = () => {};
  */
 export function demoWireOpts(wsUrl?: string): WireOpts {
   return {
-    settings: { ...DEFAULT_SETTINGS, lang: "en", verbosity: "short", onboarded: true },
+    settings: { ...DEFAULT_SETTINGS, lang: "auto", verbosity: "short", onboarded: true },
     wsUrl,
     connect: false,
     env: {

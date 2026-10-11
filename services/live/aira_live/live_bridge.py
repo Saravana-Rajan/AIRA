@@ -19,7 +19,7 @@ from typing import TYPE_CHECKING, AsyncIterator, Awaitable, Callable, Literal, P
 
 from aira_live import safety
 from aira_live.contracts import AudioOutMsg, CueMsg, ErrorMsg, TranscriptMsg
-from aira_live.i18n import t
+from aira_live.i18n import detect_lang, t
 from aira_live.prompt import last_catalog_facts
 
 if TYPE_CHECKING:
@@ -181,8 +181,12 @@ class LiveBridge:
             self._queue_text(text)
 
     async def speak_notice(self, text: str) -> None:
-        """Have AIRA speak a vendor reply or an alert in the live audio (used by ``sessions.notify``)."""
-        await self.send_text(f"{NOTICE_PREFIX} Tell the shopkeeper briefly, in his language: {text}")
+        """Have AIRA speak a vendor reply or an alert in the live audio (used by ``sessions.notify``).
+
+        The text is a fixed line (English for a language without a catalog): Live says it in the language the
+        shopkeeper last spoke, so a notice is never dropped for want of a translation.
+        """
+        await self.send_text(f"{NOTICE_PREFIX} Tell the shopkeeper briefly, in the language he last spoke: {text}")
 
     def hard_stop(self) -> None:
         """Long-press: drop the rest of the current answer (audio + captions).
@@ -272,13 +276,16 @@ class LiveBridge:
                 await s.send(TranscriptMsg(role="aira", text=ev.text, final=ev.final))
         elif ev.kind == "input_transcript":
             self._muted = False  # a new question has started
+            lang = None
             if ev.final:
                 utterance, self._in_partial = ev.text or self._in_partial, ""
+                # AIRA follows the speaker turn by turn: the catalog and the phone's labels switch with him.
+                s.lang = lang = detect_lang(utterance, s.lang)
                 self._notify_listeners(utterance)
             else:
                 self._in_partial += ev.text
             if ev.text:
-                await s.send(TranscriptMsg(role="user", text=ev.text, final=ev.final))
+                await s.send(TranscriptMsg(role="user", text=ev.text, final=ev.final, lang=lang))
         elif ev.kind == "interrupted":
             # Live cut the answer (barge-in or a new prompt): the stopped answer is over, the next one is new.
             self._muted = self._answering = False
@@ -286,6 +293,7 @@ class LiveBridge:
         elif ev.kind == "turn_complete":
             if self._in_partial:  # the backend never marked the utterance final
                 utterance, self._in_partial = self._in_partial, ""
+                s.lang = detect_lang(utterance, s.lang)
                 self._notify_listeners(utterance)
             if ev.more:  # the same answer goes on in another model turn
                 return

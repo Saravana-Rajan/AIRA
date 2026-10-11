@@ -35,7 +35,7 @@ BENCH = Path(__file__).resolve().parent
 ROLE = "point"
 ENV_OVERRIDE = "AIRA_MODEL_POINT"
 
-# Decision rule. Murugan waits for the answer while holding the pack, so latency
+# Decision rule. Sam waits for the answer while holding the pack, so latency
 # comes first: if ER 2's median identify call is slower than 3 s (and Flash is
 # faster), switch. Even when ER 2 is fast enough, switch if Flash is clearly more
 # accurate (10+ points). Never switch to a Flash that failed every call (_live).

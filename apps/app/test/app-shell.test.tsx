@@ -73,7 +73,7 @@ describe("AppShell", () => {
     act(() => { render(<AppShell wire={wire} onWired={onWired} wsUrl="ws://x/ws" languages={["ta-IN"]} initial={{ ...DEFAULT_SETTINGS }} />, root); });
     act(() => { startBtn().click(); });
     expect(wire).toHaveBeenCalledTimes(1);
-    expect(wire.mock.calls[0][0]).toMatchObject({ wsUrl: "ws://x/ws", settings: { lang: "ta", shopId: "murugan_dairy", onboarded: true } });
+    expect(wire.mock.calls[0][0]).toMatchObject({ wsUrl: "ws://x/ws", settings: { lang: "auto", shopId: "sunrise_dairy", onboarded: true } });
     expect(onWired).toHaveBeenCalledWith(f.w);
     const buttons = root.querySelectorAll("button");
     expect(buttons).toHaveLength(1);
@@ -82,7 +82,7 @@ describe("AppShell", () => {
     const region = root.querySelector('[aria-live="polite"]')!;
     expect(region).not.toBeNull();
     expect(buttons[0].contains(region)).toBe(false);
-    expect(root.textContent).toContain("Murugan Dairy");
+    expect(root.textContent).toContain("Sunrise Dairy");
   });
 
   it("redraws from the wired view and routes gestures to the wired handlers", () => {

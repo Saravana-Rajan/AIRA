@@ -1,9 +1,9 @@
 // Pure access resolution for the Shop Dashboard.
 // Build overrides: no Firebase Auth. One owner runs one shop, so every visitor is signed out
-// and reads murugan_dairy, read-only, as its owner. The family branch stays for a later
+// and reads sunrise_dairy, read-only, as its owner. The family branch stays for a later
 // signed-in mode and is never reached in this build.
 
-export const DEMO_SHOP_ID = "murugan_dairy";
+export const DEMO_SHOP_ID = "sunrise_dairy";
 
 export type AccessRole = "owner" | "family";
 

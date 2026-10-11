@@ -5,7 +5,7 @@
 //                              [--out <report dir>] [--require]
 //
 // - No --url: builds the dashboard against the Firestore emulator (database "aira", project demo-aira),
-//   seeds the Murugan Dairy demo shop (test/e2e/demoShop.mjs), serves it with `vite preview` at
+//   seeds the Sunrise Dairy demo shop (test/e2e/demoShop.mjs), serves it with `vite preview` at
 //   /dashboard/ and audits each page. It attaches to FIRESTORE_EMULATOR_HOST when one answers there,
 //   otherwise starts one with `firebase emulators:exec` (needs Java).
 // - --url: audits that URL (for example https://aira-shop.web.app/dashboard/) as it is. Read-only.

@@ -2,7 +2,7 @@
 
 Usage:
     uv run python -m aira_live.devtools.call_tool <tool> --args '<json>' [--image a.jpg ...] [--purpose count]
-        [--shop murugan_dairy] [--lang en] [--confirm yes|no] [--session-id S] [--call-id C]
+        [--shop sunrise_dairy] [--lang en] [--confirm yes|no] [--session-id S] [--call-id C]
 
 - The tool runs through ``tool_runtime.wrap_tool`` with a harness Session, so ``get_session()``,
   ``ids.current_idem_key()``, ``request_frames`` and ``confirm.propose`` behave as in a Live call. Each run gets a

@@ -23,8 +23,9 @@ from aira_live.live_bridge import NOTICE_PREFIX, LiveEvent
 from aira_live.tool_runtime import live_tools
 from aira_live.tools import NON_BLOCKING_TOOLS, TOOL_FUNCS
 
-DEMO = "murugan_dairy"
+DEMO = "sunrise_dairy"
 HELLO = {"t": "hello", "uid": "u1", "shopId": DEMO, "lang": "en", "verbosity": "short", "appVersion": "0.1.0"}
+ORIGIN = {"Origin": "https://aira-shop.web.app"}  # every browser upgrade carries Origin; without it /ws is refused
 
 
 def _wait(pred, timeout: float = 2.0) -> None:
@@ -46,7 +47,7 @@ def _tool_name(tool) -> str:
 
 @pytest.fixture(autouse=True)
 def clean_env(monkeypatch):
-    for name in ("GEMINI_API_KEY", "AIRA_MOCK", "AIRA_ALLOW_NO_TOKEN", "AIRA_DEMO_SHOP"):
+    for name in ("GEMINI_API_KEY", "AIRA_MOCK", "AIRA_ALLOW_NO_TOKEN", "AIRA_DEMO_SHOP", "AIRA_APP_KEY"):
         monkeypatch.delenv(name, raising=False)
 
 
@@ -80,8 +81,8 @@ def real_mode(monkeypatch, fake_db, mem_store):
 
 # ---------- sessions: registry + notify ----------
 async def test_notify_reaches_every_live_session_of_that_shop_only(mk_session):
-    s1, r1 = mk_session(shop="murugan")
-    s2, r2 = mk_session(shop="murugan")
+    s1, r1 = mk_session(shop="sunrise")
+    s2, r2 = mk_session(shop="sunrise")
     s3, r3 = mk_session(shop="other")
     spoken = []
 
@@ -93,7 +94,7 @@ async def test_notify_reaches_every_live_session_of_that_shop_only(mk_session):
     sessions.register(s2)
     sessions.register(s3)
     try:
-        n = await sessions.notify("murugan", "Sakthi vendor confirmed: delivery at 6 pm.")
+        n = await sessions.notify("sunrise", "Sakthi vendor confirmed: delivery at 6 pm.")
         assert n == 2 and spoken == ["Sakthi vendor confirmed: delivery at 6 pm."]
         assert [m.t for m in r1.msgs] == ["transcript", "cue"] and r1.msgs[0].text.startswith("Sakthi vendor")
         assert r1.msgs[1].cue == "ack" and [m.t for m in r2.msgs] == ["transcript", "cue"]
@@ -101,7 +102,7 @@ async def test_notify_reaches_every_live_session_of_that_shop_only(mk_session):
     finally:
         for s in (s1, s2, s3):
             sessions.unregister(s.session_id)
-    assert await sessions.notify("murugan", "x") == 0
+    assert await sessions.notify("sunrise", "x") == 0
 
 
 async def test_registry_attach_and_unregister_by_id_or_session(mk_session):
@@ -152,7 +153,7 @@ async def test_demo_shop_comes_from_env(monkeypatch):
 
 
 async def test_mock_mode_without_token_lands_in_the_demo_shop():
-    r = await auth.verify_hello(None, "dev", "murugan", mock=True)
+    r = await auth.verify_hello(None, "dev", "sunrise", mock=True)
     assert r.shop_id == DEMO and r.uid == "dev"
 
 
@@ -190,8 +191,8 @@ def test_client_events_and_stop_reach_guidance_hooks(monkeypatch, fake_db):
 
     monkeypatch.setitem(sys.modules, "aira_live.tools.guidance",
                         SimpleNamespace(handle_client_event=handle_client_event, stop_guidance=stop_guidance))
-    with TestClient(main_mod.app).websocket_connect("/ws") as ws:
-        ws.send_json({**HELLO, "shopId": "murugan"})
+    with TestClient(main_mod.app).websocket_connect("/ws", headers=ORIGIN) as ws:
+        ws.send_json({**HELLO, "shopId": "sunrise"})
         sid = ws.receive_json()["sessionId"]
         ws.send_json({"t": "event", "name": "fingertip_in_target", "data": {"label": "Sakthi curd"}})
         ws.send_json({"t": "event", "name": "visibility", "data": {"hidden": True}})
@@ -209,7 +210,7 @@ def test_broken_guidance_hook_never_closes_the_socket(monkeypatch, fake_db):
 
     monkeypatch.setitem(sys.modules, "aira_live.tools.guidance",
                         SimpleNamespace(handle_client_event=boom, stop_guidance=boom))
-    with TestClient(main_mod.app).websocket_connect("/ws") as ws:
+    with TestClient(main_mod.app).websocket_connect("/ws", headers=ORIGIN) as ws:
         ws.send_json(HELLO)
         ws.receive_json()
         ws.send_json({"t": "event", "name": "fingertip_in_target", "data": {}})
@@ -219,9 +220,49 @@ def test_broken_guidance_hook_never_closes_the_socket(monkeypatch, fake_db):
         assert ws.receive_json() == {"t": "cue", "cue": "done"}
 
 
+# ---------- AIRA_APP_KEY: the shared demo key the app sends as hello.idToken ----------
+async def test_app_key_must_match_the_hello_token(monkeypatch):
+    monkeypatch.setenv("AIRA_ALLOW_NO_TOKEN", "1")
+    monkeypatch.setenv("AIRA_APP_KEY", "k-secret")
+    assert (await auth.verify_hello("k-secret", "u1", DEMO, mock=False)).shop_id == DEMO
+    for bad in (None, "", "k-secre", "K-SECRET", "k-secret "):
+        with pytest.raises(auth.AuthError):
+            await auth.verify_hello(bad, "u1", DEMO, mock=False)
+
+
+async def test_app_key_is_not_checked_in_mock_mode_and_not_required_when_unset(monkeypatch):
+    monkeypatch.setenv("AIRA_APP_KEY", "k-secret")
+    assert (await auth.verify_hello(None, "dev", DEMO, mock=True)).shop_id == DEMO
+    monkeypatch.delenv("AIRA_APP_KEY")
+    monkeypatch.setenv("AIRA_ALLOW_NO_TOKEN", "1")
+    assert (await auth.verify_hello(None, "u1", DEMO, mock=False)).shop_id == DEMO
+
+
+async def test_app_key_alone_does_not_switch_tokenless_mode_on(monkeypatch):
+    monkeypatch.setenv("AIRA_APP_KEY", "k-secret")  # AIRA_ALLOW_NO_TOKEN unset: there is still no Firebase Auth
+    with pytest.raises(auth.AuthError):
+        await auth.verify_hello("k-secret", "u1", DEMO, mock=False)
+
+
+def test_ws_hello_needs_the_app_key_when_one_is_set(real_mode, monkeypatch):
+    monkeypatch.setenv("AIRA_APP_KEY", "k-secret")
+    for token in ({}, {"idToken": "wrong"}):
+        with TestClient(main_mod.app).websocket_connect("/ws", headers=ORIGIN) as ws:
+            ws.send_json({**HELLO, **token})
+            assert ws.receive_json() == {"t": "error", "code": "permission", "say": t("auth.denied", "en")}
+            with pytest.raises(WebSocketDisconnect) as closed:
+                ws.receive_json()
+            assert closed.value.code == 4403
+    assert real_mode == []
+    with TestClient(main_mod.app).websocket_connect("/ws", headers=ORIGIN) as ws:
+        ws.send_json({**HELLO, "idToken": "k-secret"})
+        assert ws.receive_json()["t"] == "ready"
+    assert len(real_mode) == 1
+
+
 # ---------- hello in real mode ----------
 def test_real_mode_tokenless_hello_ignores_the_client_shop(real_mode):
-    with TestClient(main_mod.app).websocket_connect("/ws") as ws:
+    with TestClient(main_mod.app).websocket_connect("/ws", headers=ORIGIN) as ws:
         ws.send_json({**HELLO, "shopId": "other_shop"})
         ready = ws.receive_json()
         assert ready["t"] == "ready" and ready["mock"] is False
@@ -231,7 +272,7 @@ def test_real_mode_tokenless_hello_ignores_the_client_shop(real_mode):
 
 def test_hello_without_token_is_refused_and_closed_when_tokenless_mode_is_off(real_mode, monkeypatch):
     monkeypatch.delenv("AIRA_ALLOW_NO_TOKEN")
-    with TestClient(main_mod.app).websocket_connect("/ws") as ws:
+    with TestClient(main_mod.app).websocket_connect("/ws", headers=ORIGIN) as ws:
         ws.send_json(HELLO)
         assert ws.receive_json() == {"t": "error", "code": "permission", "say": t("auth.denied", "en")}
         with pytest.raises(WebSocketDisconnect) as closed:
@@ -241,7 +282,7 @@ def test_hello_without_token_is_refused_and_closed_when_tokenless_mode_is_off(re
 
 
 def test_ws_real_mode_wires_bridge_audio_text_and_transcripts(real_mode):
-    with TestClient(main_mod.app).websocket_connect("/ws") as ws:
+    with TestClient(main_mod.app).websocket_connect("/ws", headers=ORIGIN) as ws:
         ws.send_json({**HELLO, "idToken": "ignored"})
         ready = ws.receive_json()
         sid = ready["sessionId"]
@@ -251,8 +292,8 @@ def test_ws_real_mode_wires_bridge_audio_text_and_transcripts(real_mode):
         ws.send_json({"t": "audio", "pcm16": base64.b64encode(b"\x00\x01").decode()})
         _wait(lambda: fb.sent_audio)
         assert fb.sent_audio == [b"\x00\x01"]
-        fb.push(LiveEvent("output_transcript", text="Hello Murugan.", final=True))
-        assert ws.receive_json() == {"t": "transcript", "role": "aira", "text": "Hello Murugan.", "final": True}
+        fb.push(LiveEvent("output_transcript", text="Hello Sam.", final=True))
+        assert ws.receive_json() == {"t": "transcript", "role": "aira", "text": "Hello Sam.", "final": True}
         ws.send_json({"t": "text", "text": "how much curd is left?"})
         _wait(lambda: fb.sent_text)
         assert fb.sent_text == ["how much curd is left?"]
@@ -261,7 +302,8 @@ def test_ws_real_mode_wires_bridge_audio_text_and_transcripts(real_mode):
         fb.push(LiveEvent("audio", audio=b"\x05\x06"))  # the rest of the stopped answer is dropped
         fb.push(LiveEvent("input_transcript", text="Next question.", final=True))
         # Events arrive in order, so the dropped audio would have come first.
-        assert ws.receive_json() == {"t": "transcript", "role": "user", "text": "Next question.", "final": True}
+        assert ws.receive_json() == {"t": "transcript", "role": "user", "text": "Next question.", "final": True,
+                                     "lang": "en"}
     _wait(lambda: fb.closed and sid not in _registered(DEMO))  # disconnect closes Live and unregisters
 
 
@@ -299,13 +341,13 @@ async def test_non_blocking_tool_still_runs_with_its_session(mk_session):
 
 
 def test_notify_speaks_into_the_live_session(real_mode):
-    with TestClient(main_mod.app).websocket_connect("/ws") as ws:
+    with TestClient(main_mod.app).websocket_connect("/ws", headers=ORIGIN) as ws:
         ws.send_json(HELLO)
         ws.receive_json()
         fb = real_mode[0]
         assert ws.portal.call(sessions.notify, DEMO, "Sakthi vendor confirmed: delivery at 6 pm.") >= 1
         assert ws.receive_json() == {"t": "transcript", "role": "aira",
-                                     "text": "Sakthi vendor confirmed: delivery at 6 pm.", "final": True}
+                                     "text": "Sakthi vendor confirmed: delivery at 6 pm.", "final": True, "lang": "en"}
         assert ws.receive_json() == {"t": "cue", "cue": "ack"}
         assert len(fb.sent_text) == 1 and fb.sent_text[0].startswith(NOTICE_PREFIX)
         assert "Sakthi vendor confirmed" in fb.sent_text[0]
@@ -323,7 +365,7 @@ def test_live_start_failure_reports_network_error_and_keeps_the_socket(real_mode
         return broken[-1]
 
     monkeypatch.setattr(main_mod.app.state, "backend_factory", factory)
-    with TestClient(main_mod.app).websocket_connect("/ws") as ws:
+    with TestClient(main_mod.app).websocket_connect("/ws", headers=ORIGIN) as ws:
         ws.send_json(HELLO)
         assert ws.receive_json() == {"t": "error", "code": "network", "say": t("live.unavailable", "en")}
         ready = ws.receive_json()
@@ -338,7 +380,7 @@ def test_confirm_reply_in_real_mode_tells_the_model(real_mode, mem_store):
         return {"say": "Order sent to Sakthi vendor."}
 
     confirm.register_committer("test.real.ws", commit)
-    with TestClient(main_mod.app).websocket_connect("/ws") as ws:
+    with TestClient(main_mod.app).websocket_connect("/ws", headers=ORIGIN) as ws:
         ws.send_json(HELLO)
         sid = ws.receive_json()["sessionId"]
         asyncio.run(mem_store.put(DEMO, "cf_1", {"kind": "order", "prompt": "Order?", "payload": {},
@@ -361,7 +403,8 @@ def test_allowed_origins_default_to_the_hosting_site_and_local_vite(monkeypatch)
     assert main_mod.allowed_origins() == ["https://demo.example", "http://127.0.0.1:5173"]  # the env list replaces
     assert main_mod.origin_allowed("https://demo.example") and main_mod.origin_allowed("https://demo.example/")
     assert not main_mod.origin_allowed("https://aira-shop.web.app")
-    assert main_mod.origin_allowed(None)  # no Origin header: not a browser page; nothing to check
+    assert not main_mod.origin_allowed(None)  # no Origin header: refused (the app always sends one)
+    assert not main_mod.origin_allowed("")
 
 
 def test_ws_refuses_a_browser_origin_that_is_not_allowed(real_mode):
@@ -376,6 +419,15 @@ def test_ws_refuses_a_browser_origin_that_is_not_allowed(real_mode):
         assert ws.receive_json()["t"] == "ready"
 
 
+def test_ws_refuses_an_upgrade_without_an_origin(real_mode):
+    with pytest.raises(WebSocketDisconnect) as closed:
+        with TestClient(main_mod.app).websocket_connect("/ws") as ws:
+            ws.send_json(HELLO)
+            ws.receive_json()
+    assert closed.value.code == 4403
+    assert real_mode == []
+
+
 def test_ws_allowed_origins_come_from_env(real_mode, monkeypatch):
     monkeypatch.setenv("AIRA_ALLOWED_ORIGINS", "https://judge.example")
     with TestClient(main_mod.app).websocket_connect("/ws", headers={"Origin": "https://judge.example"}) as ws:
@@ -386,9 +438,12 @@ def test_ws_allowed_origins_come_from_env(real_mode, monkeypatch):
             pass
 
 
-def test_client_ip_prefers_the_first_forwarded_address():
-    ws = SimpleNamespace(headers={"x-forwarded-for": " 203.0.113.9 , 10.0.0.1"}, client=SimpleNamespace(host="10.1.1.1"))
+def test_client_ip_is_the_last_forwarded_hop():
+    """Cloud Run appends the real client address last; the first entries are whatever the client sent."""
+    ws = SimpleNamespace(headers={"x-forwarded-for": " 1.2.3.4, 203.0.113.9 "}, client=SimpleNamespace(host="10.1.1.1"))
     assert main_mod.client_ip(ws) == "203.0.113.9"
+    assert main_mod.client_ip(SimpleNamespace(headers={"x-forwarded-for": "203.0.113.9"}, client=None)) == "203.0.113.9"
+    assert main_mod.client_ip(SimpleNamespace(headers={"x-forwarded-for": " , "}, client=SimpleNamespace(host="10.1.1.1"))) == "10.1.1.1"
     assert main_mod.client_ip(SimpleNamespace(headers={}, client=SimpleNamespace(host="10.1.1.1"))) == "10.1.1.1"
     assert main_mod.client_ip(SimpleNamespace(headers={}, client=None)) == "unknown"
 
@@ -411,12 +466,12 @@ def test_sessions_count_per_ip(mk_session):
 def test_ws_caps_concurrent_live_sessions(real_mode, monkeypatch):
     """Bounds Gemini spend on the public URL: one phone over the cap gets error/permission and is closed."""
     monkeypatch.setattr(main_mod, "MAX_SESSIONS", 2)
-    clients = [TestClient(main_mod.app).websocket_connect("/ws").__enter__() for _ in range(2)]
+    clients = [TestClient(main_mod.app).websocket_connect("/ws", headers=ORIGIN).__enter__() for _ in range(2)]
     try:
         for ws in clients:
             ws.send_json(HELLO)
             assert ws.receive_json()["t"] == "ready"
-        with TestClient(main_mod.app).websocket_connect("/ws") as ws:
+        with TestClient(main_mod.app).websocket_connect("/ws", headers=ORIGIN) as ws:
             ws.send_json(HELLO)
             assert ws.receive_json() == {"t": "error", "code": "permission", "say": t("auth.busy", "en")}
             with pytest.raises(WebSocketDisconnect) as closed:
@@ -435,7 +490,7 @@ def test_ws_caps_concurrent_sessions_per_ip(real_mode, monkeypatch):
     """A stranger with the URL gets MAX_SESSIONS_PER_IP sessions, not the whole service."""
     monkeypatch.setattr(main_mod, "MAX_SESSIONS_PER_IP", 2)
     monkeypatch.setattr(main_mod, "MAX_SESSIONS", 10)
-    same = {"X-Forwarded-For": "203.0.113.9"}
+    same = {**ORIGIN, "X-Forwarded-For": "203.0.113.9"}
     clients = [TestClient(main_mod.app).websocket_connect("/ws", headers=same).__enter__() for _ in range(2)]
     try:
         for ws in clients:
@@ -446,7 +501,7 @@ def test_ws_caps_concurrent_sessions_per_ip(real_mode, monkeypatch):
             assert ws.receive_json() == {"t": "error", "code": "permission", "say": t("auth.busy", "en")}
             with pytest.raises(WebSocketDisconnect):
                 ws.receive_json()
-        with TestClient(main_mod.app).websocket_connect("/ws", headers={"X-Forwarded-For": "198.51.100.2"}) as ws:
+        with TestClient(main_mod.app).websocket_connect("/ws", headers={**ORIGIN, "X-Forwarded-For": "198.51.100.2"}) as ws:
             ws.send_json(HELLO)
             assert ws.receive_json()["t"] == "ready"  # another phone is still served
         assert len(real_mode) == 3
@@ -457,7 +512,7 @@ def test_ws_caps_concurrent_sessions_per_ip(real_mode, monkeypatch):
 
 # ---------- resume after a WebSocket blip ----------
 def test_hello_with_resume_keeps_the_session_id_and_the_live_handle(real_mode):
-    with TestClient(main_mod.app).websocket_connect("/ws") as ws:
+    with TestClient(main_mod.app).websocket_connect("/ws", headers=ORIGIN) as ws:
         ws.send_json(HELLO)
         ready = ws.receive_json()
         sid = ready["sessionId"]
@@ -465,7 +520,7 @@ def test_hello_with_resume_keeps_the_session_id_and_the_live_handle(real_mode):
         real_mode[0].push(LiveEvent("resumption_handle", handle="h-123"))
         _wait(lambda: any(b is not None and b._handle == "h-123" for _, b in sessions.by_shop(DEMO)))
     _wait(lambda: real_mode[0].closed)
-    with TestClient(main_mod.app).websocket_connect("/ws") as ws:
+    with TestClient(main_mod.app).websocket_connect("/ws", headers=ORIGIN) as ws:
         ws.send_json({**HELLO, "resume": sid})
         again = ws.receive_json()
         assert again["sessionId"] == sid and again["resume"] == sid
@@ -474,20 +529,20 @@ def test_hello_with_resume_keeps_the_session_id_and_the_live_handle(real_mode):
 
 
 def test_resume_of_an_unknown_or_stale_session_starts_a_new_one(real_mode, monkeypatch):
-    with TestClient(main_mod.app).websocket_connect("/ws") as ws:
+    with TestClient(main_mod.app).websocket_connect("/ws", headers=ORIGIN) as ws:
         ws.send_json({**HELLO, "resume": "never-existed"})
         first = ws.receive_json()["sessionId"]
         assert first != "never-existed"
     _wait(lambda: real_mode[0].closed)
     monkeypatch.setattr(sessions, "RESUME_WINDOW_S", 0.0)
-    with TestClient(main_mod.app).websocket_connect("/ws") as ws:
+    with TestClient(main_mod.app).websocket_connect("/ws", headers=ORIGIN) as ws:
         ws.send_json({**HELLO, "resume": first})
         second = ws.receive_json()["sessionId"]
         assert second != first and real_mode[1].started_with == [None]
 
 
 def test_second_hello_replaces_the_session_and_closes_its_bridge(real_mode):
-    with TestClient(main_mod.app).websocket_connect("/ws") as ws:
+    with TestClient(main_mod.app).websocket_connect("/ws", headers=ORIGIN) as ws:
         ws.send_json(HELLO)
         first = ws.receive_json()["sessionId"]
         ws.send_json({**HELLO, "lang": "ta"})

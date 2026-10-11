@@ -372,7 +372,7 @@ import { describe, it, expect } from "vitest";
 import { SCENARIOS, DEMO_MEDIA_FILES } from "../src/demo/scenarios";
 
 describe("demo scenarios", () => {
-  it("cover the whole Murugan Dairy loop, in order", () => {
+  it("cover the whole Sunrise Dairy loop, in order", () => {
     expect(SCENARIOS.map((s) => s.id)).toEqual([
       "order", "delivery-one", "delivery-crate", "invoice-ok", "invoice-wrong",
       "pay-vendor", "sale-guide", "sale-cash", "sale-upi", "summary",
@@ -444,7 +444,7 @@ export interface Scenario {
   id: string;
   title: string;
   blurb: string;
-  prompt: string; // sent as a `text` message, exactly as Murugan would say it
+  prompt: string; // sent as a `text` message, exactly as Sam would say it
   media?: { kind: "video" | "image" | "audio"; src: string };
 }
 
@@ -585,7 +585,7 @@ export function TryAira() {
         <img src="/icons/aira-192.png" alt="AIRA logo" width={72} height={72} />
         <div>
           <h1>AIRA — try it</h1>
-          <p>A blind shopkeeper runs a dairy shop alone. Pick a moment from Murugan's day; it runs through the real AIRA pipeline on a demo shop.</p>
+          <p>A blind shopkeeper runs a dairy shop alone. Pick a moment from Sam's day; it runs through the real AIRA pipeline on a demo shop.</p>
         </div>
       </header>
       <section class="cards" aria-label="Demo scenarios">
@@ -613,7 +613,7 @@ export function TryAira() {
         )}
       </section>
       <form class="typed" onSubmit={(e) => { e.preventDefault(); if (typed.trim()) { app.send({ t: "text", text: typed.trim() }); setTyped(""); } }}>
-        <label for="typed">No microphone? Type what Murugan would say:</label>
+        <label for="typed">No microphone? Type what Sam would say:</label>
         <input id="typed" value={typed} onInput={(e) => setTyped(e.currentTarget.value)} placeholder="e.g. How much Sakthi curd is left?" />
         <button type="submit">Send</button>
       </form>

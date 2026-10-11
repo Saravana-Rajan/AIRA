@@ -9,7 +9,7 @@ from aira_live.business import paths
 from aira_live.messaging import clicktochat, telegram, whatsapp
 from aira_live.tools import _repo
 
-SHOP = "murugan_dairy"
+SHOP = "sunrise_dairy"
 ORDER = {"id": "o1", "items": [
     {"sku": "sakthi_curd_1l", "name": "Sakthi Curd 1 L", "qty": 30.0, "unit": "L", "agreedPrice": 50},
     {"sku": "aavin_paneer_200g", "name": "Aavin Paneer 200 g", "qty": 25.0, "unit": "pack", "agreedPrice": 80}]}
@@ -47,8 +47,8 @@ def test_phone_normalization_and_links():
 
 def test_order_text_lists_quantities_and_units():
     assert clicktochat.items_text(ORDER["items"]) == "30 L Sakthi Curd 1 L, 25 pack Aavin Paneer 200 g"
-    assert clicktochat.order_text("Murugan Dairy", ORDER["items"]) == (
-        "New order from Murugan Dairy: 30 L Sakthi Curd 1 L, 25 pack Aavin Paneer 200 g. "
+    assert clicktochat.order_text("Sunrise Dairy", ORDER["items"]) == (
+        "New order from Sunrise Dairy: 30 L Sakthi Curd 1 L, 25 pack Aavin Paneer 200 g. "
         "Please confirm delivery time.")
 
 
@@ -75,7 +75,7 @@ async def test_send_template_builds_graph_request(monkeypatch):
         seen.update(url=str(req.url), auth=req.headers["authorization"], body=json.loads(req.content))
         return httpx.Response(200, json={"messages": [{"id": "wamid.ABC"}]})
 
-    mid = await whatsapp.send_template("+919000000002", "Murugan Dairy", "30 L Sakthi Curd 1 L",
+    mid = await whatsapp.send_template("+919000000002", "Sunrise Dairy", "30 L Sakthi Curd 1 L",
                                        transport=httpx.MockTransport(handler))
     assert mid == "wamid.ABC"
     assert seen["url"] == "https://graph.facebook.com/v21.0/123/messages"
@@ -84,7 +84,7 @@ async def test_send_template_builds_graph_request(monkeypatch):
     assert seen["body"]["to"] == "919000000002"
     tpl = seen["body"]["template"]
     assert tpl["name"] == "order_request" and tpl["language"] == {"code": "en"}
-    assert [p["text"] for p in tpl["components"][0]["parameters"]] == ["Murugan Dairy", "30 L Sakthi Curd 1 L"]
+    assert [p["text"] for p in tpl["components"][0]["parameters"]] == ["Sunrise Dairy", "30 L Sakthi Curd 1 L"]
 
 
 async def test_send_template_graph_version_from_env(monkeypatch):
@@ -96,7 +96,7 @@ async def test_send_template_graph_version_from_env(monkeypatch):
         seen["url"] = str(req.url)
         return httpx.Response(200, json={"messages": [{"id": "wamid.V"}]})
 
-    await whatsapp.send_template("9000000002", "Murugan Dairy", "x", transport=httpx.MockTransport(handler))
+    await whatsapp.send_template("9000000002", "Sunrise Dairy", "x", transport=httpx.MockTransport(handler))
     assert seen["url"] == "https://graph.facebook.com/v99.0/123/messages"
 
 
@@ -108,7 +108,7 @@ async def test_hello_world_template_has_no_components(monkeypatch):
         seen["body"] = json.loads(req.content)
         return httpx.Response(200, json={"messages": [{"id": "wamid.H"}]})
 
-    await whatsapp.send_template("9000000002", "Murugan Dairy", "x", transport=httpx.MockTransport(handler))
+    await whatsapp.send_template("9000000002", "Sunrise Dairy", "x", transport=httpx.MockTransport(handler))
     assert seen["body"]["template"] == {"name": "hello_world", "language": {"code": "en_US"}}
 
 
@@ -116,14 +116,14 @@ async def test_send_template_http_error_raises(monkeypatch):
     _wa_env(monkeypatch)
     transport = httpx.MockTransport(lambda req: httpx.Response(401, json={"error": {"message": "bad token"}}))
     with pytest.raises(whatsapp.WhatsAppError):
-        await whatsapp.send_template("9000000002", "Murugan Dairy", "x", transport=transport)
+        await whatsapp.send_template("9000000002", "Sunrise Dairy", "x", transport=transport)
 
 
 async def test_send_template_without_message_id_raises(monkeypatch):
     _wa_env(monkeypatch)
     transport = httpx.MockTransport(lambda req: httpx.Response(200, json={"messages": []}))
     with pytest.raises(whatsapp.WhatsAppError):
-        await whatsapp.send_template("9000000002", "Murugan Dairy", "x", transport=transport)
+        await whatsapp.send_template("9000000002", "Sunrise Dairy", "x", transport=transport)
 
 
 async def test_send_template_network_error_raises(monkeypatch):
@@ -133,12 +133,12 @@ async def test_send_template_network_error_raises(monkeypatch):
         raise httpx.ConnectError("no route", request=req)
 
     with pytest.raises(whatsapp.WhatsAppError):
-        await whatsapp.send_template("9000000002", "Murugan Dairy", "x", transport=httpx.MockTransport(handler))
+        await whatsapp.send_template("9000000002", "Sunrise Dairy", "x", transport=httpx.MockTransport(handler))
 
 
 async def test_send_template_not_configured_raises():
     with pytest.raises(whatsapp.WhatsAppError):
-        await whatsapp.send_template("9000000002", "Murugan Dairy", "x")
+        await whatsapp.send_template("9000000002", "Sunrise Dairy", "x")
 
 
 # ---------------------------------------------------------------- Telegram Bot API client
@@ -193,7 +193,7 @@ async def test_send_order_whatsapp_success_indexes_message(store, monkeypatch):
     monkeypatch.setattr(whatsapp, "configured", lambda: True)
 
     async def fake_send(to, shop_name, items_text, **kw):
-        assert (to, shop_name) == ("+919000000002", "Murugan Dairy")
+        assert (to, shop_name) == ("+919000000002", "Sunrise Dairy")
         assert items_text == "30 L Sakthi Curd 1 L, 25 pack Aavin Paneer 200 g"
         return "wamid.1"
 
@@ -217,7 +217,7 @@ async def test_send_order_falls_back_to_click_to_chat(store, monkeypatch):
     monkeypatch.setattr(whatsapp, "send_template", failing)
     res = await messaging.send_order(SHOP, await supplier_doc(store, "sakthi_vendor"), ORDER)
     assert res["channel"] == "whatsapp_link"
-    assert res["fallbackUrl"].startswith("https://wa.me/919000000002?text=New%20order%20from%20Murugan%20Dairy")
+    assert res["fallbackUrl"].startswith("https://wa.me/919000000002?text=New%20order%20from%20Sunrise%20Dairy")
     assert not any("/msgIndex/" in p for p in store.data)
 
 
@@ -258,7 +258,7 @@ async def test_send_order_telegram_channel_indexes_chat(store, monkeypatch):
 
     async def fake_send(chat_id, text, **kw):
         assert chat_id == "555"
-        assert text.startswith("New order from Murugan Dairy: 30 L Sakthi Curd 1 L")
+        assert text.startswith("New order from Sunrise Dairy: 30 L Sakthi Curd 1 L")
         return "9"
 
     monkeypatch.setattr(telegram, "send_message", fake_send)

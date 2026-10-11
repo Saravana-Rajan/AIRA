@@ -1,4 +1,4 @@
-"""Point to one product so the app can guide Murugan's hand. [y, x] and boxes stay normalized 0–1000.
+"""Point to one product so the app can guide Sam's hand. [y, x] and boxes stay normalized 0–1000.
 
 ``point_to`` returns None when the target is not visible or the reply is unusable; it never invents a target.
 The caller (``product_find``, plan 03) then speaks ``t("vision.aim.not_visible", lang)``. A ``TargetResult``

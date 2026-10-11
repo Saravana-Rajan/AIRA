@@ -65,7 +65,7 @@ There is no Remote Config. Runtime switches live in one Firestore document, `con
 
 **Model priority:** env `AIRA_MODEL_<ROLE>` > `config/runtime` > `models.DEFAULTS`. An env override on the Cloud Run service always wins, so remove it before relying on the Firestore switch.
 
-**Access:** only the server writes this doc, using the Admin SDK. The Firestore rules (`infra/firestore.rules`) deny every client read and write outside `shops/murugan_dairy`.
+**Access:** only the server writes this doc, using the Admin SDK. The Firestore rules (`infra/firestore.rules`) deny every client read and write outside `shops/sunrise_dairy`.
 
 **Refresh:** the first time a switch is read in a running event loop, a background refresh starts, and after that the cache refreshes whenever it is older than 60 s. Starting `remote_config.run_refresher()` in the app lifespan keeps the cache warm from boot.
 

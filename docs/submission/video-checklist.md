@@ -83,6 +83,7 @@ Total: 155 s (2:35), plus up to 20 s for transitions. The finished file must be 
 
 - [ ] Split screen (Phone B view + Phone A screen) for the count, guidance and cash scenes. Full frame for the hook and the close.
 - [ ] English captions for every spoken line. Tamil speech gets English subtitles. Large, high-contrast text.
+- [ ] At least one scene switches language mid-conversation (Tamil, then English, then Tamil) and AIRA follows without being asked. No language is picked anywhere on screen.
 - [ ] Numbers on screen come only from `bench/results/*.csv` through `scripts/bench_table.py`. A metric shown as `pending` is left out of the video; never put a guessed number on screen.
 - [ ] If no measured numbers exist yet, the last scene shows the quote or the AIRA logo, not placeholder numbers.
 - [ ] Console and phone shots: crop or blur the project ID, the project number, the project picker, the browser URL bar, every `*.run.app` URL, the signed-in account email and any billing page. Blur phone numbers and chat names on the vendor phone.

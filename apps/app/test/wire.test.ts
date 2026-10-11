@@ -57,6 +57,7 @@ function setup(over: { settings?: Partial<Settings>; env?: Partial<WireEnv>; con
     doc,
     requestWakeLock: vi.fn(),
     requestPermissions: vi.fn(),
+    languages: ["en-IN"],
     ...over.env,
   };
   const w = wireApp({
@@ -81,21 +82,29 @@ const wired: WiredApp[] = [];
 afterEach(() => {
   while (wired.length) wired.pop()!.dispose();
   vi.useRealTimers();
+  vi.unstubAllEnvs();
 });
 const flush = async () => { for (let i = 0; i < 10; i++) await Promise.resolve(); };
 const CONFIRM: ServerMsg = { t: "confirm", id: "c1", kind: "sale", prompt: "Sell 2 Sakthi curd for 120 rupees?" };
 
 describe("wireApp: connection", () => {
-  it("says hello without an idToken, for the demo shop, with a stable device uid", () => {
+  it("says hello for the demo shop with a stable device uid, and no idToken when no app key is built in", () => {
+    vi.stubEnv("VITE_AIRA_APP_KEY", "");
     const storage = new MemStorage();
     const a = setup({ storage, settings: { lang: "ta" } });
     const h = a.socket.hello!;
-    expect(h).toMatchObject({ t: "hello", shopId: "murugan_dairy", lang: "ta", verbosity: "short" });
+    expect(h).toMatchObject({ t: "hello", shopId: "sunrise_dairy", lang: "ta", verbosity: "short" });
     expect("idToken" in h).toBe(false);
     expect(h.uid).toMatch(/^owner-/);
     expect(a.socket.url).toBe("ws://test/ws");
     const b = setup({ storage });
     expect(b.socket.hello!.uid).toBe(h.uid);
+  });
+
+  it("sends the build-time app key VITE_AIRA_APP_KEY as hello.idToken (the shared demo key, not user auth)", () => {
+    vi.stubEnv("VITE_AIRA_APP_KEY", "k-demo-key");
+    const a = setup({ storage: new MemStorage() });
+    expect(a.socket.hello!.idToken).toBe("k-demo-key");
   });
 
   it("saves the settings chosen at Start", () => {
@@ -114,6 +123,42 @@ describe("wireApp: connection", () => {
     const a = setup({ connect: false });
     expect(a.socket.hello).toBeNull();
     expect(app.socket).toBe(a.w.socket);
+  });
+});
+
+describe("wireApp: language follows the speaker", () => {
+  it("with no fixed language, the hello carries the phone's locale as a hint and the labels start there", () => {
+    const a = setup({ settings: { lang: "auto" }, env: { languages: ["ta-IN", "en-US"] } });
+    expect(a.socket.hello!.lang).toBe("ta");
+    expect(a.w.view.get().lang).toBe("ta");
+    expect(app.lang()).toBe("ta");
+    const b = setup({ settings: { lang: "auto" }, env: { languages: ["ja-JP"] } });
+    expect(b.socket.hello!.lang).toBe("en");
+  });
+
+  it("switches the labels and the local TTS to whatever language the server last heard", () => {
+    const a = setup({ settings: { lang: "auto" }, env: { languages: ["en-IN"] } });
+    const seen: string[] = [];
+    a.w.view.subscribe((v) => { seen.push(v.lang); });
+    a.socket.emit({ t: "transcript", role: "user", text: "दो दही", final: true, lang: "hi" });
+    expect(a.w.view.get().lang).toBe("hi");
+    expect(app.lang()).toBe("hi");
+    a.win.dispatchEvent(new Event("offline"));
+    expect(a.spoken()).toContain(STRINGS.offline.hi);
+    expect((a.env.speech!.speak as ReturnType<typeof vi.fn>).mock.calls.at(-1)![1]).toBe("hi");
+    a.socket.emit({ t: "transcript", role: "user", text: "ரெண்டு", final: true, lang: "ta" });
+    expect(a.w.view.get().lang).toBe("ta");
+    a.socket.emit({ t: "transcript", role: "user", text: "two", final: false }); // a partial carries no lang
+    expect(a.w.view.get().lang).toBe("ta");
+    a.socket.emit({ t: "transcript", role: "user", text: "ヨーグルト", final: true, lang: "ja" });
+    expect(a.w.view.get().lang).toBe("en"); // no Japanese labels: English ones, never blank
+    expect(seen).toEqual(expect.arrayContaining(["hi", "ta", "en"]));
+  });
+
+  it("the language is never saved as a choice", () => {
+    const a = setup({ settings: { lang: "auto" }, env: { languages: ["hi-IN"] } });
+    a.socket.emit({ t: "transcript", role: "user", text: "ரெண்டு", final: true, lang: "ta" });
+    expect(JSON.parse(a.storage.getItem(SETTINGS_KEY)!).lang).toBe("auto");
   });
 });
 

@@ -10,7 +10,7 @@ from aira_live.tools import products
 from aira_live.vision.gemini import VisionError
 from aira_live.vision.identify import IdentifyResult, ProductRef
 
-MURUGAN_CATALOG = Path(__file__).resolve().parents[4] / "content" / "catalog" / "murugan_dairy.json"
+SUNRISE_CATALOG = Path(__file__).resolve().parents[4] / "content" / "catalog" / "murugan_dairy.json"
 
 CURD = ProductRef(sku="sakthi_curd_1l", name="Sakthi curd", brand="Sakthi", pack="1 L")
 MILK = ProductRef(sku="aavin_milk_500ml", name="Aavin milk", brand="Aavin", pack="0.5 L")
@@ -161,19 +161,19 @@ async def test_product_identify_vision_down_is_honest(wired, monkeypatch):
     assert out["say"] == "I can't reach the AI right now. Please try again in a minute."
 
 
-# --- the real business.catalog.resolve over the seeded Murugan Dairy catalog ----------------------------------
+# --- the real business.catalog.resolve over the seeded Sunrise Dairy catalog ----------------------------------
 
 
 @pytest.fixture
-async def murugan(fake_db, session, monkeypatch):
-    """Murugan Dairy seeded into both backends: business.store (catalog.resolve) and aira_live.db (shop_products)."""
-    data = seed.load_catalog(MURUGAN_CATALOG)
+async def sunrise(fake_db, session, monkeypatch):
+    """Sunrise Dairy seeded into both backends: business.store (catalog.resolve) and aira_live.db (shop_products)."""
+    data = seed.load_catalog(SUNRISE_CATALOG)
     store = MemoryStore()
     await seed.seed_into(store, data, env={})
     for p in data["products"]:
-        fake_db.store[("shops", "murugan_dairy", "products", p["sku"])] = dict(p)
+        fake_db.store[("shops", "sunrise_dairy", "products", p["sku"])] = dict(p)
     set_store(store)
-    session.shop_id = "murugan_dairy"
+    session.shop_id = "sunrise_dairy"
     monkeypatch.setattr(products, "get_session", lambda: session)
     yield session
     set_store(None)
@@ -183,38 +183,38 @@ def test_catalog_resolve_is_business_catalog():
     assert products.catalog_resolve is catalog.resolve
 
 
-async def test_location_remember_real_catalog_tamil_alias(murugan, fake_db):
-    murugan.lang = "ta"
+async def test_location_remember_real_catalog_tamil_alias(sunrise, fake_db):
+    sunrise.lang = "ta"
     out = await products.location_remember("தயிர்", "fridge two, middle shelf, left")
     assert out["zone"] == "fridge2/middle/left"
     assert out["say"].startswith("சேமித்தேன்: Sakthi Curd 1 L ")
-    doc = fake_db.store[("shops", "murugan_dairy", "locations", "sakthi_curd_1l")]
+    doc = fake_db.store[("shops", "sunrise_dairy", "locations", "sakthi_curd_1l")]
     assert doc["confirmedBy"] == "user" and doc["zone"] == "fridge2/middle/left"
 
 
-async def test_location_remember_real_catalog_size_hint(murugan, fake_db):
+async def test_location_remember_real_catalog_size_hint(sunrise, fake_db):
     out = await products.location_remember("half litre curd", "fridge 2 top shelf")
     assert out["zone"] == "fridge2/top"
-    assert ("shops", "murugan_dairy", "locations", "sakthi_curd_500ml") in fake_db.store
-    assert ("shops", "murugan_dairy", "locations", "sakthi_curd_1l") not in fake_db.store
+    assert ("shops", "sunrise_dairy", "locations", "sakthi_curd_500ml") in fake_db.store
+    assert ("shops", "sunrise_dairy", "locations", "sakthi_curd_1l") not in fake_db.store
 
 
-async def test_location_remember_real_catalog_unknown_saves_nothing(murugan, fake_db):
+async def test_location_remember_real_catalog_unknown_saves_nothing(sunrise, fake_db):
     out = await products.location_remember("biscuit", "counter")
     assert out == {"say": "I don't know the product \"biscuit\".", "zone": None}
     assert not any(p[2] in ("locations", "memoryEvents") for p in fake_db.store if len(p) > 2)
 
 
-async def test_shop_products_match_catalog_refs(murugan):
+async def test_shop_products_match_catalog_refs(sunrise):
     """identify / product_find compare a camera sku with a resolved ref: both sides must name packs the same."""
-    refs = await products.shop_products("murugan_dairy")
+    refs = await products.shop_products("sunrise_dairy")
     assert len(refs) == 10
     for ref in refs:
-        assert await catalog.resolve("murugan_dairy", ref.sku, "en") == ref
+        assert await catalog.resolve("sunrise_dairy", ref.sku, "en") == ref
 
 
-async def test_product_identify_real_catalog_speaks_pack(murugan, monkeypatch):
-    _identify_frame(murugan)
+async def test_product_identify_real_catalog_speaks_pack(sunrise, monkeypatch):
+    _identify_frame(sunrise)
 
     async def ident(frame, candidates):
         assert len(candidates) == 10

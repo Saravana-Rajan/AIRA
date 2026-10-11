@@ -98,10 +98,10 @@ def test_doc_id_for_deterministic():
 
 
 def test_paths_and_text_helpers():
-    assert paths.inventory("murugan_dairy", "aavin_milk_1l") == "shops/murugan_dairy/inventory/aavin_milk_1l"
-    assert paths.product("murugan_dairy", "sakthi_curd_1l") == "shops/murugan_dairy/products/sakthi_curd_1l"
-    assert paths.supplier("murugan_dairy", "aavin_vendor") == "shops/murugan_dairy/suppliers/aavin_vendor"
-    assert paths.audit("murugan_dairy", "a1") == "shops/murugan_dairy/auditLogs/a1"
+    assert paths.inventory("sunrise_dairy", "aavin_milk_1l") == "shops/sunrise_dairy/inventory/aavin_milk_1l"
+    assert paths.product("sunrise_dairy", "sakthi_curd_1l") == "shops/sunrise_dairy/products/sakthi_curd_1l"
+    assert paths.supplier("sunrise_dairy", "aavin_vendor") == "shops/sunrise_dairy/suppliers/aavin_vendor"
+    assert paths.audit("sunrise_dairy", "a1") == "shops/sunrise_dairy/auditLogs/a1"
     assert paths.idem("k").startswith("idempotency/") and len(paths.idem("k")) == len("idempotency/") + 40
     assert normalize_digits("௨ और ५") == "2 और 5"
     assert tokens("சக்தி தயிர், ௨ லிட்டர்") == ["சக்தி", "தயிர்", "2", "லிட்டர்"]
@@ -124,18 +124,18 @@ async def test_outbox_payloads_and_failure_is_swallowed():
 
     try:
         outbox.set_publisher(fake)
-        await outbox.inventory_movement("murugan_dairy", "t1", "sakthi_curd_1l", -2, "SALE")
-        await outbox.sale_lines("murugan_dairy", "s1", [{"sku": "sakthi_curd_1l", "qty": 2, "unitPrice": 60}])
-        await outbox.order_state("murugan_dairy", "o1", "ORDER_PLACED")
-        await outbox.discrepancies("murugan_dairy", "d1", _Result())
-        assert sent[0] == ("inventory-movements", {"shop_id": "murugan_dairy", "txn_id": "t1",
+        await outbox.inventory_movement("sunrise_dairy", "t1", "sakthi_curd_1l", -2, "SALE")
+        await outbox.sale_lines("sunrise_dairy", "s1", [{"sku": "sakthi_curd_1l", "qty": 2, "unitPrice": 60}])
+        await outbox.order_state("sunrise_dairy", "o1", "ORDER_PLACED")
+        await outbox.discrepancies("sunrise_dairy", "d1", _Result())
+        assert sent[0] == ("inventory-movements", {"shop_id": "sunrise_dairy", "txn_id": "t1",
                                                    "sku": "sakthi_curd_1l", "delta": -2.0, "reason": "SALE"})
         assert sent[1][0] == "sales" and sent[1][1]["unit_price"] == 60 and sent[1][1]["qty"] == 2.0
-        assert sent[2] == ("orders", {"shop_id": "murugan_dairy", "order_id": "o1", "state": "ORDER_PLACED"})
-        assert sent[3] == ("discrepancies", {"shop_id": "murugan_dairy", "delivery_id": "d1",
+        assert sent[2] == ("orders", {"shop_id": "sunrise_dairy", "order_id": "o1", "state": "ORDER_PLACED"})
+        assert sent[3] == ("discrepancies", {"shop_id": "sunrise_dairy", "delivery_id": "d1",
                                              "field": "SHORT:sakthi_curd_1l", "expected": 30, "actual": 28})
         assert sent[4][1]["field"] == "INVOICE_UNREADABLE" and sent[4][1]["expected"] is None
         outbox.set_publisher(broken)
-        await outbox.order_state("murugan_dairy", "o1", "CLOSED")   # logged, never raised
+        await outbox.order_state("sunrise_dairy", "o1", "CLOSED")   # logged, never raised
     finally:
         outbox.set_publisher(None)

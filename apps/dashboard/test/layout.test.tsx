@@ -39,7 +39,7 @@ describe("Layout", () => {
     expect(skip.getAttribute("href")).toBe("#main");
     const h1s = el.querySelectorAll("h1");
     expect(h1s).toHaveLength(1);
-    expect(text(h1s[0])).toContain("Murugan Dairy");
+    expect(text(h1s[0])).toContain("Sunrise Dairy");
     const nav = el.querySelector("nav[aria-label='Dashboard sections']")!;
     expect([...nav.querySelectorAll("a")].map((a) => text(a))).toEqual(["Overview", "Today", "Stock", "Orders & deliveries", "Audit trail", "Forecast"]);
     expect(el.querySelector("main#main")?.getAttribute("tabindex")).toBe("-1");
@@ -77,22 +77,22 @@ describe("Layout", () => {
 
 describe("Header", () => {
   it("says Live in words, with the last update time", () => {
-    const el = mount(<Header shopName="Murugan Dairy" status="live" updatedText="6:05 pm" />);
+    const el = mount(<Header shopName="Sunrise Dairy" status="live" updatedText="6:05 pm" />);
     expect(findAllByText(el, "[role=status]", "Live")).toHaveLength(1);
     expect(text(el)).toContain("Updated 6:05 pm");
     expect(el.querySelector(".live")!.className).toContain("live--live");
   });
 
   it("says Connecting or Offline when the data is not live", () => {
-    const a = mount(<Header shopName="Murugan Dairy" status="connecting" />);
+    const a = mount(<Header shopName="Sunrise Dairy" status="connecting" />);
     expect(findAllByText(a, "[role=status]", "Connecting…")).toHaveLength(1);
-    const b = mount(<Header shopName="Murugan Dairy" status="offline" />);
+    const b = mount(<Header shopName="Sunrise Dairy" status="offline" />);
     expect(findAllByText(b, "[role=status]", "Offline")).toHaveLength(1);
     expect(b.querySelector(".live")!.className).toContain("live--offline");
   });
 
   it("loads the logo from the Vite base path (served at /dashboard/)", () => {
-    const el = mount(<Header shopName="Murugan Dairy" status="live" />);
+    const el = mount(<Header shopName="Sunrise Dairy" status="live" />);
     const img = el.querySelector("img")!;
     expect(img.getAttribute("src")).toBe(`${import.meta.env.BASE_URL}aira-logo-192.png`);
   });

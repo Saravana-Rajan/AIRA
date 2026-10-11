@@ -1,34 +1,20 @@
 import "./onboarding.css";
 import { useEffect, useRef, useState } from "preact/hooks";
-import { LANGS, type Lang } from "@aira/contracts";
+import type { Lang } from "@aira/contracts";
 import type { Settings } from "../core/types";
+import { langFromPhone, phoneLanguages } from "../core/lang";
 import { DEFAULT_SETTINGS, DEMO_SHOP_ID } from "../core/settings";
-import { LANG_NAMES, ONBOARDING } from "../i18n/strings";
+import { ONBOARDING } from "../i18n/strings";
+
+export { langFromPhone };
 
 /** Shop names shown on screen. One user, one shop in this build. */
-export const SHOP_NAMES: Record<string, string> = { [DEMO_SHOP_ID]: "Murugan Dairy" };
+export const SHOP_NAMES: Record<string, string> = { [DEMO_SHOP_ID]: "Sunrise Dairy" };
 export const shopName = (id: string): string => SHOP_NAMES[id] ?? id;
-
-/** The first of the phone's languages that AIRA speaks; English otherwise. */
-export function langFromPhone(languages: readonly string[] = []): Lang {
-  for (const l of languages) {
-    const base = l.toLowerCase().split("-")[0];
-    if ((LANGS as readonly string[]).includes(base)) return base as Lang;
-  }
-  return "en";
-}
-
-const phoneLanguages = (): readonly string[] => {
-  try {
-    return navigator.languages?.length ? navigator.languages : [navigator.language];
-  } catch {
-    return [];
-  }
-};
 
 type Props = {
   onDone(s: Settings): void;
-  /** Saved settings. A returning owner keeps the saved language and TalkBack choice. */
+  /** Saved settings. A returning owner keeps the TalkBack choice and speech rate. */
   initial?: Settings;
   /** The phone's languages (tests inject them). */
   languages?: readonly string[];
@@ -40,14 +26,14 @@ const SPARK = "M50 4 C54 34 66 46 96 50 C66 54 54 66 50 96 C46 66 34 54 4 50 C34
 /**
  * One big Start tap. That tap is the user gesture the browser needs to unlock audio, the mic,
  * the camera and the wake lock, so `onDone` must run its setup synchronously inside it.
- * The labels follow the language picked here. Start takes focus, so a TalkBack user hears
- * "Start" first and can begin with one double-tap.
+ * There is nothing to pick: AIRA answers in whatever language the speaker uses, turn by turn. The labels on
+ * this screen are written in the phone's language (English for one the app has no labels for), which is
+ * also the hint for AIRA's very first line. Start takes focus, so a TalkBack user hears "Start" first and
+ * can begin with one double-tap.
  */
 export function Onboarding({ onDone, initial, languages }: Props) {
   const base: Settings = { ...DEFAULT_SETTINGS, ...initial };
-  const [lang, setLang] = useState<Lang>(() =>
-    initial?.onboarded ? base.lang : langFromPhone(languages ?? phoneLanguages()),
-  );
+  const [lang] = useState<Lang>(() => langFromPhone(languages ?? phoneLanguages()));
   const [srMode, setSr] = useState<boolean>(base.screenReaderMode);
   const done = useRef(false);
   const start = useRef<HTMLButtonElement>(null);
@@ -58,7 +44,7 @@ export function Onboarding({ onDone, initial, languages }: Props) {
   const finish = () => {
     if (done.current) return; // a double tap must not run setup twice
     done.current = true;
-    onDone({ ...base, lang, screenReaderMode: srMode, shopId: base.shopId || DEMO_SHOP_ID, onboarded: true });
+    onDone({ ...base, screenReaderMode: srMode, shopId: base.shopId || DEMO_SHOP_ID, onboarded: true });
   };
 
   const t = (k: keyof typeof ONBOARDING) => ONBOARDING[k][lang];
@@ -73,31 +59,7 @@ export function Onboarding({ onDone, initial, languages }: Props) {
         </span>
       </header>
       <p class="onboard__how">{t("howTo")}</p>
-
-      <fieldset class="onboard__langs">
-        <legend class="onboard__legend">{t("language")}</legend>
-        <span class="onboard__tiles">
-          {LANGS.map((l) => (
-            <label key={l} class="lang-tile" data-checked={l === lang ? "true" : undefined}>
-              <input
-                class="lang-tile__input"
-                type="radio"
-                name="aira-lang"
-                value={l}
-                checked={l === lang}
-                onChange={() => setLang(l)}
-              />
-              <span class="lang-tile__native" lang={l}>{LANG_NAMES[l].native}</span>
-              {LANG_NAMES[l].english !== LANG_NAMES[l].native ? (
-                <span class="lang-tile__english" lang="en">{LANG_NAMES[l].english}</span>
-              ) : null}
-              <svg class="lang-tile__tick" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-                <path d="M5 12.5l4.5 4.5L19 7.5" />
-              </svg>
-            </label>
-          ))}
-        </span>
-      </fieldset>
+      <p class="onboard__any">{t("anyLanguage")}</p>
 
       <label class="tb-switch">
         <input class="tb-switch__input" type="checkbox" role="switch" checked={srMode} onChange={() => setSr(!srMode)} />

@@ -55,8 +55,8 @@ def test_only_the_demo_shop_is_readable():
     readable = [" ".join(cond.split()) for ops, cond in _allows() if ops & READ_OPS and cond != "false"]
     allowlist = "', '".join(DASHBOARD_COLLECTIONS)
     assert readable == [
-        "shopId == 'murugan_dairy'",  # the shop doc
-        f"shopId == 'murugan_dairy' && coll in ['{allowlist}']",  # only what the dashboard draws
+        "shopId == 'sunrise_dairy'",  # the shop doc
+        f"shopId == 'sunrise_dairy' && coll in ['{allowlist}']",  # only what the dashboard draws
     ]
 
 
@@ -146,7 +146,7 @@ def emu():
     assert _call("PUT", f"/emulator/v1/projects/{PROJECT}:securityRules",
                  {"rules": {"files": [{"content": rules}]}}) == 200
     _call("DELETE", f"/emulator/v1/projects/{PROJECT}/databases/{DATABASE}/documents")
-    for path in ("shops/murugan_dairy", "shops/murugan_dairy/inventory/sakthi_curd_1l",
+    for path in ("shops/sunrise_dairy", "shops/sunrise_dairy/inventory/sakthi_curd_1l",
                  "shops/other_shop", "shops/other_shop/inventory/x", "idempotency/k1"):
         # "Bearer owner" is the emulator's admin bypass (the role aira-live's service account plays in prod).
         assert _call("PATCH", f"{DOCS}/{path}", {"fields": {"v": {"integerValue": "1"}}}, token="owner") == 200
@@ -156,18 +156,18 @@ def emu():
 @emulator
 @pytest.mark.parametrize("token", [None, _user_token("judge")])
 def test_anyone_can_read_the_demo_shop(emu, token):
-    assert _call("GET", f"{DOCS}/shops/murugan_dairy", token=token) == 200
-    assert _call("GET", f"{DOCS}/shops/murugan_dairy/inventory/sakthi_curd_1l", token=token) == 200
-    assert _call("GET", f"{DOCS}/shops/murugan_dairy/inventory", token=token) == 200
+    assert _call("GET", f"{DOCS}/shops/sunrise_dairy", token=token) == 200
+    assert _call("GET", f"{DOCS}/shops/sunrise_dairy/inventory/sakthi_curd_1l", token=token) == 200
+    assert _call("GET", f"{DOCS}/shops/sunrise_dairy/inventory", token=token) == 200
 
 
 @emulator
 @pytest.mark.parametrize("token", [None, _user_token("judge")])
 def test_no_client_can_write_the_demo_shop(emu, token):
-    assert _call("PATCH", f"{DOCS}/shops/murugan_dairy/inventory/sakthi_curd_1l", ON_HAND_99, token) == 403
-    assert _call("DELETE", f"{DOCS}/shops/murugan_dairy/inventory/sakthi_curd_1l", token=token) == 403
-    assert _call("POST", f"{DOCS}/shops/murugan_dairy/ledger", ON_HAND_99, token) == 403
-    assert _call("PATCH", f"{DOCS}/shops/murugan_dairy", ON_HAND_99, token) == 403
+    assert _call("PATCH", f"{DOCS}/shops/sunrise_dairy/inventory/sakthi_curd_1l", ON_HAND_99, token) == 403
+    assert _call("DELETE", f"{DOCS}/shops/sunrise_dairy/inventory/sakthi_curd_1l", token=token) == 403
+    assert _call("POST", f"{DOCS}/shops/sunrise_dairy/ledger", ON_HAND_99, token) == 403
+    assert _call("PATCH", f"{DOCS}/shops/sunrise_dairy", ON_HAND_99, token) == 403
 
 
 @emulator

@@ -1,6 +1,6 @@
 # Supplier bill photos for the invoice benchmark
 
-`bench/score_invoice.py` measures how well AIRA catches a wrong supplier bill before Murugan pays it:
+`bench/score_invoice.py` measures how well AIRA catches a wrong supplier bill before Sam pays it:
 
 | Metric | Meaning |
 |---|---|

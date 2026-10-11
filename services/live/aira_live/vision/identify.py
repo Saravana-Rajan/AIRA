@@ -1,4 +1,4 @@
-"""Which product is Murugan holding? ER 2 picks from a candidate list; code decides whether to trust it."""
+"""Which product is Sam holding? ER 2 picks from a candidate list; code decides whether to trust it."""
 from __future__ import annotations
 
 import json

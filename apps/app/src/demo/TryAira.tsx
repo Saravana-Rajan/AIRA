@@ -206,7 +206,7 @@ export function TryAira({
     setMissing(null);
     setConfirm(null);
     addLine(splitTitle(s.title).name, "scene");
-    addLine(`Murugan: “${s.prompt}”`, "sent");
+    addLine(`Sam: “${s.prompt}”`, "sent");
     const media = s.media;
     sendOrQueue({ t: "text", text: s.prompt }, media?.kind === "audio" ? () => playClip(media.src) : undefined);
     if (isNarrow()) scrollTo(liveRef.current);
@@ -296,7 +296,7 @@ export function TryAira({
           <h1>A blind shopkeeper runs his own shop. Alone.</h1>
           <p class="try-lede">
             AIRA is a voice in one ear and a phone on the chest. It counts deliveries, checks bills, guides
-            the hand to the right product and confirms every payment. Pick a moment from a day at Murugan Dairy
+            the hand to the right product and confirms every payment. Pick a moment from a day at Sunrise Dairy
             and watch it run on the real AIRA backend.
           </p>
           <div class="try-actions">
@@ -308,9 +308,9 @@ export function TryAira({
 
       <div class="try-body">
         <section id="try-day" class="try-day" aria-labelledby="try-day-title">
-          <h2 id="try-day-title">A day at Murugan Dairy</h2>
+          <h2 id="try-day-title">A day at Sunrise Dairy</h2>
           <p class="try-note">
-            Each moment sends what Murugan would say. Camera photos, clips and the soundbox recording stand in
+            Each moment sends what Sam would say. Camera photos, clips and the soundbox recording stand in
             for the phone's camera and microphone.
           </p>
           {DAY_PARTS.map((part) => (
@@ -376,7 +376,7 @@ export function TryAira({
               <p class="try-stage-note try-stage-audio">The shop's payment soundbox plays into AIRA's microphone stream.</p>
             )}
             {active && !media && <p class="try-stage-note">No camera needed. AIRA answers by voice.</p>}
-            {active && <figcaption>Murugan says: “{active.prompt}”</figcaption>}
+            {active && <figcaption>Sam says: “{active.prompt}”</figcaption>}
           </figure>
 
           <section class="try-panel" aria-labelledby="try-panel-title">
@@ -399,11 +399,11 @@ export function TryAira({
           <div class="try-voice">
             <button type="button" class="try-talk" onClick={talk} disabled={!!confirm}>Talk</button>
             <button type="button" class="try-stop" onClick={stop} disabled={!!confirm || status === "idle"}>Stop</button>
-            <p class="try-voice-note">Have a microphone? Press Talk and speak as Murugan.</p>
+            <p class="try-voice-note">Have a microphone? Press Talk and speak as Sam.</p>
           </div>
 
           <form class="try-typed" onSubmit={submitTyped}>
-            <label for="try-typed-input">No microphone? Type what Murugan would say.</label>
+            <label for="try-typed-input">No microphone? Type what Sam would say.</label>
             <input id="try-typed-input" value={typed} autoComplete="off"
               onInput={(e) => setTyped(e.currentTarget.value)} placeholder="For example: How much Sakthi curd is left?" />
             <button type="submit">Send</button>

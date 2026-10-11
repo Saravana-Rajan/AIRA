@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Murugan holds up the vendor's paper bill or a handful of cash, and AIRA reads it twice, independently. Code checks that the two reads agree and that the arithmetic adds up. AIRA then returns a trustworthy result (`InvoiceRead` / `CashRead`) that lists exactly which fields to read back when it is unsure.
+**Goal:** Sam holds up the vendor's paper bill or a handful of cash, and AIRA reads it twice, independently. Code checks that the two reads agree and that the arithmetic adds up. AIRA then returns a trustworthy result (`InvoiceRead` / `CashRead`) that lists exactly which fields to read back when it is unsure.
 
 **Architecture:** Two independent Gemini reads per image:
 
@@ -956,7 +956,7 @@ def merge_cash(raw_a: dict, raw_b: dict) -> CashRead:
 
 ```python
 # services/live/aira_live/vision/cash.py
-"""Read cash in Murugan's hand twice with different output shapes; code agrees and totals."""
+"""Read cash in Sam's hand twice with different output shapes; code agrees and totals."""
 from __future__ import annotations
 
 import asyncio

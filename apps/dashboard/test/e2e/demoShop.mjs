@@ -7,7 +7,7 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
-export const DEMO_SHOP_ID = "murugan_dairy";
+export const DEMO_SHOP_ID = "sunrise_dairy";
 /** A second shop the dashboard must never show, whatever the URL asks for. */
 export const OTHER_SHOP_ID = "someone_else";
 
@@ -39,7 +39,7 @@ function product(catalog, sku) {
   return p;
 }
 
-/** shops/murugan_dairy/inventory/sakthi_curd_1l: one batch that expires tomorrow (IST). */
+/** shops/sunrise_dairy/inventory/sakthi_curd_1l: one batch that expires tomorrow (IST). */
 export function curdInventoryDoc(nowMs, onHand) {
   return {
     path: `shops/${DEMO_SHOP_ID}/inventory/${CURD}`,

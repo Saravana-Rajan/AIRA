@@ -20,7 +20,7 @@ KEYWORD_PAGE = (
 
 
 def good_pages() -> list[str]:
-    pages = [f"Slide {n} of the AIRA deck for Murugan Dairy, with enough words to read" for n in range(1, 17)]
+    pages = [f"Slide {n} of the AIRA deck for Sunrise Dairy, with enough words to read" for n in range(1, 17)]
     pages[2] = KEYWORD_PAGE
     return pages
 

@@ -4,7 +4,7 @@ import pytest
 from aira_live.business.store import MemoryStore, set_store
 from aira_live.tools import _repo
 
-SHOP = "murugan_dairy"
+SHOP = "sunrise_dairy"
 
 
 @pytest.fixture

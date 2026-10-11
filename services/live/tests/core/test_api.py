@@ -8,7 +8,7 @@ from aira_live.analytics import forecast
 from aira_live.business import paths
 from aira_live.business.store import MemoryStore, set_store
 
-DEMO = "murugan_dairy"
+DEMO = "sunrise_dairy"
 CURD, MILK = "sakthi_curd_1l", "aavin_milk_500ml"
 
 

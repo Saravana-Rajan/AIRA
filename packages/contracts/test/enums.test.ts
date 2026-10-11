@@ -50,7 +50,7 @@ describe("enums match the interface registry", () => {
   });
 
   it("demo data: shop, 10 SKUs, suppliers and units", () => {
-    expect(DEMO_SHOP_ID).toBe("murugan_dairy");
+    expect(DEMO_SHOP_ID).toBe("sunrise_dairy");
     expect(DEMO_SKUS).toEqual([
       "aavin_milk_500ml", "aavin_milk_1l", "sakthi_curd_500ml", "sakthi_curd_1l", "aavin_buttermilk_200ml",
       "aavin_ghee_200ml", "aavin_ghee_500ml", "aavin_paneer_200g", "aavin_butter_100g", "arun_icecream_box",

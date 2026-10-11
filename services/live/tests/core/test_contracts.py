@@ -86,9 +86,9 @@ def test_server_fixture_round_trips_unchanged(raw):
 
 def test_hello_is_valid_without_id_token():
     hello = client_adapter.validate_python(
-        {"t": "hello", "uid": "u1", "shopId": "murugan_dairy", "lang": "ta", "verbosity": "short", "appVersion": "0.1.0"}
+        {"t": "hello", "uid": "u1", "shopId": "sunrise_dairy", "lang": "ta", "verbosity": "short", "appVersion": "0.1.0"}
     )
-    assert hello.id_token is None and hello.shop_id == "murugan_dairy" and hello.app_version == "0.1.0"
+    assert hello.id_token is None and hello.shop_id == "sunrise_dairy" and hello.app_version == "0.1.0"
 
 
 # ---------- enums mirror enums.ts ----------

@@ -1,14 +1,32 @@
-"""System prompt for the Live voice agent: shop context + language + safety rules."""
+"""System prompt for the Live voice agent: shop context + language rule + safety rules.
+
+There is no default and no fixed language. Live answers in the language of the speaker's last utterance and
+switches when he switches; the hello language only picks the words of the very first line.
+"""
 from __future__ import annotations
 
 from aira_live.db import db
 
-LANG_NAME = {"ta": "Tamil", "hi": "Hindi", "en": "English"}
-MIX = {
-    "ta": "Tamil-English mixing is fine and natural.",
-    "hi": "Hindi-English mixing is fine and natural.",
-    "en": "Simple Indian English.",
+# Names for the first-line hint (hello.lang, usually the phone's locale). Anything else reads as English.
+LANG_NAME = {
+    "ta": "Tamil", "hi": "Hindi", "en": "English", "te": "Telugu", "kn": "Kannada", "ml": "Malayalam",
+    "bn": "Bengali", "gu": "Gujarati", "pa": "Punjabi", "or": "Odia", "mr": "Marathi", "si": "Sinhala",
+    "ja": "Japanese", "ko": "Korean", "zh": "Chinese", "th": "Thai", "vi": "Vietnamese", "id": "Indonesian",
+    "ms": "Malay", "fil": "Filipino", "tl": "Filipino", "my": "Burmese", "km": "Khmer", "lo": "Lao",
 }
+
+
+def language_rule(lang: str) -> str:
+    """The one language rule: follow the speaker. ``lang`` is only the hint for the first line."""
+    name = LANG_NAME.get(lang, "English")
+    mix = f"{name}-English" if name != "English" else "Tamil-English"
+    return (
+        "LANGUAGE: Always reply in the language the speaker used in their last utterance. Switch immediately "
+        f"when they switch. Mixed {mix} is fine and natural; so is any language mixed with English. "
+        f"Never ask which language. Until the speaker has spoken, use {name}. "
+        "When a tool's 'say' text, a notice or a correction is written in another language, say it in the "
+        "speaker's language."
+    )
 
 
 def _num(x) -> str:
@@ -101,7 +119,7 @@ def render_prompt(shop: dict, products: list[dict], suppliers: list[dict], lang:
     )
     lines = [
         intro,
-        f"Speak {LANG_NAME.get(lang, 'English')}. {MIX.get(lang, MIX['en'])} {length}",
+        f"{language_rule(lang)} {length}",
         "RULES:",
         *RULES,
         "PRODUCTS (sku: name, pack, price):",

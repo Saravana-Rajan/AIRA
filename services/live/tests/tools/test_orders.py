@@ -1,7 +1,7 @@
 """Supplier order tools (kanish/02 Task 3): order_create (read-back -> confirm.propose) and order_status, plus the
 committers "order.send" and "order.mark_sent".
 
-Everything real runs: the engine (catalog, states, outbox, audit) on a MemoryStore seeded from the real Murugan
+Everything real runs: the engine (catalog, states, outbox, audit) on a MemoryStore seeded from the real Sam
 Dairy catalog, the foundation's confirm/session/ids, and messaging. Only the analytics publisher is faked, and
 `messaging.send_order` where a test needs a specific channel result. No test reaches Meta, Telegram or Firestore.
 """
@@ -20,7 +20,7 @@ from aira_live.tools import _repo, orders
 
 ROOT = Path(__file__).resolve().parents[4]
 CATALOG = ROOT / "content" / "catalog" / "murugan_dairy.json"
-SHOP = "murugan_dairy"
+SHOP = "sunrise_dairy"
 SUPPLIER_PHONES = {
     "SUPPLIER_AAVIN_PHONE": "+919000000001",
     "SUPPLIER_SAKTHI_PHONE": "+919000000002",

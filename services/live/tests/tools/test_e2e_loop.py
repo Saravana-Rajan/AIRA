@@ -1,4 +1,4 @@
-"""Murugan's whole shop loop end to end (kanish/02 Task 6), on the real engine with a MemoryStore.
+"""Sam's whole shop loop end to end (kanish/02 Task 6), on the real engine with a MemoryStore.
 
 Order 3 L Sakthi curd -> vendor message -> delivery counted one pack at a time -> invoice checked -> vendor paid in
 cash -> a customer buys 2 L curd by UPI, confirmed by the soundbox -> "how much curd is left?".
@@ -32,7 +32,7 @@ from aira_live.vision.invoice import InvoiceLine, InvoiceRead
 
 ROOT = Path(__file__).resolve().parents[4]
 CATALOG = ROOT / "content" / "catalog" / "murugan_dairy.json"
-SHOP = "murugan_dairy"
+SHOP = "sunrise_dairy"
 CURD = "sakthi_curd_1l"
 
 
@@ -147,7 +147,7 @@ def notified(monkeypatch):
 
 # ---------------------------------------------------------------------------------------------------- the loop
 
-async def test_murugan_full_loop(store, session, phone, proposals, notified, published, monkeypatch):
+async def test_sunrise_full_loop(store, session, phone, proposals, notified, published, monkeypatch):
     start = await ledger.on_hand(SHOP, CURD)
     product = await store.get(paths.product(SHOP, CURD))
 

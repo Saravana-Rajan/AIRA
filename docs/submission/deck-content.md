@@ -29,7 +29,7 @@ AIRA listens (Gemini Live), sees (Gemini Robotics-ER 2 and Gemini Flash), rememb
 exact books in deterministic code. It places supplier orders on Telegram, counts deliveries, checks bills,
 guides the owner's hand to the right product, checks cash and UPI soundbox payments, and warns about low stock
 and expiry. This is a meaningful use of Generative AI for accessibility, and a functional prototype deployed
-on Google Cloud (Cloud Run, Firestore, Firebase Hosting). It is built around one shop: Murugan Dairy
+on Google Cloud (Cloud Run, Firestore, Firebase Hosting). It is built around one shop: Sunrise Dairy
 (Aavin milk, Sakthi curd, Arun ice cream).
 
 ## Slide 4: Opportunities
@@ -65,7 +65,8 @@ instead of a guess; stock that changes exactly once (Firestore transactions + id
 10. Bump guard: an on-device obstacle warning (vibrate + beep) while walking in the shop, with no network.
 11. Offline sale queue: if the network drops mid-sale, the sale is queued on the phone and synced once.
 12. Shop Dashboard (web) for family, helpers and judges: live stock, sales, orders, discrepancies, audit trail.
-13. Accessible user experience: Tamil, Hindi and English; double-tap to talk, long-press to stop; works with
+13. Accessible user experience: speak any language, AIRA answers in it and switches with you (demo: Tamil and
+    English); double-tap to talk, long-press to stop; works with
     TalkBack; large live captions on screen.
 
 ## Slide 6: Process flow
@@ -83,7 +84,7 @@ Caption: "One shop loop. Nothing changes state without evidence and the owner's 
   - Sample exchange: Owner: "Customer wants 2 litres curd." AIRA: "Fridge 2, middle shelf, left… a little
     lower… that is Sakthi curd 1 litre. Take one more." Soundbox: "₹… received." AIRA: "Payment matched.
     Sale done."
-- **Shop Dashboard (`/dashboard`):** header with the logo, "Murugan Dairy" and a live dot. Cards: Today (sales,
+- **Shop Dashboard (`/dashboard`):** header with the logo, "Sunrise Dairy" and a live dot. Cards: Today (sales,
   revenue, top product) · Stock (low-stock and expiry badges) · Orders & Deliveries (state timeline, vendor
   replies, discrepancies in red) · Audit trail (time, actor, action, evidence). One column on a phone, two or
   three on a laptop.
@@ -100,7 +101,7 @@ Robotics-ER 2 counts and points, and two Gemini Flash generations read invoices 
 model proposes; deterministic code commits."
 
 ## Slide 9: Technologies used
-- **Gemini:** `gemini-3.8-live` (voice + tool calls, Tamil/Hindi/English, interruptible),
+- **Gemini:** `gemini-3.8-live` (voice + tool calls, follows the speaker's language turn by turn, interruptible),
   `gemini-robotics-er-2-preview` (count, point, identify), `gemini-3.8-flash` (invoice and cash read A; fallback
   for count and point), `gemini-3.6-flash` (independent read B and number check, a different model generation so
   the two reads are not correlated). Model fallback is switched from a Firestore runtime config document.
