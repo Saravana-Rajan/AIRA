@@ -6,7 +6,7 @@
   var VERSION = "aira-v1";
   var PRECACHE = ["/", "/index.html", "/manifest.webmanifest", "/icons/aira-logo-192.png", "/icons/aira-logo-512.png"];
 
-  var BYPASS_PATHS = ["/api/", "/webhooks/", "/__/", "/.well-known/", "/download/"];
+  var BYPASS_PATHS = ["/api/", "/webhooks/", "/__/", "/.well-known/", "/download/", "/version.json"];
   var CACHE_FIRST_PATHS = ["/assets/", "/demo/", "/models/", "/icons/"];
   var STATIC_EXT = /\.(js|mjs|css|png|jpe?g|webp|gif|svg|ico|woff2?|ttf|wasm|tflite|task|mp4|webm|wav|mp3|ogg)$/i;
 

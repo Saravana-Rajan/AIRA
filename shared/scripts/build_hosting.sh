@@ -36,6 +36,10 @@ for page in "$OUT/index.html" "$OUT/dashboard/index.html"; do
     exit 1
   fi
 done
+# version.json: what the downloads page shows as the latest update (the APK loads this live site).
+BUILD_SHA="${GITHUB_SHA:-$(git -C "$ROOT" rev-parse HEAD 2>/dev/null || echo local)}"
+printf '{"build":"%s","updated":"%s"}\n' "${BUILD_SHA:0:7}" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$OUT/version.json"
+
 # firebase deploy --config shared/infra/firebase.json only publishes folders inside shared/infra,
 # so mirror the bundle to shared/infra/public (git-ignored).
 DEPLOY_DIR="$ROOT/shared/infra/public"
