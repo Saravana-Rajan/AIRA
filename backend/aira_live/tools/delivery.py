@@ -31,6 +31,8 @@ COUNT_IDLE_S = 8.0           # stop counting after this long without a new frame
 COUNT_MAX_S = 180.0          # hard cap per count session (the tool is non-blocking)
 COUNT_KINDS = {"SHORT_DELIVERY", "OVER_DELIVERY", "UNORDERED_ITEM"}   # published when the count is saved
 OPEN_STATES = ["DELIVERY_PENDING", "DISCREPANCY"]
+# A bill can be checked until the vendor is paid, also after a matching count or an earlier matching bill.
+INVOICE_STATES = [*OPEN_STATES, "DELIVERY_RECONCILED"]
 _active: dict[str, str] = {}  # session_id → delivery_id
 
 
@@ -179,34 +181,80 @@ async def delivery_count(sku: str, mode: Literal["one_by_one", "crate"] = "one_b
         return {"ok": False, "say": t("k2.delivery.nothing_seen", s.lang, product=name)}
     qty = catalog.to_selling_units(product, packs, "pack")[0]
     await s.send(CountMsg(sku=real_sku, counted=packs, expected=expected_packs, final=True, confidence=conf))
-    prompt = t("k2.delivery.readback", s.lang, counted=f"{fmt_qty(qty)} {unit}", product=name,
-               expected=f"{fmt_qty(expected)} {unit}" if expected is not None else "0")
+    if expected_packs is not None and packs != expected_packs:      # the video: "28 packs ... Two may be missing"
+        key = "k2.delivery.readback_short" if packs < expected_packs else "k2.delivery.readback_over"
+        prompt = t(key, s.lang, counted=packs, product=name, expected=expected_packs,
+                   missing=expected_packs - packs, extra=packs - expected_packs)
+    else:
+        prompt = t("k2.delivery.readback", s.lang, counted=f"{fmt_qty(qty)} {unit}", product=name,
+                   expected=f"{fmt_qty(expected)} {unit}" if expected is not None else "0")
+    if line and line.get("countedQty") is not None and abs(float(line["countedQty"]) - qty) < 1e-9:
+        prompt = f"{t('k2.delivery.still', s.lang, counted=packs)} {prompt}"   # "Count again." -> "Still 28."
     kind = "discrepancy" if expected is None or abs(qty - expected) > 1e-9 else "generic"
-    payload = {"delivery_id": d["id"], "sku": real_sku, "qty": float(qty), "packs": packs, "method": mode,
-               "confidence": conf, "idem": ids.current_idem_key()}
+    payload = {"delivery_id": d["id"], "sku": real_sku, "qty": float(qty), "packs": packs,
+               "expected_packs": expected_packs, "method": mode, "confidence": conf, "idem": ids.current_idem_key()}
     return await confirm.propose(kind, prompt, payload, "delivery.record_count")
 
 
+def _saved_line(payload: dict, name: str, lang: str) -> str:
+    """"Recorded: 28 packs received, 2 short." The packs are what the owner handled; litres stay in the ledger."""
+    packs, expected = payload.get("packs"), payload.get("expected_packs")
+    if packs is None:
+        return t("k2.delivery.saved", lang, counted=fmt_qty(payload["qty"]), product=name)
+    if expected is None or packs == expected:
+        return t("k2.delivery.saved", lang, counted=packs, product=name)
+    if packs < expected:
+        return t("k2.delivery.saved_short", lang, counted=packs, missing=expected - packs)
+    return t("k2.delivery.saved_over", lang, counted=packs, extra=packs - expected)
+
+
+async def _mark_order(s: Session, d: dict) -> dict:
+    """Once every ordered product is counted, the order says what the count found: DISCREPANCY when anything is
+    short or extra (or an earlier bill check found a problem), else DELIVERY_RECONCILED. The vendor can then be paid
+    without waiting for the bill, and the dashboard shows the shortfall at once."""
+    order = await _repo.get_order(s.shop_id, d["orderId"])
+    if order is None:
+        return d
+    counted = {i["sku"]: float(i["countedQty"]) for i in d["items"] if i.get("countedQty") is not None}
+    found = [x for x in reconcile.compare(order["items"], counted, None).discrepancies if x["kind"] in COUNT_KINDS]
+    kept = [x for x in d.get("discrepancies") or [] if x["kind"] not in COUNT_KINDS]   # an earlier bill check
+    d = {**d, "discrepancies": found + kept}
+    if order["state"] in INVOICE_STATES and all(it["sku"] in counted for it in order["items"]):
+        target = "DISCREPANCY" if d["discrepancies"] else "DELIVERY_RECONCILED"
+        if order["state"] != target:
+            order = {**order, "state": transition("order", order["state"], target), "updatedAt": now_iso()}
+            await _repo.save_order(s.shop_id, order)
+            await outbox.order_state(s.shop_id, order["id"], target)
+        d["state"] = target
+    return d
+
+
 async def _commit_count(payload: dict, value: str | None) -> dict:
-    """Committer "delivery.record_count": the owner said yes to the count. Stock grows by the counted quantity."""
+    """Committer "delivery.record_count": the owner said yes to the count. Stock grows by the counted quantity;
+    a recount of the same product corrects it by the difference instead of adding it again."""
     s = get_session()
     d = await _repo.get_delivery(s.shop_id, payload["delivery_id"])
     if d is None:
         return {"ok": False, "say": t("k2.delivery.none", s.lang)}
     product = await _product(s.shop_id, payload["sku"])
     name = product.get("name") or payload["sku"]
-    saved = {"ok": True, "say": t("k2.delivery.saved", s.lang, counted=fmt_qty(payload["qty"]), product=name)}
+    saved = {"ok": True, "say": _saved_line(payload, name, s.lang)}
     line = next((i for i in d["items"] if i["sku"] == payload["sku"]), None)
     if line and line.get("countIdem") == payload["idem"]:       # retried confirm: nothing new
         return saved
     # ledger.apply is idempotent on the key too, so a crash between here and save_delivery cannot double stock.
-    await ledger.apply(s.shop_id, payload["sku"], payload["qty"], "DELIVERY", "delivery", d["id"], payload["idem"])
+    previous = float(line["countedQty"]) if line and line.get("countedQty") is not None else None
+    if previous is None:
+        await ledger.apply(s.shop_id, payload["sku"], payload["qty"], "DELIVERY", "delivery", d["id"], payload["idem"])
+    elif abs(payload["qty"] - previous) > 1e-9:                 # "Count again": only the difference moves stock
+        await ledger.apply(s.shop_id, payload["sku"], payload["qty"] - previous, "ADJUST", "delivery", d["id"],
+                           payload["idem"])
     if line is None:
         line = {"sku": payload["sku"], "name": name, "unit": product.get("unit", "pack"), "expectedQty": 0.0}
         d["items"].append(line)
     line.update(countedQty=payload["qty"], method=payload["method"], confidence=payload["confidence"],
                 countIdem=payload["idem"])
-    d = {**d, "updatedAt": now_iso()}
+    d = await _mark_order(s, {**d, "updatedAt": now_iso()})
     await _repo.save_delivery(s.shop_id, d)
     if abs(payload["qty"] - float(line["expectedQty"])) > 1e-9:
         order = await _repo.get_order(s.shop_id, d["orderId"])
@@ -233,11 +281,11 @@ async def invoice_check(order_id: str) -> dict:
     """Read the paper invoice twice and reconcile it with the order and the verified counts."""
     s = get_session()
     order = (await _repo.get_order(s.shop_id, order_id) if order_id
-             else await _repo.latest_order(s.shop_id, OPEN_STATES))
+             else await _repo.latest_order(s.shop_id, INVOICE_STATES))
     if order is None:
         return {"ok": False, "say": t("k2.order.none", s.lang)}
     d = await _repo.delivery_for_order(s.shop_id, order["id"])
-    if d is None or order["state"] not in OPEN_STATES:
+    if d is None or order["state"] not in INVOICE_STATES:
         return {"ok": False, "say": t("k2.delivery.none", s.lang)}
     frames = await s.request_frames("invoice", count=2, interval_ms=600)
     if not frames:
@@ -268,7 +316,11 @@ async def invoice_check(order_id: str) -> dict:
         say = t("k2.invoice.match", s.lang, total=inv.total)
     else:
         await s.send(CueMsg(cue="mismatch"))
-        say = await _say_discrepancies(s, result.discrepancies)
+        # What the bill got wrong first; the count's own shortfall was already said when it was counted.
+        say = await _say_discrepancies(s, invoice_only + [x for x in result.discrepancies if x["kind"] in COUNT_KINDS])
+        due = reconcile.payable(order["items"], counted)
+        if inv.total is not None and due and int(inv.total) != int(due):   # "The bill should be ₹980."
+            say = f"{say} {t('k2.invoice.should_be', s.lang, total=inv.total, payable=due)}"
     return {"ok": True, "orderId": order["id"], "state": target, "discrepancies": result.discrepancies, "say": say}
 
 

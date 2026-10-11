@@ -338,3 +338,98 @@ async def test_invoice_unreadable_asks_retake(store, session, phone, monkeypatch
     r = await delivery.invoice_check("o1")
     assert r["needs_retake"] is True and r["say"] == hints.say("INVOICE_UNREADABLE", "en")
     assert (await _repo.get_order(SHOP, "o1"))["state"] == "DELIVERY_PENDING"
+
+
+# ---------------------------------------------------------------------------------------------------- judge and video fixes
+
+async def _count_packs(phone, monkeypatch, n: int, call_id: str):
+    """One one-by-one count of n packs, as its own Live tool call (so its own idempotency key)."""
+    current_tool_call_id.set(call_id)
+    monkeypatch.setattr(delivery, "COUNT_IDLE_S", 0.2)
+    ids = {f"p{i}": CURD for i in range(1, n + 1)}
+    monkeypatch.setattr(vid, "identify_product", _identify_by_frame_id(ids))
+    t0 = 100_000 * int(call_id.rsplit("-", 1)[-1])            # each count's frames are newer than the last count's
+    frames = []
+    for i in range(1, n + 1):
+        frames += [(f"p{i}", t0 + 1600 * i), (f"g{i}", t0 + 800 + 1600 * i)]
+    phone.streams["identify"] = frames
+    return await delivery.delivery_count(CURD)
+
+
+async def test_a_recount_corrects_stock_instead_of_adding_it_again(store, session, phone, proposals, monkeypatch):
+    """The video's "Count again": two confirmed counts must leave stock at the second count, not the sum."""
+    await _placed(store)
+    await delivery.delivery_start()
+    before = await ledger.on_hand(SHOP, CURD)
+    await _count_packs(phone, monkeypatch, 3, "tc-count-1")
+    await delivery._commit_count(proposals[-1]["payload"], None)
+    await _count_packs(phone, monkeypatch, 2, "tc-count-2")
+    await delivery._commit_count(proposals[-1]["payload"], None)
+    assert await ledger.on_hand(SHOP, CURD) == before + 2.0
+    d = await _repo.get_delivery(SHOP, proposals[-1]["payload"]["delivery_id"])
+    assert d["items"][0]["countedQty"] == 2.0
+
+
+async def test_a_short_count_names_the_shortfall_and_offers_a_recount(store, session, phone, proposals, monkeypatch):
+    await _placed(store)
+    await delivery.delivery_start()
+    await _count_packs(phone, monkeypatch, 2, "tc-count-1")
+    assert proposals[-1]["prompt"] == ("I counted 2 packs of Sakthi Curd 1 L. The order was 3. "
+                                       "1 may be missing. Save 2, or shall I count again?")
+
+
+async def test_the_same_number_again_says_still(store, session, phone, proposals, monkeypatch):
+    await _placed(store)
+    await delivery.delivery_start()
+    await _count_packs(phone, monkeypatch, 2, "tc-count-1")
+    await delivery._commit_count(proposals[-1]["payload"], None)
+    await _count_packs(phone, monkeypatch, 2, "tc-count-2")
+    assert proposals[-1]["prompt"].startswith("Still 2. ")
+
+
+async def test_a_confirmed_short_count_marks_the_order_and_lets_the_vendor_be_paid(store, session, phone, proposals,
+                                                                                  monkeypatch):
+    from aira_live.tools import payments
+    await _placed(store)
+    await delivery.delivery_start()
+    await _count_packs(phone, monkeypatch, 2, "tc-count-1")
+    r = await delivery._commit_count(proposals[-1]["payload"], None)
+    assert r["say"] == "Recorded: 2 packs received, 1 short."
+    assert (await _repo.get_order(SHOP, "o1"))["state"] == "DISCREPANCY"
+    d = await _repo.get_delivery(SHOP, proposals[-1]["payload"]["delivery_id"])
+    assert [(x["kind"], x["expected"], x["actual"]) for x in d["discrepancies"]] == [("SHORT_DELIVERY", 3.0, 2.0)]
+    assert (await _repo.latest_order(SHOP, payments.PAYABLE_STATES))["id"] == "o1"
+
+
+async def test_a_full_count_marks_the_delivery_checked(store, session, phone, proposals, monkeypatch):
+    await _placed(store)
+    await delivery.delivery_start()
+    await _count_packs(phone, monkeypatch, 3, "tc-count-1")
+    r = await delivery._commit_count(proposals[-1]["payload"], None)
+    assert r["say"] == "Recorded: 3 packs of Sakthi Curd 1 L received."
+    assert (await _repo.get_order(SHOP, "o1"))["state"] == "DELIVERY_RECONCILED"
+
+
+async def test_a_wrong_bill_can_be_checked_after_a_correct_one(store, session, phone, proposals, monkeypatch):
+    """Judge scenes 4 then 5: the second bill used to get "No open order found"."""
+    await _placed(store)
+    await delivery.delivery_start()
+    await _count_packs(phone, monkeypatch, 3, "tc-count-1")
+    await delivery._commit_count(proposals[-1]["payload"], None)
+    phone.queued["invoice"] = ["i1", "i2"]
+    monkeypatch.setattr(vinv, "read_invoice", _invoice(3, 150))
+    ok = await delivery.invoice_check("")
+    assert ok["state"] == "DELIVERY_RECONCILED"
+    phone.queued["invoice"] = ["i3", "i4"]
+    monkeypatch.setattr(vinv, "read_invoice", _invoice(4, 200))
+    wrong = await delivery.invoice_check("")
+    assert wrong["state"] == "DISCREPANCY"
+
+
+async def test_a_wrong_bill_says_its_total_and_what_it_should_be(store, session, phone, monkeypatch):
+    """The video: "The bill says 30 litres, ₹1,050. Only 28 arrived. The bill should be ₹980." """
+    await _counted_delivery(store, counted=2.0)
+    phone.queued["invoice"] = ["i1", "i2"]
+    monkeypatch.setattr(vinv, "read_invoice", _invoice(3, 150))
+    r = await delivery.invoice_check("o1")
+    assert r["say"].endswith("The bill total is 150 rupees. It should be 100 rupees.")

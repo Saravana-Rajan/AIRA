@@ -11,7 +11,8 @@ _ORDER = {
     "ORDER_PLACED": {"DELIVERY_PENDING"},
     "DELIVERY_PENDING": {"DELIVERY_RECONCILED", "DISCREPANCY"},
     "DISCREPANCY": {"DELIVERY_RECONCILED", "PAYMENT_PENDING"},
-    "DELIVERY_RECONCILED": {"PAYMENT_PENDING"},
+    # A matching count can be followed by a bill that does not match (the bill is checked after the count).
+    "DELIVERY_RECONCILED": {"PAYMENT_PENDING", "DISCREPANCY"},
     "PAYMENT_PENDING": {"PAYMENT_CONFIRMED"},
     "PAYMENT_CONFIRMED": {"CLOSED"},
     "CLOSED": set(),
