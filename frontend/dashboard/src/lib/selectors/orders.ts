@@ -1,6 +1,6 @@
 import type { Delivery, Discrepancy, Order, Product, Supplier } from "@aira/contracts";
 import { toMs, type Normalized } from "../normalize";
-import { formatCount, formatPrice, formatQty, formatTimeIST, formatWhenIST, stateLabel } from "../format";
+import { formatCount, formatLineQty, formatPrice, formatTimeIST, formatWhenIST, isQtyUnit, stateLabel } from "../format";
 
 /** The happy path shown as a timeline. DISCREPANCY is a branch drawn at DELIVERY_RECONCILED. */
 export const ORDER_FLOW = [
@@ -106,21 +106,44 @@ export function deliveryByText(deliveryBy: unknown): string | null {
   return when ? `${words} (${when})` : words;
 }
 
+/**
+ * Names and measures order lines. Quantities are in the product's selling unit, as the backend stores them
+ * (litres for milk and curd, else packs/jars/boxes): the line's own unit first, then the catalog's.
+ */
+export function lineReader(products: Normalized<Product>[]) {
+  const bySku = new Map(products.map((p) => [p.id, p]));
+  const name = (sku: string, fallback?: unknown): string =>
+    textOrNull(bySku.get(sku)?.name) ?? textOrNull(fallback) ?? sku;
+  const qty = (sku: string, n: unknown, lineUnit?: unknown): string => {
+    const q = typeof n === "number" ? n : Number(n);
+    if (!Number.isFinite(q)) return "an unknown amount";
+    const p = bySku.get(sku);
+    return formatLineQty(q, isQtyUnit(lineUnit) ? lineUnit : p?.unit, p?.packSizeL);
+  };
+  return { name, qty };
+}
+export type LineReader = ReturnType<typeof lineReader>;
+
+/** "Aavin Milk 500 ml: 20 L (40 packs)" for each line of an order. */
+export function lineText(lines: LineReader, it: { sku: string; qty: unknown; unit?: unknown; name?: unknown }): string {
+  return `${lines.name(it.sku, it.name)}: ${lines.qty(it.sku, it.qty, it.unit)}`;
+}
+
+/**
+ * A DRAFT order was read back to the owner but never sent: he said no, or has not said yes yet. Only sent
+ * orders belong in the order list; a draft he later sends becomes ORDER_PLACED and moves across by itself.
+ */
+export function splitOrders(rows: OrderRow[]): { sent: OrderRow[]; notSent: OrderRow[] } {
+  return { sent: rows.filter((r) => r.state !== "DRAFT"), notSent: rows.filter((r) => r.state === "DRAFT") };
+}
+
 export function orderRows(
   orders: Normalized<Order>[], deliveries: Normalized<Delivery>[],
   suppliers: Normalized<Supplier>[], products: Normalized<Product>[],
   nowMs: number = Date.now(),
 ): OrderRow[] {
-  const productNames = new Map(products.map((p) => [p.id, p.name]));
   const supplierNames = new Map(suppliers.map((s) => [s.id, s.name]));
-  const productName = (sku: string, fallback?: unknown) =>
-    productNames.get(sku) ?? (typeof fallback === "string" && fallback ? fallback : sku);
-  const productUnits = new Map(products.map((p) => [p.id, p.unit]));
-  /** "28 L" for a catalog product; a bare number when the unit is unknown. */
-  const qty = (sku: string | null, n: number) => {
-    const unit = sku ? productUnits.get(sku) : undefined;
-    return unit ? formatQty(n, unit) : formatCount(n);
-  };
+  const lines = lineReader(products);
   const updated = (o: Normalized<Order>) => toMs(o.updatedAt);
 
   return [...orders]
@@ -132,7 +155,10 @@ export function orderRows(
         ? ORDER_FLOW.indexOf("DELIVERY_RECONCILED")
         : ORDER_FLOW.indexOf(state as OrderFlowState);
       const orderNames = new Map((o.items ?? []).map((it) => [it.sku, it.name]));
-      const label = (sku: string, fallback?: unknown) => productName(sku, textOrNull(fallback) ?? orderNames.get(sku));
+      const orderUnits = new Map((o.items ?? []).map((it) => [it.sku, it.unit]));
+      const label = (sku: string, fallback?: unknown) => lines.name(sku, textOrNull(fallback) ?? orderNames.get(sku));
+      /** In the order line's selling unit, with packs for pouches: "19 L (38 packs)"; a bare number when unknown. */
+      const qty = (sku: string | null, n: number) => (sku ? lines.qty(sku, n, orderUnits.get(sku)) : formatCount(n));
       const texts = deliveries
         .filter((d) => d.orderId === o.id)
         .flatMap((d) => {
@@ -156,9 +182,7 @@ export function orderRows(
       return {
         id: o.id,
         supplierName: supplierNames.get(o.supplierId) ?? textOrNull(o.supplierName) ?? o.supplierId,
-        itemsText: (o.items ?? [])
-          .map((it) => `${productName(it.sku, it.name)} × ${it.qty}`)
-          .join(", "),
+        itemsText: (o.items ?? []).map((it) => lineText(lines, it)).join(", "),
         state,
         stateLabel: stateLabel(state),
         stepIndex,

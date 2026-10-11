@@ -128,6 +128,7 @@ async def whatsapp_in(request: Request):
 START_RE = re.compile(r"^/start(?:@\w+)?\s+([a-z0-9_]{1,64})\.([0-9a-f]{20})\s*$", re.IGNORECASE)
 TAG_HEX = 20
 WELCOME = "AIRA: you will receive {shop} orders here."
+ONE_VENDOR_PER_PHONE = "AIRA: this phone already gets {vendor} orders. Use a different phone for each vendor."
 
 
 def tagged_start_param(supplier_id: str, secret: str) -> str:
@@ -177,6 +178,15 @@ async def _link_supplier(chat_id: str, supplier_id: str, tag: str) -> str | None
     store = get_store()
     doc = await store.get(path)
     if doc is None:
+        return None
+    current = await _repo.lookup_contact("telegram", chat_id, shop_id)
+    if current and current.get("supplierId") and current["supplierId"] != supplier_id:
+        # One chat speaks for one vendor: a plain reply could not tell whose order it answers.
+        other = await store.get(paths.supplier(shop_id, current["supplierId"])) or {}
+        try:
+            await telegram.send_message(chat_id, ONE_VENDOR_PER_PHONE.format(vendor=other.get("name") or current["supplierId"]))
+        except telegram.TelegramError as exc:
+            log.warning("telegram /start for %s refused (chat already linked); notice failed: %s", supplier_id, exc)
         return None
     linked = doc.get("telegramChatId")
     if linked and linked != chat_id:

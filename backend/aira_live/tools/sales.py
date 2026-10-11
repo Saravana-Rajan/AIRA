@@ -19,7 +19,8 @@ active_sale: dict[str, str] = {}   # session_id → pending sale id
 async def sale_start(items: list[dict]) -> dict:
     """A CUSTOMER asks for products, e.g. "2 litres curd and 1 paneer".
 
-    items: [{"product": "curd", "qty": 2, "unit": "L"}] (unit optional: the product's own unit). Opens a pending
+    items: [{"product": "curd", "qty": 2, "unit": "L"}]. Leave unit out when the customer only gave a count
+    ("2 milk"): a bare count means packs, never litres. Opens a pending
     sale and says the total. Then ask "cash or UPI?" and call sale_pay.
     """
     s = get_session()

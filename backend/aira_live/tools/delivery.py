@@ -40,30 +40,38 @@ _active: dict[str, str] = {}  # session_id → delivery_id
 class OnePassCounter:
     """Counts packs shown one at a time. Pure: feed it (timestamp, identified sku, confidence) per frame.
 
-    A pack counts when the SKU matches with confidence >= min_confidence and either it is the first pack, or an
-    absence was seen since the last counted pack and at least gap_ms have passed. A pack held in view never
-    counts twice; a short flicker is ignored.
+    A pack counts when the SKU matches with confidence >= min_confidence and either it is the first pack, or a
+    real absence was seen since the last counted pack and at least gap_ms have passed. A real absence is two
+    frames in a row without the pack, or a gap of absent_ms before it shows again: the phone streams 2 frames a
+    second, so one glare frame on a pack held still (500 ms) is not an absence. A pack held in view never counts
+    twice; a short flicker is ignored.
     """
     sku: str
     min_confidence: float = 0.7
     gap_ms: float = 1200.0
+    absent_ms: float = 700.0
     counted: int = 0
     confidences: list[float] = field(default_factory=list)
     _last_count_ts: float = 0.0
-    _absent: bool = False
+    _absent_frames: int = 0
+    _absent_since: float | None = None
 
     def observe(self, ts_ms: float, sku: str | None, confidence: float) -> bool:
         """Feed one identified frame. True when it adds a new pack."""
         if sku != self.sku or confidence < self.min_confidence:
-            self._absent = True
+            if self._absent_since is None:
+                self._absent_since = ts_ms
+            self._absent_frames += 1
             return False
-        if self.counted == 0 or (self._absent and ts_ms - self._last_count_ts >= self.gap_ms):
+        away = self._absent_frames >= 2 or (self._absent_since is not None
+                                            and ts_ms - self._absent_since >= self.absent_ms)
+        self._absent_frames, self._absent_since = 0, None
+        if self.counted == 0 or (away and ts_ms - self._last_count_ts >= self.gap_ms):
             self.counted += 1
             self.confidences.append(confidence)
-            self._last_count_ts, self._absent = ts_ms, False
+            self._last_count_ts = ts_ms
             return True
-        self._absent = False                                   # the same pack still (or again) in view
-        return False
+        return False                                           # the same pack still (or again) in view
 
     @property
     def confidence(self) -> float:
@@ -84,7 +92,10 @@ async def _resolve_sku(s: Session, spoken: str, delivery: dict) -> str | None:
 async def _current_delivery(s: Session) -> dict | None:
     did = _active.get(s.session_id)
     if did and (d := await _repo.get_delivery(s.shop_id, did)):
-        return d
+        order = await _repo.get_order(s.shop_id, d["orderId"])
+        if order is not None and order["state"] in INVOICE_STATES:     # still being checked: counts may go here
+            return d
+        _active.pop(s.session_id, None)        # paid or closed: a new order's packs must never land on it
     order = await _repo.latest_order(s.shop_id, OPEN_STATES)
     return await _repo.delivery_for_order(s.shop_id, order["id"]) if order else None
 
@@ -134,10 +145,10 @@ async def _count_one_by_one(s: Session, product: dict, expected_packs: int | Non
             after = frame.ts
             res = await vid.identify_product(frame, candidates)
             if counter.observe(frame.ts, res.sku, res.confidence):
+                # Keep counting past the ordered number: extra packs are real stock (the count stops when the owner
+                # stops showing packs, after COUNT_IDLE_S).
                 await s.send(CountMsg(sku=product["sku"], counted=counter.counted, expected=expected_packs,
                                       final=False, confidence=res.confidence))
-                if expected_packs is not None and counter.counted >= expected_packs:
-                    break
     finally:
         await s.send(RequestFrameMsg(purpose="identify", stop=True))
     return counter.counted, counter.confidence

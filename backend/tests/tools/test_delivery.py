@@ -433,3 +433,40 @@ async def test_a_wrong_bill_says_its_total_and_what_it_should_be(store, session,
     monkeypatch.setattr(vinv, "read_invoice", _invoice(3, 150))
     r = await delivery.invoice_check("o1")
     assert r["say"].endswith("The bill total is 150 rupees. It should be 100 rupees.")
+
+
+def test_one_blurry_frame_while_holding_a_pack_does_not_count_it_twice():
+    """Bug sweep: the phone streams 2 frames a second; one glare frame on a held pack made AIRA say "2"."""
+    c = OnePassCounter(CURD)
+    for ts, conf in [(0, 0.9), (500, 0.9), (1000, 0.9), (1500, 0.65), (2000, 0.9), (2500, 0.9)]:
+        c.observe(ts, CURD, conf)
+    assert c.counted == 1
+    c2 = OnePassCounter(CURD)
+    for ts, sku in [(0, CURD), (500, CURD), (1000, None), (1500, CURD), (2000, CURD)]:
+        c2.observe(ts, sku, 0.9)
+    assert c2.counted == 1
+
+
+async def test_counting_carries_on_past_the_ordered_number(store, session, phone, proposals, monkeypatch):
+    """Bug sweep: 5 packs arrived against 3 ordered, counting stopped at 3 and 2 packs never entered stock."""
+    await _placed(store)                                        # 3 L of 1 L packs ordered
+    await delivery.delivery_start()
+    await _count_packs(phone, monkeypatch, 5, "tc-count-1")
+    assert proposals[-1]["payload"]["packs"] == 5
+
+
+async def test_a_new_order_is_never_counted_against_an_old_paid_delivery(store, session, phone, proposals, monkeypatch):
+    await _placed(store)
+    first = await delivery.delivery_start()
+    await _count_packs(phone, monkeypatch, 3, "tc-count-1")
+    await delivery._commit_count(proposals[-1]["payload"], None)
+    paid = await _repo.get_order(SHOP, "o1")
+    await _repo.save_order(SHOP, {**paid, "state": "PAYMENT_CONFIRMED"})
+    p = await store.get(paths.product(SHOP, CURD))
+    await _repo.save_order(SHOP, {"id": "o2", "supplierId": "sakthi_vendor", "supplierName": "Sakthi curd vendor",
+                                  "state": "ORDER_PLACED", "lang": "en", "idemKey": "k-o2", "updatedAt": "2026-10-13T09:00:00",
+                                  "items": [{"sku": CURD, "name": p["name"], "qty": 6.0, "unit": "L", "agreedPrice": 50}]})
+    r = await _count_packs(phone, monkeypatch, 6, "tc-count-2")              # Gemini skipped delivery_start
+    assert r["ok"] is False and r["say"] == t("k2.delivery.none", "en")
+    old = await _repo.get_delivery(SHOP, first["deliveryId"])
+    assert old["items"][0]["countedQty"] == 3.0                               # the paid delivery is untouched

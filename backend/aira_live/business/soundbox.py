@@ -28,6 +28,13 @@ _NEGATIVE_PARTS = ("नहीं", "भेजे", "भेजा", "कटे", 
                    "वापस", "अनुरोध",
                    "இல்லை", "வில்லை", "அனுப்ப", "தோல்வி", "நிலுவை", "திருப்பி", "டெபிட்", "பிடித்தம்",
                    "கோரிக்கை")
+# What a person says, never a soundbox: a question, "my phone says", or a customer telling the owner "bhaiya, I sent
+# it". A soundbox announces in the third person and never asks.
+_PERSON_TOKENS = {"kya", "did", "i", "my", "me", "we", "our", "bhaiya", "bhai", "anna", "sir", "madam", "kar", "diye",
+                  "diya"}
+_PERSON_PARTS = ("phone says", "phone shows", "screen", "क्या", "मैंने", "मेरे", "मेरा", "भैया", "भाई", "कर दिए",
+                 "कर दिया", "दिए", "दिया",
+                 "அண்ணா", "நான்", "என்", "எனக்கு")
 # "ரத்து" (cancelled) as a word of its own: inside "ஆயிரத்து" (thousand-and) it is part of a number.
 _CANCELLED_TA = fold("ரத்து")
 _FRACTION_TOKENS = {"paise", "paisa", "point", "dot", "half", "quarter"}
@@ -92,6 +99,8 @@ def parse(transcript: str) -> SoundboxEvent | None:
     tok_set = set(toks)
     if _says(tok_set, text, _NEGATIVE_TOKENS, _NEGATIVE_PARTS) or any(t.startswith(_CANCELLED_TA) for t in toks):
         return None                                     # sent / failed / not received / refund / request / cancelled
+    if "?" in transcript or "？" in transcript or _says(tok_set, text, _PERSON_TOKENS, _PERSON_PARTS):
+        return None                                     # a question or a person talking: not the soundbox
     if _says(tok_set, text, _FRACTION_TOKENS, _FRACTION_PARTS):
         return None                                     # paise: cannot match a whole-rupee bill exactly
     if not _says(tok_set, text, _RECEIVED_TOKENS, _RECEIVED_PARTS):

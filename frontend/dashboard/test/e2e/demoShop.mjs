@@ -101,6 +101,7 @@ export function buildDemoShop(nowMs, catalog = loadCatalog()) {
       data: {
         id: "e2e_delivery_1", orderId: "e2e_order_1",
         items: [{ sku: CURD, expectedQty: 30, countedQty: 28, method: "one_by_one", confidence: 0.93 }],
+        // the shape business/reconcile.py stores: quantities in the product's selling unit (litres for curd)
         invoice: null, discrepancies: [{ kind: "SHORT_DELIVERY", sku: CURD, expected: 30, actual: 28 }], state: "DISCREPANCY",
       },
     },

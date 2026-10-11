@@ -486,6 +486,27 @@ a {
 .order__reply q {
   color: var(--text);
 }
+/* Orders read back to the owner but never sent (DRAFT): small plain text under the order cards, no track. */
+.drafts {
+  margin-top: 16px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+  color: var(--text-muted);
+  font-size: var(--text-small);
+}
+.drafts__title {
+  margin: 0;
+  color: var(--text);
+  font-size: var(--text-small);
+  font-weight: 700;
+}
+.drafts__note {
+  margin: 2px 0 6px;
+}
+.drafts__list {
+  margin: 0;
+  padding-left: 20px;
+}
 
 /* ---------- narrow cards ---------- */
 /* In a narrow card (a phone, the overview's side column) tables drop their secondary columns

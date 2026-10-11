@@ -626,3 +626,11 @@ def test_tools_that_take_an_order_id_say_an_empty_one_means_the_latest():
     for fn in (delivery.invoice_check, payments.supplier_pay):
         assert 'order_id: ""' in fn.__doc__ or "order_id: empty" in fn.__doc__, fn.__name__
     assert 'sale_id: ""' in payments.sale_pay.__doc__ or "sale_id: empty" in payments.sale_pay.__doc__
+
+
+async def test_a_count_without_a_unit_means_packs(store, session, proposals):
+    """Bug sweep: "2 milk" became 2 litres, which is 4 pouches. A bare count is packs; the read-back says both."""
+    await orders.order_create("aavin vendor", [{"product": "aavin milk 500 ml", "qty": 2}])
+    line = (await _repo.get_order(SHOP, proposals[0]["payload"]["order_id"]))["items"][0]
+    assert (line["sku"], line["qty"], line["unit"]) == ("aavin_milk_500ml", 1.0, "L")
+    assert "2 × 500 ml" in proposals[0]["prompt"]

@@ -483,3 +483,9 @@ async def test_expiry_counts_pouches_in_packs(store, session, monkeypatch):
     monkeypatch.setattr(clock, "today_ist", lambda: date(2026, 10, 13))
     r = await stock.expiry_check()
     assert "Aavin Milk 500 ml 8 packs" in r["say"] and "4 L" not in r["say"]
+
+
+async def test_two_milk_is_two_pouches_not_two_litres(store, session):
+    """Bug sweep: a customer's "2 milk" was charged as 2 litres (₹88) instead of 2 pouches (₹44)."""
+    r = await sale_tools.sale_start([{"product": "aavin milk 500 ml", "qty": 2}])
+    assert r["total"] == 44
