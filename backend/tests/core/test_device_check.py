@@ -62,7 +62,7 @@ async def test_a_clear_picture_passes_and_says_what_it_sees(vision):
     r = await post({"image": JPEG, "lang": "en", "device": "laptop"})
     assert r.status_code == 200
     assert r.json() == {"ok": True, "seen": "a person at a desk", "problem": None}
-    assert calls[0]["role"] == "read" and calls[0]["parts"][0] == ("image", JPEG)
+    assert calls[0]["role"] == "verify" and calls[0]["parts"][0] == ("image", JPEG)   # the faster Flash
     assert "English" in calls[0]["parts"][1]
 
 
