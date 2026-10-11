@@ -14,8 +14,10 @@ import "../ui/tokens.css";
 import "./try.css";
 
 const MAX_LINES = 80;
-/** The UPI prompt goes first; the soundbox clip follows once AIRA is listening for it. */
-const UPI_AUDIO_DELAY_MS = 2500;
+/** The UPI prompt goes first; the soundbox clip follows once AIRA is listening for it. The prompt opens a new
+ *  sale (sale_start) and only then does sale_pay start listening, and nothing heard before that is replayed.
+ *  A late clip costs a few seconds (sale_pay listens for 60 s); an early one is lost, so err late. */
+const UPI_AUDIO_DELAY_MS = 8000;
 
 type Status = "idle" | "connecting" | "live" | "error";
 type LineKind = "scene" | "aira" | "user" | "sent" | "ok" | "warn" | "error" | "event";

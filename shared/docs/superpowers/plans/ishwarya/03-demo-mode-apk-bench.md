@@ -381,8 +381,8 @@ describe("demo scenarios", () => {
   it("list exactly the media files that must be recorded", () => {
     expect(DEMO_MEDIA_FILES).toEqual([
       "/demo/delivery_one_by_one.mp4", "/demo/crate_sakthi_curd.jpg", "/demo/invoice_ok.jpg",
-      "/demo/invoice_wrong_qty.jpg", "/demo/cash_vendor_500x2.jpg", "/demo/sale_guidance.mp4",
-      "/demo/cash_customer_100.jpg", "/demo/soundbox_upi_60.wav",
+      "/demo/invoice_wrong_qty.jpg", "/demo/cash_vendor_500.jpg", "/demo/sale_guidance.mp4",
+      "/demo/cash_customer_120.jpg", "/demo/soundbox_upi_60.wav",
     ]);
   });
   it("every card has a spoken-style prompt", () => {
@@ -445,7 +445,7 @@ export interface Scenario {
   title: string;
   blurb: string;
   prompt: string; // sent as a `text` message, exactly as Sam would say it
-  media?: { kind: "video" | "image" | "audio"; src: string };
+  media?: { kind: "video" | "image" | "audio"; src: string; rupees?: number }; // rupees: what a money photo/clip shows
 }
 
 export const SCENARIOS: Scenario[] = [
@@ -459,14 +459,14 @@ export const SCENARIOS: Scenario[] = [
     prompt: "Check the Sakthi invoice.", media: { kind: "image", src: "/demo/invoice_ok.jpg" } },
   { id: "invoice-wrong", title: "5 · Check the invoice (wrong)", blurb: "The bill says 12 litres but 10 arrived. AIRA catches it.",
     prompt: "Check this Sakthi invoice.", media: { kind: "image", src: "/demo/invoice_wrong_qty.jpg" } },
-  { id: "pay-vendor", title: "6 · Pay the vendor in cash", blurb: "Notes in hand are read twice and totalled in code.",
-    prompt: "Pay the Sakthi vendor in cash.", media: { kind: "image", src: "/demo/cash_vendor_500x2.jpg" } },
+  { id: "pay-vendor", title: "6 · Pay the vendor in cash", blurb: "AIRA works out what is owed (10 L at ₹50 is ₹500), then reads the note in hand twice and checks it in code.",
+    prompt: "Pay the Sakthi vendor in cash.", media: { kind: "image", src: "/demo/cash_vendor_500.jpg", rupees: 500 } },
   { id: "sale-guide", title: "7 · Guide the hand to the product", blurb: "Location memory plus live pointing guide the hand to the curd.",
     prompt: "A customer wants 2 litres of Sakthi curd. Guide me.", media: { kind: "video", src: "/demo/sale_guidance.mp4" } },
-  { id: "sale-cash", title: "8 · Customer pays cash", blurb: "AIRA reads the note and gives the exact change.",
-    prompt: "The customer is paying cash for the curd.", media: { kind: "image", src: "/demo/cash_customer_100.jpg" } },
-  { id: "sale-upi", title: "9 · Customer pays by UPI", blurb: "AIRA listens to the shop's payment soundbox; a screenshot is never trusted.",
-    prompt: "The customer is paying by UPI.", media: { kind: "audio", src: "/demo/soundbox_upi_60.wav" } },
+  { id: "sale-cash", title: "8 · Customer pays cash", blurb: "AIRA reads the notes and totals them in code: ₹120 for 2 litres, so no change is due.",
+    prompt: "The customer is paying cash for the curd.", media: { kind: "image", src: "/demo/cash_customer_120.jpg", rupees: 120 } },
+  { id: "sale-upi", title: "9 · Customer pays by UPI", blurb: "A new customer buys 1 litre. AIRA listens to the shop's payment soundbox; a screenshot is never trusted.",
+    prompt: "A customer wants 1 litre of Sakthi curd and is paying by UPI.", media: { kind: "audio", src: "/demo/soundbox_upi_60.wav", rupees: 60 } },
   { id: "summary", title: "10 · End of day", blurb: "Sales, top seller, low stock and tomorrow's suggested order.",
     prompt: "How was today?" },
 ];
@@ -669,12 +669,12 @@ Record on the test phone in the demo dairy shop.
 | File | Content | Spec |
 |---|---|---|
 | `delivery_one_by_one.mp4` | Chest-camera view: 10 Sakthi curd 1 L pouches. Each is held towards the camera ~1.5 s, then placed into the fridge | 1280×720, H.264, ≤25 s, no audio |
-| `crate_sakthi_curd.jpg` | Top-down photo of one crate, 12 pouches visible, none overlapping more than half | ≤1600 px long side |
-| `invoice_ok.jpg` | Printed mock invoice, "Sakthi Dairy Distributor": 10 × Sakthi curd 1 L, unit price and total consistent | Flat, well lit, ≤1600 px |
-| `invoice_wrong_qty.jpg` | The same invoice but qty **12** (total adjusted), to trigger a discrepancy against the 10 counted | Same as above |
-| `cash_vendor_500x2.jpg` | Two ₹500 notes fanned in an open hand, chest-camera view | ≤1600 px |
+| `crate_sakthi_curd.jpg` | Top-down photo of one crate holding exactly **10** Sakthi curd 1 L pouches (the same delivery), none overlapping more than half | ≤1600 px long side |
+| `invoice_ok.jpg` | Printed mock invoice, "Sakthi Dairy Distributor": one line, Sakthi curd 1 L, qty **10**, unit price **₹50**, line total **₹500**; bill total **₹500** | Flat, well lit, ≤1600 px |
+| `invoice_wrong_qty.jpg` | The same invoice but qty **12**, unit price **₹50**, line total **₹600**, bill total **₹600**, to trigger a discrepancy against the 10 counted | Same as above |
+| `cash_vendor_500.jpg` | Exactly one ₹500 note, flat in an open hand, chest-camera view. Nothing else in the hand | ≤1600 px |
 | `sale_guidance.mp4` | Chest-camera view reaching into fridge 2, middle shelf, left, taking one Sakthi curd 1 L pouch | 1280×720, ≤15 s, no audio |
-| `cash_customer_100.jpg` | One ₹100 note in an open hand | ≤1600 px |
+| `cash_customer_120.jpg` | Exactly one ₹100 note and one ₹20 note side by side in an open hand, not overlapping, both values fully visible. Nothing else in the hand | ≤1600 px |
 | `soundbox_upi_60.wav` | Recording of a UPI payment soundbox announcing a ₹60 receipt, as it is heard in the shop | WAV PCM16, mono or stereo, 16–48 kHz, ≤6 s |
 ```
 
@@ -683,7 +683,7 @@ Record on the test phone in the demo dairy shop.
 Record the 8 files listed in `public/demo/README.md` and copy them to `frontend/app/public/demo/` with those exact names. Then run this check:
 
 ```bash
-cd frontend/app && node -e "const f=['delivery_one_by_one.mp4','crate_sakthi_curd.jpg','invoice_ok.jpg','invoice_wrong_qty.jpg','cash_vendor_500x2.jpg','sale_guidance.mp4','cash_customer_100.jpg','soundbox_upi_60.wav'];const fs=require('fs');const miss=f.filter(x=>!fs.existsSync('public/demo/'+x));const big=f.filter(x=>fs.existsSync('public/demo/'+x)&&fs.statSync('public/demo/'+x).size>8e6);console.log(JSON.stringify({miss,big}))"
+cd frontend/app && node -e "const f=['delivery_one_by_one.mp4','crate_sakthi_curd.jpg','invoice_ok.jpg','invoice_wrong_qty.jpg','cash_vendor_500.jpg','sale_guidance.mp4','cash_customer_120.jpg','soundbox_upi_60.wav'];const fs=require('fs');const miss=f.filter(x=>!fs.existsSync('public/demo/'+x));const big=f.filter(x=>fs.existsSync('public/demo/'+x)&&fs.statSync('public/demo/'+x).size>8e6);console.log(JSON.stringify({miss,big}))"
 ```
 
 Expected: `{"miss":[],"big":[]}`

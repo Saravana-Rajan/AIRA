@@ -12,8 +12,8 @@ describe("demo scenarios", () => {
   it("list exactly the media files that must be recorded", () => {
     expect(DEMO_MEDIA_FILES).toEqual([
       "/demo/delivery_one_by_one.mp4", "/demo/crate_sakthi_curd.jpg", "/demo/invoice_ok.jpg",
-      "/demo/invoice_wrong_qty.jpg", "/demo/cash_vendor_500x2.jpg", "/demo/sale_guidance.mp4",
-      "/demo/cash_customer_100.jpg", "/demo/soundbox_upi_60.wav",
+      "/demo/invoice_wrong_qty.jpg", "/demo/cash_vendor_500.jpg", "/demo/sale_guidance.mp4",
+      "/demo/cash_customer_120.jpg", "/demo/soundbox_upi_60.wav",
     ]);
   });
 

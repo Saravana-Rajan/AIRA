@@ -6,7 +6,13 @@ export interface Scenario {
   blurb: string;
   /** Sent as a `text` message, exactly as Sam would say it. */
   prompt: string;
-  media?: { kind: ScenarioMediaKind; src: string };
+  media?: {
+    kind: ScenarioMediaKind;
+    src: string;
+    /** Money scenes only: the rupees the photo or soundbox clip must show, so the recording matches what AIRA
+     *  works out from the catalog (shared/catalog/sunrise_dairy.json: Sakthi curd 1 L sells at ₹60, costs ₹50). */
+    rupees?: number;
+  };
 }
 
 export const SCENARIOS: Scenario[] = [
@@ -20,14 +26,14 @@ export const SCENARIOS: Scenario[] = [
     prompt: "Check the Sakthi invoice.", media: { kind: "image", src: "/demo/invoice_ok.jpg" } },
   { id: "invoice-wrong", title: "5 · Check the invoice (wrong)", blurb: "The bill says 12 litres but 10 arrived. AIRA catches it.",
     prompt: "Check this Sakthi invoice.", media: { kind: "image", src: "/demo/invoice_wrong_qty.jpg" } },
-  { id: "pay-vendor", title: "6 · Pay the vendor in cash", blurb: "Notes in hand are read twice and totalled in code.",
-    prompt: "Pay the Sakthi vendor in cash.", media: { kind: "image", src: "/demo/cash_vendor_500x2.jpg" } },
+  { id: "pay-vendor", title: "6 · Pay the vendor in cash", blurb: "AIRA works out what is owed (10 L at ₹50 is ₹500), then reads the note in hand twice and checks it in code.",
+    prompt: "Pay the Sakthi vendor in cash.", media: { kind: "image", src: "/demo/cash_vendor_500.jpg", rupees: 500 } },
   { id: "sale-guide", title: "7 · Guide the hand to the product", blurb: "Location memory plus live pointing guide the hand to the curd.",
     prompt: "A customer wants 2 litres of Sakthi curd. Guide me.", media: { kind: "video", src: "/demo/sale_guidance.mp4" } },
-  { id: "sale-cash", title: "8 · Customer pays cash", blurb: "AIRA reads the note and gives the exact change.",
-    prompt: "The customer is paying cash for the curd.", media: { kind: "image", src: "/demo/cash_customer_100.jpg" } },
-  { id: "sale-upi", title: "9 · Customer pays by UPI", blurb: "AIRA listens to the shop's payment soundbox; a screenshot is never trusted.",
-    prompt: "The customer is paying by UPI.", media: { kind: "audio", src: "/demo/soundbox_upi_60.wav" } },
+  { id: "sale-cash", title: "8 · Customer pays cash", blurb: "AIRA reads the notes and totals them in code: ₹120 for 2 litres, so no change is due.",
+    prompt: "The customer is paying cash for the curd.", media: { kind: "image", src: "/demo/cash_customer_120.jpg", rupees: 120 } },
+  { id: "sale-upi", title: "9 · Customer pays by UPI", blurb: "A new customer buys 1 litre. AIRA listens to the shop's payment soundbox; a screenshot is never trusted.",
+    prompt: "A customer wants 1 litre of Sakthi curd and is paying by UPI.", media: { kind: "audio", src: "/demo/soundbox_upi_60.wav", rupees: 60 } },
   { id: "summary", title: "10 · End of day", blurb: "Sales, top seller, low stock and tomorrow's suggested order.",
     prompt: "How was today?" },
 ];
