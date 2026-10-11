@@ -5,15 +5,16 @@ Everything real runs: the engine (catalog, states, outbox, audit) on a MemorySto
 Dairy catalog, the foundation's confirm/session/ids, and messaging. Only the analytics publisher is faked, and
 `messaging.send_order` where a test needs a specific channel result. No test reaches Meta, Telegram or Firestore.
 """
+import asyncio
 from pathlib import Path
 
 import pytest
 
 import aira_live.messaging as messaging
-from aira_live import confirm
+from aira_live import confirm, sessions
 from aira_live.business import hints, outbox, paths, seed
 from aira_live.business.store import MemoryStore, set_store
-from aira_live.contracts import ConfirmMsg, StateMsg
+from aira_live.contracts import ConfirmMsg, CueMsg, StateMsg, TranscriptMsg
 from aira_live.i18n import t
 from aira_live.session import Session, current_session, current_tool_call_id
 from aira_live.tools import _repo, orders
@@ -513,3 +514,97 @@ async def test_commit_send_telegram_fallback_says_the_bot_is_not_linked(store, s
                         "The order message is ready. Double-tap Send, then tell me when it is sent. "
                         "Did you send the order to Sakthi curd vendor?")
     assert r["reason"] == "telegram_not_linked"
+
+
+# ---------------------------------------------------------------------------------------------------- judges' demo vendor
+
+@pytest.fixture
+def judge(phone):
+    """A judge on the public link: the judge page gives every tab a "judge-" uid (frontend/app/src/demo/hello.ts)."""
+    s = Session("judge-k3x9a1b2", SHOP, "en", "short", phone)
+    tok_s, tok_c = current_session.set(s), current_tool_call_id.set("tc-1")
+    sessions.register(s)
+    yield s
+    sessions.unregister(s)
+    current_tool_call_id.reset(tok_c)
+    current_session.reset(tok_s)
+
+
+@pytest.fixture
+def instant_demo_reply(monkeypatch):
+    monkeypatch.setattr(orders, "DEMO_REPLY_DELAY_S", 0)
+
+
+async def _demo_replies_done() -> None:
+    await asyncio.gather(*list(orders._DEMO_REPLIES))
+
+
+async def test_judge_order_goes_to_the_demo_vendor_not_the_real_one(store, judge, proposals, phone, published,
+                                                                    instant_demo_reply, monkeypatch):
+    calls: list = []
+    monkeypatch.setattr(messaging, "send_order", fake_send({"channel": "telegram", "messageId": "77:12"}, calls))
+    payload = await _drafted(proposals)
+    r = await orders._commit_send(payload, None)
+    await _demo_replies_done()
+    assert calls == []                                       # a judge's order never reaches a real vendor
+    o = await _repo.get_order(SHOP, payload["order_id"])
+    assert (o["state"], o["channel"], o["channelMsgId"]) == ("ORDER_PLACED", "demo", f"demo-{o['id']}")
+    assert r["say"] == "Order sent to the demo Sakthi curd vendor. The reply comes in a few seconds."
+    assert ("orders", {"shop_id": SHOP, "order_id": o["id"], "state": "ORDER_PLACED"}) in published
+    logs = [d for _, d in await store.list(f"shops/{SHOP}/auditLogs")]
+    assert [(a["action"], a["outcome"]) for a in logs] == [("order_placed", "demo")]
+
+
+async def test_judge_hears_the_demo_reply_and_nobody_else_does(store, judge, proposals, phone, instant_demo_reply):
+    owner_phone = _Phone()
+    owner = Session("owner1", SHOP, "en", "short", owner_phone)
+    sessions.register(owner)
+    try:
+        payload = await _drafted(proposals)
+        await orders._commit_send(payload, None)
+        await _demo_replies_done()
+    finally:
+        sessions.unregister(owner)
+    said = [m.text for m in phone.of(TranscriptMsg)]
+    assert said == ["Demo reply from Sakthi curd vendor: OK, delivery today at 6 pm."]
+    assert [m.cue for m in phone.of(CueMsg)] == ["ack"]
+    assert owner_phone.msgs == []                            # the shop's own phone and other judges hear nothing
+
+
+async def test_demo_reply_is_never_stored_as_a_real_vendor_reply(store, judge, proposals, instant_demo_reply):
+    payload = await _drafted(proposals)
+    await orders._commit_send(payload, None)
+    await _demo_replies_done()
+    o = await _repo.get_order(SHOP, payload["order_id"])
+    assert "vendorReply" not in o                            # a reply is evidence; a demo vendor gives none
+
+
+async def test_demo_reply_echoes_the_delivery_time_the_judge_asked_for(store, judge, proposals, phone,
+                                                                      instant_demo_reply):
+    await orders.order_create("sakthi vendor", CURD_30L, delivery_by="6 am tomorrow")
+    await orders._commit_send(proposals[-1]["payload"], None)
+    await _demo_replies_done()
+    assert phone.of(TranscriptMsg)[-1].text == "Demo reply from Sakthi curd vendor: OK, I will deliver by 6 am tomorrow."
+
+
+async def test_demo_reply_speaks_the_judges_language(store, judge, proposals, phone, instant_demo_reply):
+    judge.lang = "ta"
+    payload = await _drafted(proposals)
+    r = await orders._commit_send(payload, None)
+    await _demo_replies_done()
+    assert r["say"] == t("k2.order.sent_demo", "ta", supplier="Sakthi curd vendor")
+    reply = t("k2.demo_vendor.reply", "ta")
+    assert phone.of(TranscriptMsg)[-1].text == t("k2.order.demo_vendor_replied", "ta", supplier="Sakthi curd vendor",
+                                                 text=reply)
+
+
+async def test_demo_reply_after_the_judge_left_is_dropped_quietly(store, judge, proposals, phone, instant_demo_reply):
+    async def gone(msg):
+        raise ConnectionError("socket closed")
+
+    payload = await _drafted(proposals)
+    await orders._commit_send(payload, None)
+    judge._send = gone
+    await _demo_replies_done()                               # no exception escapes the background reply
+    assert (await _repo.get_order(SHOP, payload["order_id"]))["state"] == "ORDER_PLACED"
+

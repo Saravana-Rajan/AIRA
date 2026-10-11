@@ -6,21 +6,35 @@ The model proposes, the backend commits: ``order_create`` only saves a DRAFT and
   When no message could go out, the phone opens a click-to-chat or ``tel:`` link (``OPEN_URL``), the order stays
   DRAFT, and AIRA asks whether the owner sent it.
 - ``order.mark_sent`` places the order once the owner says he sent it himself (channel ``manual``).
+- A judge's order (a session from the public judge page) goes to a demo vendor instead: it is placed on channel
+  ``demo``, no real vendor is messaged, and a few seconds later the demo vendor's reply is spoken to that judge
+  only. The demo reply is never stored as a vendor reply, because it is not evidence of what a vendor said.
 Quantities are stored in each product's selling unit (``catalog.to_selling_units``). A retried tool call reuses
 its draft (the doc id comes from ``ids.current_idem_key()``), and a placed order is never sent twice.
 """
+import asyncio
+import logging
+
 import aira_live.messaging as messaging
-from aira_live import confirm, ids
+from aira_live import confirm, ids, sessions
 from aira_live.business import audit, catalog, delivery_time, hints, outbox, paths
 from aira_live.business._ids import doc_id_for
 from aira_live.business.clock import now_iso
 from aira_live.business.states import transition
 from aira_live.business.store import get_store
-from aira_live.contracts import StateMsg
+from aira_live.contracts import CueMsg, StateMsg, TranscriptMsg
 from aira_live.i18n import t
 from aira_live.messaging.clicktochat import fmt_qty, items_text
 from aira_live.session import Session, get_session
 from aira_live.tools import _repo
+
+log = logging.getLogger(__name__)
+
+# The judge page gives every browser tab a "judge-" uid (frontend/app/src/demo/hello.ts). The shop's own phone
+# never does, so it keeps ordering from real vendors.
+JUDGE_UID_PREFIX = "judge-"
+DEMO_REPLY_DELAY_S = 4.0
+_DEMO_REPLIES: set[asyncio.Task] = set()   # holds each pending demo reply until it finishes
 
 # Orders worth reporting when the owner asks "what about my order?" (a DRAFT was never sent; CLOSED is done).
 ACTIVE_STATES = ["ORDER_PLACED", "DELIVERY_PENDING", "DELIVERY_RECONCILED", "DISCREPANCY",
@@ -181,6 +195,8 @@ async def _commit_send(payload: dict, value: str | None) -> dict:
         return {"ok": False, "say": t("k2.order.none", s.lang)}
     if order["state"] != "DRAFT":
         return {"ok": True, "orderId": order["id"], "say": t("k2.order.already", s.lang)}
+    if is_judge(s):                            # a judge's order never reaches a real vendor
+        return await _place_with_demo_vendor(s, order)
     res = await messaging.send_order(s.shop_id, await _supplier(s.shop_id, order["supplierId"]), order)
     if res.get("messageId"):
         return await _place(s, order, res["channel"], res["messageId"])
@@ -200,6 +216,39 @@ async def _commit_send(payload: dict, value: str | None) -> dict:
     if reason:
         out["reason"] = reason
     return out
+
+
+def is_judge(s: Session) -> bool:
+    return str(s.uid).startswith(JUDGE_UID_PREFIX)
+
+
+async def _place_with_demo_vendor(s: Session, order: dict) -> dict:
+    out = await _place(s, order, "demo", f"demo-{order['id']}")
+    out["say"] = t("k2.order.sent_demo", s.lang, supplier=order["supplierName"])
+    task = asyncio.create_task(_demo_vendor_reply(s, order["id"]))
+    _DEMO_REPLIES.add(task)
+    task.add_done_callback(_DEMO_REPLIES.discard)
+    return out
+
+
+async def _demo_vendor_reply(s: Session, order_id: str) -> None:
+    """After a short pause, speak the demo vendor's reply to this judge's session only (never ``sessions.notify``,
+    which would reach the shop's own phone and every other judge). A judge who already left is skipped quietly."""
+    try:
+        await asyncio.sleep(DEMO_REPLY_DELAY_S)
+        order = await _repo.get_order(s.shop_id, order_id)
+        if order is None or order["state"] != "ORDER_PLACED":
+            return
+        by = (order.get("deliveryBy") or {}).get("text")
+        reply = t("k2.demo_vendor.reply_by", s.lang, time=by) if by else t("k2.demo_vendor.reply", s.lang)
+        text = t("k2.order.demo_vendor_replied", s.lang, supplier=order["supplierName"], text=reply)
+        bridge = next((b for sess, b in sessions.by_shop(s.shop_id) if sess.session_id == s.session_id), None)
+        await s.send(TranscriptMsg(role="aira", text=text, final=True, lang=s.lang))
+        await s.send(CueMsg(cue="ack"))
+        if bridge is not None:
+            await bridge.speak_notice(text)
+    except Exception:
+        log.warning("demo vendor reply for order %s: session %s unreachable", order_id, s.session_id, exc_info=True)
 
 
 async def _commit_mark_sent(payload: dict, value: str | None) -> dict:
