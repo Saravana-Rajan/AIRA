@@ -360,3 +360,22 @@ async def test_send_order_whatsapp_fallback_has_no_telegram_reason(store, monkey
     supplier = {**(await supplier_doc(store, "sakthi_vendor")), "channel": "whatsapp"}
     res = await messaging.send_order(SHOP, supplier, ORDER)
     assert res["channel"] == "whatsapp_link" and "reason" not in res
+
+
+async def test_a_database_blip_after_sending_still_reports_the_order_as_sent(store, monkeypatch):
+    """Telegram delivered it; a failed index write must not make the owner's retry send it again."""
+    monkeypatch.setattr(telegram, "configured", lambda: True)
+    _no_whatsapp_api(monkeypatch)
+
+    async def fake_send(chat_id, text, **kw):
+        return "9"
+
+    async def broken(*a, **k):
+        raise RuntimeError("firestore unavailable")
+
+    monkeypatch.setattr(telegram, "send_message", fake_send)
+    monkeypatch.setattr(_repo, "index_message", broken)
+    monkeypatch.setattr(_repo, "index_contact", broken)
+    supplier = {**(await supplier_doc(store, "sakthi_vendor")), "telegramChatId": 555}
+    res = await messaging.send_order(SHOP, supplier, ORDER)
+    assert res == {"channel": "telegram", "messageId": "9"}

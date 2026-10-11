@@ -71,6 +71,8 @@ async def supplier_pay(order_id: str, method: Literal["cash", "upi"]) -> dict:
     cash: AIRA says which notes to take out and checks them with the camera. upi: the owner pays in his own UPI
     app and confirms. Either way the payment is recorded only after the owner says yes (confirm_action).
     If AIRA asks to show the notes again, call this again.
+    order_id: "" (empty) for the latest delivery waiting to be paid, which is almost always right. Only pass an
+    orderId that a tool returned; never make one up from a supplier or product name.
     """
     s = get_session()
     if method not in ("cash", "upi"):
@@ -164,6 +166,8 @@ async def sale_pay(sale_id: str, method: Literal["cash", "upi"]) -> dict:
 
     cash: the owner shows the customer's notes, then the change he gives back. upi: AIRA listens for the shop's
     payment soundbox. Completing the sale always waits for the owner's yes (confirm_action).
+    sale_id: "" (empty) for the sale that is open now, which is almost always right. Only pass a saleId that
+    sale_start returned; never make one up.
     """
     s = get_session()
     sale = await _sale(s, sale_id)

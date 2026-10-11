@@ -102,6 +102,8 @@
   "k2.order.mark_sent_q": "क्या आपने {supplier} को ऑर्डर भेज दिया?",
   "k2.order.already": "वह ऑर्डर पहले ही भेजा जा चुका है।",
   "k2.order.vendor_replied": "{supplier} का जवाब: {text}",
+  "k2.order.telegram_down": "Telegram से अभी नहीं भेज पाया।",
+  "k2.order.vendor_replied_old": "पिछले ऑर्डर के बारे में {supplier} का जवाब: {text}",
   "k2.order.sent_demo": "डेमो {supplier} को ऑर्डर भेज दिया। कुछ ही सेकंड में जवाब आएगा।",
   "k2.order.demo_vendor_replied": "डेमो {supplier} का जवाब: {text}",
   "k2.demo_vendor.reply": "ठीक है, आज शाम 6 बजे डिलीवरी।",

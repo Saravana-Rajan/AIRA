@@ -58,7 +58,7 @@ async def whatsapp_verify(request: Request):
     q = request.query_params
     expected = os.getenv("WHATSAPP_VERIFY_TOKEN")
     token = q.get("hub.verify_token") or ""
-    if q.get("hub.mode") == "subscribe" and expected and hmac.compare_digest(token, expected):
+    if q.get("hub.mode") == "subscribe" and expected and hmac.compare_digest(token.encode(), expected.encode()):
         return PlainTextResponse(q.get("hub.challenge", ""))
     return Response(status_code=403)
 
@@ -75,7 +75,7 @@ def _signature_ok(body: bytes, header: str | None) -> bool:
     if not header or not header.startswith("sha256="):
         return False
     digest = hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
-    return hmac.compare_digest(digest, header[len("sha256="):])
+    return hmac.compare_digest(digest.encode(), header[len("sha256="):].encode())   # bytes: odd characters are a 403
 
 
 def _dicts(value) -> list[dict]:
@@ -237,6 +237,12 @@ async def _apply_reply(channel: str, msg_key: str | None, contact: str, text: st
     if ref:
         shop_id = ref["shopId"]
         order = await _repo.get_order(shop_id, ref["orderId"])
+        if order is not None and contact:
+            # A swipe-reply from a chat that no longer speaks for this supplier (the vendor re-linked a new phone)
+            # is ignored, the same as a plain message from it.
+            who = await _repo.lookup_contact(channel, contact, shop_id)
+            if who is not None and who.get("supplierId") != order.get("supplierId"):
+                return False
     if order is None:
         who = await _repo.lookup_contact(channel, contact) if contact else None
         if not who or not who.get("supplierId"):  # unknown, or a chat unlinked by a re-link
@@ -251,5 +257,7 @@ async def _apply_reply(channel: str, msg_key: str | None, contact: str, text: st
     await _repo.save_order(shop_id, {**order, "vendorReply": {"text": text, "at": now, "channel": channel},
                                      "updatedAt": now})
     supplier = order.get("supplierName") or order.get("supplierId", "")
-    await _notify(shop_id, t("k2.order.vendor_replied", order.get("lang") or "en", supplier=supplier, text=text))
+    # A reply to an order that is no longer open (last week's, already paid) must not sound like news about today's.
+    key = "k2.order.vendor_replied" if order.get("state") in OPEN_STATES else "k2.order.vendor_replied_old"
+    await _notify(shop_id, t(key, order.get("lang") or "en", supplier=supplier, text=text))
     return True

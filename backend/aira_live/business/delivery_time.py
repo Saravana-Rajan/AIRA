@@ -66,8 +66,10 @@ def parse_delivery_by(text: str | None, now: datetime | None = None) -> dict | N
 
     hint: str | None = None
     part_hour: int | None = None
-    for word, (hour, ampm) in _PART_WORDS.items():
-        if word in s:
+    # Longest first and whole words for English: "afternoon" contains "noon", "midnight" contains "night".
+    for word, (hour, ampm) in sorted(_PART_WORDS.items(), key=lambda kv: -len(kv[0])):
+        found = re.search(rf"\b{word}\b", s) if word.isascii() else word in s
+        if found:
             part_hour, hint = hour, ampm
             break
 

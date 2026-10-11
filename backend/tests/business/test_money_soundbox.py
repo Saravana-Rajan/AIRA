@@ -209,3 +209,10 @@ def test_soundbox_rejects(transcript):
 ])
 def test_soundbox_rejects_more(transcript):
     assert soundbox.parse(transcript) is None
+
+
+def test_spoken_tamil_120_and_1200_are_read_right():
+    """Bug sweep: colloquial "நூத்தி" (100) was skipped, and "ரத்து" (cancelled) matched inside "ஆயிரத்து"."""
+    assert soundbox.parse("நூத்தி இருபது ரூபாய் பெறப்பட்டது").amount == 120
+    assert soundbox.parse("ஆயிரத்து இருநூறு ரூபாய் பெறப்பட்டது").amount == 1200
+    assert soundbox.parse("அறுபது ரூபாய் ரத்து செய்யப்பட்டது") is None    # a real cancellation still refuses

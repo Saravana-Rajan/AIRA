@@ -71,6 +71,20 @@ export function formatTimeIST(ms: number): string {
   return TIME_IST.format(ms).replace(/[  ]/g, " ");
 }
 
+const DAY_MONTH_IST = new Intl.DateTimeFormat("en-IN", { timeZone: "Asia/Kolkata", day: "numeric", month: "short" });
+
+/**
+ * A time with its day when it is not today (IST): "6:05 pm", "Yesterday, 6:05 pm", "8 Oct, 6:05 pm".
+ * Older rows looked the same as today's when only the time was shown.
+ */
+export function formatWhenIST(ms: number, nowMs: number = Date.now()): string {
+  const days = Math.round((startOfDayIST(nowMs) - startOfDayIST(ms)) / DAY_MS);
+  const time = formatTimeIST(ms);
+  if (days === 0) return time;
+  if (days === 1) return `Yesterday, ${time}`;
+  return `${DAY_MONTH_IST.format(ms)}, ${time}`;
+}
+
 const STATE_LABELS: Record<string, string> = {
   DRAFT: "Draft",
   ORDER_PLACED: "Order placed",

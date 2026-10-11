@@ -1,6 +1,6 @@
 import type { Delivery, Discrepancy, Order, Product, Supplier } from "@aira/contracts";
 import { toMs, type Normalized } from "../normalize";
-import { formatCount, formatPrice, formatQty, formatTimeIST, stateLabel } from "../format";
+import { formatCount, formatPrice, formatQty, formatTimeIST, formatWhenIST, stateLabel } from "../format";
 
 /** The happy path shown as a timeline. DISCREPANCY is a branch drawn at DELIVERY_RECONCILED. */
 export const ORDER_FLOW = [
@@ -109,6 +109,7 @@ export function deliveryByText(deliveryBy: unknown): string | null {
 export function orderRows(
   orders: Normalized<Order>[], deliveries: Normalized<Delivery>[],
   suppliers: Normalized<Supplier>[], products: Normalized<Product>[],
+  nowMs: number = Date.now(),
 ): OrderRow[] {
   const productNames = new Map(products.map((p) => [p.id, p.name]));
   const supplierNames = new Map(suppliers.map((s) => [s.id, s.name]));
@@ -164,7 +165,7 @@ export function orderRows(
         isDiscrepancy,
         vendorReply: textOrNull(o.vendorReply?.text),
         discrepancyTexts,
-        updatedText: updatedMs !== null ? formatTimeIST(updatedMs) : "",
+        updatedText: updatedMs !== null ? formatWhenIST(updatedMs, nowMs) : "",
         deliveryByText: deliveryByText(o.deliveryBy),
         note: textOrNull(o.note),
       };

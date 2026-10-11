@@ -205,8 +205,10 @@ async def _commit_send(payload: dict, value: str | None) -> dict:
     first = t("k2.order.call" if res.get("channel") == "call" else "k2.order.fallback", s.lang,
               supplier=order["supplierName"], items=items_text(order["items"]))
     reason = res.get("reason")
-    if reason and reason.startswith("telegram"):   # never silent: say why the Telegram bot did not send it
+    if reason == "telegram_not_linked":            # never silent: say why the Telegram bot did not send it
         first = f"{t('k2.order.no_telegram', s.lang, supplier=order['supplierName'])} {first}"
+    elif reason and reason.startswith("telegram"):  # down or not set up: not the vendor's doing
+        first = f"{t('k2.order.telegram_down', s.lang)} {first}"
     follow = await confirm.propose("generic", t("k2.order.mark_sent_q", s.lang, supplier=order["supplierName"]),
                                    {"order_id": order["id"], "idem": payload.get("idem") or order.get("idemKey")},
                                    "order.mark_sent")

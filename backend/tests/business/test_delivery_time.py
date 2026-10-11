@@ -56,3 +56,11 @@ def test_note_is_trimmed_capped_and_sanitised():
     assert clean_note("x" * 200) == "x" * 140
     for s in ("", "   ", None, "no", "none", "nothing", "no note"):
         assert clean_note(s) is None
+
+
+def test_afternoon_is_not_read_as_noon_and_midnight_is_not_night():
+    """Bug sweep: "afternoon" contains "noon" and "midnight" contains "night"; both went to the vendor wrong."""
+    assert parse_delivery_by("tomorrow afternoon", now=NOW)["at"] == "2026-10-12T14:00:00+05:30"
+    assert parse_delivery_by("before midnight", now=NOW)["at"] is None    # left unread rather than guessed
+    assert parse_delivery_by("tonight", now=NOW)["at"] == "2026-10-11T20:00:00+05:30"
+    assert parse_delivery_by("tomorrow noon", now=NOW)["at"] == "2026-10-12T12:00:00+05:30"

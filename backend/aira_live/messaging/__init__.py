@@ -20,6 +20,15 @@ def _whatsapp_enabled() -> bool:
     return remote_config.flag("whatsapp_enabled", True)
 
 
+async def _index_quietly(channel: str, msg_key: str, contact: str, shop_id: str, order_id: str, supplier_id: str) -> None:
+    """The message already went out. A failed index write is logged, never raised: raising would leave the order a
+    DRAFT, and the owner's retried "yes" would send the vendor the same order twice."""
+    try:
+        await _repo.index_message(channel, msg_key, shop_id, order_id)
+        await _repo.index_contact(channel, contact, shop_id, supplier_id)
+    except Exception:
+        log.warning("order %s sent on %s, but its reply index was not saved", order_id, channel, exc_info=True)
+
 async def send_order(shop_id: str, supplier: dict, order: dict) -> dict:
     """Send `order` ({id, items: [{name, qty, unit}]}) to `supplier` ({id, phone, channel, telegramChatId?}).
 
@@ -54,8 +63,7 @@ async def send_order(shop_id: str, supplier: dict, order: dict) -> dict:
                 log.warning("telegram order %s to %s failed: %s", order["id"], supplier.get("id"), exc)
                 reason = "telegram_failed"
             else:
-                await _repo.index_message("telegram", f"{chat}:{mid}", shop_id, order["id"])
-                await _repo.index_contact("telegram", chat, shop_id, supplier["id"])
+                await _index_quietly("telegram", f"{chat}:{mid}", chat, shop_id, order["id"], supplier["id"])
                 return {"channel": "telegram", "messageId": mid}
         log.warning("telegram order %s to %s not sent (%s): falling back to click-to-chat",
                     order["id"], supplier.get("id"), reason)
@@ -67,8 +75,7 @@ async def send_order(shop_id: str, supplier: dict, order: dict) -> dict:
         except whatsapp.WhatsAppError as exc:
             log.warning("whatsapp order %s to %s failed: %s", order["id"], supplier.get("id"), exc)
         else:
-            await _repo.index_message("whatsapp", mid, shop_id, order["id"])
-            await _repo.index_contact("whatsapp", to, shop_id, supplier["id"])
+            await _index_quietly("whatsapp", mid, to, shop_id, order["id"], supplier["id"])
             return {"channel": "whatsapp", "messageId": mid}
 
     out = {"channel": "whatsapp_link", "fallbackUrl": clicktochat.wa_link(phone, text)}

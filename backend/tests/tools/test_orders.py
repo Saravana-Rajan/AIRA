@@ -608,3 +608,21 @@ async def test_demo_reply_after_the_judge_left_is_dropped_quietly(store, judge, 
     await _demo_replies_done()                               # no exception escapes the background reply
     assert (await _repo.get_order(SHOP, payload["order_id"]))["state"] == "ORDER_PLACED"
 
+
+
+async def test_a_telegram_outage_is_not_called_vendor_not_on_the_bot(store, session, proposals, phone, monkeypatch):
+    payload = await _drafted(proposals)
+    monkeypatch.setattr(messaging, "send_order",
+                        fake_send({"channel": "whatsapp_link", "fallbackUrl": "https://wa.me/1?text=x",
+                                   "reason": "telegram_failed"}))
+    r = await orders._commit_send(payload, None)
+    assert "not on the AIRA Telegram bot" not in r["say"]
+    assert r["say"].startswith("The Telegram bot could not send it right now.")
+
+
+def test_tools_that_take_an_order_id_say_an_empty_one_means_the_latest():
+    """Gemini filled order_id with guesses like "sakthi_vendor" and got "No open order found"."""
+    from aira_live.tools import delivery, payments
+    for fn in (delivery.invoice_check, payments.supplier_pay):
+        assert 'order_id: ""' in fn.__doc__ or "order_id: empty" in fn.__doc__, fn.__name__
+    assert 'sale_id: ""' in payments.sale_pay.__doc__ or "sale_id: empty" in payments.sale_pay.__doc__

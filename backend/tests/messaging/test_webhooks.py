@@ -23,7 +23,7 @@ I18N_DIR = Path(__file__).resolve().parents[2] / "aira_live" / "i18n"
 K2_KEYS = {
     "k2.order.read_back", "k2.order.sent", "k2.order.fallback", "k2.order.call", "k2.order.mark_sent_q",
     "k2.order.already", "k2.order.vendor_replied", "k2.order.none", "k2.order.status", "k2.order.status_reply",
-    "k2.qty.both", "k2.order.no_telegram",
+    "k2.qty.both", "k2.order.no_telegram", "k2.order.telegram_down", "k2.order.vendor_replied_old",
     "k2.delivery.started", "k2.delivery.none", "k2.delivery.readback", "k2.delivery.saved",
     "k2.delivery.nothing_seen", "k2.delivery.readback_short", "k2.delivery.readback_over", "k2.delivery.still",
     "k2.delivery.saved_short", "k2.delivery.saved_over", "k2.invoice.should_be",
@@ -447,3 +447,42 @@ async def test_a_linked_vendor_reply_reaches_the_owner_after_start(store, notifi
     assert r.json()["handled"] == 1
     assert (await _repo.get_order(SHOP, "o9"))["vendorReply"]["text"] == "OK 6 pm"
     assert notified == [(SHOP, "Sakthi curd vendor replied: OK 6 pm", "ack")]
+
+
+# ---------------------------------------------------------------- quick fixes (bug sweep)
+
+async def test_odd_characters_in_the_verify_token_are_a_403_not_a_crash(monkeypatch):
+    monkeypatch.setenv("WHATSAPP_VERIFY_TOKEN", "vt")
+    async with client() as c:
+        r = await c.get("/webhooks/whatsapp", params={"hub.mode": "subscribe", "hub.verify_token": "é",
+                                                      "hub.challenge": "1"})
+    assert r.status_code == 403
+
+
+async def test_odd_characters_in_the_signature_are_a_403_not_a_crash(store, notified):
+    async with client(sign=False) as c:
+        r = await c.post("/webhooks/whatsapp", content=b"{}",
+                         headers={"x-hub-signature-256": b"sha256=\xc3\xa9", "content-type": "application/json"})
+    assert r.status_code == 403 and notified == []
+
+
+async def test_a_reply_to_an_old_order_says_it_is_about_an_earlier_order(store, notified):
+    await _order("o_old", "CLOSED", "2026-10-05T10:00:00")
+    await _repo.index_message("telegram", "555:70", SHOP, "o_old")
+    update = {"message": {"chat": {"id": 555}, "text": "Not today, sorry", "reply_to_message": {"message_id": 70}}}
+    async with client() as c:
+        r = await c.post("/webhooks/telegram", json=update, headers=TG)
+    assert r.json()["handled"] == 1
+    assert notified == [(SHOP, "About an earlier order, Sakthi curd vendor replied: Not today, sorry", "ack")]
+
+
+async def test_a_vendors_old_phone_no_longer_speaks_for_them_after_a_relink(store, notified):
+    await _order("o5", "ORDER_PLACED", "2026-10-12T10:00:00")
+    await _repo.index_message("telegram", "555:71", SHOP, "o5")
+    await _repo.unlink_contact("telegram", "555")               # the vendor moved to a new phone
+    update = {"message": {"chat": {"id": 555}, "text": "Cancel it, pay cash to my boy",
+                          "reply_to_message": {"message_id": 71}}}
+    async with client() as c:
+        r = await c.post("/webhooks/telegram", json=update, headers=TG)
+    assert r.json()["handled"] == 0 and notified == []
+    assert "vendorReply" not in await _repo.get_order(SHOP, "o5")

@@ -102,6 +102,8 @@
   "k2.order.mark_sent_q": "{supplier}-க்கு ஆர்டர் அனுப்பினீர்களா?",
   "k2.order.already": "அந்த ஆர்டர் ஏற்கனவே அனுப்பப்பட்டது.",
   "k2.order.vendor_replied": "{supplier} பதில்: {text}",
+  "k2.order.telegram_down": "Telegram மூலம் இப்போது அனுப்ப முடியவில்லை.",
+  "k2.order.vendor_replied_old": "முந்தைய ஆர்டர் பற்றி {supplier} பதில்: {text}",
   "k2.order.sent_demo": "டெமோ {supplier}-க்கு ஆர்டர் அனுப்பப்பட்டது. சில வினாடிகளில் பதில் வரும்.",
   "k2.order.demo_vendor_replied": "டெமோ {supplier} பதில்: {text}",
   "k2.demo_vendor.reply": "சரி, இன்று மாலை 6 மணிக்கு டெலிவரி.",
