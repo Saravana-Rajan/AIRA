@@ -40,7 +40,7 @@ async def shop_products(shop_id: str) -> list[ProductRef]:
     out: list[ProductRef] = []
     async for snap in coll.stream():
         d = snap.to_dict() or {}
-        if d.get("name"):
+        if d.get("name") and d.get("active") is not False:      # a product disabled by voice is not a candidate
             out.append(ProductRef(sku=snap.id, name=str(d["name"]), brand=str(d.get("brand", "")), pack=_pack(d)))
     return out
 

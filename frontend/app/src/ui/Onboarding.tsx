@@ -31,6 +31,8 @@ const SPARK = "M50 4 C54 34 66 46 96 50 C66 54 54 66 50 96 C46 66 34 54 4 50 C34
  * also the hint for AIRA's very first line. Start takes focus, so a TalkBack user hears "Start" first and
  * can begin with one double-tap. The whole screen sits in one phone-width column (tokens.css
  * `--phone-width`), so a laptop shows a centred phone rather than a page stretched edge to edge.
+ * The Start card is a centred stack (badge, "Start", one-line hint) that fills the rest of a phone
+ * screen, so it is still one huge tap target without being an empty slab.
  */
 export function Onboarding({ onDone, initial, languages }: Props) {
   const base: Settings = { ...DEFAULT_SETTINGS, ...initial };
@@ -54,14 +56,13 @@ export function Onboarding({ onDone, initial, languages }: Props) {
     <main class="onboard" lang={lang}>
       <div class="onboard__col">
       <header class="onboard__head">
-        <img class="onboard__logo" src="/icons/aira-logo-192.png" alt="" width={64} height={64} />
+        <img class="onboard__logo" src="/icons/aira-logo-192.png" alt="" width={48} height={48} />
         <span class="onboard__titles">
           <h1 class="onboard__title">AIRA</h1>
           <span class="onboard__shop">{shopName(base.shopId || DEMO_SHOP_ID)}</span>
         </span>
       </header>
-      <p class="onboard__how">{t("howTo")}</p>
-      <p class="onboard__any">{t("anyLanguage")}</p>
+      <p class="onboard__intro">{t("howTo")} {t("anyLanguage")}</p>
 
       <label class="tb-switch">
         <input class="tb-switch__input" type="checkbox" role="switch" checked={srMode} onChange={() => setSr(!srMode)} />
@@ -80,17 +81,11 @@ export function Onboarding({ onDone, initial, languages }: Props) {
         aria-describedby="aira-start-hint"
         onClick={finish}
       >
-        <svg class="onboard__spark" viewBox="0 0 100 100" aria-hidden="true" focusable="false">
-          <defs>
-            <linearGradient id="aira-spark-grad" x1="0" y1="0" x2="1" y2="1">
-              <stop class="onboard__stop onboard__stop--1" offset="0" />
-              <stop class="onboard__stop onboard__stop--2" offset="0.4" />
-              <stop class="onboard__stop onboard__stop--3" offset="0.7" />
-              <stop class="onboard__stop onboard__stop--4" offset="1" />
-            </linearGradient>
-          </defs>
-          <path d={SPARK} fill="url(#aira-spark-grad)" />
-        </svg>
+        <span class="onboard__badge" aria-hidden="true">
+          <svg class="onboard__spark" viewBox="0 0 100 100" focusable="false">
+            <path d={SPARK} fill="currentColor" />
+          </svg>
+        </span>
         <span id="aira-start-label" class="onboard__start-label">{t("start")}</span>
         <span id="aira-start-hint" class="onboard__start-hint">{t("startHint")}</span>
       </button>

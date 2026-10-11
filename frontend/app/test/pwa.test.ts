@@ -333,6 +333,12 @@ describe.skipIf(!existsSync(MANIFEST))("manifest (foundation file)", () => {
     expect(m.start_url).toBe("/");
     expect(m.display).toBe("standalone");
   });
+  it("has a 'Talk to AIRA' shortcut to /?start=1 (Android app shortcuts, Assistant)", () => {
+    expect(m.shortcuts).toEqual([
+      expect.objectContaining({ name: "Talk to AIRA", url: "/?start=1" }),
+    ]);
+    for (const i of m.shortcuts[0].icons ?? []) expect(existsSync(appPath(`public${i.src}`))).toBe(true);
+  });
   it("has 192 and 512 icons that the service worker precaches and the logo folder provides", () => {
     const sizes = m.icons.map((i: any) => i.sizes);
     expect(sizes).toContain("192x192");

@@ -5,7 +5,14 @@ import type { Lang } from "@aira/contracts";
 type S = Record<Lang, string>;
 
 /** Spoken (or written to the screen-reader region) for local status the server cannot know. */
-export const STRINGS: Record<"offline" | "online" | "reconnecting" | "paused" | "listening" | "confirmPending" | "micBlocked" | "notSent", S> = {
+export const STRINGS: Record<
+  "offline" | "online" | "reconnecting" | "paused" | "listening" | "confirmPending" | "micBlocked" | "notSent" | "greeting" | "tapToStart",
+  S
+> = {
+  // hands-free start (core/autostart.ts): AIRA's first line when the app opened straight into listening, and
+  // the one-line instruction when the browser wanted a tap first.
+  greeting:       { en: "AIRA is ready. Just talk.", ta: "AIRA தயார். பேசுங்கள்.", hi: "AIRA तैयार है। बोलिए।" },
+  tapToStart:     { en: "Tap anywhere to start.", ta: "தொடங்க எங்காவது தட்டுங்கள்.", hi: "शुरू करने के लिए कहीं भी टैप करें।" },
   micBlocked:     { en: "Microphone is blocked. Allow it in settings.", ta: "மைக் அனுமதி இல்லை. அமைப்பில் அனுமதியுங்கள்.", hi: "माइक बंद है। सेटिंग में अनुमति दें।" },
   notSent:        { en: "Not sent. No connection. Try again.", ta: "அனுப்பவில்லை. இணையம் இல்லை. மீண்டும் முயலுங்கள்.", hi: "नहीं भेजा। कनेक्शन नहीं है। फिर कोशिश करें।" },
   offline:        { en: "Offline. Sales are saved and will sync.", ta: "இணையம் இல்லை. விற்பனை சேமிக்கப்படுகிறது.", hi: "ऑफ़लाइन। बिक्री सेव हो रही है।" },

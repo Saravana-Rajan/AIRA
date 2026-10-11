@@ -1,4 +1,4 @@
-"""Spoken strings in ta, hi and en, plus ``detect_lang``.
+"""Spoken strings in ta, hi and en, plus ``detect_lang`` and the sticky ``follow_lang``.
 
 AIRA has no default and no fixed language: it answers in whatever language the speaker used last. The
 catalogs here only cover the fixed lines (hints, confirmations, errors) in Tamil, Hindi and English; every
@@ -10,12 +10,12 @@ import json
 from functools import lru_cache
 from pathlib import Path
 
-from aira_live.i18n.detect import detect_lang
+from aira_live.i18n.detect import detect_lang, follow_lang
 
 _DIR = Path(__file__).parent
 LANGS = ("ta", "hi", "en")  # the languages with a catalog file; not a limit on what AIRA speaks
 
-__all__ = ["LANGS", "detect_lang", "t"]
+__all__ = ["LANGS", "detect_lang", "follow_lang", "t"]
 
 
 @lru_cache(maxsize=None)

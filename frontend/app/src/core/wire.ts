@@ -14,7 +14,7 @@ import { createDispatcher } from "./dispatch";
 import type { AppApi, HapticName, Settings } from "./types";
 import { STRINGS } from "../i18n/strings";
 import { PlaybackQueue } from "../voice/playback";
-import { playEarcon } from "../voice/earcons";
+import { playEarcon, type EarconName } from "../voice/earcons";
 import { startMic, type StartMicOpts } from "../voice/mic";
 import { announceToRegion } from "../ui/ScreenReaderRegion";
 import { initialScreen, reduceScreen, type LocalEvent, type ScreenState } from "../ui/screenState";
@@ -47,7 +47,7 @@ export interface WireEnv {
   createSocket(url: string): SocketLike;
   createAudioContext(): AudioContext | null;
   createPlayback(ctx: AudioContext): PlaybackLike;
-  playEarcon(ctx: AudioContext, n: CueName): void;
+  playEarcon(ctx: AudioContext, n: EarconName): void;
   vibrate(n: HapticName): void;
   /** Client TTS for local status and fallbacks. Null where speechSynthesis is missing. */
   speech: { speak(text: string, lang: Lang, rate: number): void; cancel(): void } | null;
@@ -104,6 +104,13 @@ export interface WiredApp {
   onTalk(): void;
   /** Long-press: "no" to a pending confirm, otherwise a hard stop. */
   onStop(): void;
+  /**
+   * Hands-free start (core/autostart.ts, ui/AppShell): opens the mic with no tap. Resolves true once the mic
+   * streams, after the local "listening" earcon and a short greeting; false when the browser refused (no user
+   * gesture on this origin yet, or the permission was not persisted). Nothing is spoken on failure: the
+   * caller shows the Start screen and says "Tap anywhere to start".
+   */
+  startListening(): Promise<boolean>;
   /**
    * For ops that must survive a dropped connection: queued under `idemKey` (never twice) and
    * sent in order now or on the next reconnect. True when it went out now.
@@ -339,7 +346,7 @@ export function wireApp(opts: WireOpts): WiredApp {
         // The owner is still speaking: no thinking sound yet. When he finishes, start the 1.5 s wait.
         if (m.final) thinking.arm();
         else thinking.disarm();
-        if (mic || micOpening) armMicIdle();
+        if (mic || micOpen) armMicIdle();
       }
       dispatch(m);
     }),
@@ -347,7 +354,7 @@ export function wireApp(opts: WireOpts): WiredApp {
 
   // ---- mic ----
   let mic: { stop(): void } | null = null;
-  let micOpening = false;
+  let micOpen: Promise<boolean> | null = null; // an open in flight
   let micIdle: ReturnType<typeof setTimeout> | null = null;
   let micGen = 0; // bumps on every stop, so a mic that opens after a stop is closed at once
 
@@ -367,18 +374,22 @@ export function wireApp(opts: WireOpts): WiredApp {
   const stopMic = () => {
     micGen++;
     clearMicIdle();
-    micOpening = false;
+    micOpen = null;
     if (mic) tryRun(() => mic!.stop());
     mic = null;
     if (view.level !== 0) setView({ level: 0 });
   };
-  const openMic = () => {
+  /**
+   * Resolves true once the mic streams (or already does), false when it could not open. `quiet` skips the
+   * warning, the "Microphone is blocked" line and the screen reset: the hands-free start handles that itself.
+   */
+  const openMic = (quiet = false): Promise<boolean> => {
     armMicIdle();
-    if (mic || micOpening) return;
-    micOpening = true;
+    if (mic) return Promise.resolve(true);
+    if (micOpen) return micOpen;
     const gen = micGen;
     let lastLevel = 0;
-    env
+    micOpen = env
       .startMic({
         onChunk: (b64) => { api.send({ t: "audio", pcm16: b64 }); },
         onLevel: (lv) => {
@@ -388,20 +399,43 @@ export function wireApp(opts: WireOpts): WiredApp {
         },
       })
       .then((h) => {
-        if (disposed || gen !== micGen) { tryRun(() => h.stop()); return; }
-        micOpening = false;
+        if (disposed || gen !== micGen) { tryRun(() => h.stop()); return false; }
+        micOpen = null;
         mic = h;
+        return true;
       })
       .catch((e: unknown) => {
-        if (gen !== micGen) return;
-        micOpening = false;
+        if (gen !== micGen) return false;
+        micOpen = null;
         clearMicIdle();
         thinking.disarm();
+        if (quiet) return false;
         api.earcon("warn");
         api.haptic("warn");
         if ((e as { name?: string })?.name === "NotAllowedError") api.speak(STRINGS.micBlocked[lang()]);
         local("stop");
+        return false;
       });
+    return micOpen;
+  };
+
+  // ---- hands-free start ----
+  // No ack earcon and no thinking timer: nothing was asked yet. Audio output may still be locked (the
+  // AudioContext was created without a gesture), but Chrome lets a page with a live getUserMedia stream start
+  // Web Audio, so resume once more after the mic opens, then play the listening earcon and greet.
+  const startListening = async (): Promise<boolean> => {
+    local("talk");
+    const ok = await openMic(true);
+    if (!ok) {
+      local("stop");
+      return false;
+    }
+    if (ctx) {
+      void ctx.resume().catch(() => {});
+      tryRun(() => env.playEarcon(ctx!, "listening"));
+    }
+    api.speak(STRINGS.greeting[lang()]);
+    return true;
   };
 
   // ---- gestures ----
@@ -430,7 +464,7 @@ export function wireApp(opts: WireOpts): WiredApp {
     env.speech?.cancel();
     local("talk");
     thinking.arm();
-    openMic();
+    void openMic();
   };
 
   const stop = () => {
@@ -490,6 +524,7 @@ export function wireApp(opts: WireOpts): WiredApp {
     view: viewStore,
     onTalk: () => { if (!answer("double")) talk(); },
     onStop: () => { if (!answer("long")) stop(); },
+    startListening,
     sendOrQueue: async (m, idemKey) => {
       await queue.add(m, idemKey);
       await replay();

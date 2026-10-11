@@ -37,9 +37,12 @@ export interface Supplier { id: string; name: string; phone: string; channel: "w
 export interface OrderItem { sku: string; qty: number; unit?: string; name?: string; agreedPrice?: number }
 /** The vendor's last reply, as the webhooks store it (messaging/webhooks.py). */
 export interface VendorReply { text: string; at: FsTime; channel: "whatsapp" | "telegram" }
+/** The delivery time the owner asked for: his words, plus an ISO IST datetime (or bare date) when they parsed. */
+export interface DeliveryBy { text: string; at: string | null }
 export interface Order {
   id: string; supplierId: string; supplierName?: string; items: OrderItem[]; state: OrderState;
   channelMsgId?: string; vendorReply?: VendorReply; idemKey: string; createdAt: FsTime; updatedAt: FsTime;
+  deliveryBy?: DeliveryBy | null; note?: string | null;
 }
 
 /** shops/{shopId}/deliveries/{id}: method and confidence are null until the item has been counted. */

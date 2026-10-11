@@ -32,12 +32,32 @@ describe("one centred phone-width column on Start, /try and /bench", () => {
     }
   });
 
-  it("Start is a rounded card inside the column, at least half the phone screen tall", () => {
+  it("Start is a rounded card inside the column that fills the rest of a phone screen, never less than 220px", () => {
     const start = block(onboardingCss, ".onboard__start");
-    expect(start).toMatch(/min-height:\s*max\(50dvh/);
+    expect(start).toMatch(/flex:\s*1 1 auto/);
+    expect(start).toMatch(/min-height:\s*220px/);
+    expect(start).not.toMatch(/50dvh/); // no half-screen empty slab
     expect(start).toMatch(/border-radius:\s*var\(--onboard-radius\)/);
+    expect(start).toMatch(/align-items:\s*center/);
+    expect(start).toMatch(/justify-content:\s*center/);
+    expect(start).toMatch(/text-align:\s*center/);
     expect(start).not.toMatch(/calc\(-1 \* var\(--gutter\)\)/); // no full-bleed negative margin
+    expect(onboardingCss).toMatch(/--onboard-radius:\s*24px/);
     expect(onboardingCss).toMatch(/--onboard-start:\s*clamp\(/);
     expect(onboardingCss).toMatch(/--onboard-title:\s*clamp\(/);
+  });
+
+  it("the Start card is 240-280px tall on a wide screen, with a 64px badge, a pressed state and a focus ring", () => {
+    const wide = onboardingCss.slice(onboardingCss.indexOf("@media (min-width: 600px)"));
+    expect(block(wide, "  .onboard__start")).toMatch(/min-height:\s*2[4-8]0px/);
+    expect(block(wide, "  .onboard__start")).toMatch(/max-height:\s*280px/);
+    const badge = block(onboardingCss, ".onboard__badge");
+    expect(badge).toMatch(/width:\s*64px/);
+    expect(badge).toMatch(/height:\s*64px/);
+    expect(badge).toMatch(/border-radius:\s*50%/);
+    expect(badge).toMatch(/var\(--gradient\)/);
+    expect(onboardingCss).toMatch(/\.onboard__start:active \{/);
+    expect(block(onboardingCss, ".onboard__start:focus-visible")).toMatch(/outline:\s*var\(--focus-ring\)/);
+    expect(block(onboardingCss, ".onboard__logo")).toMatch(/width:\s*48px/);
   });
 });

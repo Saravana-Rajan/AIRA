@@ -312,3 +312,19 @@ body,
     transform: none;
   }
 }
+
+/* ---------- hands-free start fallback (ui/AppShell, core/autostart.ts) ----------
+   The Start screen, wrapped so a tap anywhere presses Start, with one line of instruction on top. */
+.autostart-fallback {
+  min-height: 100dvh;
+  cursor: pointer;
+}
+.autostart-note {
+  margin: 0;
+  padding: 12px 16px;
+  text-align: center;
+  font-weight: 600;
+  background: var(--surface);
+  color: var(--text);
+  border-bottom: 1px solid var(--border);
+}

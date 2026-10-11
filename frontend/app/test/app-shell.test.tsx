@@ -18,6 +18,7 @@ function fakeWired(lang: AppView["lang"] = "en") {
     onTalk: vi.fn(),
     onStop: vi.fn(),
     dispose: vi.fn(),
+    startListening: vi.fn(async () => true),
     view: {
       get: () => v,
       subscribe: (fn: (v: AppView) => void) => { subs.add(fn); return () => { subs.delete(fn); }; },
@@ -135,5 +136,74 @@ describe("AppShell", () => {
     act(() => { startBtn().click(); });
     act(() => { render(null, root); });
     expect(f.raw.dispose).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("AppShell: hands-free start", () => {
+  const ONBOARDED = { ...DEFAULT_SETTINGS, onboarded: true };
+  const settle = async () => { for (let i = 0; i < 10; i++) await act(async () => { await Promise.resolve(); }); };
+
+  it("an onboarded owner opening the app skips Start: wires, listens and shows the surface at once", async () => {
+    const f = fakeWired("ta");
+    f.raw.startListening = vi.fn(async () => true);
+    const wire = vi.fn((_o: WireOpts) => f.w);
+    const onWired = vi.fn();
+    act(() => { render(<AppShell wire={wire} onWired={onWired} autoStart languages={["ta-IN"]} initial={ONBOARDED} />, root); });
+    await settle();
+    expect(wire).toHaveBeenCalledTimes(1);
+    expect(wire.mock.calls[0][0].settings).toMatchObject({ onboarded: true, shopId: "sunrise_dairy" });
+    expect(onWired).toHaveBeenCalledWith(f.w);
+    expect(f.raw.startListening).toHaveBeenCalledTimes(1);
+    expect(root.querySelector("button.onboard__start")).toBeNull();
+    expect(root.querySelector("button")!.getAttribute("aria-label")).toBe(SURFACE_LABEL);
+    expect(f.raw.dispose).not.toHaveBeenCalled();
+  });
+
+  it("falls back to the Start screen, saying 'Tap anywhere to start', when the mic auto-start is blocked", async () => {
+    const f = fakeWired();
+    f.raw.startListening = vi.fn(async () => false); // getUserMedia rejected: no user gesture yet
+    const second = fakeWired();
+    second.raw.startListening = vi.fn(async () => true);
+    const wire = vi.fn().mockReturnValueOnce(f.w).mockReturnValueOnce(second.w);
+    act(() => { render(<AppShell wire={wire} autoStart languages={["en"]} initial={ONBOARDED} />, root); });
+    await settle();
+    expect(f.raw.dispose).toHaveBeenCalledTimes(1); // the gesture-less wiring is thrown away
+    expect(startBtn()).not.toBeNull();
+    const note = root.querySelector('[role="status"].autostart-note')!;
+    expect(note.textContent).toBe("Tap anywhere to start.");
+    // "anywhere": a tap outside the Start button starts too
+    act(() => { root.querySelector<HTMLElement>(".autostart-fallback")!.click(); });
+    expect(wire).toHaveBeenCalledTimes(2);
+    expect(root.querySelector("button")!.getAttribute("aria-label")).toBe(SURFACE_LABEL);
+    expect(second.raw.startListening).not.toHaveBeenCalled(); // a real tap goes through the normal Start path
+  });
+
+  it("the Start tap itself still works on the fallback screen, once", async () => {
+    const f = fakeWired();
+    f.raw.startListening = vi.fn(async () => false);
+    const second = fakeWired();
+    const wire = vi.fn().mockReturnValueOnce(f.w).mockReturnValue(second.w);
+    act(() => { render(<AppShell wire={wire} autoStart languages={["en"]} initial={ONBOARDED} />, root); });
+    await settle();
+    act(() => { startBtn().click(); });
+    expect(wire).toHaveBeenCalledTimes(2);
+  });
+
+  it("the first launch ever still shows Start and wires nothing, even from the ?start=1 shortcut", async () => {
+    const wire = vi.fn();
+    const firstLaunch = { ...DEFAULT_SETTINGS, onboarded: false };
+    act(() => { render(<AppShell wire={wire} autoStart languages={["en"]} initial={firstLaunch} />, root); });
+    await settle();
+    expect(startBtn()).not.toBeNull();
+    expect(wire).not.toHaveBeenCalled();
+    expect(root.querySelector(".autostart-note")).toBeNull();
+  });
+
+  it("without the prop, a jsdom tab (not installed, no ?start=1) shows Start even when onboarded", async () => {
+    const wire = vi.fn();
+    act(() => { render(<AppShell wire={wire} languages={["en"]} initial={ONBOARDED} />, root); });
+    await settle();
+    expect(startBtn()).not.toBeNull();
+    expect(wire).not.toHaveBeenCalled();
   });
 });

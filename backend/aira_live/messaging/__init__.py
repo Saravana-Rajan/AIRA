@@ -34,6 +34,8 @@ async def send_order(shop_id: str, supplier: dict, order: dict) -> dict:
     phone = supplier.get("phone") or ""
     channel = supplier.get("channel") or "whatsapp"
     items = order["items"]
+    delivery_by, note = order.get("deliveryBy"), order.get("note")
+    text = clicktochat.order_text(shop_name, items, delivery_by, note)
 
     if channel == "call":
         return {"channel": "call", "fallbackUrl": clicktochat.tel_link(phone)}
@@ -47,7 +49,7 @@ async def send_order(shop_id: str, supplier: dict, order: dict) -> dict:
             reason = "telegram_not_configured"
         else:
             try:
-                mid = await telegram.send_message(chat, clicktochat.order_text(shop_name, items))
+                mid = await telegram.send_message(chat, text)
             except telegram.TelegramError as exc:
                 log.warning("telegram order %s to %s failed: %s", order["id"], supplier.get("id"), exc)
                 reason = "telegram_failed"
@@ -61,7 +63,7 @@ async def send_order(shop_id: str, supplier: dict, order: dict) -> dict:
     to = clicktochat.normalize_in_phone(phone)
     if to and _whatsapp_enabled() and whatsapp.configured():
         try:
-            mid = await whatsapp.send_template(phone, shop_name, clicktochat.items_text(items))
+            mid = await whatsapp.send_template(phone, shop_name, clicktochat.order_summary(items, delivery_by, note))
         except whatsapp.WhatsAppError as exc:
             log.warning("whatsapp order %s to %s failed: %s", order["id"], supplier.get("id"), exc)
         else:
@@ -69,7 +71,6 @@ async def send_order(shop_id: str, supplier: dict, order: dict) -> dict:
             await _repo.index_contact("whatsapp", to, shop_id, supplier["id"])
             return {"channel": "whatsapp", "messageId": mid}
 
-    text = clicktochat.order_text(shop_name, items)
     out = {"channel": "whatsapp_link", "fallbackUrl": clicktochat.wa_link(phone, text)}
     if reason:
         out["reason"] = reason

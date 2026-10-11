@@ -20,10 +20,17 @@ def language_rule(lang: str) -> str:
     """The one language rule: follow the speaker. ``lang`` is only the hint for the first line."""
     name = LANG_NAME.get(lang, "English")
     mix = f"{name}-English" if name != "English" else "Tamil-English"
+    # Gemini's transcript sometimes writes an Indian-language word in Latin letters ("Amo" for ஆமா).
+    latin = (f"{name} words that the transcript shows in Latin letters are still {name}, not English."
+             if name != "English" else
+             "Indian-language words that the transcript shows in Latin letters (amo, aama, illa, venum, paal, "
+             "haan, nahi) are still that language, not English.")
     return (
-        "LANGUAGE: Always reply in the language the speaker used in their last utterance. Switch immediately "
-        f"when they switch. Mixed {mix} is fine and natural; so is any language mixed with English. "
-        f"Never ask which language. Until the speaker has spoken, use {name}. "
+        "LANGUAGE: Always reply in the language the speaker used in their last utterance. Keep the current "
+        "language unless the speaker clearly speaks a full sentence in another language; a short reply, a "
+        f"number, 'ok' or a product name never changes it. {latin} "
+        f"Never switch language mid-reply. Mixed {mix} is fine and natural; so is any language mixed with "
+        f"English. Never ask which language. Until the speaker has spoken, use {name}. "
         "When a tool's 'say' text, a notice or a correction is written in another language, say it in the "
         "speaker's language."
     )
@@ -108,6 +115,19 @@ RULES = (
         "9. Evidence before state: an order is not a delivery, an invoice is not proof of receipt, and a saved "
         "location is not proof the product is still there. Check with a tool before you say it is done."
     ),
+    (
+        "10. For ANY question about what is around the owner, what is in front of the camera, reading text or "
+        "finding things, call camera_ask (or product_find to guide the hand to a product). Never answer from "
+        "imagination; you cannot see without these tools. Speak the tool's 'say' as guidance: side, distance, "
+        "next step."
+    ),
+    (
+        "11. The owner can change the shop by voice: product_add (a new product; ask the price and unit if "
+        "missing), product_update (price, name or vendor), product_disable, stock_add (stock that came without "
+        "an order) and supplier_add (a new vendor; for Telegram, read out the link). \"Add buttermilk\" for a "
+        "product the shop already has: ask whether to add stock or a new product. Each of these waits for the "
+        "owner's yes."
+    ),
 )
 
 
@@ -153,7 +173,9 @@ async def build_system_prompt(shop_id: str, lang: str, verbosity: str) -> str:
     shop_ref = db().collection("shops").document(shop_id)
     snap = await shop_ref.get()
     shop = (snap.to_dict() or {}) if snap.exists else {"name": shop_id}
-    products = [(d.to_dict() or {}) | {"sku": d.id} async for d in shop_ref.collection("products").stream()]
-    suppliers = [(d.to_dict() or {}) | {"id": d.id} async for d in shop_ref.collection("suppliers").stream()]
+    products = [(d.to_dict() or {}) | {"sku": d.id} async for d in shop_ref.collection("products").stream()
+                if (d.to_dict() or {}).get("active") is not False]          # disabled by voice: not for sale
+    suppliers = [(d.to_dict() or {}) | {"id": d.id} async for d in shop_ref.collection("suppliers").stream()
+                 if (d.to_dict() or {}).get("active") is not False]
     _LAST_FACTS[shop_id] = catalog_facts(products)
     return render_prompt(shop, products, suppliers, lang, verbosity)

@@ -9,7 +9,10 @@ The APK wraps the AIRA web app at `https://aira-shop.web.app` with Bubblewrap.
 - Light theme only: white status bar, navigation bar and splash, with the `--border` colour `#E3E9F4` as the nav divider.
 - Off on purpose: notifications, Play Billing, location delegation, extra origins.
 
-This folder holds config only. Nothing here has been built yet.
+This folder holds config only. The first release APK was built on 2026-10-11 (`dist/android/AIRA.apk`, git-ignored). Its signing key lives outside the repo at `~/.aira-android/aira-release.keystore` on the build Mac, with the password in `~/.aira-android/keystore.txt`; the SHA-256 is in `public/.well-known/assetlinks.json`.
+
+- `minSdkVersion` is 24 (Android 7.0): `androidbrowserhelper` 2.7.4 refuses anything lower.
+- `appVersion` and `appVersionName` must stay equal. Bubblewrap 1.27 reads `appVersion` for the Android `versionName`.
 
 ## What you need
 

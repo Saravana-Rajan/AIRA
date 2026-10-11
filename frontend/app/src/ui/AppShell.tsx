@@ -6,8 +6,10 @@ import { Screen } from "./Screen";
 import { ScreenReaderRegion } from "./ScreenReaderRegion";
 import type { ScreenState } from "./screenState";
 import { statusLabel, type CountProgress } from "./view";
-import { LABELS } from "../i18n/strings";
+import { LABELS, STRINGS } from "../i18n/strings";
 import { loadSettings } from "../core/settings";
+import { langFromPhone, phoneLanguages } from "../core/lang";
+import { isInstalledLaunch, shouldAutoStart } from "../core/autostart";
 import type { Settings } from "../core/types";
 import { wireApp, type AppView, type WiredApp, type WireOpts } from "../core/wire";
 
@@ -75,37 +77,97 @@ type Props = {
   languages?: readonly string[];
   /** Runs right after wiring, still inside the Start tap: e.g. wireCameraAndGuidance(). */
   onWired?(w: WiredApp): void;
+  /**
+   * Skip the Start tap and open the mic on load (core/autostart.ts). Default: an onboarded owner opening the
+   * installed app or `/?start=1`. The first launch ever always shows Start: the browser needs one gesture.
+   */
+  autoStart?: boolean;
 };
+
+/** Best-effort local speech for the Start screen (no wiring yet); silent where blocked or unsupported. */
+function sayLocal(text: string, lang: Lang, rate: number): void {
+  try {
+    if (typeof speechSynthesis === "undefined") return;
+    const u = new SpeechSynthesisUtterance(text);
+    u.lang = { ta: "ta-IN", hi: "hi-IN", en: "en-IN" }[lang];
+    u.rate = rate;
+    speechSynthesis.cancel();
+    speechSynthesis.speak(u);
+  } catch {
+    /* Chrome may refuse speech before a gesture; the role=status note below is read by TalkBack anyway */
+  }
+}
 
 /**
  * The whole phone app: onboarding until the one Start tap, then the single gesture surface
  * (status chip, voice orb, captions, task card) plus the screen-reader live region.
  * main.tsx only has to render <AppShell />.
  */
-export function AppShell({ wire = wireApp, wsUrl, connect, initial, languages, onWired }: Props) {
+export function AppShell({ wire = wireApp, wsUrl, connect, initial, languages, onWired, autoStart }: Props) {
   const [saved] = useState<Settings>(() => initial ?? loadSettings());
   const [w, setW] = useState<WiredApp | null>(null);
   const [settings, setSettings] = useState<Settings>(saved);
+  // true once a gesture-less start was refused: Start is back, with a spoken "Tap anywhere to start"
+  const [fallback, setFallback] = useState(false);
   const view = useWiredView(w);
 
   useEffect(() => () => { w?.dispose(); }, [w]);
 
+  const wireNow = (s: Settings): WiredApp => {
+    const wired = wire({ settings: s, wsUrl, connect });
+    try {
+      onWired?.(wired);
+    } catch (e) {
+      console.error("[aira] onWired hook failed", e); // the voice app keeps working
+    }
+    setSettings(s);
+    setW(wired);
+    return wired;
+  };
+
+  // ---- hands-free start ----
+  // Wires on load, with no tap. The mic opens only if the browser lets a page that was granted the mic inside
+  // an earlier Start tap reopen it without a gesture (installed apps and Chrome's persisted permission do).
+  // When it refuses (first launch after a browser reset, a cleared permission, a new phone) the gesture-less
+  // wiring is thrown away and the Start screen comes back.
+  useEffect(() => {
+    const auto = autoStart ?? shouldAutoStart({ onboarded: saved.onboarded, search: location.search, installed: isInstalledLaunch() });
+    if (!auto || !saved.onboarded) return;
+    const wired = wireNow(saved);
+    let cancelled = false;
+    void wired.startListening().then((ok) => {
+      if (cancelled || ok) return;
+      setW(null); // the [w] effect above disposes it
+      setFallback(true);
+      const lang = langFromPhone(languages ?? phoneLanguages());
+      sayLocal(STRINGS.tapToStart[lang], lang, saved.speechRate);
+    });
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- once, on mount
+  }, []);
+
   if (!w) {
-    return (
+    const onboarding = (
       <Onboarding
         initial={saved}
         languages={languages}
-        onDone={(s) => {
-          const wired = wire({ settings: s, wsUrl, connect }); // synchronous: still inside the tap
-          try {
-            onWired?.(wired);
-          } catch (e) {
-            console.error("[aira] onWired hook failed", e); // the voice app keeps working
-          }
-          setSettings(s);
-          setW(wired);
-        }}
+        onDone={(s) => { wireNow(s); }} // synchronous: still inside the tap
       />
+    );
+    if (!fallback) return onboarding;
+    // "Tap anywhere": a tap outside the Start button (and off the TalkBack switch) presses Start. The
+    // synthetic click runs inside the real tap's handler, so the user gesture still unlocks the mic.
+    const tapAnywhere = (e: MouseEvent) => {
+      const t = e.target as HTMLElement | null;
+      if (t?.closest("button.onboard__start, label, input")) return;
+      (e.currentTarget as HTMLElement).querySelector<HTMLButtonElement>("button.onboard__start")?.click();
+    };
+    const lang = langFromPhone(languages ?? phoneLanguages());
+    return (
+      <div class="autostart-fallback" onClick={tapAnywhere}>
+        <p role="status" aria-live="polite" class="autostart-note" lang={lang}>{STRINGS.tapToStart[lang]}</p>
+        {onboarding}
+      </div>
     );
   }
 

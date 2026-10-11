@@ -1,6 +1,8 @@
 """Every Live tool exposed to Gemini (names and signatures: the interfaces "Live tools" table)."""
 from collections.abc import Awaitable, Callable
 
+from aira_live.tools.camera import camera_ask
+from aira_live.tools.catalog import product_add, product_disable, product_update, stock_add, supplier_add
 from aira_live.tools.core import confirm_action
 from aira_live.tools.delivery import delivery_count, delivery_start, invoice_check
 from aira_live.tools.insights import day_summary, reorder_suggest
@@ -13,8 +15,10 @@ from aira_live.tools.stock import expiry_check, stock_query
 TOOL_FUNCS: list[Callable[..., Awaitable[dict]]] = [
     order_create, order_status, delivery_start, delivery_count, invoice_check,
     supplier_pay, sale_start, sale_pay, stock_query, expiry_check,
-    product_find, product_identify, location_remember,
+    product_find, product_identify, location_remember, camera_ask,
     day_summary, reorder_suggest, confirm_action,
+    # catalog by voice (confirm-gated: each proposes, then commits after the owner's yes)
+    product_add, product_update, product_disable, stock_add, supplier_add,
 ]
 TOOLS_BY_NAME: dict[str, Callable[..., Awaitable[dict]]] = {f.__name__: f for f in TOOL_FUNCS}
 # Live tools that run in the background (Live NON_BLOCKING behaviour): the conversation goes on while

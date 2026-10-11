@@ -11,7 +11,7 @@ its draft (the doc id comes from ``ids.current_idem_key()``), and a placed order
 """
 import aira_live.messaging as messaging
 from aira_live import confirm, ids
-from aira_live.business import audit, catalog, hints, outbox, paths
+from aira_live.business import audit, catalog, delivery_time, hints, outbox, paths
 from aira_live.business._ids import doc_id_for
 from aira_live.business.clock import now_iso
 from aira_live.business.states import transition
@@ -105,13 +105,34 @@ async def resolve_lines(shop_id: str, items: list[dict], lang: str,
     return lines, phrases, None
 
 
-async def order_create(supplier: str, items: list[dict]) -> dict:
-    """Order stock from a supplier when the OWNER asks, e.g. "order 30 litres Sakthi curd from the Sakthi vendor".
+def read_back_prompt(phrases: list[str], supplier_name: str, delivery_by: dict | None, note: str | None,
+                     lang: str) -> str:
+    """'Order 30 L Sakthi Curd 1 L from Sakthi vendor?' or, with extras, '…, deliver by 6 am tomorrow, note: …. Send it?'"""
+    items = ", ".join(phrases)
+    extras = []
+    if delivery_by:
+        extras.append(t("k2.order.by_phrase", lang, time=delivery_by["text"]))
+    if note:
+        extras.append(t("k2.order.note_phrase", lang, note=note))
+    if not extras:
+        return t("k2.order.read_back", lang, items=items, supplier=supplier_name)
+    return t("k2.order.read_back_extra", lang, items=items, supplier=supplier_name, extras=", ".join(extras))
+
+
+async def order_create(supplier: str, items: list[dict], delivery_by: str | None = None,
+                       note: str | None = None) -> dict:
+    """Order stock from a supplier when the OWNER asks, e.g. "order 30 litres Sakthi curd from the Sakthi vendor,
+    deliver by 6 am tomorrow, send fresh stock".
 
     supplier: the vendor as spoken ("Sakthi vendor", "milkman", "ice cream distributor").
     items: [{"product": "sakthi curd", "qty": 30, "unit": "L"}]; unit is one of L, ml, kg, g, pack, jar, box
-    (optional: the product's own unit). Nothing is sent yet: this reads the order back and waits for the owner's
-    yes (confirm_action), then sends it to the vendor.
+    (optional: the product's own unit).
+    delivery_by: when the owner wants it, in his words ("6 am tomorrow", "today evening", "நாளை காலை").
+    note: any short instruction for the vendor, in his words ("send fresh stock", "pack the ice cream in dry ice").
+    Capture any delivery time or note the owner says. If he gave no delivery time, ask ONCE "Any delivery time?"
+    before calling; if he says no, call without delivery_by. Never invent a time or a note.
+    Nothing is sent yet: this reads the order back and waits for the owner's yes (confirm_action), then sends it
+    to the vendor with the time and the note.
     """
     s = get_session()
     sup = await catalog.resolve_supplier(s.shop_id, supplier, s.lang)
@@ -122,14 +143,17 @@ async def order_create(supplier: str, items: list[dict]) -> dict:
     lines, phrases, err = await resolve_lines(s.shop_id, items, s.lang, sup)
     if err:
         return {"ok": False, "say": err}
+    by = delivery_time.parse_delivery_by(delivery_by)
+    note_text = delivery_time.clean_note(note)
     idem = ids.current_idem_key()
     oid = doc_id_for("o", idem)
     if await _repo.get_order(s.shop_id, oid) is None:          # a retried tool call reuses the same draft
         now = now_iso()
         await _repo.save_order(s.shop_id, {
             "id": oid, "supplierId": sup["id"], "supplierName": sup["name"], "channel": sup.get("channel", "whatsapp"),
-            "items": lines, "state": "DRAFT", "lang": s.lang, "idemKey": idem, "createdAt": now, "updatedAt": now})
-    prompt = t("k2.order.read_back", s.lang, items=", ".join(phrases), supplier=sup["name"])
+            "items": lines, "deliveryBy": by, "note": note_text, "state": "DRAFT", "lang": s.lang, "idemKey": idem,
+            "createdAt": now, "updatedAt": now})
+    prompt = read_back_prompt(phrases, sup["name"], by, note_text, s.lang)
     return await confirm.propose("order", prompt, {"order_id": oid, "idem": idem}, "order.send")
 
 

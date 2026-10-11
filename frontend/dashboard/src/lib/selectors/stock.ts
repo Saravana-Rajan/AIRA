@@ -12,6 +12,13 @@ function num(v: unknown): number {
   return Number.isFinite(n) ? n : 0;
 }
 
+/** A product the owner disabled by voice (product_disable writes `active: false`) keeps its history but
+ * leaves the list. A missing field means active, so the seeded catalog needs no change. */
+export function isActiveProduct(p: object): boolean {
+  // `active` is not in the frozen Product contract: it is read as a loose field, missing = active.
+  return (p as Record<string, unknown>).active !== false;
+}
+
 /**
  * One row per product (doc id = sku). A product with no inventory doc yet shows 0 and is low stock.
  * Expiry is the nearest one among batches that still hold stock; empty batches are ignored.
@@ -21,7 +28,7 @@ export function stockRows(
   products: Normalized<Product>[], inventory: Normalized<InventoryDoc>[], nowMs: number,
 ): StockRow[] {
   const bySku = new Map(inventory.map((d) => [d.id, d]));
-  const rows = products.map((p): StockRow => {
+  const rows = products.filter(isActiveProduct).map((p): StockRow => {
     const inv = bySku.get(p.id);
     const onHand = num(inv?.onHand);
     const live = (inv?.batches ?? []).filter((b) => num(b.qty) > 0 && typeof b.expiryDate === "string");

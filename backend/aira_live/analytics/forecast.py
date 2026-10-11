@@ -134,7 +134,8 @@ async def _rows(query) -> list[dict]:
 async def _product_skus(shop_id: str) -> set[str]:
     """SKUs of the shop's products: the `sku` field, else the doc id (products/{sku}, spec §5)."""
     col = _db().collection("shops").document(shop_id).collection("products")
-    return {(snap.to_dict() or {}).get("sku") or snap.id async for snap in col.stream()}
+    return {doc.get("sku") or snap.id async for snap in col.stream()
+            if (doc := snap.to_dict() or {}).get("active") is not False}      # disabled by voice: no forecast
 
 
 async def _fetch_window(shop_id: str, today: date) -> Window:

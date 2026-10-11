@@ -87,6 +87,30 @@ describe("Onboarding", () => {
     expect(startBtn().getAttribute("aria-describedby")).toBe("aira-start-hint");
   });
 
+  it("Start is a centred stack: gradient badge, then the title, then the subtitle", () => {
+    mount({ onDone: () => {}, languages: ["en"] });
+    const kids = Array.from(startBtn().children);
+    expect(kids.map((k) => k.className)).toEqual(["onboard__badge", "onboard__start-label", "onboard__start-hint"]);
+    const badge = kids[0];
+    expect(badge.getAttribute("aria-hidden")).toBe("true");
+    expect(badge.querySelector("svg.onboard__spark")).not.toBeNull();
+    expect(kids[1].id).toBe("aira-start-label");
+    expect(kids[1].textContent).toBe("Start");
+    expect(kids[2].id).toBe("aira-start-hint");
+    expect(kids[2].textContent).toBe("Turns on the microphone and camera.");
+  });
+
+  it("the intro is one short line and the header is logo, name, shop", () => {
+    mount({ onDone: () => {}, languages: ["en"] });
+    const intro = root.querySelectorAll(".onboard__intro");
+    expect(intro).toHaveLength(1);
+    expect(root.querySelector(".onboard__how")).toBeNull();
+    expect(root.querySelector(".onboard__any")).toBeNull();
+    expect(intro[0].textContent).toContain("Tap Start, then just talk.");
+    expect(intro[0].textContent).toContain("any language");
+    expect(root.querySelector(".onboard__head img")!.getAttribute("width")).toBe("48");
+  });
+
   it("names the shop and labels every control for screen readers", () => {
     mount({ onDone: () => {}, languages: ["en"] });
     expect(root.textContent).toContain("Sunrise Dairy");

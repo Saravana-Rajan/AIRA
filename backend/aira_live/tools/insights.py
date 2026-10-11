@@ -30,7 +30,7 @@ async def _on_hand(shop_id: str, sku: str) -> float:
 
 async def _products(shop_id: str) -> dict[str, dict]:
     col = db().collection("shops").document(shop_id).collection("products")
-    return {d.id: d.to_dict() or {} async for d in col.stream()}
+    return {d.id: doc async for d in col.stream() if (doc := d.to_dict() or {}).get("active") is not False}
 
 
 async def _suppliers_by_sku(shop_id: str) -> dict[str, str]:

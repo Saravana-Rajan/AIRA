@@ -95,7 +95,7 @@ describe("OrdersPage", () => {
   const row: OrderRow = {
     id: "o1", supplierName: "Sakthi vendor", itemsText: "Sakthi curd 1 L × 30", state: "DISCREPANCY",
     stateLabel: "Discrepancy", stepIndex: 2, isDiscrepancy: true, vendorReply: "OK, delivery at 6 pm",
-    discrepancyTexts: ["Sakthi curd 1 L: expected 30, got 28"], updatedText: "6:05 pm",
+    discrepancyTexts: ["Sakthi curd 1 L: expected 30, got 28"], updatedText: "6:05 pm", deliveryByText: null, note: null,
   };
 
   it("announces discrepancies in words with each mismatch listed", () => {
@@ -134,6 +134,16 @@ describe("OrdersPage", () => {
   it("says when there are no orders yet", () => {
     const el = mount(<OrdersPage rows={[]} />);
     expect(text(el)).toContain("No supplier orders yet");
+  });
+
+  it("shows the delivery time and note as small read-only text, and nothing when absent", () => {
+    const el = mount(<OrdersPage rows={[{ ...row, deliveryByText: "6 am tomorrow (12 Oct, 6:00 am)", note: "send fresh stock" }]} />);
+    const extras = el.querySelector(".order__extras")!;
+    expect(text(extras)).toContain("Deliver by: 6 am tomorrow (12 Oct, 6:00 am)");
+    expect(text(extras)).toContain("Note: send fresh stock");
+    const bare = mount(<OrdersPage rows={[row]} />);
+    expect(bare.querySelector(".order__extras")).toBeNull();
+    expect(text(bare)).not.toMatch(/Deliver by|Note:/);
   });
 });
 
@@ -230,6 +240,7 @@ describe("overview cards stay short", () => {
   const order = (i: number): OrderRow => ({
     id: `o${i}`, supplierName: `Vendor ${i}`, itemsText: "Aavin milk 500 ml × 10", state: "ORDER_PLACED",
     stateLabel: "Order placed", stepIndex: 0, isDiscrepancy: false, vendorReply: null, discrepancyTexts: [], updatedText: "",
+    deliveryByText: null, note: null,
   });
 
   it("OrdersPage shows the first few orders and links to the rest", () => {

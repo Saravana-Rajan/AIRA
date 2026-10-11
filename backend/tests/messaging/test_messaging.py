@@ -48,8 +48,31 @@ def test_phone_normalization_and_links():
 def test_order_text_lists_quantities_and_units():
     assert clicktochat.items_text(ORDER["items"]) == "30 L Sakthi Curd 1 L, 25 pack Aavin Paneer 200 g"
     assert clicktochat.order_text("Sunrise Dairy", ORDER["items"]) == (
-        "New order from Sunrise Dairy: 30 L Sakthi Curd 1 L, 25 pack Aavin Paneer 200 g. "
-        "Please confirm delivery time.")
+        "New order from Sunrise Dairy\n"
+        "- 30 L Sakthi Curd 1 L\n"
+        "- 25 pack Aavin Paneer 200 g\n"
+        "Reply here to confirm.")
+
+
+def test_order_text_adds_delivery_time_and_note_lines():
+    text = clicktochat.order_text("Sunrise Dairy", ORDER["items"],
+                                  delivery_by={"text": "6 am tomorrow", "at": "2026-10-12T06:00:00+05:30"},
+                                  note="send fresh stock")
+    assert text == (
+        "New order from Sunrise Dairy\n"
+        "- 30 L Sakthi Curd 1 L\n"
+        "- 25 pack Aavin Paneer 200 g\n"
+        "Deliver by: 6 am tomorrow (Mon 12 Oct, 6:00 am)\n"
+        "Note: send fresh stock\n"
+        "Reply here to confirm.")
+    only_note = clicktochat.order_text("Sunrise Dairy", ORDER["items"], note="send fresh stock")
+    assert "Deliver by:" not in only_note and "Note: send fresh stock\nReply here to confirm." in only_note
+
+
+def test_order_summary_is_one_line_for_the_whatsapp_template():
+    assert clicktochat.order_summary(ORDER["items"], {"text": "6 am tomorrow", "at": None}, "send fresh stock") == (
+        "30 L Sakthi Curd 1 L, 25 pack Aavin Paneer 200 g; deliver by 6 am tomorrow; note: send fresh stock")
+    assert clicktochat.order_summary(ORDER["items"], None, None) == "30 L Sakthi Curd 1 L, 25 pack Aavin Paneer 200 g"
 
 
 def test_items_text_keeps_fractions():
@@ -194,11 +217,12 @@ async def test_send_order_whatsapp_success_indexes_message(store, monkeypatch):
 
     async def fake_send(to, shop_name, items_text, **kw):
         assert (to, shop_name) == ("+919000000002", "Sunrise Dairy")
-        assert items_text == "30 L Sakthi Curd 1 L, 25 pack Aavin Paneer 200 g"
+        assert items_text == "30 L Sakthi Curd 1 L, 25 pack Aavin Paneer 200 g; deliver by 6 am tomorrow"
         return "wamid.1"
 
     monkeypatch.setattr(whatsapp, "send_template", fake_send)
-    res = await messaging.send_order(SHOP, await supplier_doc(store, "sakthi_vendor"), ORDER)
+    order = {**ORDER, "deliveryBy": {"text": "6 am tomorrow", "at": None}}
+    res = await messaging.send_order(SHOP, await supplier_doc(store, "sakthi_vendor"), order)
     assert res == {"channel": "whatsapp", "messageId": "wamid.1"}
     assert await _repo.lookup_message("whatsapp", "wamid.1") == {"shopId": SHOP, "orderId": "o1"}
     assert await _repo.lookup_contact("whatsapp", "919000000002") == {"shopId": SHOP, "supplierId": "sakthi_vendor"}
@@ -258,13 +282,15 @@ async def test_send_order_telegram_channel_indexes_chat(store, monkeypatch):
 
     async def fake_send(chat_id, text, **kw):
         assert chat_id == "555"
-        assert text.startswith("New order from Sunrise Dairy: 30 L Sakthi Curd 1 L")
+        assert text == ("New order from Sunrise Dairy\n- 30 L Sakthi Curd 1 L\n- 25 pack Aavin Paneer 200 g\n"
+                        "Deliver by: 6 am tomorrow\nNote: send fresh stock\nReply here to confirm.")
         return "9"
 
     monkeypatch.setattr(telegram, "send_message", fake_send)
     supplier = {**(await supplier_doc(store, "sakthi_vendor")), "telegramChatId": 555}
     assert supplier["channel"] == "telegram"            # the catalog's vendor channel for now
-    res = await messaging.send_order(SHOP, supplier, ORDER)
+    order = {**ORDER, "deliveryBy": {"text": "6 am tomorrow", "at": None}, "note": "send fresh stock"}
+    res = await messaging.send_order(SHOP, supplier, order)
     assert res == {"channel": "telegram", "messageId": "9"}
     assert await _repo.lookup_message("telegram", "555:9") == {"shopId": SHOP, "orderId": "o1"}
     assert await _repo.lookup_contact("telegram", "555") == {"shopId": SHOP, "supplierId": "sakthi_vendor"}

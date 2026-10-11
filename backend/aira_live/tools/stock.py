@@ -29,7 +29,7 @@ async def stock_query(product: str | None = None) -> dict:
                 "say": t("k2.stock.one", s.lang, product=p.get("name", ref.sku),
                          qty=f"{fmt_qty(qty)} {p.get('unit', '')}".strip())}
     rows = []
-    for sku, p in await get_store().list(paths.products(s.shop_id)):
+    for sku, p in await catalog.active_products(s.shop_id):        # disabled products keep their history, unspoken
         qty = await ledger.on_hand(s.shop_id, sku)
         above = qty > float(p.get("reorderThreshold") or 0)
         rows.append((above, qty, p.get("name", sku), p.get("unit", ""), sku))

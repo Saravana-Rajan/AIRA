@@ -13,24 +13,35 @@ from aira_live.tools import TOOL_FUNCS, TOOLS_BY_NAME
 
 # shared/docs/superpowers/plans/2026-10-10-00-interfaces.md, "Live tools" (+ the product_find count_needed addition).
 EXPECTED = {
-    "order_create": ["supplier", "items"], "order_status": ["order_id"],
+    "order_create": ["supplier", "items", "delivery_by", "note"], "order_status": ["order_id"],
     "delivery_start": ["order_id"], "delivery_count": ["sku", "mode"], "invoice_check": ["order_id"],
     "supplier_pay": ["order_id", "method"], "sale_start": ["items"], "sale_pay": ["sale_id", "method"],
     "stock_query": ["product"], "expiry_check": [],
     "product_find": ["product", "count_needed"], "product_identify": [], "location_remember": ["product", "zone"],
+    "camera_ask": ["question"],
     "day_summary": [], "reorder_suggest": ["product"], "confirm_action": ["confirm_id", "answer"],
+    # catalog by voice (tools/catalog.py)
+    "product_add": ["name", "brand", "unit", "pack_size", "price_rupees", "supplier_id"],
+    "product_update": ["product", "price_rupees", "name", "supplier_id"], "product_disable": ["product"],
+    "stock_add": ["product", "quantity", "unit"], "supplier_add": ["name", "channel"],
 }
 
 OPTIONAL_DEFAULTS = {
+    ("order_create", "delivery_by"): None, ("order_create", "note"): None,
     ("order_status", "order_id"): None, ("delivery_start", "order_id"): None,
     ("delivery_count", "mode"): "one_by_one", ("stock_query", "product"): None,
     ("product_find", "count_needed"): 1, ("reorder_suggest", "product"): None,
+    ("product_add", "brand"): None, ("product_add", "unit"): None, ("product_add", "pack_size"): None,
+    ("product_add", "price_rupees"): None, ("product_add", "supplier_id"): None,
+    ("product_update", "price_rupees"): None, ("product_update", "name"): None,
+    ("product_update", "supplier_id"): None, ("stock_add", "unit"): None,
 }
 
 LITERALS = {
     ("delivery_count", "mode"): ("one_by_one", "crate"),
     ("supplier_pay", "method"): ("cash", "upi"), ("sale_pay", "method"): ("cash", "upi"),
     ("confirm_action", "answer"): ("yes", "no"),
+    ("supplier_add", "channel"): ("telegram", "call", "whatsapp"),
 }
 
 # Typed sample arguments for each stub. When an owner implements a tool, they remove it from STUBS

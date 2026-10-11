@@ -2,6 +2,8 @@
 import re
 from urllib.parse import quote
 
+from aira_live.business.delivery_time import delivery_by_words
+
 
 def normalize_in_phone(phone: str) -> str:
     """Digits only, with the Indian country code: '+91 90000 00002' / '9000000002' / '09000000002' → '919000000002'."""
@@ -34,5 +36,25 @@ def items_text(items: list[dict]) -> str:
     return ", ".join(f"{fmt_qty(it['qty'])} {it['unit']} {it['name']}" for it in items)
 
 
-def order_text(shop_name: str, items: list[dict]) -> str:
-    return f"New order from {shop_name}: {items_text(items)}. Please confirm delivery time."
+def order_summary(items: list[dict], delivery_by: dict | None = None, note: str | None = None) -> str:
+    """One line for the WhatsApp template parameter: items, then '; deliver by …' and '; note: …' when present."""
+    parts = [items_text(items)]
+    time_words = delivery_by_words(delivery_by)
+    if time_words:
+        parts.append(f"deliver by {time_words}")
+    if note:
+        parts.append(f"note: {note}")
+    return "; ".join(parts)
+
+
+def order_text(shop_name: str, items: list[dict], delivery_by: dict | None = None, note: str | None = None) -> str:
+    """The vendor message (Telegram, wa.me link): one line per item, the delivery time and note when the owner
+    gave them, and a clear ask to reply."""
+    lines = [f"New order from {shop_name}", *(f"- {fmt_qty(it['qty'])} {it['unit']} {it['name']}" for it in items)]
+    time_words = delivery_by_words(delivery_by)
+    if time_words:
+        lines.append(f"Deliver by: {time_words}")
+    if note:
+        lines.append(f"Note: {note}")
+    lines.append("Reply here to confirm.")
+    return "\n".join(lines)

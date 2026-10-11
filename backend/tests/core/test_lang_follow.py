@@ -69,7 +69,7 @@ def test_prompt_tells_live_to_follow_the_speaker_and_never_pin_a_language():
     p = render_prompt({"name": "Sunrise Dairy"}, [], [], "ta", "short")
     low = p.lower()
     assert "language the speaker used in their last utterance" in low
-    assert "switch immediately" in low
+    assert "full sentence in another language" in low  # sticky: a short reply never flips the language
     assert "never ask which language" in low
     assert "tamil-english" in low
     assert "default language" not in low and "always speak" not in low
@@ -97,7 +97,7 @@ async def test_session_lang_follows_every_final_user_turn(mk_session):
     await bridge.start()
     try:
         b.push(LiveEvent("input_transcript", text="ரெண்டு ", final=False))
-        b.push(LiveEvent("input_transcript", text="ரெண்டு தயிர்", final=True))
+        b.push(LiveEvent("input_transcript", text="ரெண்டு தயிர் கொடுங்க", final=True))  # a full sentence
         await wait_until(lambda: any(m.t == "transcript" and m.final for m in rec.msgs))
         assert s.lang == "ta"
         finals = [m for m in rec.msgs if m.t == "transcript" and m.final]
@@ -107,7 +107,7 @@ async def test_session_lang_follows_every_final_user_turn(mk_session):
 
         b.push(LiveEvent("input_transcript", text="ヨーグルトを二つ", final=True))
         await wait_until(lambda: s.lang == "ja")
-        b.push(LiveEvent("input_transcript", text="how much is curd", final=True))
+        b.push(LiveEvent("input_transcript", text="how much is the curd", final=True))
         await wait_until(lambda: s.lang == "en")
         b.push(LiveEvent("input_transcript", text="60", final=True))  # digits only: the language stays
         await wait_until(lambda: len([m for m in rec.msgs if m.t == "transcript" and m.final]) == 4)
@@ -142,11 +142,11 @@ def test_mock_mode_follows_typed_text_and_tells_the_phone(monkeypatch):
     with TestClient(app).websocket_connect("/ws", headers={"Origin": "https://aira-shop.web.app"}) as ws:
         ws.send_json(hello)
         ws.receive_json()
-        ws.send_json({"t": "text", "text": "ரெண்டு தயிர்"})
+        ws.send_json({"t": "text", "text": "ரெண்டு தயிர் கொடுங்க"})
         reply = ws.receive_json()
         assert reply["lang"] == "ta" and reply["text"].startswith("(mock) நீங்கள்")
         ws.send_json({"t": "text", "text": "ヨーグルト"})
         reply = ws.receive_json()
         assert reply["lang"] == "ja" and reply["text"] == "(mock) you said: ヨーグルト"  # English line, never silence
-        ws.send_json({"t": "text", "text": "two curd"})
+        ws.send_json({"t": "text", "text": "how much is the curd"})
         assert ws.receive_json()["lang"] == "en"

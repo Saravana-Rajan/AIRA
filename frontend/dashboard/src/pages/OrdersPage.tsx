@@ -42,6 +42,22 @@ function OrderCard({ o }: { o: OrderRow }) {
           </ul>
         </div>
       )}
+      {(o.deliveryByText || o.note) && (
+        <dl class="order__extras">
+          {o.deliveryByText && (
+            <div class="order__extra">
+              <dt>Deliver by:</dt>{" "}
+              <dd>{o.deliveryByText}</dd>
+            </div>
+          )}
+          {o.note && (
+            <div class="order__extra">
+              <dt>Note:</dt>{" "}
+              <dd>{o.note}</dd>
+            </div>
+          )}
+        </dl>
+      )}
       {o.vendorReply && (
         <p class="order__reply">
           Vendor replied: <q>{o.vendorReply}</q>

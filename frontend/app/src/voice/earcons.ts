@@ -19,9 +19,19 @@ export const EARCONS: Record<CueName, Earcon> = {
   offline:     { tones: [{ hz: 392, ms: 200 }, { hz: 262, ms: 300 }], gain: 0.3 },
 };
 
+/**
+ * Earcons the app plays on its own, never sent by the server (the contract's CueName list is frozen).
+ * `listening`: the hands-free start opened the mic; a short rise, softer than `done`.
+ */
+export const LOCAL_EARCONS: Record<"listening", Earcon> = {
+  listening: { tones: [{ hz: 587, ms: 70 }, { hz: 880, ms: 110 }], gain: 0.2 },
+};
+
+export type EarconName = CueName | keyof typeof LOCAL_EARCONS;
+
 /** Synthesized with OscillatorNode, so there are no asset files to download. */
-export function playEarcon(ctx: AudioContext, n: CueName): void {
-  const e = EARCONS[n];
+export function playEarcon(ctx: AudioContext, n: EarconName): void {
+  const e: Earcon | undefined = (EARCONS as Record<string, Earcon>)[n] ?? (LOCAL_EARCONS as Record<string, Earcon>)[n];
   if (!e) return;
   let t = ctx.currentTime;
   for (const tone of e.tones) {

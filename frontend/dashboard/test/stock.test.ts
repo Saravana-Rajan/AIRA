@@ -25,4 +25,16 @@ describe("toRows", () => {
   it("returns no rows when there are no products", () => {
     expect(toRows([], inventory)).toEqual([]);
   });
+
+  it("hides a product disabled by voice (active === false) and shows one added by voice", () => {
+    const withDisabled = [
+      ...products,
+      { sku: "arun_icecream_box", name: "Arun Ice Cream", unit: "box", reorderThreshold: 3, active: false },
+      { sku: "aavin_lassi_200ml", name: "Aavin Lassi 200 ml", unit: "pack", reorderThreshold: 2, active: true },
+    ] as unknown as Product[];
+    const skus = toRows(withDisabled, inventory).map((r) => r.sku);
+    expect(skus).not.toContain("arun_icecream_box");
+    expect(skus).toContain("aavin_lassi_200ml");
+    expect(skus).toContain("sakthi_curd_1l");
+  });
 });

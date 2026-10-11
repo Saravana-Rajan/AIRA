@@ -461,6 +461,24 @@ a {
   padding-left: 20px;
   font-variant-numeric: tabular-nums;
 }
+/* What the owner asked the vendor for: delivery time and note, small and read-only. */
+.order__extras {
+  margin: 10px 0 0;
+  color: var(--text-muted);
+  font-size: var(--text-small);
+}
+.order__extra {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 6px;
+}
+.order__extra dt {
+  font-weight: 600;
+}
+.order__extra dd {
+  margin: 0;
+  color: var(--text);
+}
 .order__reply {
   margin: 12px 0 0;
   color: var(--text-muted);

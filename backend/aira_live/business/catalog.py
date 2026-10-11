@@ -174,10 +174,20 @@ def _pick(products: list[tuple[str, dict]], spoken: str) -> ProductRef | None:
     return _ref(*tied[0])
 
 
+def is_active(doc: dict) -> bool:
+    """A product or supplier counts unless it was disabled by voice (``active: false``). Missing = active."""
+    return doc.get("active") is not False
+
+
+async def active_products(shop_id: str) -> list[tuple[str, dict]]:
+    """(sku, doc) of every product that is not disabled. Read fresh from the Store on every call: nothing is
+    cached here, so a product added or disabled a moment ago is seen at once."""
+    return [(sku, p) for sku, p in await get_store().list(paths.products(shop_id)) if is_active(p)]
+
+
 async def resolve(shop_id: str, spoken: str, lang: str) -> ProductRef | None:
-    """Spoken product name (any of ta/hi/en) → ProductRef, or None when unknown or ambiguous."""
-    products = await get_store().list(paths.products(shop_id))
-    return _pick(products, spoken or "")
+    """Spoken product name (any of ta/hi/en) → ProductRef, or None when unknown, ambiguous or disabled."""
+    return _pick(await active_products(shop_id), spoken or "")
 
 
 # ---------- suppliers ----------
@@ -197,7 +207,7 @@ async def resolve_supplier(shop_id: str, spoken: str, lang: str) -> dict | None:
     """Spoken supplier ("Sakthi vendor", "பால்காரர்", "ice cream") → {id, name, phone, channel, products, aliases}.
     A product name finds the one supplier of that product. None when unknown or ambiguous."""
     spoken = spoken or ""
-    suppliers = await get_store().list(paths.suppliers(shop_id))
+    suppliers = [(sid, s) for sid, s in await get_store().list(paths.suppliers(shop_id)) if is_active(s)]
     key = spoken.strip().lower()
     for sid, s in suppliers:
         if sid == key:

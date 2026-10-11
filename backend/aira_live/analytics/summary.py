@@ -111,6 +111,11 @@ async def _docs(query) -> dict[str, dict]:
     return {d.id: d.to_dict() or {} async for d in query.stream()}
 
 
+async def _active(query) -> dict[str, dict]:
+    """Products disabled by voice (``active: false``) keep their history but leave the summary."""
+    return {k: v for k, v in (await _docs(query)).items() if v.get("active") is not False}
+
+
 async def today(shop_id: str, now: datetime | None = None) -> dict:
     """Today's (IST) completed sales, stock, open delivery discrepancies and suggested orders for one shop.
 
@@ -121,7 +126,7 @@ async def today(shop_id: str, now: datetime | None = None) -> dict:
     start = datetime.combine(now.date(), time.min, tzinfo=IST)
     shop = db().collection("shops").document(shop_id)
     products, inventory, sales, disc = await asyncio.gather(
-        _docs(shop.collection("products")),
+        _active(shop.collection("products")),
         _docs(shop.collection("inventory")),
         _docs(_where(shop.collection("sales"), "completedAt", ">=", start)),
         _docs(_where(shop.collection("orders"), "state", "==", "DISCREPANCY")),

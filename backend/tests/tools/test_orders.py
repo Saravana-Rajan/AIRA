@@ -212,6 +212,61 @@ async def test_order_create_several_lines_read_back_together(store, session, pro
                                       "from Aavin vendor?")
 
 
+async def test_order_create_stores_delivery_time_and_note_and_reads_them_back(store, session, proposals):
+    await orders.order_create("sakthi vendor", CURD_30L, delivery_by="6 am tomorrow", note="send fresh stock")
+    o = await _repo.get_order(SHOP, proposals[0]["payload"]["order_id"])
+    assert o["deliveryBy"]["text"] == "6 am tomorrow" and o["deliveryBy"]["at"].endswith("T06:00:00+05:30")
+    assert o["note"] == "send fresh stock"
+    name = await _name(store, "sakthi_curd_1l")
+    assert proposals[0]["prompt"] == (f"Order 30 L {name} from Sakthi curd vendor, deliver by 6 am tomorrow, "
+                                      "note: send fresh stock. Send it?")
+
+
+async def test_order_create_without_extras_stores_none_and_keeps_short_read_back(store, session, proposals):
+    await orders.order_create("sakthi vendor", CURD_30L, delivery_by="no", note="")
+    o = await _repo.get_order(SHOP, proposals[0]["payload"]["order_id"])
+    assert o["deliveryBy"] is None and o["note"] is None
+    assert proposals[0]["prompt"].endswith("from Sakthi curd vendor?")
+
+
+async def test_order_create_unparseable_time_keeps_the_words(store, session, proposals):
+    await orders.order_create("sakthi vendor", CURD_30L, delivery_by="before the festival")
+    o = await _repo.get_order(SHOP, proposals[0]["payload"]["order_id"])
+    assert o["deliveryBy"] == {"text": "before the festival", "at": None}
+    assert ", deliver by before the festival. Send it?" in proposals[0]["prompt"]
+
+
+async def test_order_create_read_back_extras_in_tamil(store, phone, proposals):
+    s = Session("owner1", SHOP, "ta", "short", phone)
+    tok_s, tok_c = current_session.set(s), current_tool_call_id.set("tc-ta")
+    try:
+        await orders.order_create("sakthi vendor", CURD_30L, delivery_by="நாளை காலை 6 மணிக்கு", note="fresh")
+    finally:
+        current_tool_call_id.reset(tok_c)
+        current_session.reset(tok_s)
+    prompt = proposals[0]["prompt"]
+    assert prompt == t("k2.order.read_back_extra", "ta", items=f"30 L {await _name(store, 'sakthi_curd_1l')}",
+                       supplier="Sakthi curd vendor",
+                       extras=f"{t('k2.order.by_phrase', 'ta', time='நாளை காலை 6 மணிக்கு')}, "
+                              f"{t('k2.order.note_phrase', 'ta', note='fresh')}")
+    assert "k2." not in prompt
+
+
+async def test_commit_send_passes_delivery_time_to_the_vendor_message(store, session, proposals, monkeypatch):
+    seen = {}
+
+    async def send(shop_id, supplier, order):
+        seen.update(order)
+        return {"channel": "telegram", "messageId": "9"}
+
+    monkeypatch.setattr(messaging, "send_order", send)
+    await orders.order_create("sakthi vendor", CURD_30L, delivery_by="6 am tomorrow", note="fresh stock")
+    await orders._commit_send(proposals[0]["payload"], "yes")
+    assert seen["deliveryBy"]["text"] == "6 am tomorrow" and seen["note"] == "fresh stock"
+    o = await _repo.get_order(SHOP, proposals[0]["payload"]["order_id"])
+    assert o["state"] == "ORDER_PLACED" and o["deliveryBy"]["text"] == "6 am tomorrow"
+
+
 async def test_order_create_speaks_the_owners_language(store, session, proposals):
     session.lang = "ta"
     await orders.order_create("sakthi vendor", CURD_30L)

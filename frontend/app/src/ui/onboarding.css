@@ -1,16 +1,19 @@
 /* Onboarding: the one Start tap. LIGHT THEME ONLY; every colour comes from tokens.css.
    Layout: ONE phone-width column (tokens.css --phone-width, 480 px) centred on the page. On a phone it
    is full width with the 16 px gutter; on anything wider it sits in the middle with a faint surface
-   frame, so a laptop sees a phone, not a page stretched edge to edge. Start is the one bold thing: a
-   big rounded navy card at the bottom of the column, at least half the screen tall on a phone, so a
-   blind owner finds it by touching the lower half. */
+   frame, so a laptop sees a phone, not a page stretched edge to edge. Everything above Start is compact
+   (48 px logo, one-line intro, one TalkBack row). Start is the one bold thing: a navy card with the
+   brand gradient glowing through it, its badge / word / hint centred. On a phone it takes all the
+   remaining height (never under 220 px) so a blind owner finds it by touching the lower part of the
+   screen; on a laptop it is 240–280 px, so the frame never shows an empty slab. */
 @import "./tokens.css";
 
 .onboard {
-  --onboard-title: clamp(32px, 9vw, 40px);
-  --onboard-start: clamp(40px, 11vw, 48px);
-  --onboard-shop: clamp(18px, 5vw, 20px);
-  --onboard-radius: 28px;
+  --onboard-title: clamp(26px, 7vw, 28px);
+  --onboard-start: clamp(30px, 8vw, 32px);
+  --onboard-shop: 16px;
+  --onboard-hint: 15px;
+  --onboard-radius: 24px;
   box-sizing: border-box;
   display: flex;
   flex-direction: column;
@@ -39,19 +42,19 @@
   width: 100%;
   max-width: var(--phone-width);
   min-height: 100dvh;
-  padding: max(20px, env(safe-area-inset-top)) var(--gutter) max(var(--gutter), env(safe-area-inset-bottom));
+  padding: max(16px, env(safe-area-inset-top)) var(--gutter) max(var(--gutter), env(safe-area-inset-bottom));
 }
 
 /* ---------- logo, name, shop ---------- */
 .onboard__head {
   display: flex;
   align-items: center;
-  gap: 14px;
+  gap: 12px;
 }
 .onboard__logo {
-  width: 64px;
-  height: 64px;
-  border-radius: 18px;
+  width: 48px;
+  height: 48px;
+  border-radius: 14px;
 }
 .onboard__titles {
   display: flex;
@@ -65,25 +68,19 @@
   letter-spacing: -0.02em;
 }
 .onboard__shop {
-  margin-top: 4px;
+  margin-top: 3px;
   font-size: var(--onboard-shop);
-  font-weight: 600;
-  color: var(--text-muted);
-}
-.onboard__how {
-  margin: 20px 0 0;
-  max-width: 34ch;
-  font-size: var(--text-body);
+  font-weight: 500;
   color: var(--text-muted);
 }
 
-/* No language picker: AIRA follows whoever speaks. One line says so, under the how-to. */
-.onboard__any {
-  margin: 10px 0 0;
-  max-width: 34ch;
-  font-size: var(--text-body);
-  font-weight: 600;
-  color: var(--text);
+/* One line: what to do, and that any language works. No picker: AIRA follows whoever speaks. */
+.onboard__intro {
+  margin: 14px 0 0;
+  max-width: 40ch;
+  font-size: 16px;
+  line-height: 1.45;
+  color: var(--text-muted);
 }
 
 /* ---------- TalkBack switch ---------- */
@@ -91,10 +88,11 @@
   position: relative;
   display: flex;
   align-items: center;
-  gap: 14px;
-  margin: 18px 0 20px;
-  padding: 14px 0;
+  gap: 12px;
+  margin: 14px 0 16px;
+  padding: 12px 0;
   border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
   cursor: pointer;
 }
 .tb-switch .tb-switch__input {
@@ -107,8 +105,8 @@
 .tb-switch__track {
   flex: none;
   position: relative;
-  width: 60px;
-  height: 34px;
+  width: 52px;
+  height: 30px;
   border-radius: var(--radius-pill);
   background: var(--border);
   transition: background-color 160ms ease;
@@ -117,15 +115,15 @@
   position: absolute;
   top: 3px;
   left: 3px;
-  width: 28px;
-  height: 28px;
+  width: 24px;
+  height: 24px;
   border-radius: 50%;
   background: var(--bg);
   box-shadow: 0 1px 3px color-mix(in srgb, var(--text) 30%, transparent);
   transition: transform 160ms ease;
 }
 .tb-switch__input:checked + .tb-switch__track { background: var(--brand-blue); }
-.tb-switch__input:checked + .tb-switch__track .tb-switch__knob { transform: translateX(26px); }
+.tb-switch__input:checked + .tb-switch__track .tb-switch__knob { transform: translateX(22px); }
 .tb-switch__input:focus-visible + .tb-switch__track {
   outline: var(--focus-ring);
   outline-offset: 3px;
@@ -133,65 +131,83 @@
 .tb-switch__text {
   display: flex;
   flex-direction: column;
+  gap: 1px;
 }
 .tb-switch__label {
-  font-size: var(--onboard-shop);
+  font-size: 16px;
   font-weight: 600;
+  line-height: 1.3;
 }
 .tb-switch__hint {
-  font-size: 16px;
+  font-size: 14px;
+  line-height: 1.3;
   color: var(--text-muted);
 }
 
-/* ---------- Start: the navy card ---------- */
+/* ---------- Start: the navy card, content centred ---------- */
 .onboard__start {
+  position: relative;
   display: flex;
   flex-direction: column;
-  align-items: flex-start;
-  justify-content: flex-end;
-  gap: 6px;
-  /* takes whatever height is left in the column; at least half the phone screen */
-  flex: 1 0 auto;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  /* the rest of the phone screen, never a sliver */
+  flex: 1 1 auto;
   width: 100%;
-  margin: auto 0 0;
-  min-height: max(50dvh, 240px);
-  padding: 28px 28px 30px;
+  margin: 0;
+  min-height: 220px;
+  padding: 28px 24px;
   border: 0;
   border-radius: var(--onboard-radius);
-  background: var(--text);
+  background:
+    radial-gradient(120% 90% at 50% 110%, color-mix(in srgb, var(--brand-purple) 55%, transparent), transparent 60%),
+    radial-gradient(90% 70% at 15% -10%, color-mix(in srgb, var(--brand-blue) 45%, transparent), transparent 60%),
+    var(--text);
   color: var(--bg);
   font: inherit;
-  text-align: left;
+  text-align: center;
   cursor: pointer;
   touch-action: manipulation;
   -webkit-tap-highlight-color: transparent;
-  transition: background-color 120ms ease;
+  overflow: hidden;
+  isolation: isolate;
+  transition: transform 120ms ease, box-shadow 120ms ease;
 }
 .onboard__start:active {
-  background: color-mix(in srgb, var(--text) 86%, var(--brand-blue));
+  transform: scale(0.985);
+  box-shadow: inset 0 0 0 999px color-mix(in srgb, var(--brand-blue) 22%, transparent);
 }
 .onboard__start:focus-visible {
   outline: var(--focus-ring);
   outline-offset: 4px;
 }
-.onboard__spark {
-  width: 56px;
-  height: 56px;
-  margin-bottom: auto;
+.onboard__badge {
+  display: grid;
+  place-items: center;
+  width: 64px;
+  height: 64px;
+  margin-bottom: 12px;
+  border-radius: 50%;
+  background: var(--gradient);
+  color: var(--bg);
+  box-shadow: 0 10px 28px -10px color-mix(in srgb, var(--brand-purple) 70%, transparent);
 }
-.onboard__stop--1 { stop-color: var(--brand-cyan); }
-.onboard__stop--2 { stop-color: var(--brand-blue); }
-.onboard__stop--3 { stop-color: var(--brand-purple); }
-.onboard__stop--4 { stop-color: var(--brand-orange); }
+.onboard__spark {
+  width: 34px;
+  height: 34px;
+}
 .onboard__start-label {
   font-size: var(--onboard-start);
   font-weight: 800;
-  line-height: 1.05;
+  line-height: 1.1;
   letter-spacing: -0.01em;
 }
 .onboard__start-hint {
-  font-size: var(--text-body);
-  color: color-mix(in srgb, var(--bg) 82%, var(--text));
+  max-width: 28ch;
+  font-size: var(--onboard-hint);
+  line-height: 1.35;
+  color: color-mix(in srgb, var(--bg) 78%, var(--text));
 }
 
 /* ---------- wide screens: a framed phone in the middle ---------- */
@@ -202,15 +218,17 @@
   }
   .onboard__col {
     flex: 0 1 auto;
-    min-height: min(820px, calc(100dvh - 80px));
-    padding: 32px 28px 28px;
+    min-height: 0;
+    padding: 28px 28px 28px;
     border: 1px solid var(--border);
-    border-radius: 36px;
+    border-radius: 32px;
     background: var(--surface);
     box-shadow: 0 24px 60px -32px color-mix(in srgb, var(--text) 28%, transparent);
   }
   .onboard__start {
-    min-height: 320px;
+    flex: 0 0 auto;
+    min-height: 260px;
+    max-height: 280px;
   }
 }
 
@@ -219,5 +237,8 @@
   .tb-switch__knob,
   .onboard__start {
     transition: none;
+  }
+  .onboard__start:active {
+    transform: none;
   }
 }

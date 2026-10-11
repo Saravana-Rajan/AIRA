@@ -12,10 +12,37 @@ export interface OrderRow {
   id: string; supplierName: string; itemsText: string; state: string; stateLabel: string;
   /** Index into ORDER_FLOW; -1 while the order is still a DRAFT (or in an unknown state). */
   stepIndex: number; isDiscrepancy: boolean; vendorReply: string | null; discrepancyTexts: string[]; updatedText: string;
+  /** The delivery time the owner asked for, in his words plus the read IST date when there is one; null when none. */
+  deliveryByText: string | null;
+  /** The owner's free-text note to the vendor; null when none. */
+  note: string | null;
 }
 
 function textOrNull(v: unknown): string | null {
   return typeof v === "string" && v.trim() ? v : null;
+}
+
+const DAY_IST = new Intl.DateTimeFormat("en-IN", { timeZone: "Asia/Kolkata", day: "numeric", month: "short" });
+
+/** "2026-10-12T06:00:00+05:30" → "12 Oct, 6:00 am"; a bare date "2026-10-12" → "12 Oct"; "" when unreadable. */
+function deliveryAtText(at: unknown): string {
+  if (typeof at !== "string" || !at) return "";
+  if (at.length === 10) {
+    const [y, m, d] = at.split("-").map(Number);
+    return Number.isFinite(d) ? DAY_IST.format(Date.UTC(y, m - 1, d, 12)) : "";
+  }
+  const ms = Date.parse(at);
+  return Number.isNaN(ms) ? "" : `${DAY_IST.format(ms)}, ${formatTimeIST(ms)}`;
+}
+
+/** The order's deliveryBy ({text, at}) as one line: "6 am tomorrow (12 Oct, 6:00 am)". */
+export function deliveryByText(deliveryBy: unknown): string | null {
+  if (typeof deliveryBy !== "object" || deliveryBy === null) return null;
+  const { text, at } = deliveryBy as { text?: unknown; at?: unknown };
+  const words = textOrNull(text);
+  if (!words) return null;
+  const when = deliveryAtText(at);
+  return when ? `${words} (${when})` : words;
 }
 
 export function orderRows(
@@ -54,6 +81,8 @@ export function orderRows(
         vendorReply: textOrNull(o.vendorReply?.text),
         discrepancyTexts,
         updatedText: updatedMs !== null ? formatTimeIST(updatedMs) : "",
+        deliveryByText: deliveryByText(o.deliveryBy),
+        note: textOrNull(o.note),
       };
     });
 }

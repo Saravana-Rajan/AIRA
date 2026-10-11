@@ -82,3 +82,97 @@ def detect_lang(text: str, previous: str = FALLBACK) -> str:
     if non_latin:
         return max(non_latin, key=non_latin.__getitem__)
     return "en"
+
+
+# ---------- sticky session language ----------
+# Gemini's input transcript sometimes renders Tamil or Hindi words in Latin letters ("Amo" for ஆமா, "paal" for
+# பால்). Those are still the speaker's language. The list is small on purpose: the common yes/no/want/
+# don't-want/product words of a dairy shop conversation.
+ROMANISED_INDIC: frozenset[str] = frozenset({
+    # Tamil
+    "aama", "ama", "amo", "aamaa", "aamam", "amma", "illa", "illai", "ille", "venum", "venam", "vendam",
+    "vendum", "paal", "pal", "thayir", "thair", "sari", "seri", "romba", "konjam", "kudunga", "kodunga",
+    "enna", "evlo", "evvalavu", "ethana", "rendu", "onnu", "moonu", "naalu", "anju", "inniki", "innaiki",
+    "naalaiki", "vanakkam", "nalla", "nallathu", "podhum", "pothum", "mudinchu", "irukku", "iruku", "aachu",
+    "poitu", "paakanum", "sollu", "sollunga", "yen", "yenna", "adhu", "idhu", "inga", "anga",
+    # Hindi
+    "haan", "han", "ha", "nahi", "nahin", "theek", "thik", "accha", "achha", "acha", "dudh", "doodh", "dahi",
+    "kitna", "kitne", "chahiye", "nai", "bas", "abhi", "kal", "aaj", "bolo", "batao", "kya", "kaun", "kahan",
+    "do", "teen", "char", "paanch", "ek", "ji", "haanji", "namaste", "sahi",
+})
+# Words that belong to no language in a shop conversation: confirmations, fillers, brands, units and the
+# product nouns the owner mixes into any sentence. They never count towards a language change.
+_NEUTRAL: frozenset[str] = frozenset({
+    "ok", "okay", "k", "yes", "no", "yeah", "yep", "nope", "hmm", "mm", "hm", "ah", "oh", "uh", "um", "hi",
+    "hello", "hey", "bye", "stop", "cancel", "done", "wait", "thanks", "thank", "you", "please", "sorry",
+    "fine", "aira",
+    "milk", "curd", "yogurt", "ghee", "butter", "paneer", "ice", "cream", "aavin", "sakthi", "arun", "amul",
+    "litre", "liter", "litres", "liters", "ml", "kg", "g", "gram", "grams", "packet", "packets", "pack",
+    "piece", "pieces", "cup", "cups", "rupees", "rupee", "rs", "upi", "cash",
+})
+# Scripts written without spaces: a run of letters is a sentence, so characters are counted instead of words.
+_UNSPACED: frozenset[str] = frozenset({"ja", "zh", "th", "lo", "km", "my"})
+SENTENCE_WORDS = 3   # this many letter-words in another language is a clear sentence: switch at once
+STREAK_WORDS = 2     # this many in each of two consecutive utterances is a switch too
+
+
+def _letter_words(text: str) -> list[tuple[str, str]]:
+    """``(word, language)`` for every run of letters in ``text``; the language is that of most of its letters."""
+    words: list[tuple[str, str]] = []
+    buf: list[str] = []
+    counts: dict[str, int] = {}
+
+    def flush() -> None:
+        if buf:
+            words.append(("".join(buf), max(counts, key=counts.__getitem__)))
+            buf.clear()
+            counts.clear()
+
+    for ch in text:
+        code = _script_of(ord(ch))
+        if code is None:
+            flush()
+            continue
+        buf.append(ch)
+        counts[code] = counts.get(code, 0) + 1
+    flush()
+    return words
+
+
+def _new_language_weight(text: str, previous: str, candidate: str) -> int:
+    """How strongly ``text`` speaks ``candidate`` rather than ``previous``: the letter-words (characters, for an
+    unspaced script) that belong to ``candidate`` and are neither neutral nor a romanised Indic word."""
+    weight = 0
+    for word, code in _letter_words(text):
+        if code == "zh" and candidate == "ja":
+            code = "ja"  # kanji inside a Japanese sentence
+        if code != candidate:
+            continue
+        low = word.lower()
+        if candidate == "en" and (low in _NEUTRAL or (previous != "en" and low in ROMANISED_INDIC)):
+            continue
+        weight += len(word) if candidate in _UNSPACED else 1
+    return weight
+
+
+def follow_lang(text: str, previous: str, pending: str | None = None) -> tuple[str, str | None]:
+    """The session language after ``text``, and the language streak to carry to the next utterance.
+
+    The language changes only when the speaker clearly speaks another language:
+    - at least ``SENTENCE_WORDS`` letter-words in the new language in one utterance, or
+    - at least ``STREAK_WORDS`` such words in each of two consecutive utterances (``pending`` is the streak
+      language from the previous utterance, or ``None``).
+    Short replies (one or two words, confirmations, numbers) never change the language, and romanised Tamil
+    or Hindi words ("amo", "paal", "haan") count as the current Indic language, never as English.
+    Never raises.
+    """
+    previous = previous or FALLBACK
+    if not isinstance(text, str):
+        return previous, None
+    candidate = detect_lang(text, previous)
+    if candidate == previous:
+        return previous, None
+    weight = _new_language_weight(text, previous, candidate)
+    if weight >= SENTENCE_WORDS or (weight >= STREAK_WORDS and pending == candidate):
+        return candidate, None
+    return previous, candidate if weight >= STREAK_WORDS else None

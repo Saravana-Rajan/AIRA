@@ -202,6 +202,31 @@ describe("orderRows", () => {
     );
     expect(blank.vendorReply).toBeNull();
   });
+  it("carries the delivery time and note the owner asked for, with the parsed time in IST", () => {
+    const [r] = orderRows(
+      [{
+        id: "o5", supplierId: "sakthi_vendor", items: [], state: "ORDER_PLACED", updatedAt: 1,
+        deliveryBy: { text: "6 am tomorrow", at: "2026-10-12T06:00:00+05:30" }, note: "send fresh stock",
+      }] as any[],
+      [], suppliers, products,
+    );
+    expect(r.deliveryByText).toBe("6 am tomorrow (12 Oct, 6:00 am)");
+    expect(r.note).toBe("send fresh stock");
+    const [raw] = orderRows(
+      [{ id: "o6", supplierId: "sakthi_vendor", items: [], state: "ORDER_PLACED", updatedAt: 1, deliveryBy: { text: "before the rush", at: null } }] as any[],
+      [], suppliers, products,
+    );
+    expect(raw.deliveryByText).toBe("before the rush");
+    expect(raw.note).toBeNull();
+    const [dateOnly] = orderRows(
+      [{ id: "o7", supplierId: "sakthi_vendor", items: [], state: "ORDER_PLACED", updatedAt: 1, deliveryBy: { text: "tomorrow", at: "2026-10-12" } }] as any[],
+      [], suppliers, products,
+    );
+    expect(dateOnly.deliveryByText).toBe("tomorrow (12 Oct)");
+    const [none] = orderRows([{ id: "o8", supplierId: "sakthi_vendor", items: [], state: "ORDER_PLACED", updatedAt: 1 }] as any[], [], suppliers, products);
+    expect(none.deliveryByText).toBeNull();
+    expect(none.note).toBeNull();
+  });
 });
 
 describe("auditRows", () => {
@@ -220,5 +245,23 @@ describe("auditRows", () => {
     ]);
     expect(rows[0]).toMatchObject({ id: "a3", actorLabel: "System", actionText: "Expiry check", timeText: "6:05 pm" });
     expect(rows[1]).toMatchObject({ id: "a4", actorLabel: "helper", timeText: "9:00 am" });
+  });
+});
+
+describe("stockRows and products changed by voice", () => {
+  it("hides a product with active === false and shows a new one added by voice", () => {
+    const rows = stockRows(
+      [
+        ...products,
+        { id: "arun_old", sku: "arun_old", name: "Old box", unit: "box", reorderThreshold: 3, active: false } as any,
+        { id: "aavin_lassi_200ml", sku: "aavin_lassi_200ml", name: "Aavin Lassi 200 ml", unit: "pack", reorderThreshold: 2, active: true } as any,
+      ],
+      inventory,
+      NOW,
+    );
+    const skus = rows.map((r) => r.sku);
+    expect(skus).not.toContain("arun_old");
+    expect(skus).toContain("aavin_lassi_200ml");
+    expect(skus).toContain("new_sku");
   });
 });

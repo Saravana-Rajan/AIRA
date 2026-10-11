@@ -19,7 +19,7 @@ from typing import TYPE_CHECKING, AsyncIterator, Awaitable, Callable, Literal, P
 
 from aira_live import safety
 from aira_live.contracts import AudioOutMsg, CueMsg, ErrorMsg, TranscriptMsg
-from aira_live.i18n import detect_lang, t
+from aira_live.i18n import t
 from aira_live.prompt import last_catalog_facts
 
 if TYPE_CHECKING:
@@ -279,8 +279,9 @@ class LiveBridge:
             lang = None
             if ev.final:
                 utterance, self._in_partial = ev.text or self._in_partial, ""
-                # AIRA follows the speaker turn by turn: the catalog and the phone's labels switch with him.
-                s.lang = lang = detect_lang(utterance, s.lang)
+                # AIRA follows the speaker: the catalog and the phone's labels switch with him, but only when he
+                # clearly speaks another language (sticky: "Amo" in Latin letters is still Tamil).
+                lang = s.follow_lang(utterance)
                 self._notify_listeners(utterance)
             else:
                 self._in_partial += ev.text
@@ -293,7 +294,7 @@ class LiveBridge:
         elif ev.kind == "turn_complete":
             if self._in_partial:  # the backend never marked the utterance final
                 utterance, self._in_partial = self._in_partial, ""
-                s.lang = detect_lang(utterance, s.lang)
+                s.follow_lang(utterance)
                 self._notify_listeners(utterance)
             if ev.more:  # the same answer goes on in another model turn
                 return

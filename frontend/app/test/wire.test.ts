@@ -282,6 +282,47 @@ describe("wireApp: gestures", () => {
   });
 });
 
+describe("wireApp: hands-free start (startListening)", () => {
+  it("opens the mic with no tap, then plays the listening earcon and greets", async () => {
+    const a = setup({ settings: { lang: "ta" } });
+    const ok = await a.w.startListening();
+    expect(ok).toBe(true);
+    expect(a.env.startMic).toHaveBeenCalledTimes(1);
+    expect(a.earcons()).toContain("listening");
+    expect(a.spoken()).toContain(STRINGS.greeting.ta);
+    expect(a.w.view.get().screen.status.kind).toBe("listening");
+    a.chunk("AAAA");
+    expect(a.socket.sent).toContainEqual({ t: "audio", pcm16: "AAAA" });
+    expect(a.ctx.resume).toHaveBeenCalledTimes(2); // once at wiring, again once the mic stream unlocked audio
+  });
+
+  it("resolves false, quietly, when getUserMedia rejects (no gesture yet): the caller shows Start", async () => {
+    const err = Object.assign(new Error("denied"), { name: "NotAllowedError" });
+    const a = setup({ env: { startMic: vi.fn(async () => { throw err; }) } });
+    expect(await a.w.startListening()).toBe(false);
+    expect(a.spoken()).toEqual([]); // not "Microphone is blocked": the owner only has to tap
+    expect(a.earcons()).not.toContain("warn");
+    expect(a.earcons()).not.toContain("listening");
+    expect(a.w.view.get().screen.status.kind).not.toBe("listening");
+  });
+
+  it("does not start the thinking sound: nobody has asked anything yet", async () => {
+    vi.useFakeTimers();
+    const a = setup();
+    await a.w.startListening();
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(a.earcons()).not.toContain("thinking");
+  });
+
+  it("a later double-tap reuses the open mic", async () => {
+    const a = setup();
+    await a.w.startListening();
+    a.w.onTalk();
+    await flush();
+    expect(a.env.startMic).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("wireApp: server messages", () => {
   it("cue interrupted flushes AIRA's audio and holds late chunks", () => {
     const a = setup();
