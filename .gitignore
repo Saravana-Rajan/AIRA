@@ -23,3 +23,6 @@ shared/docs/submission/*.pdf
 # demo video cuts (uploaded to YouTube, never committed)
 shared/docs/submission/*.mp4
 .ruff_cache/
+
+# hosting bundle copied next to shared/infra/firebase.json for firebase deploy
+shared/infra/public/

@@ -276,7 +276,7 @@ def test_firebase_json_single_hosting_site_and_aira_database():
     hosting = cfg["hosting"]
     assert isinstance(hosting, dict), "exactly one hosting entry"
     assert hosting["site"] == "aira-shop"
-    assert hosting["public"] == "../../dist/hosting"
+    assert hosting["public"] == "public"
     assert hosting["rewrites"] == [
         {"source": "/dashboard/**", "destination": "/dashboard/index.html"},
         {"source": "**", "destination": "/index.html"},

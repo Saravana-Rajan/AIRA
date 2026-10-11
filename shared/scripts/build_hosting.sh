@@ -36,4 +36,9 @@ for page in "$OUT/index.html" "$OUT/dashboard/index.html"; do
     exit 1
   fi
 done
-echo "Hosting bundle ready: $OUT"
+# firebase deploy --config shared/infra/firebase.json only publishes folders inside shared/infra,
+# so mirror the bundle to shared/infra/public (git-ignored).
+DEPLOY_DIR="$ROOT/shared/infra/public"
+rm -rf "$DEPLOY_DIR"
+cp -R "$OUT" "$DEPLOY_DIR"
+echo "Hosting bundle ready: $OUT (copied to $DEPLOY_DIR for firebase deploy)"

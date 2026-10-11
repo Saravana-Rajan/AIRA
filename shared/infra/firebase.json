@@ -8,7 +8,7 @@
   ],
   "hosting": {
     "site": "aira-shop",
-    "public": "../../dist/hosting",
+    "public": "public",
     "ignore": [
       "firebase.json",
       "**/node_modules/**",
@@ -16,8 +16,10 @@
     ],
     "redirects": [
       { "source": "/dashboard", "destination": "/dashboard/", "type": 301 },
-      { "source": "/DASHBOARD{,/**}", "destination": "/dashboard/", "type": 301 },
-      { "source": "/Dashboard{,/**}", "destination": "/dashboard/", "type": 301 }
+      { "source": "/DASHBOARD", "destination": "/dashboard/", "type": 301 },
+      { "source": "/DASHBOARD/**", "destination": "/dashboard/", "type": 301 },
+      { "source": "/Dashboard", "destination": "/dashboard/", "type": 301 },
+      { "source": "/Dashboard/**", "destination": "/dashboard/", "type": 301 }
     ],
     "rewrites": [
       {

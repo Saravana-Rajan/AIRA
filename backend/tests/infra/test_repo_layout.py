@@ -158,7 +158,7 @@ def test_frontend_is_the_npm_workspace_root():
 def test_firebase_json_lives_in_shared_infra_and_uses_relative_paths():
     fb = json.loads((ROOT / "shared" / "infra" / "firebase.json").read_text(encoding="utf-8"))
     assert fb["firestore"] == [{"database": "aira", "rules": "firestore.rules", "indexes": "firestore.indexes.json"}]
-    assert fb["hosting"]["public"] == "../../dist/hosting"
+    assert fb["hosting"]["public"] == "public"
     rc = json.loads((ROOT / "shared" / "infra" / ".firebaserc").read_text(encoding="utf-8"))
     assert rc["projects"]["default"] == "demo-aira"
 
