@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
-  formatINR, formatPrice, formatCount, formatQty, IST_OFFSET_MS, startOfDayIST, daysUntil, formatTimeIST, stateLabel, expiryLabel,
+  formatINR, formatPrice, formatCount, formatQty, formatLineQty, IST_OFFSET_MS, startOfDayIST, daysUntil, formatTimeIST, stateLabel, expiryLabel,
 } from "../src/lib/format";
 
 describe("formatINR", () => {
@@ -42,6 +42,30 @@ describe("formatQty", () => {
   it("formats ghee jars with plurals", () => {
     expect(formatQty(1, "jar")).toBe("1 jar");
     expect(formatQty(4, "jar")).toBe("4 jars");
+  });
+});
+
+describe("formatLineQty", () => {
+  // The backend stores order lines in the product's selling unit: litres for milk and curd, else packs/jars/boxes.
+  it("adds the pack count to litres of a pouch product when the litres are whole packs", () => {
+    expect(formatLineQty(20, "L", 0.5)).toBe("20 L (40 packs)");
+    expect(formatLineQty(0.5, "L", 0.5)).toBe("0.5 L (1 pack)");
+    expect(formatLineQty(0.6, "L", 0.2)).toBe("0.6 L (3 packs)"); // 0.6 / 0.2 is 2.9999… in floating point
+  });
+  it("shows litres alone for a 1 L pack, when the litres are not whole packs, or with no pack size", () => {
+    expect(formatLineQty(30, "L", 1)).toBe("30 L");
+    expect(formatLineQty(3, "L", 2)).toBe("3 L");
+    expect(formatLineQty(12, "L")).toBe("12 L");
+  });
+  it("shows packs, jars and boxes as they are, whatever their pack size", () => {
+    expect(formatLineQty(25, "pack")).toBe("25 packs");
+    expect(formatLineQty(10, "pack", 0.2)).toBe("10 packs");
+    expect(formatLineQty(3, "jar", 0.2)).toBe("3 jars");
+    expect(formatLineQty(1, "box")).toBe("1 box");
+  });
+  it("shows a bare number when the unit is unknown", () => {
+    expect(formatLineQty(12, undefined)).toBe("12");
+    expect(formatLineQty(4, "crate")).toBe("4");
   });
 });
 

@@ -11,7 +11,7 @@ export function buildViews(d: ShopData, nowMs: number): DashboardViews {
   return {
     stock: stockRows(d.products, d.inventory, nowMs),
     today: todaySummary(d.sales, d.payments, d.products, nowMs),
-    orders: orderRows(d.orders, d.deliveries, d.suppliers, d.products),
-    audit: auditRows(d.auditLogs),
+    orders: orderRows(d.orders, d.deliveries, d.suppliers, d.products, nowMs),
+    audit: auditRows(d.auditLogs, nowMs, { products: d.products, orders: d.orders, deliveries: d.deliveries, suppliers: d.suppliers }),
   };
 }

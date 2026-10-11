@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { ORDER_STATES } from "@aira/contracts";
 import { stockRows } from "../src/lib/selectors/stock";
 import { todaySummary } from "../src/lib/selectors/today";
-import { ORDER_FLOW, orderRows } from "../src/lib/selectors/orders";
+import { ORDER_FLOW, orderRows, splitOrders } from "../src/lib/selectors/orders";
 import { auditRows } from "../src/lib/selectors/audit";
 
 const NOW = Date.UTC(2026, 9, 10, 6, 30); // 2026-10-10 12:00 IST
@@ -157,7 +157,7 @@ describe("orderRows", () => {
     expect(r.stepIndex).toBe(ORDER_FLOW.indexOf("DELIVERY_RECONCILED"));
     expect(r.discrepancyTexts).toEqual(["Sakthi curd 1 L: expected 30, got 28", "total: expected 1500, got 1600"]);
     expect(r.vendorReply).toBe("OK, delivery at 6 pm");
-    expect(r.itemsText).toBe("Sakthi curd 1 L × 30");
+    expect(r.itemsText).toBe("Sakthi curd 1 L: 30 L");
     expect(r.supplierName).toBe("Sakthi vendor");
   });
   it("sorts newest first and survives an unknown supplier", () => {
@@ -195,7 +195,7 @@ describe("orderRows", () => {
     );
     expect(r.vendorReply).toBe("Sending tomorrow 7 am");
     expect(r.supplierName).toBe("Arun ice cream agent");
-    expect(r.itemsText).toBe("Arun cone pack × 12");
+    expect(r.itemsText).toBe("Arun cone pack: 12");
     const [blank] = orderRows(
       [{ id: "o4", supplierId: "sakthi_vendor", items: [], state: "ORDER_PLACED", vendorReply: { at: "x" }, updatedAt: 1 }] as any[],
       [], suppliers, products,
@@ -329,7 +329,7 @@ describe("auditRows", () => {
       { id: "a1", actor: "owner", action: "order_confirmed", refType: "order", refId: "o1", outcome: "ok", at: 1000 } as any,
       { id: "a2", actor: "aira", action: "sale_completed", refType: "sale", refId: "s2", outcome: "ok", evidenceUri: "gs://aira-evidence/s2.jpg", at: 2000 } as any,
     ]);
-    expect(rows[0]).toMatchObject({ id: "a2", actorLabel: "AIRA", actionText: "Sale completed", outcome: "ok", evidenceUri: "gs://aira-evidence/s2.jpg" });
+    expect(rows[0]).toMatchObject({ id: "a2", actorLabel: "AIRA", actionText: "Sale completed", outcomeText: "OK", evidenceUri: "gs://aira-evidence/s2.jpg" });
     expect(rows[1]).toMatchObject({ id: "a1", actorLabel: "Owner", actionText: "Order confirmed", evidenceUri: null });
   });
   it("shows the time in IST, reads ISO strings and keeps unknown actors as written", () => {
@@ -339,6 +339,193 @@ describe("auditRows", () => {
     ], NOW);
     expect(rows[0]).toMatchObject({ id: "a3", actorLabel: "System", actionText: "Expiry check", timeText: "6:05 pm" });
     expect(rows[1]).toMatchObject({ id: "a4", actorLabel: "helper", timeText: "9:00 am" });
+  });
+});
+
+// The real Sunrise Dairy catalog shapes (shared/catalog/sunrise_dairy.json): milk and curd are sold by the litre.
+const catalogProducts: any[] = [
+  { id: "aavin_milk_500ml", sku: "aavin_milk_500ml", name: "Aavin Milk 500 ml", unit: "L", packSizeL: 0.5 },
+  { id: "sakthi_curd_1l", sku: "sakthi_curd_1l", name: "Sakthi Curd 1 L", unit: "L", packSizeL: 1 },
+  { id: "aavin_paneer_200g", sku: "aavin_paneer_200g", name: "Aavin Paneer 200 g", unit: "pack", packSizeG: 200 },
+  { id: "aavin_ghee_200ml", sku: "aavin_ghee_200ml", name: "Aavin Ghee 200 ml", unit: "jar", packSizeL: 0.2 },
+  { id: "arun_icecream_box", sku: "arun_icecream_box", name: "Arun Ice Cream Family Box", unit: "box", active: false },
+];
+
+describe("order quantities in their selling unit", () => {
+  const one = (items: any[], extra: any = {}) =>
+    orderRows([{ id: "o", supplierId: "aavin_vendor", supplierName: "Aavin vendor", items, state: "ORDER_PLACED", updatedAt: 1, ...extra }], [], [], catalogProducts)[0];
+
+  it("reads litres as litres, with the pack count for half-litre pouches", () => {
+    const r = one([
+      { sku: "aavin_milk_500ml", qty: 20, unit: "L" },
+      { sku: "sakthi_curd_1l", qty: 30, unit: "L" },
+      { sku: "aavin_paneer_200g", qty: 25, unit: "pack" },
+      { sku: "aavin_ghee_200ml", qty: 4, unit: "jar" },
+    ]);
+    expect(r.itemsText).toBe("Aavin Milk 500 ml: 20 L (40 packs), Sakthi Curd 1 L: 30 L, Aavin Paneer 200 g: 25 packs, Aavin Ghee 200 ml: 4 jars");
+  });
+  it("uses the product's unit when the line has none, and the line's unit when the product is gone", () => {
+    expect(one([{ sku: "aavin_milk_500ml", qty: 20 }]).itemsText).toBe("Aavin Milk 500 ml: 20 L (40 packs)");
+    expect(one([{ sku: "gone", name: "Mystery milk", qty: 4, unit: "L" }]).itemsText).toBe("Mystery milk: 4 L");
+  });
+  it("never shows the old pack-count look (×) for an order line", () => {
+    expect(one([{ sku: "aavin_milk_500ml", qty: 20, unit: "L" }]).itemsText).not.toContain("×");
+  });
+
+  it("puts litres and pack counts inside the per-kind mismatch sentences; the bill quantity stays bare", () => {
+    const mismatch = (discrepancies: any[], items: any[] = []) => orderRows(
+      [{ id: "o", supplierId: "aavin_vendor", items: [{ sku: "aavin_milk_500ml", qty: 20, unit: "L" }, { sku: "sakthi_curd_1l", qty: 30, unit: "L" }], state: "DISCREPANCY", updatedAt: 1 }] as any[],
+      [{ id: "d", orderId: "o", items, discrepancies }] as any[],
+      [], catalogProducts,
+    )[0].discrepancyTexts;
+    expect(mismatch([
+      { kind: "SHORT_DELIVERY", sku: "aavin_milk_500ml", expected: 20, actual: 19 },
+      { kind: "OVER_DELIVERY", sku: "sakthi_curd_1l", expected: 30, actual: 32 },
+      { kind: "UNORDERED_ITEM", sku: "aavin_paneer_200g", expected: 0, actual: 5 },
+      { kind: "INVOICE_QTY_MISMATCH", sku: "aavin_milk_500ml", expected: 38, actual: 40 },
+    ])).toEqual([
+      "Aavin Milk 500 ml: counted 19 L (38 packs) of 20 L (40 packs) ordered",
+      "Sakthi Curd 1 L: counted 32 L, ordered 30 L",
+      "Aavin Paneer 200 g: not ordered, 5 packs delivered",
+      "Aavin Milk 500 ml: bill says 40, counted 38",
+    ]);
+    // a short count read from the delivery items before reconcile writes it
+    expect(mismatch([], [{ sku: "aavin_milk_500ml", expectedQty: 20, countedQty: 19 }]))
+      .toEqual(["Aavin Milk 500 ml: counted 19 L (38 packs) of 20 L (40 packs) ordered"]);
+  });
+});
+
+describe("orders the owner never sent (DRAFT)", () => {
+  const rows = orderRows(
+    [
+      { id: "said_no", supplierId: "aavin_vendor", supplierName: "Aavin vendor", items: [{ sku: "aavin_milk_500ml", qty: 20, unit: "L" }], state: "DRAFT", updatedAt: 300 },
+      { id: "sent_later", supplierId: "aavin_vendor", supplierName: "Aavin vendor", items: [], state: "ORDER_PLACED", updatedAt: 200 },
+      { id: "short", supplierId: "sakthi_vendor", supplierName: "Sakthi curd vendor", items: [], state: "DISCREPANCY", updatedAt: 100 },
+    ] as any[],
+    [], [], catalogProducts,
+  );
+  it("keeps drafts out of the sent list and in a separate not-sent list, newest first", () => {
+    const { sent, notSent } = splitOrders(rows);
+    expect(sent.map((r) => r.id)).toEqual(["sent_later", "short"]);
+    expect(notSent.map((r) => r.id)).toEqual(["said_no"]);
+  });
+  it("treats a draft the owner later sent (ORDER_PLACED) as a normal order", () => {
+    const placed = rows.map((r) => (r.id === "said_no" ? { ...r, state: "ORDER_PLACED", stepIndex: 0 } : r));
+    expect(splitOrders(placed).notSent).toEqual([]);
+    expect(splitOrders(placed).sent).toHaveLength(3);
+  });
+});
+
+describe("audit rows say what happened, to what, in plain words", () => {
+  const orders: any[] = [
+    { id: "o_milk", supplierId: "aavin_vendor", supplierName: "Aavin vendor", items: [{ sku: "aavin_milk_500ml", qty: 20, unit: "L" }], state: "ORDER_PLACED", updatedAt: 1 },
+    { id: "o_curd", supplierId: "sakthi_vendor", supplierName: "Sakthi curd vendor", items: [{ sku: "sakthi_curd_1l", qty: 30, unit: "L" }], state: "DISCREPANCY", updatedAt: 1 },
+    {
+      id: "o_mixed", supplierId: "aavin_vendor", supplierName: "Aavin vendor", state: "ORDER_PLACED", updatedAt: 1,
+      items: [{ sku: "aavin_milk_500ml", qty: 10, unit: "L" }, { sku: "aavin_paneer_200g", qty: 25, unit: "pack" }, { sku: "aavin_ghee_200ml", qty: 4, unit: "jar" }],
+    },
+    { id: "o_two", supplierId: "aavin_vendor", supplierName: "Aavin vendor", state: "ORDER_PLACED", updatedAt: 1, items: [{ sku: "aavin_paneer_200g", qty: 1, unit: "pack" }, { sku: "aavin_ghee_200ml", qty: 2, unit: "jar" }] },
+  ];
+  const deliveries: any[] = [{ id: "d_curd", orderId: "o_curd", items: [], discrepancies: [] }];
+  const refs = { products: catalogProducts, orders, deliveries, suppliers: [] };
+  let t = 0;
+  const row = (action: string, refType: string, refId: string, outcome: unknown, actor = "owner") =>
+    auditRows([{ id: `a${++t}`, actor, action, refType, refId, outcome, at: 1000 } as any], NOW, refs)[0];
+
+  it("names the order's supplier and items, and how the order went out", () => {
+    expect(row("order_placed", "order", "o_milk", "telegram")).toMatchObject({
+      actionText: "Ordered 20 L (40 packs) of Aavin Milk 500 ml from Aavin vendor", outcomeText: "Sent on Telegram",
+    });
+    expect(row("order_placed", "order", "o_curd", "demo")).toMatchObject({
+      actionText: "Ordered 30 L of Sakthi Curd 1 L from Sakthi curd vendor", outcomeText: "Sent to the demo vendor",
+    });
+    expect(row("order_placed", "order", "o_two", "manual")).toMatchObject({
+      actionText: "Ordered 1 pack of Aavin Paneer 200 g and 2 jars of Aavin Ghee 200 ml from Aavin vendor", outcomeText: "Sent by the owner",
+    });
+    expect(row("order_placed", "order", "o_mixed", "whatsapp")).toMatchObject({
+      actionText: "Ordered 10 L (20 packs) of Aavin Milk 500 ml, 25 packs of Aavin Paneer 200 g and 1 more item from Aavin vendor",
+      outcomeText: "Sent on WhatsApp",
+    });
+  });
+  it("tells four Telegram orders apart instead of four identical rows", () => {
+    const rows = auditRows(
+      ["o_milk", "o_curd", "o_mixed", "o_two"].map((id, i) => ({ id: `t${i}`, actor: "owner", action: "order_placed", refType: "order", refId: id, outcome: "telegram", at: i } as any)),
+      NOW, refs,
+    );
+    expect(new Set(rows.map((r) => r.actionText)).size).toBe(4);
+  });
+  it("dates an older audit sentence like any other row", () => {
+    const [r] = auditRows([{ id: "y", actor: "owner", action: "order_placed", refType: "order", refId: "o_milk", outcome: "telegram", at: Date.UTC(2026, 9, 9, 5, 0) } as any], NOW, refs);
+    expect(r).toMatchObject({ timeText: "Yesterday, 10:30 am", actionText: "Ordered 20 L (40 packs) of Aavin Milk 500 ml from Aavin vendor" });
+  });
+  it("still reads plainly when the order is not loaded", () => {
+    expect(row("order_placed", "order", "o_old", "telegram")).toMatchObject({ actionText: "Order placed", outcomeText: "Sent on Telegram" });
+  });
+
+  it("writes a supplier payment in rupees with Indian grouping and says how it was checked", () => {
+    expect(row("supplier_paid", "order", "o_curd", "cash_count:980")).toMatchObject({
+      actionText: "Paid Sakthi curd vendor ₹980", outcomeText: "Cash, checked by camera",
+    });
+    expect(row("supplier_paid", "order", "o_milk", "user_confirm:12500")).toMatchObject({
+      actionText: "Paid Aavin vendor ₹12,500", outcomeText: "UPI, owner confirmed",
+    });
+    expect(row("supplier_paid", "order", "o_old", "soundbox:500")).toMatchObject({
+      actionText: "Paid a supplier ₹500", outcomeText: "Soundbox confirmed",
+    });
+  });
+
+  it("writes a delivery count with the product name and its litres or packs", () => {
+    expect(row("delivery_counted", "delivery", "d_curd", "sakthi_curd_1l=28.0")).toMatchObject({
+      actionText: "Counted 28 L of Sakthi Curd 1 L from Sakthi curd vendor", outcomeText: "Added to stock",
+    });
+    expect(row("delivery_counted", "delivery", "d_gone", "aavin_milk_500ml=19.0")).toMatchObject({
+      actionText: "Counted 19 L (38 packs) of Aavin Milk 500 ml", outcomeText: "Added to stock",
+    });
+  });
+
+  it("says whether the bill matched, and whose bill it was", () => {
+    expect(row("invoice_checked", "delivery", "d_curd", "DELIVERY_RECONCILED", "aira")).toMatchObject({
+      actionText: "Checked the bill from Sakthi curd vendor", outcomeText: "Bill matches",
+    });
+    expect(row("invoice_checked", "delivery", "d_gone", "DISCREPANCY", "aira")).toMatchObject({
+      actionText: "Checked the bill", outcomeText: "Bill does not match",
+    });
+  });
+
+  it("names products and suppliers changed by voice", () => {
+    expect(row("product_added", "product", "aavin_paneer_200g", "added")).toMatchObject({ actionText: "New product: Aavin Paneer 200 g", outcomeText: "Added" });
+    expect(row("product_updated", "product", "aavin_paneer_200g", "price")).toMatchObject({ actionText: "Changed Aavin Paneer 200 g", outcomeText: "Price changed" });
+    expect(row("product_updated", "product", "aavin_paneer_200g", "name,price")).toMatchObject({ outcomeText: "Name and price changed" });
+    expect(row("product_updated", "product", "aavin_paneer_200g", "name,price,supplier")).toMatchObject({ outcomeText: "Name, price and supplier changed" });
+    expect(row("product_disabled", "product", "arun_icecream_box", "disabled")).toMatchObject({ actionText: "Stopped selling Arun Ice Cream Family Box", outcomeText: "Taken off sale" });
+    expect(row("stock_received", "product", "sakthi_curd_1l", "+10")).toMatchObject({ actionText: "Received 10 L of Sakthi Curd 1 L without an order", outcomeText: "Added to stock" });
+    // suppliers are server-only, so the name comes from an order to that supplier
+    expect(row("supplier_added", "supplier", "aavin_vendor", "telegram")).toMatchObject({ actionText: "New supplier: Aavin vendor", outcomeText: "Orders go on Telegram" });
+    expect(row("supplier_added", "supplier", "new_vendor", "call")).toMatchObject({ actionText: "New supplier added", outcomeText: "Orders by phone call" });
+  });
+
+  it("falls back to plain words for unknown actions and outcomes, never undefined or a raw code", () => {
+    expect(row("stock_moved", "product", "x", "zone=fridge2")).toMatchObject({ actionText: "Stock moved", outcomeText: "Zone fridge2" });
+    expect(row("refund_given", "sale", "s1", "cash_count:980")).toMatchObject({ actionText: "Refund given", outcomeText: "Cash count 980" });
+    expect(row("delivery_counted", "delivery", "d_curd", "garbage")).toMatchObject({ actionText: "Delivery counted", outcomeText: "Garbage" });
+    expect(row("supplier_paid", "order", "o_curd", "cheque")).toMatchObject({ actionText: "Supplier paid", outcomeText: "Cheque" });
+    const blank = auditRows([{ id: "b", actor: "owner", at: 1 } as any], NOW, refs)[0];
+    expect(blank).toMatchObject({ actionText: "Action not recorded", outcomeText: "Not recorded" });
+    const outcomes = ["ok", "discrepancy", "needs_recount", ""].map((o) => row("expiry_check", "inventory", "x", o, "system").outcomeText);
+    expect(outcomes).toEqual(["OK", "Discrepancy", "Needs recount", "Not recorded"]);
+  });
+
+  it("never shows undefined, an em dash or a raw code with = or : in any row", () => {
+    const logs = [
+      ["order_placed", "order", "o_milk", "telegram"], ["supplier_paid", "order", "o_x", "cash_count:980"],
+      ["delivery_counted", "delivery", "d_x", "nope_sku=4.0"], ["invoice_checked", "delivery", "d_x", "WEIRD_STATE"],
+      ["product_updated", "product", "gone", "price"], ["mystery", "x", "y", "a=b:c"], [undefined, undefined, undefined, undefined],
+    ];
+    const rows = auditRows(logs.map(([action, refType, refId, outcome], i) => ({ id: `z${i}`, actor: "owner", action, refType, refId, outcome, at: i } as any)), NOW, refs);
+    for (const r of rows) {
+      expect(`${r.actionText} ${r.outcomeText}`).not.toMatch(/undefined|null|—/);
+      expect(r.outcomeText).not.toMatch(/[=:]/);
+    }
   });
 });
 

@@ -86,7 +86,7 @@ describe("App", () => {
     expect(findAllByText(el, "li", "Sakthi Curd 1 L: counted 28 L of 30 L ordered")).toHaveLength(1);
     expect(findAllByText(el, "li", "Sakthi Curd 1 L: bill says 30, counted 28")).toHaveLength(1);
     expect(text(el)).not.toMatch(/expected 28, got 30|undefined/);
-    expect(findAllByText(el, "dd", "₹180").length).toBeGreaterThan(0);
+    expect(findAllByText(el, ".order__items", "Sakthi Curd 1 L: 30 L")).toHaveLength(1);    expect(findAllByText(el, "dd", "₹180").length).toBeGreaterThan(0);
     expect(text(el)).toContain("Forecast unavailable");
     expect(text(el)).toMatch(/Demo shop/);
   });

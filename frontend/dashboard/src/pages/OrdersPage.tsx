@@ -1,5 +1,5 @@
 import type { OrderRow } from "../lib/selectors/orders";
-import { ORDER_FLOW } from "../lib/selectors/orders";
+import { ORDER_FLOW, splitOrders } from "../lib/selectors/orders";
 import { stateLabel } from "../lib/format";
 
 function stepClass(i: number, o: OrderRow): string {
@@ -67,13 +67,33 @@ function OrderCard({ o }: { o: OrderRow }) {
   );
 }
 
-/** limit: on the overview, show only the newest few orders and link to the full list. */
+/** Orders read back to the owner that never went to the vendor: plain text, no progress track. */
+function NotSent({ rows }: { rows: OrderRow[] }) {
+  return (
+    <section class="drafts" aria-labelledby="drafts-title">
+      <h3 id="drafts-title" class="drafts__title">Not sent</h3>
+      <p class="drafts__note">Read back to the owner but not sent to the supplier.</p>
+      <ul class="drafts__list">
+        {rows.map((o) => (
+          <li key={o.id}>{[o.supplierName, o.itemsText || "No items listed", o.updatedText].filter(Boolean).join(" · ")}</li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
+/**
+ * Sent orders as cards; DRAFT orders (never sent) only in a small "Not sent" group on the full page.
+ * limit: on the overview, show only the newest few sent orders and link to the full list.
+ */
 export function OrdersPage(props: { rows: OrderRow[]; limit?: number }) {
-  const shown = props.limit !== undefined ? props.rows.slice(0, props.limit) : props.rows;
+  const { sent, notSent } = splitOrders(props.rows);
+  const overview = props.limit !== undefined;
+  const shown = overview ? sent.slice(0, props.limit) : sent;
   return (
     <section class="card card--orders" aria-labelledby="orders-title">
       <h2 id="orders-title" class="card__title">Orders &amp; deliveries</h2>
-      {props.rows.length === 0 ? (
+      {sent.length === 0 ? (
         <p class="empty">No supplier orders yet. When the owner orders from a supplier through AIRA, it shows here.</p>
       ) : (
         <div class="orders">
@@ -82,9 +102,10 @@ export function OrdersPage(props: { rows: OrderRow[]; limit?: number }) {
           ))}
         </div>
       )}
-      {shown.length < props.rows.length && (
-        <a class="more" href="#/orders">See all {props.rows.length} orders</a>
+      {shown.length < sent.length && (
+        <a class="more" href="#/orders">See all {sent.length} orders</a>
       )}
+      {!overview && notSent.length > 0 && <NotSent rows={notSent} />}
     </section>
   );
 }

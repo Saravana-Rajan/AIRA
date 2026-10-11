@@ -43,6 +43,24 @@ export function formatQty(qty: number, unit: QtyUnit): string {
   return `${n} ${PLURALS[unit] ?? unit}`;
 }
 
+export function isQtyUnit(unit: unknown): unit is QtyUnit {
+  return unit === "L" || unit === "pack" || unit === "jar" || unit === "box";
+}
+
+/**
+ * One order line in its selling unit, as the backend stores it (litres for milk and curd, else packs/jars/boxes).
+ * Litres of a pouch product also show the pack count when they are whole packs: 20 L of 500 ml → "20 L (40 packs)".
+ * A 1 L pack shows litres alone ("30 L"); an unknown unit shows the bare number.
+ */
+export function formatLineQty(qty: number, unit: unknown, packSizeL?: unknown): string {
+  if (!isQtyUnit(unit)) return formatCount(qty);
+  const text = formatQty(qty, unit);
+  if (unit !== "L" || typeof packSizeL !== "number" || !(packSizeL > 0) || packSizeL === 1) return text;
+  const packs = Math.round(qty / packSizeL);
+  if (packs <= 0 || Math.abs(packs * packSizeL - qty) > 1e-6) return text;
+  return `${text} (${formatQty(packs, "pack")})`;
+}
+
 export const IST_OFFSET_MS = 330 * 60 * 1000; // UTC+05:30, India has no DST
 const DAY_MS = 86_400_000;
 

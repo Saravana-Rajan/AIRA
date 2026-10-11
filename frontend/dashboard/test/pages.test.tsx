@@ -8,6 +8,7 @@ import { ForecastPage } from "../src/pages/ForecastPage";
 import { HomePage } from "../src/pages/HomePage";
 import type { OrderRow } from "../src/lib/selectors/orders";
 import type { TodaySummary } from "../src/lib/selectors/today";
+import { buildViews } from "../src/lib/views";
 
 afterEach(cleanup);
 
@@ -93,7 +94,7 @@ describe("TodayPage", () => {
 
 describe("OrdersPage", () => {
   const row: OrderRow = {
-    id: "o1", supplierName: "Sakthi vendor", itemsText: "Sakthi curd 1 L × 30", state: "DISCREPANCY",
+    id: "o1", supplierName: "Sakthi vendor", itemsText: "Sakthi curd 1 L: 30 L", state: "DISCREPANCY",
     stateLabel: "Discrepancy", stepIndex: 2, isDiscrepancy: true, vendorReply: "OK, delivery at 6 pm",
     discrepancyTexts: ["Sakthi curd 1 L: expected 30, got 28"], updatedText: "6:05 pm", deliveryByText: null, note: null,
   };
@@ -145,13 +146,57 @@ describe("OrdersPage", () => {
     expect(bare.querySelector(".order__extras")).toBeNull();
     expect(text(bare)).not.toMatch(/Deliver by|Note:/);
   });
+
+  describe("orders the owner never sent (DRAFT)", () => {
+    const draft: OrderRow = {
+      ...row, id: "d1", supplierName: "Aavin vendor", itemsText: "Aavin Milk 500 ml: 20 L (40 packs)", state: "DRAFT",
+      stateLabel: "Draft", stepIndex: -1, isDiscrepancy: false, discrepancyTexts: [], vendorReply: null, updatedText: "5:40 pm",
+    };
+    const placed: OrderRow = { ...row, id: "p1", state: "ORDER_PLACED", stateLabel: "Order placed", stepIndex: 0, isDiscrepancy: false, discrepancyTexts: [], vendorReply: null };
+
+    it("keeps a draft out of the order cards and lists it under 'Not sent' as plain text, with no progress track", () => {
+      const el = mount(<OrdersPage rows={[draft, placed]} />);
+      const cards = [...el.querySelectorAll("article")];
+      expect(cards).toHaveLength(1);
+      expect(text(cards[0].querySelector("h3"))).toBe("Sakthi vendor");
+      const group = el.querySelector<HTMLElement>(".drafts")!;
+      expect(group).not.toBeNull();
+      expect(text(group.querySelector("h3"))).toBe("Not sent");
+      expect(group.getAttribute("aria-labelledby")).toBe(group.querySelector("h3")!.id);
+      expect(group.querySelector("ol, .track, .badge, article")).toBeNull();
+      const items = [...group.querySelectorAll("li")].map((li) => text(li));
+      expect(items).toEqual(["Aavin vendor · Aavin Milk 500 ml: 20 L (40 packs) · 5:40 pm"]);
+      expect(text(el)).not.toContain("Draft");
+      expect(text(el)).not.toContain("—");
+    });
+
+    it("shows no 'Not sent' group when every order went out", () => {
+      const el = mount(<OrdersPage rows={[placed]} />);
+      expect(el.querySelector(".drafts")).toBeNull();
+      expect(text(el)).not.toContain("Not sent");
+    });
+
+    it("still says there are no supplier orders when only drafts exist", () => {
+      const el = mount(<OrdersPage rows={[draft]} />);
+      expect(el.querySelectorAll("article")).toHaveLength(0);
+      expect(text(el)).toContain("No supplier orders yet");
+      expect(el.querySelector(".drafts")).not.toBeNull();
+    });
+
+    it("leaves drafts off the overview card entirely and counts only sent orders in the link", () => {
+      const el = mount(<OrdersPage rows={[draft, { ...draft, id: "d2" }, placed, { ...placed, id: "p2" }, { ...placed, id: "p3" }, { ...placed, id: "p4" }]} limit={3} />);
+      expect(el.querySelectorAll("article")).toHaveLength(3);
+      expect(el.querySelector(".drafts")).toBeNull();
+      expect(text(el.querySelector("a.more"))).toBe("See all 4 orders");
+    });
+  });
 });
 
 describe("AuditPage", () => {
   const rows = [
-    { id: "a1", timeText: "6:05 pm", actorLabel: "AIRA", actionText: "Sale completed", outcome: "ok", evidenceUri: "https://example.test/e.jpg" },
-    { id: "a2", timeText: "6:00 pm", actorLabel: "Owner", actionText: "Order confirmed", outcome: "ok", evidenceUri: "gs://aira-evidence/x.jpg" },
-    { id: "a3", timeText: "5:55 pm", actorLabel: "System", actionText: "Expiry check", outcome: "ok", evidenceUri: null },
+    { id: "a1", timeText: "6:05 pm", actorLabel: "AIRA", actionText: "Sale completed", outcomeText: "OK", evidenceUri: "https://example.test/e.jpg" },
+    { id: "a2", timeText: "6:00 pm", actorLabel: "Owner", actionText: "Order confirmed", outcomeText: "OK", evidenceUri: "gs://aira-evidence/x.jpg" },
+    { id: "a3", timeText: "5:55 pm", actorLabel: "System", actionText: "Expiry check", outcomeText: "OK", evidenceUri: null },
   ];
 
   it("lists recent actions in a captioned table and resolves evidence links", async () => {
@@ -175,20 +220,29 @@ describe("AuditPage", () => {
     expect(text(el.querySelector("tbody tr .narrow-only"))).toBe("By AIRA. Outcome: OK");
   });
 
-  it("writes each outcome in plain sentence case", () => {
+  it("shows the sentence and the readable outcome the selector wrote, in both the wide and narrow layouts", () => {
     const el = mount(
       <AuditPage
         resolveEvidence={async () => null}
-        rows={[
-          { ...rows[0], id: "x1", outcome: "ok" },
-          { ...rows[0], id: "x2", outcome: "discrepancy" },
-          { ...rows[0], id: "x3", outcome: "needs_recount" },
-          { ...rows[0], id: "x4", outcome: "" },
-        ]}
+        rows={[{ ...rows[0], id: "x1", actorLabel: "Owner", actionText: "Ordered 20 L (40 packs) of Aavin Milk 500 ml from Aavin vendor", outcomeText: "Sent on Telegram" }]}
       />,
     );
-    const outcomes = [...el.querySelectorAll("tbody tr")].map((r) => text(r.querySelectorAll("td")[3]));
-    expect(outcomes).toEqual(["OK", "Discrepancy", "Needs recount", "Not recorded"]);
+    const tds = el.querySelectorAll("tbody tr td");
+    expect(text(tds[2].querySelector(".cell__main"))).toBe("Ordered 20 L (40 packs) of Aavin Milk 500 ml from Aavin vendor");
+    expect(text(tds[2].querySelector(".narrow-only"))).toBe("By Owner. Outcome: Sent on Telegram");
+    expect(text(tds[3])).toBe("Sent on Telegram");
+  });
+
+  it("built from live data, an order row names the supplier and the litres, not a raw code", () => {
+    const views = buildViews({
+      products: [{ id: "aavin_milk_500ml", sku: "aavin_milk_500ml", name: "Aavin Milk 500 ml", unit: "L", packSizeL: 0.5 }],
+      inventory: [], sales: [], payments: [], deliveries: [], suppliers: [],
+      orders: [{ id: "o1", supplierId: "aavin_vendor", supplierName: "Aavin vendor", items: [{ sku: "aavin_milk_500ml", qty: 20, unit: "L" }], state: "ORDER_PLACED", updatedAt: 1 }],
+      auditLogs: [{ id: "a1", actor: "owner", action: "order_placed", refType: "order", refId: "o1", outcome: "telegram", at: 1 }],
+    } as never, 1);
+    const el = mount(<AuditPage rows={views.audit} resolveEvidence={async () => null} />);
+    expect(text(el.querySelector("tbody .cell__main"))).toBe("Ordered 20 L (40 packs) of Aavin Milk 500 ml from Aavin vendor");
+    expect(text(el.querySelectorAll("tbody td")[3])).toBe("Sent on Telegram");
   });
 
   it("says when nothing has been recorded yet", () => {
@@ -261,7 +315,7 @@ describe("ForecastPage", () => {
 
 describe("overview cards stay short", () => {
   const order = (i: number): OrderRow => ({
-    id: `o${i}`, supplierName: `Vendor ${i}`, itemsText: "Aavin milk 500 ml × 10", state: "ORDER_PLACED",
+    id: `o${i}`, supplierName: `Vendor ${i}`, itemsText: "Aavin Milk 500 ml: 10 L (20 packs)", state: "ORDER_PLACED",
     stateLabel: "Order placed", stepIndex: 0, isDiscrepancy: false, vendorReply: null, discrepancyTexts: [], updatedText: "",
     deliveryByText: null, note: null,
   });
@@ -276,7 +330,7 @@ describe("overview cards stay short", () => {
 
   it("AuditPage shows the newest actions and links to the full trail", () => {
     const rows = Array.from({ length: 12 }, (_, i) => ({
-      id: `a${i}`, timeText: "6:05 pm", actorLabel: "AIRA", actionText: "Sale completed", outcome: "ok", evidenceUri: null,
+      id: `a${i}`, timeText: "6:05 pm", actorLabel: "AIRA", actionText: "Sale completed", outcomeText: "OK", evidenceUri: null,
     }));
     const el = mount(<AuditPage rows={rows} resolveEvidence={async () => null} limit={8} />);
     expect(el.querySelectorAll("tbody tr")).toHaveLength(8);
@@ -300,6 +354,16 @@ describe("overview cards stay short", () => {
     const titles = [...el.querySelectorAll("article h3")].map((h) => text(h));
     expect(titles).toEqual(["Vendor 4", "Vendor 1", "Vendor 2"]);
     expect(text(el)).toContain("The delivery does not match the order");
+  });
+
+  it("the overview's top orders are real orders: newer drafts the owner said no to never push them out", () => {
+    const draft = (i: number): OrderRow => ({ ...order(i), supplierName: `Draft ${i}`, state: "DRAFT", stateLabel: "Draft", stepIndex: -1 });
+    const rows = [draft(1), draft(2), draft(3), draft(4), order(5), order(6)];
+    const views = { stock: [], audit: [], orders: rows, today: { salesCount: 0, revenue: 0, revenueText: "₹0", topProduct: null, byMethod: { cash: 0, upi: 0 }, byMethodText: { cash: "₹0", upi: "₹0" } } };
+    const el = mount(<HomePage views={views} forecast={null} forecastLoading={false} resolveEvidence={async () => null} />);
+    expect([...el.querySelectorAll("article h3")].map((h) => text(h))).toEqual(["Vendor 5", "Vendor 6"]);
+    expect(el.querySelector(".drafts")).toBeNull();
+    expect(text(el)).not.toMatch(/Draft/);
   });
 
   it("shows no link when everything fits", () => {
