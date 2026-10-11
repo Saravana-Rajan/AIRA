@@ -43,11 +43,14 @@ async def save_order(shop_id: str, order: dict) -> None:
     await get_store().set(order_path(shop_id, order["id"]), order)
 
 
-async def latest_order(shop_id: str, states: list[str], supplier_id: str | None = None) -> dict | None:
-    """The most recently updated order in one of `states` (optionally of one supplier), or None."""
+async def latest_order(shop_id: str, states: list[str], supplier_id: str | None = None,
+                       skip_channels: tuple[str, ...] = ()) -> dict | None:
+    """The most recently updated order in one of `states` (optionally of one supplier, and not sent on any of
+    `skip_channels`), or None."""
     rows = await get_store().list(f"shops/{shop_id}/orders")
     cands = [{**d, "id": oid} for oid, d in rows
-             if d.get("state") in states and (supplier_id is None or d.get("supplierId") == supplier_id)]
+             if d.get("state") in states and (supplier_id is None or d.get("supplierId") == supplier_id)
+             and d.get("channel") not in skip_channels]
     return max(cands, key=_recency, default=None)
 
 

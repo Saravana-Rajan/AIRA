@@ -241,7 +241,9 @@ async def _apply_reply(channel: str, msg_key: str | None, contact: str, text: st
         if not who or not who.get("supplierId"):  # unknown, or a chat unlinked by a re-link
             return False
         shop_id = who["shopId"]
-        order = await _repo.latest_order(shop_id, OPEN_STATES, supplier_id=who["supplierId"])
+        # A judge's order went to the demo vendor (tools/orders.py) and stays placed: a real vendor's words are
+        # never about it.
+        order = await _repo.latest_order(shop_id, OPEN_STATES, supplier_id=who["supplierId"], skip_channels=("demo",))
         if order is None:
             return False
     now = now_iso()

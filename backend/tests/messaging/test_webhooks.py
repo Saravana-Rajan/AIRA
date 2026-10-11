@@ -260,6 +260,21 @@ async def test_telegram_reply_by_chat_matches_latest_open_order(store, notified)
     assert (await _repo.get_order(SHOP, "o4"))["vendorReply"]["text"] == "On the way"
 
 
+async def test_plain_vendor_message_never_lands_on_a_judges_demo_order(store, notified):
+    """Judges' orders go to a demo vendor (channel "demo") and stay placed; a real vendor's words are never about them."""
+    await _order("o_real", "ORDER_PLACED", "2026-10-12T10:00:00")
+    await _repo.save_order(SHOP, {"id": "o_demo", "supplierId": "sakthi_vendor", "supplierName": "Sakthi curd vendor",
+                                  "state": "ORDER_PLACED", "channel": "demo", "lang": "en", "items": [],
+                                  "updatedAt": "2026-10-12T11:00:00"})
+    await _repo.index_contact("telegram", "555", SHOP, "sakthi_vendor")
+    async with client() as c:
+        r = await c.post("/webhooks/telegram", json={"message": {"chat": {"id": 555}, "text": "Curd at 6 pm"}},
+                         headers=TG)
+    assert r.json()["handled"] == 1
+    assert (await _repo.get_order(SHOP, "o_real"))["vendorReply"]["text"] == "Curd at 6 pm"
+    assert "vendorReply" not in await _repo.get_order(SHOP, "o_demo")
+
+
 async def test_telegram_secret_and_malformed(store, notified, monkeypatch):
     update = {"message": {"chat": {"id": 555}, "text": "hi"}}
     hdr = TG
