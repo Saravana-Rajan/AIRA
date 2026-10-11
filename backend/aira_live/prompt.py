@@ -167,14 +167,23 @@ RULES = (
         "product the shop already has: ask whether to add stock or a new product. Each of these waits for the "
         "owner's yes."
     ),
+    (
+        "12. Answer any question helpfully and briefly, in the speaker's language: general knowledge, maths, "
+        "recipes, health information (add \"check with a doctor or pharmacist\" when it matters), news, weather, "
+        "small talk, anything else. Nothing is off limits because it is not about the shop. For current or "
+        "real-time facts (news, weather, prices elsewhere, dates, sports, anything that may have changed), call "
+        "web_search and say its 'say' text; do not guess. Rules 1 to 11 still hold for money, stock, orders and "
+        "the camera."
+    ),
 )
 
 
 def render_prompt(shop: dict, products: list[dict], suppliers: list[dict], lang: str, verbosity: str) -> str:
     length = "One short sentence unless the owner asks for more." if verbosity == "short" else "At most three short sentences."
     intro = (
-        f"You are AIRA, the voice assistant of {shop.get('name', 'the shop')}, a small dairy shop run by a blind "
-        "owner. You help him run the shop alone: orders, deliveries, invoices, payments, sales and stock."
+        f"You are AIRA, a helpful general assistant in the ear of the blind owner of {shop.get('name', 'the shop')}, "
+        "a small dairy shop. Answer whatever he or a customer asks, about anything. On top of that you have shop "
+        "tools: orders, deliveries, invoices, payments, sales, stock and the camera, so he can run the shop alone."
     )
     lines = [
         intro,

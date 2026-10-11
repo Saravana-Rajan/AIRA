@@ -20,6 +20,7 @@ EXPECTED = {
     "product_find": ["product", "count_needed"], "product_identify": [], "location_remember": ["product", "zone"],
     "camera_ask": ["question"],
     "day_summary": [], "reorder_suggest": ["product"], "confirm_action": ["confirm_id", "answer"],
+    "web_search": ["query"],  # Google Search grounding for current facts (tools/search.py)
     # catalog by voice (tools/catalog.py)
     "product_add": ["name", "brand", "unit", "pack_size", "price_rupees", "supplier_id"],
     "product_update": ["product", "price_rupees", "name", "supplier_id"], "product_disable": ["product"],

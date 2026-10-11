@@ -10,6 +10,7 @@ from aira_live.tools.orders import order_create, order_status
 from aira_live.tools.payments import sale_pay, supplier_pay
 from aira_live.tools.products import location_remember, product_find, product_identify
 from aira_live.tools.sales import sale_start
+from aira_live.tools.search import web_search
 from aira_live.tools.stock import expiry_check, stock_query
 
 TOOL_FUNCS: list[Callable[..., Awaitable[dict]]] = [
@@ -17,6 +18,7 @@ TOOL_FUNCS: list[Callable[..., Awaitable[dict]]] = [
     supplier_pay, sale_start, sale_pay, stock_query, expiry_check,
     product_find, product_identify, location_remember, camera_ask,
     day_summary, reorder_suggest, confirm_action,
+    web_search,  # Google Search grounding for current facts (open assistant)
     # catalog by voice (confirm-gated: each proposes, then commits after the owner's yes)
     product_add, product_update, product_disable, stock_add, supplier_add,
 ]
