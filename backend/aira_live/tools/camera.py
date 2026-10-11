@@ -16,6 +16,7 @@ import logging
 import re
 from typing import Any
 
+from aira_live.diag import diag, summarize, trunc
 from aira_live.i18n import t
 from aira_live.prompt import LANG_NAME
 from aira_live.session import Session, get_session
@@ -180,26 +181,44 @@ async def camera_ask(question: str) -> dict:
     count = 2 if kind == "path" else 1                          # a path needs a short burst: things move
     frames = await s.request_frames("ask", count=count, interval_ms=400 if count > 1 else 0,
                                     timeout_s=FRAME_TIMEOUT_S)
+    diag("camera_ask", stage="frames", session=s.session_id, kind=kind, lang=s.lang, question=trunc(question),
+         frames=len(frames), bytes=[len(f.jpeg_b64) for f in frames], sizes=[[f.w, f.h] for f in frames])
     if not frames:
+        diag("camera_ask", severity="WARNING", stage="no_frames", session=s.session_id, kind=kind,
+             timeout_s=FRAME_TIMEOUT_S)
         return {"say": t("camera.none", s.lang), "answer": "", "kind": kind, "objects": [], "confidence": 0.0}
     try:
         if kind == "read":
-            return await _read_twice(frames[-1].jpeg_b64, s.lang)
+            out = await _read_twice(frames[-1].jpeg_b64, s.lang)
+            diag("camera_ask", stage="done", session=s.session_id, kind=kind, confidence=out["confidence"],
+                 agreed=out.get("agreed"), aim_hint=out.get("aim_hint"), say=trunc(out["say"]))
+            return out
         parts = [image_part(f.jpeg_b64) for f in frames]
         parts.append(ASK_PROMPT.format(question=question, lang=LANG_NAME.get(s.lang, "English"),
                                        hints=", ".join(HINT_KEYS)))
         data = await generate_json("point", parts, ASK_SCHEMA, thinking="low", timeout_s=6.0)
     except VisionError as exc:
         log.warning("camera_ask: vision failed for %s: %s", s.shop_id, exc)
+        diag("camera_ask", severity="WARNING", stage="error", session=s.session_id, kind=kind,
+             error=type(exc).__name__, message=trunc(str(exc), 200))
         return {"say": t("live.unavailable", s.lang), "answer": "", "kind": kind, "objects": [], "confidence": 0.0}
 
     objects = _objects(data.get("objects"))
     conf = _conf(data.get("confidence"))
     steps = _steps(data.get("guidance"))
     answer = str(data.get("answer") or "").strip()
+    raw_objects = data.get("objects")
+    diag("camera_ask", stage="model", session=s.session_id, kind=kind, model=data.get("_model"),
+         keys=sorted(k for k in data if k != "_model"), confidence=conf, raw_confidence=summarize(data.get("confidence")),
+         objects=len(objects), raw_objects=len(raw_objects) if isinstance(raw_objects, list) else None,
+         aim_hint=summarize(data.get("aim_hint")), answer=trunc(answer), steps=len(steps))
     if conf < MIN_CONF or data.get("aim_hint"):
         hint = _hint(data.get("aim_hint"))
-        return {"say": f"{t('cam.not_sure', s.lang)} {t(hint, s.lang)}", "answer": "", "kind": kind,
-                "objects": objects, "confidence": conf, "aim_hint": hint}
+        say = f"{t('cam.not_sure', s.lang)} {t(hint, s.lang)}"
+        diag("camera_ask", stage="done", session=s.session_id, kind=kind, verdict="not_sure", confidence=conf,
+             aim_hint=hint, say=trunc(say))
+        return {"say": say, "answer": "", "kind": kind, "objects": objects, "confidence": conf, "aim_hint": hint}
     say = _say_path(steps, objects, s.lang) if kind == "path" else _say_look(answer, steps, objects, s.lang)
+    diag("camera_ask", stage="done", session=s.session_id, kind=kind, verdict="answer", confidence=conf,
+         objects=len(objects), say=trunc(say))
     return {"say": say, "answer": answer, "guidance": steps, "kind": kind, "objects": objects, "confidence": conf}

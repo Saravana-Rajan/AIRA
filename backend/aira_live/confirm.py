@@ -24,6 +24,7 @@ from typing import Literal, Protocol
 
 from aira_live import config
 from aira_live.contracts import ConfirmMsg
+from aira_live.diag import diag, trunc
 from aira_live.i18n import t
 from aira_live.session import Session, get_session
 
@@ -109,6 +110,8 @@ async def propose(kind: str, prompt: str, payload: dict, committer: str) -> dict
         "createdAt": time.time(), "sessionId": s.session_id, "uid": s.uid,
     })
     await s.send(ConfirmMsg(id=cid, kind=kind if kind in _KINDS else "generic", prompt=prompt))
+    diag("confirm", action="propose", session=s.session_id, shop=s.shop_id, id=cid, kind=kind,
+         committer=committer, prompt=trunc(prompt))
     return {"needs_confirm": True, "confirm_id": cid, "say": prompt}
 
 
@@ -124,7 +127,11 @@ async def resolve(confirm_id: str, answer: Literal["yes", "no"], value: str | No
     if lock is None:  # no await between the lookup and the insert, so every concurrent resolve shares one lock
         lock = _LOCKS[key] = asyncio.Lock()
     async with lock:  # concurrent "yes" answers commit exactly once
-        return await _resolve_locked(s, confirm_id, answer, value)
+        result = await _resolve_locked(s, confirm_id, answer, value)
+    diag("confirm", action="resolve", session=s.session_id, shop=s.shop_id, id=confirm_id, answer=answer,
+         value=None if value is None else trunc(value), status=result.get("status"), ok=result.get("ok"),
+         error=result.get("error"), say=trunc(result.get("say", "")))
+    return result
 
 
 async def _resolve_locked(s: Session, confirm_id: str, answer: str, value: str | None) -> dict:

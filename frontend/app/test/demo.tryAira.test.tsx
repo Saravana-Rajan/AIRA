@@ -16,7 +16,8 @@ class FakeSocket {
   private hs = new Set<(m: ServerMsg) => void>();
   constructor(public url: string) {}
   connect(h: Extract<ClientMsg, { t: "hello" }>) { this.connects.push(h); this.open = true; this.closed = false; }
-  send(m: ClientMsg) { if (!this.open) return false; this.sent.push(m); return true; }
+  // Diagnostic "log" lines (core/clientLog.ts) ride the same socket; these tests are about what the page sends.
+  send(m: ClientMsg) { if (!this.open) return false; if (m.t !== "log") this.sent.push(m); return true; }
   on(h: (m: ServerMsg) => void) { this.hs.add(h); return () => { this.hs.delete(h); }; }
   close() { this.closed = true; this.open = false; }
   emit(m: ServerMsg) { this.hs.forEach((h) => h(m)); }

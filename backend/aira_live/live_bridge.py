@@ -20,6 +20,7 @@ from typing import TYPE_CHECKING, AsyncIterator, Awaitable, Callable, Literal, P
 
 from aira_live import safety
 from aira_live.contracts import AudioOutMsg, CueMsg, ErrorMsg, TranscriptMsg
+from aira_live.diag import diag, trunc
 from aira_live.i18n import t
 from aira_live.prompt import last_catalog_facts, unclear_note
 from aira_live.session import NOTICE_DEDUPE_S, notice_key
@@ -148,6 +149,8 @@ class LiveBridge:
         self._backend = backend
         await backend.start(self.system_prompt, self.tools, self._handle)
         self._connected = True
+        diag("live", event="connected", session=self.session.session_id, resumed=bool(self._handle),
+             tools=len(self.tools), pending_text=len(self._pending_text))
         pending, self._pending_text = self._pending_text, []
         now = _monotonic()
         for text, at, notice in pending:
@@ -178,6 +181,8 @@ class LiveBridge:
             # A long-press with nothing playing (e.g. to stop guidance) must not swallow the answer to this new
             # prompt. If the stopped answer is still streaming, the mute lifts when Live cuts or ends it.
             self._muted = False
+        diag("live_text", session=self.session.session_id, text=trunc(text), notice=_notice,
+             queued=not self._connected)
         if not self._connected:
             self._queue_text(text, _notice)
             return
@@ -202,8 +207,10 @@ class LiveBridge:
             del self._notices[stale]
         last = self._notices.get(key)
         if last is not None and now - last <= NOTICE_DEDUPE_S:
+            diag("notice", session=self.session.session_id, text=trunc(text), deduped=True)
             return
         self._notices[key] = now
+        diag("notice", session=self.session.session_id, text=trunc(text), deduped=False)
         await self.send_text(f"{NOTICE_PREFIX} Tell the shopkeeper briefly, in the language he last spoke: {text}",
                              _notice=True)
 
@@ -235,6 +242,8 @@ class LiveBridge:
                 if self._closed:
                     return
                 log.warning("live connection lost (session %s): %s", self.session.session_id, exc)
+                diag("live", severity="WARNING", event="lost", session=self.session.session_id,
+                     error=type(exc).__name__, message=trunc(str(exc), 200))
             finally:
                 await _aclose(stream)
             self._connected = False
@@ -289,6 +298,7 @@ class LiveBridge:
             if ev.final:
                 self._out_final.append(ev.text)
                 self._out_partial = ""
+                diag("transcript", session=s.session_id, role="aira", text=trunc(ev.text), final=True)
             else:
                 self._out_partial += ev.text
             if ev.text:
@@ -302,6 +312,8 @@ class LiveBridge:
                 # clearly speaks another language (sticky: "Amo" in Latin letters is still Tamil).
                 lang, unclear = await self._judge(utterance)
                 self._notify_listeners(utterance)
+                diag("transcript", session=s.session_id, role="user", text=trunc(utterance), final=True,
+                     lang=lang, unclear=unclear)
             else:
                 self._in_partial += ev.text
             if ev.text:
@@ -309,12 +321,17 @@ class LiveBridge:
         elif ev.kind == "interrupted":
             # Live cut the answer (barge-in or a new prompt): the stopped answer is over, the next one is new.
             self._muted = self._answering = False
+            diag("live", event="interrupted", session=s.session_id)
             await s.send(CueMsg(cue="interrupted"))
         elif ev.kind == "turn_complete":
             if self._in_partial:  # the backend never marked the utterance final
                 utterance, self._in_partial = self._in_partial, ""
-                await self._judge(utterance)
+                step_lang, step_unclear = await self._judge(utterance)
                 self._notify_listeners(utterance)
+                diag("transcript", session=s.session_id, role="user", text=trunc(utterance), final=True,
+                     lang=step_lang, unclear=step_unclear, source="turn_end")
+            diag("live", event="turn_complete", session=s.session_id, more=ev.more, muted=self._muted,
+                 spoken_parts=len(self._out_final) + (1 if self._out_partial else 0))
             if ev.more:  # the same answer goes on in another model turn
                 return
             self._muted = self._answering = False

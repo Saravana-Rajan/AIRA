@@ -9,6 +9,7 @@ from contextvars import ContextVar
 from pydantic import BaseModel
 
 from aira_live.contracts import Burst, RequestFrameMsg
+from aira_live.diag import diag
 from aira_live.frames import Frame, FrameStore
 from aira_live.i18n.detect import LangStep, judge_lang
 
@@ -86,8 +87,15 @@ class Session:
         """
         since = self.frames.last_ts(purpose)
         burst = Burst(count=count, interval_ms=interval_ms) if count > 1 else None
+        started = time.perf_counter()
+        diag("request_frame", session=self.session_id, purpose=purpose, count=count, interval_ms=interval_ms,
+             timeout_s=timeout_s, since_ts=since)
         await self.send(RequestFrameMsg(purpose=purpose, burst=burst))
-        return await self.frames.wait_for(count=count, purpose=purpose, after_ts=since, timeout_s=timeout_s)
+        frames = await self.frames.wait_for(count=count, purpose=purpose, after_ts=since, timeout_s=timeout_s)
+        diag("frames_got", session=self.session_id, purpose=purpose, wanted=count, got=len(frames),
+             waited_ms=round((time.perf_counter() - started) * 1000), bytes=[len(f.jpeg_b64) for f in frames],
+             sizes=[[f.w, f.h] for f in frames])
+        return frames
 
 
 current_session: ContextVar[Session] = ContextVar("current_session")

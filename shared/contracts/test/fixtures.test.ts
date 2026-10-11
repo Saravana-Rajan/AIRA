@@ -58,6 +58,16 @@ describe("contract fixtures", () => {
     expect(isServerMsg({ t: "transcript", role: "user", text: "x", final: true, unclear: "yes" })).toBe(false);
   });
 
+  it("a client log line carries a tag and a data object, never anything else", () => {
+    expect(isClientMsg({ t: "log", tag: "tilt", data: { beta: 131.2, reason: "speak" } })).toBe(true);
+    expect(isClientMsg({ t: "log", tag: "build", data: {} })).toBe(true);
+    expect(isClientMsg({ t: "log", tag: 5, data: {} })).toBe(false);
+    expect(isClientMsg({ t: "log", tag: "tilt", data: [] })).toBe(false);
+    expect(isClientMsg({ t: "log", tag: "tilt", data: null })).toBe(false);
+    expect(isClientMsg({ t: "log", tag: "tilt" })).toBe(false);
+    expect(isServerMsg({ t: "log", tag: "tilt", data: {} })).toBe(false);
+  });
+
   it("hello is valid without an idToken (no Firebase Auth)", () => {
     const hellos = client.filter((m) => m.t === "hello");
     expect(hellos.some((m) => m.idToken === undefined)).toBe(true);

@@ -116,7 +116,9 @@ describe("wireCameraAndGuidance", () => {
     wire();
     socket.emit({ t: "request_frame", purpose: "ask" });
     await flush();
-    expect(socket.sent).toEqual([]);
+    expect(socket.sent.filter((m) => m.t !== "log")).toEqual([]);  // no frame; only diagnostic lines
+    expect(socket.sent[0]).toEqual({ t: "log", tag: "frame", data: { purpose: "ask", error: "unknown" } });
+    expect(socket.sent.map((m) => (m.t === "log" ? m.tag : m.t))).toEqual(["frame", "hint"]);
     expect(said).toEqual(["Camera is not available."]);
   });
 

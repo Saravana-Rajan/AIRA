@@ -10,5 +10,7 @@
   {"t":"event","name":"network","data":{"online":false}},
   {"t":"confirm","id":"c1","answer":"yes"},
   {"t":"confirm","id":"c2","answer":"no","value":"28"},
-  {"t":"stop"}
+  {"t":"stop"},
+  {"t":"log","tag":"tilt","data":{"beta":131.2,"gamma":3.5,"reason":"speak"}},
+  {"t":"log","tag":"build","data":{"build":"a1b2c3d","appVersion":"0.1.0"}}
 ]

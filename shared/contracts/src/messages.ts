@@ -20,7 +20,12 @@ export type ClientMsg =
   | { t: "text"; text: string }
   | { t: "event"; name: ClientEventName; data: Record<string, unknown> }
   | { t: "confirm"; id: string; answer: ConfirmAnswer; value?: string }
-  | { t: "stop" };
+  | { t: "stop" }
+  // A diagnostic line from the phone, written to Cloud Logging by the server (aira_live.diag) as
+  // jsonPayload.aira="client". tag names what happened ("build", "camera", "tilt", "frame", "hint", "speak");
+  // data is small metadata, never audio or image bytes. The server keeps at most 2 KB of it and 20 lines a
+  // second per socket, and never answers it.
+  | { t: "log"; tag: string; data: Record<string, unknown> };
 
 // ---------- server -> client ----------
 export type ServerMsg =
@@ -44,7 +49,7 @@ export type ServerMsgType = ServerMsg["t"];
 export type ClientMsgOf<T extends ClientMsgType> = Extract<ClientMsg, { t: T }>;
 export type ServerMsgOf<T extends ServerMsgType> = Extract<ServerMsg, { t: T }>;
 
-export const CLIENT_MSG_TYPES = Object.freeze(["hello", "audio", "frame", "text", "event", "confirm", "stop"] as const);
+export const CLIENT_MSG_TYPES = Object.freeze(["hello", "audio", "frame", "text", "event", "confirm", "stop", "log"] as const);
 export const SERVER_MSG_TYPES = Object.freeze([
   "ready", "audio", "transcript", "request_frame", "target", "count", "state", "confirm", "cue", "error",
 ] as const);
@@ -88,6 +93,8 @@ export function isClientMsg(x: unknown): x is ClientMsg {
       return isStr(x.id) && inList(CONFIRM_ANSWERS, x.answer) && optional(x.value, isStr);
     case "stop":
       return true;
+    case "log":
+      return isStr(x.tag) && isObj(x.data);
   }
   return false;
 }

@@ -34,7 +34,7 @@ from types import SimpleNamespace
 
 from pydantic import BaseModel
 
-from aira_live import config
+from aira_live import config, diag
 from aira_live.contracts import ConfirmAnswer, FramePurpose, Lang, RequestFrameMsg, dump_server_msg
 from aira_live.frames import Frame
 from aira_live.session import Session
@@ -143,7 +143,8 @@ async def run(argv: list[str]) -> int:
         print(f"call_tool: no such image: {', '.join(missing)}", file=sys.stderr)
         return 2
     print(_mode_line(ns.shop), file=sys.stderr, flush=True)
-    await _call(tools[ns.tool], args, ns)
+    with diag.suppressed():  # this CLI's stdout is the tool's JSON; diagnostic lines would interleave with it
+        await _call(tools[ns.tool], args, ns)
     return 0
 
 

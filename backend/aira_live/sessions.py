@@ -8,6 +8,7 @@ import logging
 import time
 
 from aira_live.contracts import CueMsg, TranscriptMsg
+from aira_live.diag import diag, trunc
 from aira_live.session import Session
 
 log = logging.getLogger(__name__)
@@ -91,7 +92,8 @@ async def notify(shop_id: str, text: str, cue: str = "ack") -> int:
     it once.
     """
     n = 0
-    for s, bridge in by_shop(shop_id):
+    targets = by_shop(shop_id)
+    for s, bridge in targets:
         if s.notice_is_repeat(text):
             continue
         try:
@@ -103,4 +105,5 @@ async def notify(shop_id: str, text: str, cue: str = "ack") -> int:
             log.warning("notify: session %s unreachable", s.session_id, exc_info=True)
             continue
         n += 1
+    diag("notify", shop=shop_id, text=trunc(text), cue=cue, sessions=len(targets), delivered=n)
     return n

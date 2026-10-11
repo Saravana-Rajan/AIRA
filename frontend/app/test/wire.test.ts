@@ -401,7 +401,8 @@ describe("wireApp: offline queue", () => {
     a.socket.open = true;
     a.win.dispatchEvent(new Event("online"));
     await a.w.replay();
-    expect(a.socket.sent).toEqual([{ t: "text", text: "sale 1" }]);
+    // "Back online." is spoken locally, which also sends a "speak" diagnostic line; the queue itself is one text
+    expect(a.socket.sent.filter((m) => m.t !== "log")).toEqual([{ t: "text", text: "sale 1" }]);
   });
 });
 

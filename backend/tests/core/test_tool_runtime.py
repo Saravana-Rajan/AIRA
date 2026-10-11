@@ -260,3 +260,78 @@ def test_every_registered_tool_can_be_wrapped_for_adk(mk_session):
         schema = decl.parameters_json_schema or decl.parameters
         props = (schema.get("properties") if isinstance(schema, dict) else schema.properties) if schema else {}
         assert "tool_context" not in (props or {}), fn.__name__
+
+
+# ---------- diagnostics: one aira="tool" line per call ----------
+def _tool_lines(capsys) -> list[dict]:
+    import json
+    out = [json.loads(l) for l in capsys.readouterr().out.splitlines() if l.startswith("{")]
+    return [r for r in out if r.get("aira") == "tool"]
+
+
+async def test_tool_call_is_logged_with_args_summary_duration_and_say(mk_session, capsys, monkeypatch):
+    monkeypatch.delenv("AIRA_DIAG", raising=False)
+    monkeypatch.setenv("AIRA_DIAG_CONTENT", "1")  # this test reads the logged 'say' text
+    s, _ = mk_session()
+
+    async def camera_ask(question: str) -> dict:
+        return {"say": "Not sure. " + "x" * 100, "aim_hint": "vision.aim.show_items", "confidence": 0.3,
+                "objects": [{"label": "crate", "point": [1, 2]}]}
+
+    w = wrap_tool(camera_ask, s)
+    capsys.readouterr()
+    await w(question="q" * 100, tool_context=SimpleNamespace(function_call_id="call-9"))
+    recs = _tool_lines(capsys)
+    assert len(recs) == 1
+    r = recs[0]
+    assert r["name"] == "camera_ask" and r["call_id"] == "call-9" and r["ok"] is True
+    assert r["session"] == s.session_id and r["shop"] == "sunrise_dairy"
+    assert r["args"] == {"question": "q" * 80 + "…(+20)"}
+    assert r["say"].startswith("Not sure.") and len(r["say"]) < 100
+    assert r["aim_hint"] == "vision.aim.show_items" and r["confidence"] == 0.3
+    assert isinstance(r["ms"], int) and r["ms"] >= 0
+    assert "objects" not in r  # only the spoken bits of a result, never the whole payload
+
+
+async def test_tool_error_is_logged_and_reraised(mk_session, capsys, monkeypatch):
+    monkeypatch.delenv("AIRA_DIAG", raising=False)
+    s, _ = mk_session()
+
+    async def order_create(supplier: str) -> dict:
+        raise ValueError("boom")
+
+    w = wrap_tool(order_create, s)
+    capsys.readouterr()
+    with pytest.raises(ValueError):
+        await w(supplier="Sakthi", tool_context=None)
+    recs = _tool_lines(capsys)
+    assert len(recs) == 1
+    assert recs[0]["ok"] is False and recs[0]["error"] == "ValueError" and recs[0]["message"] == "boom"
+    assert recs[0]["severity"] == "WARNING" and recs[0]["args"] == {"supplier": "Sakthi"}
+    assert s.tool_results == []
+
+
+async def test_tool_log_never_carries_frame_bytes(mk_session, capsys, monkeypatch):
+    monkeypatch.delenv("AIRA_DIAG", raising=False)
+    s, _ = mk_session()
+
+    async def frame_tool(frames: list[dict]) -> dict:
+        return {"say": "ok"}
+
+    w = wrap_tool(frame_tool, s)
+    capsys.readouterr()
+    await w(frames=[{"jpeg": "/9j/AAAA" * 50, "w": 640}], tool_context=None)
+    out = capsys.readouterr().out
+    assert "/9j/" not in out and "<redacted 400>" in out
+
+
+async def test_tool_log_can_be_switched_off(mk_session, capsys, monkeypatch):
+    monkeypatch.setenv("AIRA_DIAG", "0")
+    s, _ = mk_session()
+
+    async def day_summary() -> dict:
+        return {"say": "ok"}
+
+    capsys.readouterr()
+    await wrap_tool(day_summary, s)(tool_context=None)
+    assert _tool_lines(capsys) == []

@@ -123,8 +123,20 @@ class StopMsg(_ClientWire):
     t: Literal["stop"]
 
 
+class LogMsg(_ClientWire):
+    """A diagnostic line from the phone, written to Cloud Logging by ``aira_live.diag`` as ``aira="client"``.
+
+    ``tag`` names what happened ("build", "camera", "tilt", "frame", "hint", "speak"); ``data`` is small
+    metadata, never audio or image bytes. The server keeps at most 2 KB of it and 20 lines a second per socket.
+    """
+
+    t: Literal["log"]
+    tag: StrictStr
+    data: dict[str, Any]
+
+
 ClientMsg = Annotated[
-    Union[HelloMsg, AudioInMsg, FrameMsg, TextMsg, EventMsg, ConfirmReplyMsg, StopMsg],
+    Union[HelloMsg, AudioInMsg, FrameMsg, TextMsg, EventMsg, ConfirmReplyMsg, StopMsg, LogMsg],
     Field(discriminator="t"),
 ]
 
@@ -238,7 +250,9 @@ CLIENT_MSG_TYPES: tuple[str, ...] = _tags(ClientMsg)
 SERVER_MSG_TYPES: tuple[str, ...] = _tags(ServerMsg)
 
 
-def parse_client_msg(raw: str | bytes) -> HelloMsg | AudioInMsg | FrameMsg | TextMsg | EventMsg | ConfirmReplyMsg | StopMsg | None:
+def parse_client_msg(raw: str | bytes) -> (
+    HelloMsg | AudioInMsg | FrameMsg | TextMsg | EventMsg | ConfirmReplyMsg | StopMsg | LogMsg | None
+):
     """Parse one WebSocket text frame from the app. None for bad JSON or an unknown/invalid message."""
     try:
         return client_adapter.validate_json(raw)

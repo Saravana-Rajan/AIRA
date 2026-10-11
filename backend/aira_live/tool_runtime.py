@@ -7,6 +7,7 @@ same tool-call id gets the same idempotency key.
 """
 import functools
 import inspect
+import time
 import uuid
 from collections.abc import Awaitable, Callable
 from typing import Any
@@ -16,10 +17,43 @@ try:  # ADK finds the context parameter by this annotation, or by the name `tool
 except ImportError:  # pragma: no cover - ADK is a declared dependency
     ToolContext = Any  # type: ignore[misc,assignment]
 
+from aira_live.diag import diag, summarize, trunc
 from aira_live.session import Session, current_session, current_tool_call_id
 
 ToolFn = Callable[..., Awaitable[dict]]
 _CTX = "tool_context"
+# Result keys worth a log line (never the whole result: a count may carry frames or long lists).
+_LOGGED_RESULT_KEYS = ("say", "aim_hint", "confidence", "kind", "needs_confirm", "confirm_id", "error", "ok")
+
+
+def _args_summary(sig: inspect.Signature, args: tuple, kwargs: dict) -> Any:
+    kw = {k: v for k, v in kwargs.items() if k != _CTX}
+    try:
+        bound = dict(sig.bind_partial(*args, **kw).arguments)
+    except (TypeError, ValueError):
+        bound = {**({"_args": list(args)} if args else {}), **kw}
+    bound.pop(_CTX, None)
+    return summarize(bound)
+
+
+def _log_call(name: str, call_id: str, session: Session, sig: inspect.Signature, args: tuple, kwargs: dict,
+              started: float, result: Any = None, error: BaseException | None = None) -> None:
+    """One ``aira="tool"`` line per call: name, args summary, duration, ok/error and the spoken result."""
+    fields: dict[str, Any] = {"name": name, "call_id": call_id, "session": session.session_id,
+                              "shop": session.shop_id, "args": _args_summary(sig, args, kwargs),
+                              "ms": round((time.perf_counter() - started) * 1000)}
+    if error is not None:
+        fields.update(ok=False, error=type(error).__name__, message=trunc(str(error), 200))
+        diag("tool", severity="WARNING", **fields)
+        return
+    fields["ok"] = True
+    if isinstance(result, dict):
+        for key in _LOGGED_RESULT_KEYS:
+            if key in result:
+                fields[key] = summarize(result[key])
+    else:
+        fields["result_type"] = type(result).__name__
+    diag("tool", **fields)
 
 
 def _signature(fn: Callable[..., Any]) -> inspect.Signature:
@@ -62,13 +96,18 @@ def wrap_tool(fn: Callable[..., Any], session: Session) -> ToolFn:
             kwargs[_CTX] = tool_context
         s_token = current_session.set(session)
         c_token = current_tool_call_id.set(call_id)
+        started = time.perf_counter()
         try:
             result = fn(*args, **kwargs)
             if inspect.isawaitable(result):
                 result = await result
+        except BaseException as exc:  # logged, never swallowed (CancelledError included)
+            _log_call(fn.__name__, call_id, session, sig, args, kwargs, started, error=exc)
+            raise
         finally:
             current_tool_call_id.reset(c_token)
             current_session.reset(s_token)
+        _log_call(fn.__name__, call_id, session, sig, args, kwargs, started, result=result)
         if isinstance(result, dict):
             session.tool_results.append({"tool": fn.__name__, "call_id": call_id, "result": result})
         return result

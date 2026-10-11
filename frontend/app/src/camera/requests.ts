@@ -4,6 +4,7 @@
 import type { ClientMsg, FramePurpose, ServerMsg } from "@aira/contracts";
 import { CameraError, type FrameMsg } from "./capture";
 import type { HintKey } from "../i18n/camera";
+import { clientLog } from "../core/clientLog";
 
 export const CONTINUOUS_FPS = 2;
 /** Upper bounds so a malformed server burst can't keep the camera busy for minutes. */
@@ -52,6 +53,7 @@ export function createFrameRequestHandler(deps: RequestDeps): (m: FrameRequest) 
       try {
         deps.send(await deps.capture(m.purpose));
       } catch (e) {
+        clientLog("frame", { purpose: m.purpose, error: e instanceof CameraError ? e.code : "unknown" });
         deps.hint(hintFor(e));
         return; // one hint, no retry loop
       }

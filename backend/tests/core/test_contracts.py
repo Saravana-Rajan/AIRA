@@ -57,7 +57,7 @@ SERVER = load("server_msgs.json")
 def test_every_client_fixture_validates_and_covers_all_types():
     seen = {client_adapter.validate_python(m).t for m in CLIENT}
     assert seen == set(ts_list(MESSAGES_TS, "CLIENT_MSG_TYPES"))
-    assert seen == {"hello", "audio", "frame", "text", "event", "confirm", "stop"}
+    assert seen == {"hello", "audio", "frame", "text", "event", "confirm", "stop", "log"}
 
 
 def test_every_server_fixture_validates_and_covers_all_types():
@@ -82,6 +82,12 @@ def test_server_fixture_round_trips_unchanged(raw):
     msg = parse_server_msg(json.dumps(raw))
     assert msg is not None
     assert json.loads(dump_server_msg(msg)) == raw
+
+
+def test_client_log_line_carries_a_tag_and_a_data_object():
+    msg = client_adapter.validate_python({"t": "log", "tag": "tilt", "data": {"beta": 131.2, "reason": "speak"}})
+    assert msg.t == "log" and msg.tag == "tilt" and msg.data == {"beta": 131.2, "reason": "speak"}
+    assert parse_client_msg('{"t":"log","tag":"build","data":{}}').data == {}
 
 
 def test_hello_is_valid_without_id_token():
@@ -131,6 +137,9 @@ BAD_CLIENT = [
     {"t": "frame", "id": "f", "jpeg": "x", "w": 1.5, "h": 1, "ts": 1, "purpose": "count"},
     {"t": "frame", "id": "f", "jpeg": "x", "w": "640", "h": 1, "ts": 1, "purpose": "count"},
     {"t": "confirm", "id": "c1", "kind": "order", "prompt": "?"},
+    {"t": "log", "tag": 5, "data": {}},
+    {"t": "log", "tag": "tilt", "data": []},
+    {"t": "log", "tag": "tilt"},
     # the wire is camelCase only, as in the TS guard
     {"t": "hello", "uid": "u", "shop_id": "s", "lang": "ta", "verbosity": "short", "app_version": "0"},
 ]

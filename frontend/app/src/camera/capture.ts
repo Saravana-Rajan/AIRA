@@ -3,9 +3,10 @@
 // bump guard) reads frames through captureFrame / getVideo so only one stream exists.
 import type { ClientMsg, FramePurpose } from "@aira/contracts";
 import { app } from "../core/app";
+import { clientLog, shortText, type LogData } from "../core/clientLog";
 import { toGray, qualityHint, noteFrameQuality } from "./quality";
 import { overrideSource } from "./source";
-import { ensureBackCamera, type CameraFacing } from "./backCamera";
+import { ensureBackCamera, type BackCameraResult, type CameraFacing } from "./backCamera";
 
 export type FrameMsg = Extract<ClientMsg, { t: "frame" }>;
 export type CameraErrorCode = "permission" | "no_frame" | "no_canvas" | "too_large";
@@ -97,6 +98,27 @@ export function fitWithin(w: number, h: number, max = MAX_SIDE): { w: number; h:
 
 const nextId = () => `f${Date.now().toString(36)}${(++seq).toString(36)}`;
 
+/** What the diagnostics say about an open camera: facing, the track's label and settings. Never pixels. */
+export function describeCamera(r: BackCameraResult): LogData {
+  let label = "";
+  let settings: MediaTrackSettings = {};
+  try {
+    const track = r.stream.getVideoTracks?.()[0];
+    label = track?.label ?? "";
+    settings = track?.getSettings?.() ?? {};
+  } catch {
+    /* a stream without tracks: report what we know */
+  }
+  return {
+    facing: r.facing,
+    label: shortText(label),
+    width: settings.width ?? null,
+    height: settings.height ?? null,
+    facingMode: settings.facingMode ?? null,
+    deviceId: r.deviceId ? r.deviceId.slice(0, 8) : null,
+  };
+}
+
 async function openCamera(): Promise<HTMLVideoElement> {
   let s: MediaStream;
   try {
@@ -110,7 +132,10 @@ async function openCamera(): Promise<HTMLVideoElement> {
     const r = await ensureBackCamera(navigator.mediaDevices, storage);
     s = r.stream;
     facing = r.facing;
-  } catch {
+    clientLog("camera", describeCamera(r));
+  } catch (e) {
+    const err = e as { name?: string; message?: string } | undefined;
+    clientLog("camera", { error: shortText(String(err?.name ?? "Error")), message: shortText(String(err?.message ?? "")) });
     throw new CameraError("permission");
   }
   const v = document.createElement("video");
@@ -161,15 +186,19 @@ export async function captureFrame(purpose: FramePurpose): Promise<FrameMsg> {
   if (!ctx) throw new CameraError("no_canvas");
   src.draw(ctx, w, h);
   // Quality check on every 3rd frame (cheap enough at 640 px).
+  let quality: "ok" | "dark" | "blurry" | "skipped" = "skipped";
   if (qualityListener && ++qualityCounter % 3 === 0) {
     const img = ctx.getImageData(0, 0, w, h);
     const hint = qualityHint(toGray(img.data, w, h), w, h);
     noteFrameQuality(hint);
+    quality = hint ?? "ok";
     if (hint) qualityListener(hint);
   }
   let jpeg = await deps.encoder(canvas, JPEG_QUALITY);
   if (jpeg.length > MAX_B64) jpeg = await deps.encoder(canvas, JPEG_RETRY_QUALITY);
   if (jpeg.length > MAX_B64) throw new CameraError("too_large");
+  // Diagnostics: the frame about to go out, by size only (never the jpeg). At most a few lines a second.
+  clientLog("frame", { purpose, bytes: jpeg.length, w, h, quality, demo: demo !== null }, { minGapMs: 250 });
   return { t: "frame", id: nextId(), jpeg, w, h, ts: Date.now(), purpose };
 }
 

@@ -5,6 +5,7 @@ import type { ClientMsg, CueName, Lang, ServerMsg } from "@aira/contracts";
 import { AiraSocket } from "../net/socket";
 import { OfflineQueue, defaultStore, type QueueStore } from "../net/offline-queue";
 import { initApp } from "./app";
+import { clientLog, loadBuildInfo, shortText, type BuildInfo } from "./clientLog";
 import { langFromPhone, phoneLanguages, uiLangFor } from "./lang";
 import { saveSettings } from "./settings";
 import { vibrate } from "./haptics";
@@ -73,6 +74,8 @@ export interface WireEnv {
   requestPermissions(): void;
   /** The phone's locales: only the hint for AIRA's first line (`hello.lang`) and the labels before anyone speaks. */
   languages: readonly string[];
+  /** The deployed build (/version.json) for the "build" diagnostic line. Default: `loadBuildInfo`. */
+  buildInfo?: () => Promise<BuildInfo | null>;
 }
 
 /** Everything the screen draws. */
@@ -189,6 +192,7 @@ export function browserEnv(): WireEnv {
         .catch(() => { /* the mic start reports a block when the owner talks */ });
     },
     languages: phoneLanguages(),
+    buildInfo: () => loadBuildInfo(),
   };
 }
 
@@ -275,10 +279,15 @@ export function wireApp(opts: WireOpts): WiredApp {
     const now = Date.now();
     const key = normaliseSpeech(text);
     if (!key) return;
-    if (lastSpoken && lastSpoken.key === key && now - lastSpoken.at < SPEAK_DEDUPE_MS) return;
+    if (lastSpoken && lastSpoken.key === key && now - lastSpoken.at < SPEAK_DEDUPE_MS) {
+      clientLog("speak", { text: shortText(text), dropped: "dedupe" });
+      return;
+    }
     lastSpoken = { key, at: now };
-    if (api.settings.screenReaderMode) env.announce(text);
+    const sr = api.settings.screenReaderMode;
+    if (sr) env.announce(text);
     else env.speech?.speak(text, uiLang, api.settings.speechRate);
+    clientLog("speak", { text: shortText(text), mode: sr ? "sr" : "tts", lang: uiLang });
   };
   const dropWaiting = () => {
     waiting = null;
@@ -288,7 +297,11 @@ export function wireApp(opts: WireOpts): WiredApp {
   const drainWaiting = () => {
     waitTimer = null;
     if (disposed || !waiting) return;
-    if (Date.now() - waiting.at > SPEAK_STALE_MS) { waiting = null; return; }
+    if (Date.now() - waiting.at > SPEAK_STALE_MS) {
+      clientLog("speak", { text: shortText(waiting.text), dropped: "stale" });
+      waiting = null;
+      return;
+    }
     if (liveBusy()) {
       const id = setTimeout(() => { timers.delete(id); drainWaiting(); }, SPEAK_POLL_MS);
       timers.add(id);
@@ -377,11 +390,26 @@ export function wireApp(opts: WireOpts): WiredApp {
 
   const replay = () => queue.replay((m) => api.send(m));
 
+  // Diagnostics: the deployed build (/version.json) is fetched once and reported after every `ready`, so a
+  // Cloud Logging session always starts with which build the phone runs. Never blocks anything.
+  const buildLoad: Promise<BuildInfo | null> = (async () => {
+    try { return await (env.buildInfo ?? loadBuildInfo)(); } catch { return null; }
+  })();
+  const ua = typeof navigator === "undefined" ? "" : String(navigator.userAgent ?? "");
+
   cleanups.push(
     socket.on((m) => {
       if (m.t === "ready") {
         mock = m.mock;
         void replay().catch(() => {});
+        const isMock = m.mock;
+        void buildLoad.then((b) => {
+          if (disposed) return;
+          clientLog("build", {
+            build: b?.build ?? "unknown", ...(b?.updated ? { updated: b.updated } : {}), appVersion: APP_VERSION,
+            mock: isMock, lang: uiLang, screenReader: api.settings.screenReaderMode, ua: shortText(ua, 120),
+          });
+        });
       }
       if (m.t === "transcript" && m.role === "user") {
         // The owner is still speaking: no thinking sound yet. When he finishes, start the 1.5 s wait.

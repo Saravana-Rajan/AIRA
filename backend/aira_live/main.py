@@ -40,6 +40,7 @@ from aira_live.contracts import (
     EventMsg,
     FrameMsg,
     HelloMsg,
+    LogMsg,
     ReadyMsg,
     StopMsg,
     TextMsg,
@@ -47,6 +48,7 @@ from aira_live.contracts import (
     client_adapter,
     dump_server_msg,
 )
+from aira_live.diag import RateLimiter, cap_json, diag, trunc
 from aira_live.frames import Frame
 from aira_live.i18n import t
 from aira_live.i18n.expected import shop_languages
@@ -70,6 +72,12 @@ OPTIONAL_ROUTERS: tuple[str, ...] = ("aira_live.jobs", "aira_live.messaging.webh
 #   which caps what can be spent on Gemini Live. The owner's one phone never reaches either limit.
 MAX_SESSIONS = 6
 MAX_SESSIONS_PER_IP = 3
+# Client diagnostic ``log`` lines kept per socket per second (aira_live.diag); the rest are dropped.
+LOG_MAX_PER_S = 20
+
+
+def _log_limiter() -> RateLimiter:
+    return RateLimiter(LOG_MAX_PER_S)
 
 # Browser origins allowed on /ws (the Origin header) and on the HTTP API (CORS, the dashboard's forecast card):
 # the Firebase Hosting site and the local Vite servers. Env AIRA_ALLOWED_ORIGINS (comma-separated) replaces it.
@@ -238,6 +246,8 @@ async def ws_endpoint(ws: WebSocket) -> None:
     await ws.accept()
     ip = client_ip(ws)
     settings = config.load()
+    diag("ws", event="open", origin=origin, mock=settings.mock)
+    log_limit = _log_limiter()
 
     async def send(msg: BaseModel) -> None:
         await ws.send_text(dump_server_msg(msg))
@@ -281,6 +291,9 @@ async def ws_endpoint(ws: WebSocket) -> None:
                 lang = msg.lang
                 current_session.set(session)
                 sessions.register(session, ip=ip)
+                diag("hello", session=session.session_id, uid=who.uid, shop=who.shop_id, lang=msg.lang,
+                     verbosity=msg.verbosity, app_version=msg.app_version, resume=bool(msg.resume),
+                     resumed=resumed, mock=settings.mock, camera=is_camera_session(session))
                 if not settings.mock and not is_camera_session(session):  # a shop camera only sends frames
                     bridge = await _start_live(session, handle)
                 await send(ReadyMsg(session_id=session.session_id, resume=session.session_id, mock=settings.mock))
@@ -290,9 +303,16 @@ async def ws_endpoint(ws: WebSocket) -> None:
                 if bridge:
                     bridge.hard_stop()
                 await send(CueMsg(cue="done"))
+            elif isinstance(msg, LogMsg):  # a phone diagnostic: logged, never answered, capped per socket
+                if log_limit.allow():
+                    diag("client", tag=msg.tag, data=cap_json(msg.data),
+                         session=session.session_id if session else None,
+                         shop=session.shop_id if session else None, dropped=log_limit.dropped)
             elif isinstance(msg, TextMsg):
                 if session:  # typed text is a user turn too: AIRA follows its language
                     lang = session.follow_lang(msg.text, typed=True)  # sticky: only a clear sentence switches
+                diag("transcript", session=session.session_id if session else None, role="user", typed=True,
+                     lang=lang, text=trunc(msg.text), final=True)
                 if bridge:
                     await bridge.send_text(msg.text)
                 else:
@@ -306,11 +326,15 @@ async def ws_endpoint(ws: WebSocket) -> None:
             elif isinstance(msg, FrameMsg):
                 session.frames.add(Frame(id=msg.id, jpeg_b64=msg.jpeg, w=msg.w, h=msg.h, ts=msg.ts,
                                          purpose=msg.purpose))
+                diag("frame", session=session.session_id, purpose=msg.purpose, id=msg.id, bytes=len(msg.jpeg),
+                     w=msg.w, h=msg.h)
             elif isinstance(msg, ConfirmReplyMsg):
                 try:
                     result = await confirm.resolve(msg.id, msg.answer, msg.value)
-                except Exception:  # a failed commit stays pending and can be retried
+                except Exception as exc:  # a failed commit stays pending and can be retried
                     log.exception("confirm %s failed", msg.id)
+                    diag("confirm", severity="ERROR", action="resolve_failed", session=session.session_id,
+                         id=msg.id, answer=msg.answer, error=type(exc).__name__, message=trunc(str(exc), 200))
                     await send(ErrorMsg(code="internal", say=t("error.internal", lang)))
                 else:
                     say = result.get("say", "")
@@ -324,5 +348,7 @@ async def ws_endpoint(ws: WebSocket) -> None:
     except WebSocketDisconnect:
         pass
     finally:
+        diag("ws", event="close", session=session.session_id if session else None,
+             client_logs_dropped=log_limit.dropped)
         if session:
             await _end_session(session, bridge)

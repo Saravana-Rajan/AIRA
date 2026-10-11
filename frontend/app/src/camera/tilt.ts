@@ -4,8 +4,27 @@
 // when the frames themselves look fine (the owner cannot see the screen; nagging him is worse than
 // a slightly odd angle).
 import { frameLooksGood as frameEvidence } from "./quality";
+import { clientLog } from "../core/clientLog";
 
 export type TiltHintKey = "tilt_down" | "tilt_up";
+
+/** Why one sample did or did not become a spoken hint (diagnostics only; nothing acts on it). */
+export type TiltReason = "no_reading" | "ok" | "hold" | "gap" | "frame_good" | "speak";
+
+export interface TiltDecision {
+  reason: TiltReason;
+  /** The hint the smoothed reading points at (null in band or without a reading). */
+  hint: TiltHintKey | null;
+  rawBeta: number | null;
+  rawGamma: number | null;
+  /** Smoothed (EMA) readings the decision was made on. */
+  beta: number | null;
+  gamma: number | null;
+  /** How long the smoothed reading has been out of band. */
+  outMs: number;
+  /** Ms since the last spoken tilt hint (Infinity before the first). */
+  sinceHintMs: number;
+}
 
 /** OK band for beta (pitch): 60°–120° covers slouching and leaning on the counter. */
 export const TILT_MIN = 60;
@@ -39,6 +58,8 @@ export interface TiltJudgeOptions {
   /** Frame evidence: when true, the camera sees fine and no tilt hint is given. */
   frameLooksGood?: (now: number) => boolean;
   alpha?: number;
+  /** Told about every sample's verdict (diagnostics). Must be cheap: deviceorientation fires up to 60 Hz. */
+  onDecision?: (d: TiltDecision) => void;
 }
 
 export interface TiltJudge {
@@ -54,27 +75,41 @@ export function createTiltJudge(opts: TiltJudgeOptions = {}): TiltJudge {
   const gapMs = opts.gapMs ?? TILT_HINT_GAP_MS;
   const frameGood = opts.frameLooksGood ?? frameEvidence;
   const alpha = opts.alpha ?? TILT_SMOOTH_ALPHA;
+  const onDecision = opts.onDecision;
   let beta: number | null = null;
   let gamma: number | null = null;
   let outSince: number | null = null;
   let lastHintAt = Number.NEGATIVE_INFINITY;
 
   const reset = () => { beta = null; gamma = null; outSince = null; };
+  // Diagnostics only: the verdict is decided before this is called, and a throwing listener changes nothing.
+  const tell = (reason: TiltReason, hint: TiltHintKey | null, rawBeta: number | null, rawGamma: number | null, t: number) => {
+    if (!onDecision) return;
+    try {
+      onDecision({
+        reason, hint, rawBeta, rawGamma, beta, gamma,
+        outMs: outSince == null ? 0 : t - outSince,
+        sinceHintMs: t - lastHintAt,
+      });
+    } catch { /* never let a log break the judge */ }
+  };
 
   return {
     reset,
     sample(b, g = null) {
-      if (!finite(b)) { reset(); return null; }
+      if (!finite(b)) { reset(); tell("no_reading", null, null, finite(g) ? g : null, now()); return null; }
       const t = now();
       beta = beta == null ? b : beta + alpha * (b - beta);
       if (finite(g)) gamma = gamma == null ? g : gamma + alpha * (g - gamma);
       else gamma = null;
+      const rawG = finite(g) ? g : null;
       const h = tiltHint(beta, gamma);
-      if (!h) { outSince = null; return null; }
+      if (!h) { outSince = null; tell("ok", null, b, rawG, t); return null; }
       if (outSince == null) outSince = t;
-      if (t - outSince < holdMs) return null;
-      if (t - lastHintAt < gapMs) return null;
-      if (frameGood(t)) return null;
+      if (t - outSince < holdMs) { tell("hold", h, b, rawG, t); return null; }
+      if (t - lastHintAt < gapMs) { tell("gap", h, b, rawG, t); return null; }
+      if (frameGood(t)) { tell("frame_good", h, b, rawG, t); return null; }
+      tell("speak", h, b, rawG, t);
       lastHintAt = t;
       outSince = t; // must be held again before the next hint
       return h;
@@ -82,8 +117,21 @@ export function createTiltJudge(opts: TiltJudgeOptions = {}): TiltJudge {
   };
 }
 
+/** The default judge's diagnostics: one "tilt" line a second to the server, plus every spoken hint. */
+function logTiltDecision(d: TiltDecision): void {
+  const round = (v: number | null) => (v == null ? null : Math.round(v * 10) / 10);
+  clientLog("tilt", {
+    reason: d.reason, hint: d.hint,
+    rawBeta: round(d.rawBeta), rawGamma: round(d.rawGamma), beta: round(d.beta), gamma: round(d.gamma),
+    outMs: Math.round(d.outMs), sinceHintMs: Number.isFinite(d.sinceHintMs) ? Math.round(d.sinceHintMs) : null,
+  }, { minGapMs: d.reason === "speak" ? 0 : 1000 });
+}
+
 /** Listens to deviceorientation and speaks through onHint. No sensor or no permission: no events, no hints. */
-export function startTiltHints(onHint: (h: TiltHintKey) => void, judge: TiltJudge = createTiltJudge()): () => void {
+export function startTiltHints(
+  onHint: (h: TiltHintKey) => void,
+  judge: TiltJudge = createTiltJudge({ onDecision: logTiltDecision }),
+): () => void {
   if (typeof window === "undefined") return () => {};
   const handler = (e: Event) => {
     const o = e as DeviceOrientationEvent;

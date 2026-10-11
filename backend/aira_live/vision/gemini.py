@@ -6,6 +6,7 @@ import base64
 import json
 import logging
 import re
+import time
 from typing import Any, Literal
 
 from google import genai
@@ -13,6 +14,7 @@ from google.genai import types
 from pydantic import BaseModel
 
 from aira_live import config
+from aira_live.diag import diag, trunc
 from aira_live.models import Role, fallback_for, model_for
 
 log = logging.getLogger(__name__)
@@ -124,7 +126,8 @@ async def generate_json(role: Role, parts: list, schema_hint: str,
         attempts.append(fb)
     cfg = _config(thinking)
     last: Exception | None = None
-    for model in attempts:
+    started = time.perf_counter()
+    for attempt, model in enumerate(attempts):
         try:
             resp = await asyncio.wait_for(
                 client().aio.models.generate_content(model=model, contents=contents, config=cfg),
@@ -138,8 +141,13 @@ async def generate_json(role: Role, parts: list, schema_hint: str,
             else:
                 raise ValueError(f"model reply is JSON {type(data).__name__}, not an object or list")
             out["_model"] = model
+            diag("vision", role=role, model=model, attempt=attempt, parts=len(parts), thinking=thinking,
+                 ms=round((time.perf_counter() - started) * 1000), keys=sorted(k for k in out if k != "_model"))
             return out
         except Exception as e:  # timeout, API error, or unparseable reply -> next attempt
             last = e
             log.warning("vision.generate_json role=%s model=%s failed: %r", role, model, e)
+            diag("vision_error", severity="WARNING", role=role, model=model, attempt=attempt, parts=len(parts),
+                 ms=round((time.perf_counter() - started) * 1000), error=type(e).__name__,
+                 message=trunc(str(e), 200))
     raise VisionError(f"{role}: all attempts failed: {last!r}")
