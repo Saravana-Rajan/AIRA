@@ -16,23 +16,22 @@ import asyncio
 import logging
 
 import aira_live.messaging as messaging
-from aira_live import confirm, ids, sessions
+from aira_live import confirm, ids
 from aira_live.business import audit, catalog, delivery_time, hints, outbox, paths
 from aira_live.business._ids import doc_id_for
 from aira_live.business.clock import now_iso
 from aira_live.business.states import transition
 from aira_live.business.store import get_store
-from aira_live.contracts import CueMsg, StateMsg, TranscriptMsg
+from aira_live.contracts import StateMsg
 from aira_live.i18n import t
 from aira_live.messaging.clicktochat import fmt_qty, items_text
 from aira_live.session import Session, get_session
-from aira_live.tools import _repo
+from aira_live.tools import _repo, _speak
+from aira_live.tools._speak import is_judge
 
 log = logging.getLogger(__name__)
 
-# The judge page gives every browser tab a "judge-" uid (frontend/app/src/demo/hello.ts). The shop's own phone
-# never does, so it keeps ordering from real vendors.
-JUDGE_UID_PREFIX = "judge-"
+# Judges (tools/_speak.is_judge) order from a demo vendor; the shop's own phone keeps ordering from real vendors.
 DEMO_REPLY_DELAY_S = 4.0
 _DEMO_REPLIES: set[asyncio.Task] = set()   # holds each pending demo reply until it finishes
 
@@ -218,10 +217,6 @@ async def _commit_send(payload: dict, value: str | None) -> dict:
     return out
 
 
-def is_judge(s: Session) -> bool:
-    return str(s.uid).startswith(JUDGE_UID_PREFIX)
-
-
 async def _place_with_demo_vendor(s: Session, order: dict) -> dict:
     out = await _place(s, order, "demo", f"demo-{order['id']}")
     out["say"] = t("k2.order.sent_demo", s.lang, supplier=order["supplierName"])
@@ -232,8 +227,8 @@ async def _place_with_demo_vendor(s: Session, order: dict) -> dict:
 
 
 async def _demo_vendor_reply(s: Session, order_id: str) -> None:
-    """After a short pause, speak the demo vendor's reply to this judge's session only (never ``sessions.notify``,
-    which would reach the shop's own phone and every other judge). A judge who already left is skipped quietly."""
+    """After a short pause, speak the demo vendor's reply to this judge's session only (``_speak.speak_to``, never
+    the shop-wide announcer). A judge who already left is skipped quietly."""
     try:
         await asyncio.sleep(DEMO_REPLY_DELAY_S)
         order = await _repo.get_order(s.shop_id, order_id)
@@ -242,11 +237,7 @@ async def _demo_vendor_reply(s: Session, order_id: str) -> None:
         by = (order.get("deliveryBy") or {}).get("text")
         reply = t("k2.demo_vendor.reply_by", s.lang, time=by) if by else t("k2.demo_vendor.reply", s.lang)
         text = t("k2.order.demo_vendor_replied", s.lang, supplier=order["supplierName"], text=reply)
-        bridge = next((b for sess, b in sessions.by_shop(s.shop_id) if sess.session_id == s.session_id), None)
-        await s.send(TranscriptMsg(role="aira", text=text, final=True, lang=s.lang))
-        await s.send(CueMsg(cue="ack"))
-        if bridge is not None:
-            await bridge.speak_notice(text)
+        await _speak.speak_to(s, text)
     except Exception:
         log.warning("demo vendor reply for order %s: session %s unreachable", order_id, s.session_id, exc_info=True)
 

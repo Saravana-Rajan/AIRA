@@ -47,8 +47,9 @@ def _ignored() -> dict:
 
 
 async def _notify(shop_id: str, text: str) -> None:
-    from aira_live import sessions          # looked up at call time so tests can monkeypatch sessions.notify
-    await sessions.notify(shop_id, text, "ack")
+    """A real vendor's reply is the shop owner's business: his sessions hear it, judges on the demo page do not."""
+    from aira_live.tools import _speak      # looked up at call time so tests can monkeypatch speak_to_owners
+    await _speak.speak_to_owners(shop_id, text, "ack")
 
 
 # ---------------------------------------------------------------- WhatsApp

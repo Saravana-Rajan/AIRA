@@ -25,7 +25,7 @@ from aira_live.contracts import CueMsg, StateMsg
 from aira_live.i18n import t
 from aira_live.messaging.clicktochat import fmt_qty
 from aira_live.session import Session, get_session
-from aira_live.tools import _repo
+from aira_live.tools import _repo, _speak
 from aira_live.tools import sales as sale_tools
 from aira_live.tools.orders import product_doc
 from aira_live.vision import cash as vcash
@@ -42,8 +42,8 @@ def _subscribe(session_id: str, callback):
 
 
 async def _notify(s: Session, text: str, cue: str = "ack") -> None:
-    from aira_live import sessions
-    await sessions.notify(s.shop_id, text, cue)
+    """Payment prompts belong to the session paying: never the shop-wide announcer, which every judge hears."""
+    await _speak.speak_to(s, text, cue)
 
 
 def _notes_words(notes: list[dict]) -> str:

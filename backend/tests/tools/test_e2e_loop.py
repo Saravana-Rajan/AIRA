@@ -142,6 +142,14 @@ def notified(monkeypatch):
         return 1
 
     monkeypatch.setattr(sessions, "notify", fake_notify)
+    from aira_live.tools import _speak
+
+    async def fake_speak_to(sess, text: str, cue: str = "ack") -> bool:
+        await fake_notify(sess.shop_id, text, cue)
+        return True
+
+    monkeypatch.setattr(_speak, "speak_to", fake_speak_to)
+    monkeypatch.setattr(_speak, "speak_to_owners", fake_notify)
     return said
 
 
