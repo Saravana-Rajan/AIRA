@@ -80,5 +80,17 @@
      "aliases": {"ta": ["அருண் விநியோகஸ்தர்", "ஐஸ்கிரீம் விநியோகஸ்தர்", "அருண்"],
                  "hi": ["अरुण डिस्ट्रीब्यूटर", "आइसक्रीम वाले", "अरुण"],
                  "en": ["arun distributor", "ice cream distributor", "arun agent", "arun"]}}
+  ],
+  "inventory": [
+    {"sku": "aavin_milk_500ml", "onHand": 20},
+    {"sku": "aavin_milk_1l", "onHand": 30},
+    {"sku": "sakthi_curd_500ml", "onHand": 10},
+    {"sku": "sakthi_curd_1l", "onHand": 3},
+    {"sku": "aavin_buttermilk_200ml", "onHand": 40},
+    {"sku": "aavin_ghee_200ml", "onHand": 8},
+    {"sku": "aavin_ghee_500ml", "onHand": 6},
+    {"sku": "aavin_paneer_200g", "onHand": 12},
+    {"sku": "aavin_butter_100g", "onHand": 15},
+    {"sku": "arun_icecream_box", "onHand": 10}
   ]
 }

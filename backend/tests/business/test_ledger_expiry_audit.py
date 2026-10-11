@@ -196,8 +196,17 @@ async def test_seed_inventory_idempotent(store, published):
 
 
 async def test_seed_inventory_without_inventory_is_a_no_op(store):
-    await seed.seed_inventory(store, seed.load_catalog(CATALOG), today=D0)
+    catalog = {k: v for k, v in seed.load_catalog(CATALOG).items() if k != "inventory"}
+    await seed.seed_inventory(store, catalog, today=D0)
     assert _docs(store, "ledger") == [] and _docs(store, "inventory") == []
+
+
+async def test_demo_catalog_gives_every_product_starting_stock(store):
+    catalog = seed.load_catalog(CATALOG)
+    await seed.seed_inventory(store, catalog, today=D0)
+    for p in catalog["products"]:
+        assert await ledger.on_hand(SHOP, p["sku"]) > 0, p["sku"]
+    assert await ledger.on_hand(SHOP, "sakthi_curd_1l") == 3     # the video opens on "Sakthi curd is low. Three litres left."
 
 
 def test_seed_cli_seeds_catalog_then_starting_stock(tmp_path, monkeypatch, published):
