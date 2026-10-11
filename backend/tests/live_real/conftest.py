@@ -177,7 +177,7 @@ def draw_bill(size: tuple[int, int] = (900, 700)) -> Image.Image:
     d.text((40, 20), SYNTHETIC_BANNER, fill="gray", font=small)
     d.text((40, 60), BILL_SUPPLIER, fill="black", font=big)
     d.text((40, 110), f"Invoice No: T-0001    Date: {BILL_DATE}", fill="black", font=body)
-    d.text((40, 150), "To: Murugan Dairy", fill="black", font=body)
+    d.text((40, 150), "To: Sunrise Dairy", fill="black", font=body)
     y = 220
     d.line((40, y - 10, size[0] - 40, y - 10), fill="black", width=2)
     d.text((40, y), "Item", fill="black", font=body)

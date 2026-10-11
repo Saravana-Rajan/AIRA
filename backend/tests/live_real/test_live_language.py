@@ -1,6 +1,6 @@
 """(a) Gemini Live (``model_for("live")``) through the app's own ``LiveBridge`` + ``AdkLiveBackend``.
 
-One session, the app's real system prompt (``render_prompt`` for a Tamil-speaking owner of Murugan Dairy).
+One session, the app's real system prompt (``render_prompt`` for a Tamil-speaking owner of Sunrise Dairy).
 A Tamil text turn must be answered in Tamil script and an English text turn in English: the language
 follows the speaker. First-audio latency is recorded per turn.
 """
@@ -17,7 +17,7 @@ from aira_live.prompt import render_prompt
 TAMIL_TURN = "வணக்கம். கடை திறந்துவிட்டதா? ஒரே வரியில் சொல்லுங்கள்."
 ENGLISH_TURN = "Hello. Is the shop open now? Answer in one short English sentence."
 
-SHOP = {"name": "Murugan Dairy"}
+SHOP = {"name": "Sunrise Dairy"}
 PRODUCTS = [
     {"sku": "aavin_milk_500ml", "name": "Aavin Milk", "packSizeL": 0.5, "price": 28},
     {"sku": "sakthi_curd_200g", "name": "Sakthi Curd", "packSizeG": 200, "price": 20},

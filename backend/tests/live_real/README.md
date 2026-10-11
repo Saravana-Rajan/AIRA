@@ -4,7 +4,7 @@ These tests call the real Gemini models through the app's own code paths. They a
 environment variables are set, so `uv run pytest -q` and CI stay offline:
 
 ```sh
-cd services/live
+cd backend
 AIRA_LIVE_TESTS=1 GEMINI_API_KEY=... uv run pytest tests/live_real -q -s
 ```
 
