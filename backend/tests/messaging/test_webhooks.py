@@ -486,3 +486,14 @@ async def test_a_vendors_old_phone_no_longer_speaks_for_them_after_a_relink(stor
         r = await c.post("/webhooks/telegram", json=update, headers=TG)
     assert r.json()["handled"] == 0 and notified == []
     assert "vendorReply" not in await _repo.get_order(SHOP, "o5")
+
+
+async def test_one_phone_cannot_be_linked_to_two_vendors(store, notified, tg_sent):
+    """Bug sweep: one teammate phone linked as both Aavin and Sakthi filed Aavin's answer on the Sakthi order."""
+    async with client() as c:
+        await c.post("/webhooks/telegram", json=start(777, f"/start {tagged('aavin_vendor')}"), headers=TG)
+        r = await c.post("/webhooks/telegram", json=start(777, f"/start {tagged('sakthi_vendor')}"), headers=TG)
+    assert r.json().get("linked") is None
+    assert await _chat_of(store, "sakthi_vendor") is None
+    assert await _repo.lookup_contact("telegram", "777") == {"shopId": SHOP, "supplierId": "aavin_vendor"}
+    assert tg_sent[-1] == ("777", "AIRA: this phone already gets Aavin vendor orders. Use a different phone for each vendor.")

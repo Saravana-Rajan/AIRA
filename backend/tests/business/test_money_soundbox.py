@@ -216,3 +216,22 @@ def test_spoken_tamil_120_and_1200_are_read_right():
     assert soundbox.parse("நூத்தி இருபது ரூபாய் பெறப்பட்டது").amount == 120
     assert soundbox.parse("ஆயிரத்து இருநூறு ரூபாய் பெறப்பட்டது").amount == 1200
     assert soundbox.parse("அறுபது ரூபாய் ரத்து செய்யப்பட்டது") is None    # a real cancellation still refuses
+
+
+@pytest.mark.parametrize("heard", [
+    "भैया, साठ रुपये मिले?", "60 rupaye mile kya?", "sixty rupees received?", "my phone says sixty rupees received",
+    "भैया साठ रुपये जमा कर दिए", "அண்ணா அறுபது ரூபாய் கிடைத்தது?",
+])
+def test_a_customers_question_or_phone_screen_is_never_soundbox_proof(heard):
+    """Bug sweep: the design says a customer's word or screen is never proof of a UPI payment."""
+    assert soundbox.parse(heard) is None
+
+
+@pytest.mark.parametrize("heard, amount", [
+    ("Received rupees sixty", 60),
+    ("पेटीएम पर साठ रुपये प्राप्त हुए", 60), ("அறுபது ரூபாய் பெறப்பட்டது", 60),
+    ("Payment of rupees one hundred and twenty received on Google Pay", 120),
+    ("received sixty rupees on phone pe", 60),
+])
+def test_real_soundbox_lines_still_confirm(heard, amount):
+    assert soundbox.parse(heard).amount == amount

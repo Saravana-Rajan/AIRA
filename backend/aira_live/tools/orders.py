@@ -74,6 +74,8 @@ def qty_phrase(product: dict, qty: float, unit: str, spoken_qty, spoken_unit: st
     spoken = _canon_unit(spoken_unit)
     if spoken == unit:
         return base
+    if spoken not in _MEASURES and abs(_packs(product, qty, unit) - qty) < 1e-9:
+        return base                            # 12 packs of a 1 L product are 12 L: nothing more to say
     if spoken in _MEASURES:                    # "5 kg" of paneer: say the packs and what the owner said
         other = f"{fmt_qty(spoken_qty)} {spoken}"
     elif unit in _MEASURES:                    # "4 packets" of milk: say the packs and the litres
@@ -105,7 +107,8 @@ async def resolve_lines(shop_id: str, items: list[dict], lang: str,
         if sells and ref.sku not in sells:
             return [], [], t("k2.order.wrong_supplier", lang, supplier=supplier["name"], product=name)
         spoken_qty = it.get("qty")
-        spoken_unit = _canon_unit(it.get("unit") or product.get("unit") or "pack")
+        # A bare count is packs: "2 milk" is 2 pouches (1 L), never 2 litres. The read-back says both forms.
+        spoken_unit = _canon_unit(it.get("unit") or "")
         try:
             qty, unit = catalog.to_selling_units(product, spoken_qty, spoken_unit)
         except (TypeError, ValueError):
@@ -138,8 +141,8 @@ async def order_create(supplier: str, items: list[dict], delivery_by: str | None
     deliver by 6 am tomorrow, send fresh stock".
 
     supplier: the vendor as spoken ("Sakthi vendor", "milkman", "ice cream distributor").
-    items: [{"product": "sakthi curd", "qty": 30, "unit": "L"}]; unit is one of L, ml, kg, g, pack, jar, box
-    (optional: the product's own unit).
+    items: [{"product": "sakthi curd", "qty": 30, "unit": "L"}]; unit is one of L, ml, kg, g, pack, jar, box.
+    Leave unit out when the owner only gave a count ("20 milk"): a bare count means packs.
     delivery_by: when the owner wants it, in his words ("6 am tomorrow", "today evening", "நாளை காலை").
     note: any short instruction for the vendor, in his words ("send fresh stock", "pack the ice cream in dry ice").
     Capture any delivery time or note the owner says. If he gave no delivery time, ask ONCE "Any delivery time?"

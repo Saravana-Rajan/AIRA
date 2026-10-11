@@ -296,7 +296,7 @@ async def stock_add(product: str, quantity: float, unit: str | None = None) -> d
     if ref is None:
         return {"ok": False, "unknown": product, "say": t("k3.stock.unknown_q", s.lang, product=product)}
     doc = await product_doc(s.shop_id, ref.sku)
-    spoken_unit = _canon_unit(unit or doc.get("unit") or "pack")
+    spoken_unit = _canon_unit(unit or "")      # a bare count is packs, as for orders and sales
     try:
         qty, sell_unit = catalog.to_selling_units(doc, quantity, spoken_unit)
     except (TypeError, ValueError):
