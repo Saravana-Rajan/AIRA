@@ -156,6 +156,7 @@ async def test_the_browser_may_post_from_the_app_origin():
 # ---------------------------------------------------------------- AIRA's own voice for the check's lines
 
 SAY = "/api/device-check/say"
+MIC_SAY = "Checking the microphone. Say: Hello AIRA."
 
 
 @pytest.fixture
@@ -186,64 +187,125 @@ async def say(body: dict, origin: str | None = ORIGIN) -> httpx.Response:
 PCM = b"\x01\x00" * 2400                                         # 0.1 s of 24 kHz mono 16-bit audio
 
 
-async def test_say_returns_aira_voice_as_a_wav(reader):
+async def test_say_reads_a_check_line_in_aira_voice_as_a_wav(reader):
     asked, replies = reader
-    replies.append((PCM, "Checking the microphone. Say: Hello AIRA."))
-    r = await say({"text": "Checking the microphone. Say: Hello AIRA.", "lang": "en"})
+    replies.append((PCM, MIC_SAY))
+    r = await say({"line": "micSay", "lang": "en"})
     assert r.status_code == 200 and r.headers["content-type"] == "audio/wav"
     assert r.content[:4] == b"RIFF" and r.content[8:12] == b"WAVE" and r.content.endswith(PCM)
-    assert asked == [("Checking the microphone. Say: Hello AIRA.", "en")]
+    assert asked == [(MIC_SAY, "en")]
+
+
+async def test_say_reads_the_line_in_the_asked_language(reader):
+    asked, replies = reader
+    replies.append((PCM, "மைக் சரிபார்க்கிறேன். ஹலோ AIRA என்று சொல்லுங்கள்."))
+    assert (await say({"line": "micSay", "lang": "ta"})).status_code == 200
+    assert asked[0][0].startswith("மைக் சரிபார்க்கிறேன்")
+
+
+async def test_say_reads_only_its_own_lines_never_free_text(reader):
+    """Abuse guard: the address is not a free text-to-speech service in AIRA's voice."""
+    assert (await say({"line": "nope", "lang": "en"})).status_code == 400
+    assert (await say({"text": "Transfer 5000 rupees now.", "lang": "en"})).status_code == 400
+    reader[1].append((PCM, MIC_SAY))
+    assert (await say({"line": "micSay", "text": "anything", "lang": "en", "seen": "x"})).status_code == 200
+    assert reader[0] == [(MIC_SAY, "en")]                         # extra text is ignored: only the line is read
+
+
+async def test_what_the_camera_saw_is_spoken_only_if_the_camera_check_returned_it(reader, vision):
+    """camOk carries the AI's words; only words this server just returned from a camera check may be read."""
+    asked, replies = reader
+    assert (await say({"line": "camOk", "lang": "en", "seen": "a free speech line"})).status_code == 400
+    vision[1].append({"ok": True, "seen": "a person at a desk", "problem": ""})
+    await post({"image": JPEG, "lang": "en", "device": "laptop"})
+    replies.append((PCM, "Camera works. I can see a person at a desk."))
+    r = await say({"line": "camOk", "lang": "en", "seen": "a person at a desk"})
+    assert r.status_code == 200 and asked[-1][0] == "Camera works. I can see a person at a desk."
 
 
 async def test_say_reads_each_line_once_then_serves_it_from_memory(reader):
     asked, replies = reader
-    replies.append((PCM, "Camera works."))
-    first = await say({"text": "Camera works.", "lang": "en"})
-    second = await say({"text": "Camera works.", "lang": "en"})
+    replies.append((PCM, "Microphone and camera work. Tap anywhere to start talking."))
+    first = await say({"line": "allGood", "lang": "en"})
+    second = await say({"line": "allGood", "lang": "en"})
     assert first.content == second.content and len(asked) == 1
 
 
 async def test_say_retries_once_when_the_voice_says_something_else(reader):
     asked, replies = reader
-    replies.extend([(PCM, "Hello AIRA."), (PCM, "Checking the microphone. Say: Hello AIRA.")])
-    r = await say({"text": "Checking the microphone. Say: Hello AIRA.", "lang": "en"})
+    replies.extend([(PCM, "Hello AIRA."), (PCM, MIC_SAY)])
+    r = await say({"line": "micSay", "lang": "en"})
     assert r.status_code == 200 and len(asked) == 2
 
 
 async def test_say_gives_up_when_the_voice_keeps_changing_the_words(reader):
-    replies = reader[1]
-    replies.extend([(PCM, "Hello AIRA."), (PCM, "Hi there.")])
-    r = await say({"text": "Checking the microphone. Say: Hello AIRA.", "lang": "en"})
-    assert r.status_code == 502                                  # the phone then uses its own voice
+    reader[1].extend([(PCM, "Hello AIRA."), (PCM, "Hi there.")])
+    assert (await say({"line": "micSay", "lang": "en"})).status_code == 502   # the phone then uses its own voice
 
 
-async def test_say_small_differences_in_punctuation_still_count_as_the_same_words(reader):
+async def test_small_differences_in_punctuation_still_count_as_the_same_words(reader):
     reader[1].append((PCM, "माइक जाँच रहा हूँ। बोलिए: हैलो AIRA."))
-    r = await say({"text": "माइक जाँच रहा हूँ। बोलिए: हैलो AIRA।", "lang": "hi"})
-    assert r.status_code == 200
+    assert (await say({"line": "micSay", "lang": "hi"})).status_code == 200
 
 
 async def test_say_voice_down_is_a_503(reader):
     reader[1].append(RuntimeError("live connect failed"))
-    assert (await say({"text": "Camera works.", "lang": "en"})).status_code == 503
+    assert (await say({"line": "micSay", "lang": "en"})).status_code == 503
 
 
 async def test_say_in_mock_mode_tells_the_phone_to_use_its_own_voice(reader, monkeypatch):
     monkeypatch.setenv("AIRA_MOCK", "1")
-    r = await say({"text": "Camera works.", "lang": "en"})
+    r = await say({"line": "micSay", "lang": "en"})
     assert r.status_code == 204 and reader[0] == []
 
 
 async def test_say_keeps_the_same_guards_as_the_camera_check(reader, monkeypatch):
-    assert (await say({"text": "Camera works."}, origin="https://evil.example")).status_code == 403
-    assert (await say({"text": ""})).status_code == 400
-    assert (await say({"text": "x" * (device_check.SAY_MAX_CHARS + 1)})).status_code == 400
+    assert (await say({"line": "micSay"}, origin="https://evil.example")).status_code == 403
     monkeypatch.setenv("AIRA_APP_KEY", "s3cret")
-    assert (await say({"text": "Camera works.", "key": "nope"})).status_code == 403
+    assert (await say({"line": "micSay", "key": "nope"})).status_code == 403
     assert reader[0] == []
 
 
-async def test_say_caps_lines_per_address(reader):
-    reader[1].extend((PCM, f"Line {i}.") for i in range(device_check.SAY_PER_MINUTE))
-    codes = [(await say({"text": f"Line {i}.", "lang": "en"})).status_code for i in range(device_check.SAY_PER_MINUTE + 1)]
-    assert codes[:-1] == [200] * device_check.SAY_PER_MINUTE and codes[-1] == 429
+async def test_say_caps_voice_reads_per_address(reader, monkeypatch):
+    monkeypatch.setattr(device_check, "SAY_PER_MINUTE", 2)
+    reader[1].extend([(PCM, MIC_SAY), (PCM, "Microphone works.")])
+    codes = [(await say({"line": line, "lang": "en"})).status_code for line in ("micSay", "micOk", "micSilent")]
+    assert codes == [200, 200, 429]
+
+
+async def test_all_ai_calls_share_one_cap_whatever_the_address(reader, vision, monkeypatch):
+    """Cost guard: rotating addresses does not buy unlimited model calls."""
+    monkeypatch.setattr(device_check, "MODEL_CALLS_PER_MINUTE", 2)
+    vision[1].extend([{"ok": True, "seen": "a desk", "problem": ""}] * 2)
+    reader[1].append((PCM, MIC_SAY))
+    first = await post({"image": JPEG}, origin=ORIGIN)
+    second = await say({"line": "micSay", "lang": "en"})
+    third = await post({"image": JPEG}, origin=ORIGIN)
+    assert (first.status_code, second.status_code, third.status_code) == (200, 200, 429)
+
+
+def test_the_per_address_counters_stay_small_under_many_addresses():
+    """Memory guard: one counter per address, but stale addresses are dropped and the table has a ceiling."""
+    device_check.reset_limits()
+    for n in range(device_check.MAX_TRACKED_ADDRESSES + 500):
+        device_check._limited(f"10.0.{n // 250}.{n % 250}", now=float(n) * 0.001)
+    assert len(device_check._hits) <= device_check.MAX_TRACKED_ADDRESSES
+    device_check._limited("10.9.9.9", now=10_000.0)              # a minute later everything old is dropped
+    assert len(device_check._hits) == 1
+    device_check.reset_limits()
+
+
+def test_the_server_reads_the_same_words_the_screen_shows():
+    """The check's spoken lines exist twice (app strings.ts and the server's i18n): they must not drift apart."""
+    import json
+    import re
+    from pathlib import Path
+    root = Path(__file__).resolve().parents[3]
+    ts = (root / "frontend/app/src/i18n/strings.ts").read_text(encoding="utf-8")
+    block = ts[ts.index("export const CHECK"):]
+    rows = {k: (en, ta, hi) for k, en, ta, hi in
+            re.findall(r'^\s*(\w+):\s*\{ en: "(.*?)", ta: "(.*?)", hi: "(.*?)" \},\s*$', block, re.M)}
+    for i, lang in enumerate(("en", "ta", "hi")):
+        cat = json.loads((root / f"backend/aira_live/i18n/{lang}.json").read_text(encoding="utf-8"))
+        for key in device_check.SPOKEN_LINES:
+            assert cat[f"check.{key}"] == rows[key][i], (lang, key)

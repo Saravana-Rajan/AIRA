@@ -2,9 +2,11 @@
 
 POST /api/device-check/camera  {"image": <jpeg base64>, "lang": "en|ta|hi", "device": "phone|laptop", "key": ...}
   -> {"ok": bool, "seen": "<a few words>", "problem": null | "dark" | "blurry" | "covered" | "blank" | "unclear"}
-POST /api/device-check/say     {"text": "<one line of the check screen>", "lang": "en|ta|hi", "key": ...}
+POST /api/device-check/say     {"line": "<check line key>", "lang": "en|ta|hi", "seen": "<camOk only>", "key": ...}
   -> audio/wav in AIRA's own voice (the Live model, default voice), 204 in mock mode, 502/503 when it cannot:
-     the app then falls back to the phone's own voice.
+     the app then falls back to the phone's own voice. Only the check screen's own lines (i18n ``check.*``) can be
+     read, and camOk's "seen" words only when a camera check here returned them in the last minutes: the address
+     is never a free text-to-speech service in AIRA's voice.
 
 Before the phone app opens the voice conversation it tests the microphone on the phone and sends one camera
 picture here. A vision model says whether it is a real, usable camera view and names what is in it ("a person at a
@@ -12,8 +14,10 @@ desk", "milk packets on a shelf"); the app speaks that back and only continues o
 and nothing is stored.
 
 Guards, as for /ws (shared/docs/ops/security.md): the request must come from an allowed browser origin, carry the
-app key when ``AIRA_APP_KEY`` is set, and one address gets at most ``MAX_PER_MINUTE`` checks. The model's words are
-cleaned and cut short before they leave, because the app reads them aloud.
+app key when ``AIRA_APP_KEY`` is set, and one address gets at most ``MAX_PER_MINUTE`` checks. All AI calls from both
+routes share ``MODEL_CALLS_PER_MINUTE``, so rotating addresses cannot buy unlimited model use, and the per-address
+counters drop stale addresses and never hold more than ``MAX_TRACKED_ADDRESSES``. The model's words are cleaned and
+cut short before they leave, because the app reads them aloud.
 """
 from __future__ import annotations
 
@@ -33,6 +37,7 @@ from fastapi.responses import JSONResponse, Response
 
 from aira_live import config
 from aira_live.diag import diag, trunc
+from aira_live.i18n import t
 from aira_live.prompt import LANG_NAME
 from aira_live.models import model_for
 from aira_live.vision import gemini
@@ -64,6 +69,18 @@ _MARKERS = re.compile(r"\[[^\]]{0,40}\]")       # "[SYSTEM NOTE]"-style markers 
 _JPEG = re.compile(r"^/9j/[A-Za-z0-9+/]+={0,2}$")
 _hits: dict[str, deque] = {}
 _say_hits: dict[str, deque] = {}
+_model_calls: deque = deque()
+MODEL_CALLS_PER_MINUTE = 60            # camera checks + voice reads, all addresses together
+MAX_TRACKED_ADDRESSES = 5000
+# The check screen's spoken lines (i18n "check.<key>", the same words as frontend/app/src/i18n/strings.ts CHECK).
+SPOKEN_LINES = frozenset({
+    "micSay", "micOk", "micBlocked", "micMissing", "micSilent", "micTap", "camLookLaptop", "camLookPhone", "camOk",
+    "camDark", "camBlurry", "camCovered", "camBlank", "camUnclear", "camBlocked", "camOffline", "camBusy",
+    "camUnavailable", "allGood",
+})
+RECENT_SEEN_S = 600.0
+RECENT_SEEN_MAX = 500
+_recent_seen: OrderedDict[str, float] = OrderedDict()   # words a camera check returned -> when they stop being sayable
 
 SAY_MAX_CHARS = 220
 SAY_PER_MINUTE = 20
@@ -81,6 +98,8 @@ _voice_cache: OrderedDict[tuple[str, str], bytes] = OrderedDict()
 def reset_limits() -> None:
     _hits.clear()
     _say_hits.clear()
+    _model_calls.clear()
+    _recent_seen.clear()
 
 
 def clear_voice_cache() -> None:
@@ -90,6 +109,11 @@ def clear_voice_cache() -> None:
 def _limited(ip: str, now: float | None = None, hits: dict[str, deque] | None = None, cap: int = MAX_PER_MINUTE) -> bool:
     hits = _hits if hits is None else hits
     now = time.monotonic() if now is None else now
+    if ip not in hits and len(hits) >= MAX_TRACKED_ADDRESSES:
+        for stale in [a for a, q in hits.items() if not q or now - q[-1] > 60.0]:
+            del hits[stale]
+        if len(hits) >= MAX_TRACKED_ADDRESSES:         # a flood of fresh addresses: refuse rather than grow
+            return True
     q = hits.setdefault(ip, deque())
     while q and now - q[0] > 60.0:
         q.popleft()
@@ -97,6 +121,31 @@ def _limited(ip: str, now: float | None = None, hits: dict[str, deque] | None = 
         return True
     q.append(now)
     return False
+
+
+def _model_budget_ok(now: float | None = None) -> bool:
+    """One shared allowance for every AI call these routes make, across all addresses."""
+    now = time.monotonic() if now is None else now
+    while _model_calls and now - _model_calls[0] > 60.0:
+        _model_calls.popleft()
+    if len(_model_calls) >= MODEL_CALLS_PER_MINUTE:
+        return False
+    _model_calls.append(now)
+    return True
+
+
+def _remember_seen(seen: str, now: float | None = None) -> None:
+    now = time.monotonic() if now is None else now
+    _recent_seen[seen] = now + RECENT_SEEN_S
+    _recent_seen.move_to_end(seen)
+    while len(_recent_seen) > RECENT_SEEN_MAX:
+        _recent_seen.popitem(last=False)
+
+
+def _seen_is_recent(seen: str, now: float | None = None) -> bool:
+    now = time.monotonic() if now is None else now
+    until = _recent_seen.get(seen)
+    return until is not None and until >= now
 
 
 def _clean(text: object) -> str:
@@ -164,7 +213,10 @@ async def camera_check(request: Request) -> JSONResponse:
     lang = body.get("lang") if body.get("lang") in LANG_NAME else "en"
     device = body.get("device") if body.get("device") in _DEVICE_HINT else "phone"
     if settings.mock:
+        _remember_seen("mock camera")
         return JSONResponse({"ok": True, "seen": "mock camera", "problem": None})
+    if not _model_budget_ok():
+        return _refuse(429, "busy")
     prompt = PROMPT.format(device=_DEVICE_HINT[device], lang=LANG_NAME[lang])
     try:
         data = await generate_json("read", [image_part(image), prompt], SCHEMA, thinking="low", timeout_s=8.0)
@@ -173,6 +225,8 @@ async def camera_check(request: Request) -> JSONResponse:
         diag("device_check", severity="WARNING", stage="error", device=device, message=trunc(str(exc), 200))
         return _refuse(503, "unavailable")
     out = verdict(data)
+    if out["ok"]:
+        _remember_seen(out["seen"])                     # the app may now ask for "Camera works. I can see ..."
     diag("device_check", stage="done", device=device, lang=lang, ok=out["ok"], problem=out["problem"],
          seen=trunc(out["seen"]), model=data.get("_model"))
     return JSONResponse(out)
@@ -233,11 +287,19 @@ async def say_line(request: Request) -> Response:
     body, refused = await _guarded_body(request)
     if refused:
         return refused
-    text = body.get("text")
-    if not isinstance(text, str) or not text.strip() or len(text) > SAY_MAX_CHARS:
+    line = body.get("line")
+    if not isinstance(line, str) or line not in SPOKEN_LINES:
         return _refuse(400, "bad_request")
-    text = " ".join(_CONTROL.sub(" ", text).split())
-    lang = body.get("lang") if body.get("lang") in LANG_NAME else "en"
+    lang = body.get("lang") if body.get("lang") in ("en", "ta", "hi") else "en"
+    if line == "camOk":                                  # the only line with the AI's own words in it
+        seen = body.get("seen")
+        if not isinstance(seen, str) or not _seen_is_recent(seen):
+            return _refuse(400, "bad_request")
+        text = t("check.camOk", lang, seen=seen)
+    else:
+        text = t(f"check.{line}", lang)
+    if len(text) > SAY_MAX_CHARS:
+        return _refuse(400, "bad_request")
     if config.load().mock:
         return Response(status_code=204)                    # no voice model here: the phone speaks the line itself
     cached = _voice_cache.get((lang, text))
@@ -247,6 +309,8 @@ async def say_line(request: Request) -> Response:
     if _limited(client_ip(request), hits=_say_hits, cap=SAY_PER_MINUTE):
         return _refuse(429, "busy")
     for attempt in (1, 2):                                  # the voice sometimes answers instead of reading: retry
+        if not _model_budget_ok():
+            return _refuse(429, "busy")
         try:
             pcm, said = await read_aloud(text, lang)
         except Exception as exc:

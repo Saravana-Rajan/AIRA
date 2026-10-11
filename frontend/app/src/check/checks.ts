@@ -166,6 +166,30 @@ export function cameraInstruction(device: DeviceKind, lang: Lang): string {
   return (device === "laptop" ? CHECK.camLookLaptop : CHECK.camLookPhone)[lang];
 }
 
+/** The lines the server can read in AIRA's voice (backend i18n "check.<key>", the same words as CHECK). */
+export type SpokenKey =
+  | "micSay" | "micOk" | "micBlocked" | "micMissing" | "micSilent" | "micTap" | "camLookLaptop" | "camLookPhone"
+  | "camOk" | "camDark" | "camBlurry" | "camCovered" | "camBlank" | "camUnclear" | "camBlocked" | "camOffline"
+  | "camBusy" | "camUnavailable" | "allGood";
+/** One spoken line: its key for AIRA's voice, its words for the screen and the device's own voice. */
+export type VoiceLine = { key: SpokenKey; text: string; seen?: string };
+
+export function voiceLine(key: SpokenKey, lang: Lang): VoiceLine {
+  return { key, text: CHECK[key][lang] };
+}
+
+export function instructionVoice(device: DeviceKind, lang: Lang): VoiceLine {
+  return voiceLine(device === "laptop" ? "camLookLaptop" : "camLookPhone", lang);
+}
+
+export function micVoice(r: MicResult, lang: Lang): VoiceLine {
+  return r.ok ? voiceLine("micOk", lang) : voiceLine(MIC_LINE[r.problem] as SpokenKey, lang);
+}
+
+export function cameraVoice(r: CameraResult, lang: Lang): VoiceLine {
+  return r.ok ? { key: "camOk", text: cameraLine(r, lang), seen: r.seen } : voiceLine(CAM_LINE[r.problem] as SpokenKey, lang);
+}
+
 // ---------------------------------------------------------------- the check's lines in AIRA's own voice
 
 export interface VoiceDeps {
@@ -181,15 +205,16 @@ export interface VoiceDeps {
 
 /**
  * The check screen speaks in AIRA's own voice: aira-live reads each line with the same voice model as the
- * conversation (POST /api/device-check/say). Each line is fetched once per page (prefetch() warms the next ones);
- * when the server cannot (mock mode, an error, a slow answer) the device's own voice reads it instead.
- * speak() resolves only when the line has finished, so nothing listens to the mic while AIRA is still talking.
+ * conversation (POST /api/device-check/say). The app names the line; the server holds the words, so the address can
+ * only ever read the check's own lines. Each line is fetched once per page (prefetch() warms the next ones); when the
+ * server cannot (mock mode, an error, a slow answer) the device's own voice reads it instead. speak() resolves only
+ * when the line has finished, so nothing listens to the mic while AIRA is still talking.
  */
 export function airaVoice(d: VoiceDeps) {
   const f = d.fetch ?? fetch;
   const lines = new Map<string, Promise<Blob | null>>();
-  const load = (text: string, lang: Lang): Promise<Blob | null> => {
-    const id = `${lang}|${text}`;
+  const load = (line: VoiceLine, lang: Lang): Promise<Blob | null> => {
+    const id = `${lang}|${line.key}|${line.seen ?? ""}`;
     let p = lines.get(id);
     if (!p) {
       p = (async () => {
@@ -199,7 +224,7 @@ export function airaVoice(d: VoiceDeps) {
           const r = await f(`${d.base}/api/device-check/say`, {
             method: "POST",
             headers: { "content-type": "application/json" },
-            body: JSON.stringify({ text, lang, ...(d.key ? { key: d.key } : {}) }),
+            body: JSON.stringify({ line: line.key, lang, ...(line.seen ? { seen: line.seen } : {}), ...(d.key ? { key: d.key } : {}) }),
             signal: ctrl?.signal,
           });
           if (r.status !== 200) return null;
@@ -216,11 +241,11 @@ export function airaVoice(d: VoiceDeps) {
     return p;
   };
   return {
-    prefetch(text: string, lang: Lang): void {
-      void load(text, lang);
+    prefetch(line: VoiceLine, lang: Lang): void {
+      void load(line, lang);
     },
-    async speak(text: string, lang: Lang, rate: number): Promise<void> {
-      const blob = await load(text, lang);
+    async speak(line: VoiceLine, lang: Lang, rate: number): Promise<void> {
+      const blob = await load(line, lang);
       if (blob) {
         try {
           await d.play(blob);
@@ -229,7 +254,7 @@ export function airaVoice(d: VoiceDeps) {
           /* autoplay refused or a broken clip: read it with the device's voice */
         }
       }
-      await d.fallback(text, lang, rate);
+      await d.fallback(line.text, lang, rate);
     },
   };
 }
