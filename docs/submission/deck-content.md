@@ -15,8 +15,9 @@ keywords and the honesty rules, so run it after every edit.
 
 ## Slide 2: The problem in one slide
 (Replace the template's download note with this content; keep the slide so the deck stays 16 slides.)
-- About 9.2 million blind people live in India (IAPB estimate), and India has about 12 million kirana stores
-  (Britannia A-Eye press coverage, 2025).
+- India has about 12 million kirana stores (Britannia A-Eye press coverage, 2025), and the government's
+  NHFDC loans exist so that people with 40%+ disability can own one (see `docs/research/aira-research.md` §2;
+  quote no headcount of blind people without a source).
 - The government's NHFDC self-employment loans exist so people with 40%+ disability can start a shop.
 - But running one alone is still blocked by everyday visual tasks: counting a delivery, reading a vendor's
   bill, finding the curd in the fridge, checking cash and UPI. Today the answer is "bring a sighted helper".
@@ -25,7 +26,7 @@ keywords and the honesty rules, so run it after every edit.
 ## Slide 3: Brief about the idea
 **AIRA lets a blind person run a small shop alone.** The owner wears a chest-mounted phone and talks.
 AIRA listens (Gemini Live), sees (Gemini Robotics-ER 2 and Gemini Flash), remembers (Firestore) and keeps
-exact books in deterministic code. It places supplier orders on WhatsApp, counts deliveries, checks bills,
+exact books in deterministic code. It places supplier orders on Telegram, counts deliveries, checks bills,
 guides the owner's hand to the right product, checks cash and UPI soundbox payments, and warns about low stock
 and expiry. This is a meaningful use of Generative AI for accessibility, and a functional prototype deployed
 on Google Cloud (Cloud Run, Firestore, Firebase Hosting). It is built around one shop: Murugan Dairy
@@ -49,8 +50,8 @@ instead of a guess; stock that changes exactly once (Firestore transactions + id
 
 ## Slide 5: List of features
 1. Order stock by voice: AIRA reads the order back, waits for a spoken "yes" and sends it to the vendor on
-   WhatsApp (Cloud API, or a pre-typed click-to-chat message sent with one tap). With the Cloud API, the
-   vendor's reply is spoken back.
+   Telegram (the AIRA bot; the vendor joins by opening one deep link). The vendor's reply is spoken back. A
+   vendor not on the bot yet gets a pre-typed WhatsApp click-to-chat message, sent with one tap.
 2. Live delivery count (one by one or by crate) with read-back; shortages flagged; "not sure" when the view
    is unclear.
 3. Invoice check: two independent reads by two different Gemini Flash generations; code compares bill vs
@@ -108,29 +109,31 @@ model proposes; deterministic code commits."
   listeners for the dashboard.
 - **On device:** MediaPipe Hand Landmarker (fingertip tracking), Web Audio, IndexedDB offline queue,
   installable PWA (Android packaging as a Trusted Web Activity).
-- **Messaging:** WhatsApp Business Cloud API (order + vendor reply webhook), click-to-chat fallback.
+- **Messaging:** Telegram Bot API (order + vendor reply webhook), WhatsApp click-to-chat fallback. WhatsApp
+  Business Cloud API: built and tested with fakes, planned next once Meta tokens exist.
 - **Backend:** Python 3.12, FastAPI, Google ADK. **Frontend:** TypeScript, Preact, Vite.
 - **Delivery:** GitHub Actions with Workload Identity Federation: test, build the container, deploy Cloud Run and
   Firebase Hosting on every push to main.
 
 ## Slide 10: Estimated implementation cost
 Paste the three lines printed by `python3 scripts/cost_per_sale.py --rate <today's USD to INR rate>`:
-- Per sale (about 1 minute of voice, 1 product check, 2 cash reads): `<fill: cost_per_sale.py line 1>`
+- Per sale (about 1 minute of voice, 1 product check, one cash check read twice): `<fill: cost_per_sale.py line 1>`
 - Per delivery (30 packs counted one by one, bill and cash read twice): `<fill: cost_per_sale.py line 2>`
 - Per shop-month (60 sales/day, 2 deliveries/day): `<fill: cost_per_sale.py line 3>`
 
-Note: "Gemini API only. Cloud Run, Firestore and Hosting are shared across shops. The design scales to many
+Note: "Gemini API only, thinking tokens included. Cloud Run, Firestore and Hosting are shared across shops. The design scales to many
 shops on the same services, so per-shop infrastructure cost falls as shops are added."
 
 ## Slide 11: Snapshots of the prototype
 Six screenshots, each with a one-line caption:
 1. Phone on the chest in the shop (hands visible; face only with written consent).
-2. Live count in progress ("29 counted"): app screen with status chip and captions.
+2. Live count in progress ("Counting 12 / 30"): app screen with status chip and captions. Copy the caption
+   from the real screenshot; the demo delivery has 28 packs, so a count never shows 29.
 3. Invoice check result: "Bill says 30 L, counted 28" (discrepancy).
 4. Hand guidance: fingertip and target box overlay (debug view).
 5. Shop Dashboard: stock table and audit trail.
 6. Google Cloud console: Cloud Run `aira-live` revision and Firestore database `aira` collections. Crop the
-   project ID out before pasting.
+   project ID, the project number and the `*.run.app` service URL out before pasting.
 
 ## Slide 12: Prototype performance report / benchmarking
 Paste `docs/submission/bench-table.md`, generated by `python3 scripts/bench_table.py` from the measured CSV
@@ -195,9 +198,13 @@ Team Techjays · Saravana Rajan B · Ishwarya · Sarmitha · Kanish
 
 ## Before export (Oct 17 checklist, not a slide)
 - [ ] File → Make a copy of the official template; keep all 16 slides in order.
-- [ ] Slides 5, 7, 8 and 9: check every feature and service named is in the final build, and delete any line
-  that is not. On Oct 10 these were still being built by other lanes: MediaPipe fingertip tracking, the
-  Android Trusted Web Activity packaging, the `messaging/` WhatsApp Cloud API webhook and the bump guard.
+- [ ] Slides 5, 7, 8 and 9: for every feature and service named, confirm it works in the deployed build the
+  judges will open; otherwise move it to slide 13 (roadmap) or delete it. Check in particular: MediaPipe
+  fingertip tracking, the bump guard, the Android Trusted Web Activity package, the Telegram bot (webhook set
+  and both vendors linked) and the demand forecast.
+- [ ] Vendor channel: the deck says Telegram now and WhatsApp Cloud API as ready and next. If the Telegram bot is
+  not live in the deployed build, reword slide 5 #1 and slide 9 to click-to-chat only, remove the "vendor reply
+  webhook" and the reply edge from `architecture.mmd`, and re-render.
 - [ ] If either `.mmd` file changed, render the diagrams again and insert them on slides 6 and 8:
   `npx -y @mermaid-js/mermaid-cli@11 -i docs/submission/diagrams/process-flow.mmd -o docs/submission/diagrams/process-flow.png -w 1600 -b white`
   `npx -y @mermaid-js/mermaid-cli@11 -i docs/submission/diagrams/architecture.mmd -o docs/submission/diagrams/architecture.png -w 1600 -b white`
@@ -206,7 +213,8 @@ Team Techjays · Saravana Rajan B · Ishwarya · Sarmitha · Kanish
 - [ ] Slide 10: paste the three lines from `scripts/cost_per_sale.py` run with that day's rate.
 - [ ] Slide 12: paste `docs/submission/bench-table.md`, the user-study numbers, the quote and the phone model.
 - [ ] Slide 14: paste the links from `docs/submission/links.json`.
-- [ ] Slide 11: screenshots cropped so no project ID or personal contact detail is visible.
+- [ ] Slide 11: screenshots cropped so no project ID, project number, `*.run.app` URL or personal contact detail
+  is visible.
 - [ ] File → Download → PDF, saved as `docs/submission/AIRA-deck.pdf` (git-ignored); then run
   `python3 scripts/check_submission.py --description docs/submission/description.txt --pdf docs/submission/AIRA-deck.pdf`
   and confirm `OK    all checks passed` (strictly under 5,000,000 bytes). If it is too big, compress the

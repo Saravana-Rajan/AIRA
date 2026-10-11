@@ -30,18 +30,20 @@ function clamp(v: number | undefined, lo: number, hi: number, fallback: number):
 }
 
 export function createFrameRequestHandler(deps: RequestDeps): (m: FrameRequest) => Promise<void> {
-  let stopContinuous: (() => void) | null = null;
+  // One continuous stream per purpose: guidance (`guide`) and a one-by-one delivery count (`identify`) can run
+  // at the same time, and a stop for one never ends the other.
+  const running = new Map<FramePurpose, () => void>();
 
   return async function handle(m: FrameRequest): Promise<void> {
     if (m.stop) {
-      // stop only ends the continuous stream; a burst in flight finishes on its own
-      stopContinuous?.();
-      stopContinuous = null;
+      // stop only ends that purpose's continuous stream; a burst in flight finishes on its own
+      running.get(m.purpose)?.();
+      running.delete(m.purpose);
       return;
     }
     if (m.continuous) {
-      stopContinuous?.();
-      stopContinuous = deps.startContinuous(m.purpose, CONTINUOUS_FPS);
+      running.get(m.purpose)?.();
+      running.set(m.purpose, deps.startContinuous(m.purpose, CONTINUOUS_FPS));
       return;
     }
     const count = clamp(m.burst?.count, 1, MAX_BURST, 1);

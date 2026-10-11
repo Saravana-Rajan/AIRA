@@ -135,6 +135,16 @@ async def test_reorder_suggest_low_stock_suggests_order(shop, session):
     assert shop["on_hand_calls"] == [("murugan_dairy", "sakthi_curd_1l")]
 
 
+async def test_reorder_suggest_says_when_the_history_is_demo_data(shop, session, monkeypatch):
+    """With AIRA_INCLUDE_DEMO_HISTORY=1 the backfilled rows feed the number, so AIRA says so first."""
+    shop["forecast"]["sakthi_curd_1l"] = 26.0
+    shop["on_hand"]["sakthi_curd_1l"] = 2.0
+    monkeypatch.setenv("AIRA_INCLUDE_DEMO_HISTORY", "1")
+    out = await insights.reorder_suggest()
+    assert out["say"].startswith("Based on demo sales history. Sakthi curd: 2 litres left")
+    assert out["suggestions"][0]["qty"] == 28
+
+
 async def test_reorder_suggest_half_litre_pouches_are_spoken_in_litres(shop, session):
     """Milk 500 ml is stocked and forecast in litres: 'Order 20' would be heard as 20 pouches, not 40."""
     shop["db"].store["shops/murugan_dairy/products/aavin_milk_500ml"] = {

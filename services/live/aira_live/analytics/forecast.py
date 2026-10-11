@@ -29,6 +29,16 @@ WINDOW_DAYS = 7
 MIN_DAYS = 3
 CACHE_TTL_S = 60.0
 SALE = "SALE"
+# scripts/backfill_demo_sales.py writes invented SALE rows with this refType. They are skipped unless the
+# operator opts in with AIRA_INCLUDE_DEMO_HISTORY=1, and then every spoken suggestion says it is demo history
+# (CLAUDE.md: never invent counts or amounts; nothing fabricated is presented as real).
+DEMO_REF_TYPE = "demo_backfill"
+DEMO_HISTORY_ENV = "AIRA_INCLUDE_DEMO_HISTORY"
+
+
+def demo_history_included() -> bool:
+    """True when backfilled demo rows feed the forecast (env AIRA_INCLUDE_DEMO_HISTORY=1)."""
+    return os.getenv(DEMO_HISTORY_ENV, "0") == "1"
 
 Daily = dict[date, float]
 Window = tuple[dict[str, Daily], set[date]]
@@ -49,11 +59,15 @@ def ist_day(at: object) -> date | None:
 
 
 def fold_sales(rows: Iterable[Mapping]) -> Window:
-    """Ledger rows → ({sku: {day: units sold}}, days on which the shop sold anything). Non-SALE rows are ignored."""
+    """Ledger rows → ({sku: {day: units sold}}, days on which the shop sold anything). Non-SALE rows are ignored,
+    and so are backfilled demo rows unless ``demo_history_included()``."""
     by_sku: dict[str, Daily] = defaultdict(dict)
     active: set[date] = set()
+    include_demo = demo_history_included()
     for row in rows:
         if row.get("reason") != SALE:
+            continue
+        if not include_demo and row.get("refType") == DEMO_REF_TYPE:
             continue
         sku, day = row.get("sku"), ist_day(row.get("at"))
         try:

@@ -137,7 +137,7 @@ Freeze the pipeline first, so that no later push to `main` (including the links 
     ```bash
     python3 scripts/check_submission.py --description docs/submission/description.txt \
       --links docs/submission/links.json --pdf docs/submission/AIRA-deck.pdf \
-      --video docs/submission/aira-demo-short.mp4 --max-video 179
+      --video docs/submission/aira-demo-short.mp4 --max-video 175
     ```
   - Only with support's written approval for up to 4:00 (the 3:50 cut). One `WARN` line about the length is expected:
     ```bash

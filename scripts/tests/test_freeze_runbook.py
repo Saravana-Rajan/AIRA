@@ -279,7 +279,7 @@ def test_checker_commands_use_the_real_flags_and_files():
 def test_video_limits_match_the_video_checklist():
     runbook = _video_limits(_runbook())
     checklist = _video_limits(VIDEO_CHECKLIST.read_text(encoding="utf-8"))
-    assert runbook == checklist == {"aira-demo.mp4": 240.0, "aira-demo-short.mp4": 179.0}
+    assert runbook == checklist == {"aira-demo.mp4": 240.0, "aira-demo-short.mp4": 175.0}
     text = _runbook()
     assert "written approval" in text.lower()
     assert "2:55" in text

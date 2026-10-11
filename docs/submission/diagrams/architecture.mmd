@@ -7,13 +7,13 @@ flowchart LR
     B["business/ (deterministic)<br/>ledger · sales · payments · reconcile · expiry · audit"]
     M["memory/<br/>spatial · episodic · prefs"]
     A["analytics/<br/>events · 7-day demand · day summary"]
-    W["messaging/<br/>WhatsApp Cloud API · webhook · click-to-chat"]
+    W["messaging/<br/>Telegram Bot API · vendor reply webhook<br/>WhatsApp click-to-chat fallback"]
   end
   FS[("Firestore · database aira<br/>system of record")]
   SM["Secret Manager<br/>aira-gemini-api-key"]
   FH["Firebase Hosting · site aira-shop<br/>app at / · Shop Dashboard at /dashboard"]
   D["Shop Dashboard<br/>family · helpers · judges"]
-  VD["Vendor phone<br/>WhatsApp"]
+  VD["Vendor phone<br/>Telegram"]
   GH["GitHub Actions<br/>push to main: test, build, deploy<br/>Workload Identity Federation"]
   AR[("Artifact Registry<br/>aira")]
 

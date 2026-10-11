@@ -57,6 +57,30 @@ async def test_message_and_contact_indexes_live_under_the_shop(store):
     assert await _repo.lookup_message("whatsapp", "wamid.1", "other_shop") is None
 
 
+@pytest.mark.parametrize("bad", ["a/b", "../o1", "", "x" * 65, "o 1", "o1\n"])
+async def test_model_supplied_ids_never_reach_a_firestore_path(store, bad):
+    """A model-supplied order/delivery id goes into `shops/{shop}/orders/{id}`: an id with "/" would read or write
+    a different document (or make the client raise). Unknown-looking ids are simply "not found"."""
+    from aira_live.business import paths
+
+    with pytest.raises(ValueError):
+        paths.doc_id(bad)
+    for fn in (paths.order, paths.delivery, paths.sale, paths.payment, paths.supplier, paths.product):
+        with pytest.raises(ValueError):
+            fn(SHOP, bad)
+    assert await _repo.get_order(SHOP, bad) is None
+    assert await _repo.get_delivery(SHOP, bad) is None
+    assert not [k for k in store.data if bad and bad in k]
+
+
+def test_doc_id_accepts_the_ids_the_engine_makes():
+    from aira_live.business import paths
+    from aira_live.business._ids import doc_id_for
+
+    for ok in ("o1", doc_id_for("p", "k:cash"), "sakthi_curd_1l", "aavin-vendor", "backfill-2026-10-10-x"):
+        assert paths.doc_id(ok) == ok
+
+
 async def test_index_keys_with_a_slash_stay_one_document(store):
     await _repo.index_message("telegram", "a/b:7", SHOP, "o9")
     assert f"shops/{SHOP}/msgIndex/telegram:a_b:7" in store.data

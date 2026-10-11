@@ -37,8 +37,24 @@ describe("localizeStatus", () => {
     expect(localizeStatus(at("counting", "Counting 12 / 30"), "en", { counted: 12, expected: 30 }).status.label).toBe("Counting 12 / 30");
     expect(localizeStatus(at("counting", "Counting 12 / 30"), "ta", { counted: 12, expected: 30 }).status.label).toBe("எண்ணுகிறேன் 12 / 30");
   });
+  it("translates the warning and confirm chips, the count outcome and the task card (ta/hi/en rule)", () => {
+    expect(localizeStatus(at("warning", "Mismatch"), "ta", null).status.label).toBe("பொருந்தவில்லை");
+    expect(localizeStatus(at("warning", "Not sure"), "hi", null).status.label).toBe("पक्का नहीं");
+    expect(localizeStatus(at("connecting", "Reconnecting"), "ta", null).status.label).toBe("மீண்டும் இணைக்கிறது");
+    expect(localizeStatus(at("listening", "Yes or no?"), "ta", null).status.label).toBe("ஆமா இல்லையா?");
+    expect(localizeStatus(at("warning", "3 short"), "hi", null).status.label).toBe("3 कम");
+    expect(localizeStatus(at("warning", "2 extra"), "ta", null).status.label).toBe("2 கூடுதல்");
+    expect(localizeStatus(at("warning", "3 short"), "en", null).status.label).toBe("3 short");
+    const counting: ScreenState = { ...initialScreen, task: { title: "Delivery", detail: "12 / 30 counted", tone: "neutral" } };
+    expect(localizeStatus(counting, "ta", null).task).toEqual({ title: "டெலிவரி", detail: "12 / 30 எண்ணப்பட்டது", tone: "neutral" });
+    const confirm: ScreenState = { ...initialScreen, task: { title: "Confirm sale", detail: "Sell 2?", tone: "neutral" } };
+    expect(localizeStatus(confirm, "hi", null).task).toEqual({ title: "बिक्री पक्का करें?", detail: "Sell 2?", tone: "neutral" });
+    const state: ScreenState = { ...initialScreen, task: { title: "Payment", detail: "150", tone: "ok" } };
+    expect(localizeStatus(state, "ta", null).task!.title).toBe("பணம்");
+    expect(localizeStatus(state, "en", null)).toBe(state); // nothing to change: same object
+  });
   it("leaves labels it has no translation for", () => {
-    expect(localizeStatus(at("warning", "3 short"), "ta", null).status.label).toBe("3 short");
+    expect(localizeStatus(at("warning", "Something else"), "ta", null).status.label).toBe("Something else");
   });
 });
 
@@ -83,6 +99,24 @@ describe("AppShell", () => {
     expect(f.raw.onTalk).toHaveBeenCalledTimes(1);
     act(() => { surface.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "Escape" })); });
     expect(f.raw.onStop).toHaveBeenCalledTimes(1);
+  });
+
+  it("a mismatch cue in Tamil draws the Tamil chip and task card, not English", () => {
+    const f = fakeWired("ta");
+    act(() => { render(<AppShell wire={() => f.w} languages={["ta"]} initial={{ ...DEFAULT_SETTINGS }} />, root); });
+    act(() => { startBtn().click(); });
+    act(() => {
+      f.push({ screen: {
+        ...initialScreen,
+        status: { kind: "warning", label: "Mismatch" },
+        task: { title: "Delivery", detail: "28 / 30 counted", tone: "warn" },
+      } });
+    });
+    expect(root.querySelector(".status-chip")!.textContent).toContain("பொருந்தவில்லை");
+    expect(root.querySelector(".status-chip")!.textContent).not.toContain("Mismatch");
+    const card = root.querySelector(".task-card")!.textContent!;
+    expect(card).toContain("டெலிவரி");
+    expect(card).toContain("28 / 30 எண்ணப்பட்டது");
   });
 
   it("still shows the app when an extra onWired hook throws", () => {

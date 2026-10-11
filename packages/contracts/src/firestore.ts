@@ -34,20 +34,23 @@ export interface Product {
 export interface Supplier { id: string; name: string; phone: string; channel: "whatsapp" | "telegram" | "call"; products: string[] }
 
 /** shops/{shopId}/orders/{id} */
-export interface OrderItem { sku: string; qty: number; agreedPrice?: number }
+export interface OrderItem { sku: string; qty: number; unit?: string; name?: string; agreedPrice?: number }
+/** The vendor's last reply, as the webhooks store it (messaging/webhooks.py). */
+export interface VendorReply { text: string; at: FsTime; channel: "whatsapp" | "telegram" }
 export interface Order {
-  id: string; supplierId: string; items: OrderItem[]; state: OrderState;
-  channelMsgId?: string; vendorReply?: string; idemKey: string; createdAt: FsTime; updatedAt: FsTime;
+  id: string; supplierId: string; supplierName?: string; items: OrderItem[]; state: OrderState;
+  channelMsgId?: string; vendorReply?: VendorReply; idemKey: string; createdAt: FsTime; updatedAt: FsTime;
 }
 
-/** shops/{shopId}/deliveries/{id} */
+/** shops/{shopId}/deliveries/{id}: method and confidence are null until the item has been counted. */
 export interface DeliveryItem {
-  sku: string; expectedQty: number; countedQty: number | null;
-  method: "one_by_one" | "crate" | "owner_confirmed"; confidence: number;
+  sku: string; name?: string; unit?: string; expectedQty: number; countedQty: number | null;
+  method: "one_by_one" | "crate" | "owner_confirmed" | null; confidence: number | null; countIdem?: string | null;
 }
 export interface InvoiceLineDoc { name: string; qty: number; unit: string; unit_price: number; line_total: number }
+/** What invoice_check stores: the agreed reading of the bill (two reads must agree), never the images. */
 export interface InvoiceSnapshot {
-  imageUri: string | null; readA: unknown; readB: unknown; agreed: boolean; lines: InvoiceLineDoc[]; total: number | null;
+  supplier: string | null; date: string | null; total: number | null; agreed: boolean; lines: InvoiceLineDoc[];
 }
 export interface Discrepancy { sku?: string; field?: string; expected: unknown; actual: unknown }
 export interface Delivery {

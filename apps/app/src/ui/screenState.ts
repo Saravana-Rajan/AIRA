@@ -82,7 +82,9 @@ export function reduceScreen(s: ScreenState, m: ScreenInput): ScreenState {
       return withStatus(s, READY);
 
     case "transcript": {
-      const next = m.role === "user" ? { ...s, userText: m.text } : { ...s, airaText: m.text };
+      // Captions are paired per turn: the owner speaking again starts a new turn, so the previous AIRA
+      // reply leaves the screen and the next AIRA line shown is the answer to THIS "You" line.
+      const next = m.role === "user" ? { ...s, userText: m.text, airaText: "" } : { ...s, airaText: m.text };
       if (holdsChip(s.status)) return next;
       if (m.role === "user") return { ...next, status: m.final ? THINKING : LISTENING };
       return { ...next, status: READY };

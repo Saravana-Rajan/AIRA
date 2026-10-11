@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import subprocess
 import sys
@@ -28,6 +29,10 @@ REQUIRED_TERMS = {
     "Gemini": r"\bGemini\b",
 }
 LOGIN_MARKERS = ("accounts.google.com", "ServiceLogin", "/signin", "/login")
+# Cloud Run's deterministic URL form, https://<service>-<PROJECT_NUMBER>.<region>.run.app, puts the project number
+# in the link. The repo and the form are public, so such a link (or one naming the project id) is refused.
+PROJECT_NUMBER_URL = re.compile(r"-\d{6,}\.[a-z0-9-]+\.run\.app", flags=re.IGNORECASE)
+PROJECT_ENV = ("GCP_PROJECT", "GCP_PROJECT_NUMBER")
 
 
 @dataclass
@@ -69,11 +74,27 @@ def fetch_status(url: str, timeout: float = 15.0) -> tuple[int, str]:
         return 0, url
 
 
-def check_links(links: dict[str, str], fetch=fetch_status) -> list[str]:
+def exposes_project(url: str, env: dict[str, str] | None = None) -> str | None:
+    """Why a URL gives the GCP project away (the project number in a run.app host, or the id/number from env)."""
+    env = os.environ if env is None else env
+    if PROJECT_NUMBER_URL.search(url):
+        return "contains the project number (a *.run.app URL)"
+    for name in PROJECT_ENV:
+        value = (env.get(name) or "").strip()
+        if value and value.lower() in url.lower():
+            return f"contains {name}"
+    return None
+
+
+def check_links(links: dict[str, str], fetch=fetch_status, env: dict[str, str] | None = None) -> list[str]:
     errors: list[str] = []
     for name, url in links.items():
         if not url.startswith("https://"):
             errors.append(f"{name}: URL must start with https:// ({url})")
+            continue
+        why = exposes_project(url, env)
+        if why:
+            errors.append(f"{name}: {why}; never publish the GCP project ({url})")
             continue
         status, final_url = fetch(url)
         if status != 200:

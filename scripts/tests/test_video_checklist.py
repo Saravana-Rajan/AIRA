@@ -198,7 +198,7 @@ def test_checker_commands_are_valid_and_match_each_cut():
         if video:
             assert video.startswith("docs/submission/"), video
             by_video[Path(video).name] = float(_flag(args, "--max-video") or 240.0)
-    assert by_video == {"aira-demo.mp4": MAIN_MAX_S, "aira-demo-short.mp4": STRICT_WARN_S}
+    assert by_video == {"aira-demo.mp4": MAIN_MAX_S, "aira-demo-short.mp4": SHORT_MAX_S}  # 2:55, not 2:59
 
 
 def test_checker_enforces_the_decision_rule():
@@ -292,3 +292,26 @@ def test_console_shots_hide_the_project_id_and_account():
     assert any(
         "project id" in line and "email" in line and ("blur" in line or "crop" in line) for line in lines
     )
+
+
+def test_proof_of_deployment_shots_hide_the_project_id_number_and_service_url():
+    """The video is public: the consoles show the GCP project id, its number and the *.run.app URL."""
+    text = _checklist()
+    rows = [line for line in text.splitlines() if "Proof of deployment" in line and line.startswith("|")]
+    assert len(rows) == 2, "one shot-list row and one fallback row"
+    for row in rows:
+        low = row.lower()
+        assert "blur" in low or "hide" in low or "hidden" in low, row
+        assert "project id" in low and "project number" in low and "run.app" in low, row
+    honesty = _section(text, "Honesty rules").lower()
+    assert any("project id" in l and "project number" in l and "console" in l for l in honesty.splitlines())
+
+
+def test_vendor_channel_is_telegram_now_and_whatsapp_cloud_api_is_next():
+    text = _checklist()
+    shots = _section(text, "Shot list")
+    order_row = next(line for line in shots.splitlines() if "Vendor order by voice" in line)
+    assert "Telegram" in order_row and "docs/ops/telegram-setup.md" in order_row
+    assert "next" in order_row.lower() and "cloud api" in order_row.lower()
+    assert "docs/ops/telegram-setup.md" in _section(text, "Before the shoot")
+    assert (ROOT / "docs" / "ops" / "telegram-setup.md").exists()

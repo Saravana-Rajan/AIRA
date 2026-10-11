@@ -47,9 +47,35 @@ def test_every_client_write_is_denied():
             assert cond == "false", (ops, cond)
 
 
+DASHBOARD_COLLECTIONS = ["products", "inventory", "sales", "payments", "orders", "deliveries", "auditLogs"]
+SERVER_ONLY = ["suppliers", "msgIndex", "contactIndex", "proposals", "ledger", "prefs", "memoryEvents", "events"]
+
+
 def test_only_the_demo_shop_is_readable():
-    readable = [cond for ops, cond in _allows() if ops & READ_OPS and cond != "false"]
-    assert readable == ["shopId == 'murugan_dairy'"]
+    readable = [" ".join(cond.split()) for ops, cond in _allows() if ops & READ_OPS and cond != "false"]
+    allowlist = "', '".join(DASHBOARD_COLLECTIONS)
+    assert readable == [
+        "shopId == 'murugan_dairy'",  # the shop doc
+        f"shopId == 'murugan_dairy' && coll in ['{allowlist}']",  # only what the dashboard draws
+    ]
+
+
+def test_server_only_collections_are_never_listed_as_readable():
+    """suppliers hold vendor phones and Telegram chat ids; proposals hold pending payloads and session ids."""
+    text = RULES.read_text(encoding="utf-8")
+    conditions = [cond for ops, cond in _allows() if ops & READ_OPS and cond != "false"]
+    for coll in SERVER_ONLY:
+        assert not any(f"'{coll}'" in cond for cond in conditions), coll
+    assert "{document=**}" not in text.split("match /shops/")[1].split("match /{document=**}")[0], \
+        "no wildcard read under the shop"
+
+
+def test_dashboard_reads_only_allowlisted_collections():
+    """apps/dashboard/src/lib/live.ts must not subscribe to a collection the rules close."""
+    live = (ROOT / "apps" / "dashboard" / "src" / "lib" / "live.ts").read_text(encoding="utf-8")
+    body = live.split("function shopSources")[1].split("type Docs")[0]
+    used = set(re.findall(r'(?:all|since)\("([A-Za-z]+)"', body)) | set(re.findall(r'col\("([A-Za-z]+)"\)', body))
+    assert used <= set(DASHBOARD_COLLECTIONS), used - set(DASHBOARD_COLLECTIONS)
 
 
 def test_indexes_file_is_well_formed():

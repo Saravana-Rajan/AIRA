@@ -62,16 +62,21 @@ body,
 .screen[data-status="stop"] { --state: var(--danger); }
 
 /* ---------- top bar ---------- */
+/* The shop name has priority: it is never shrunk or cut to "Mu...". On a narrow phone (360 px) a wide chip
+   such as "Counting 28 / 30" wraps onto its own line under the name instead. */
 .topbar {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
+  gap: 8px 12px;
 }
 .brand {
   display: flex;
   align-items: center;
   gap: 10px;
+  flex: 1 0 auto;
+  max-width: 100%;
   min-width: 0;
 }
 .brand__logo {
@@ -82,9 +87,12 @@ body,
 }
 .brand__shop {
   font-weight: 600;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.topbar .status-chip {
+  flex: 0 1 auto;
+  max-width: 100%;
 }
 .status-chip {
   display: inline-flex;

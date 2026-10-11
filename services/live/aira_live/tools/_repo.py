@@ -7,15 +7,17 @@ The indexes are the server-only collections `shops/{shopId}/msgIndex` and `shops
 A webhook does not know the shop yet, so lookups default to the one demo shop (env `AIRA_DEMO_SHOP`).
 """
 from aira_live import config
+from aira_live.business import paths
 from aira_live.business.store import get_store
 
 
 def order_path(shop_id: str, oid: str) -> str:
-    return f"shops/{shop_id}/orders/{oid}"
+    """``ValueError`` for an id that is not a single path segment (business.paths.doc_id)."""
+    return paths.order(shop_id, oid)
 
 
 def delivery_path(shop_id: str, did: str) -> str:
-    return f"shops/{shop_id}/deliveries/{did}"
+    return paths.delivery(shop_id, did)
 
 
 def _index_path(shop_id: str, collection: str, channel: str, key: str) -> str:
@@ -28,7 +30,12 @@ def _recency(doc: dict) -> str:
 
 
 async def get_order(shop_id: str, oid: str) -> dict | None:
-    doc = await get_store().get(order_path(shop_id, oid))
+    """The order, or None when it does not exist or the (model-supplied) id is not a valid document id."""
+    try:
+        path = order_path(shop_id, oid)
+    except ValueError:
+        return None
+    doc = await get_store().get(path)
     return {**doc, "id": oid} if doc else None
 
 
@@ -45,7 +52,11 @@ async def latest_order(shop_id: str, states: list[str], supplier_id: str | None 
 
 
 async def get_delivery(shop_id: str, did: str) -> dict | None:
-    doc = await get_store().get(delivery_path(shop_id, did))
+    try:
+        path = delivery_path(shop_id, did)
+    except ValueError:
+        return None
+    doc = await get_store().get(path)
     return {**doc, "id": did} if doc else None
 
 

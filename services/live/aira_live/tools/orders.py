@@ -165,11 +165,17 @@ async def _commit_send(payload: dict, value: str | None) -> dict:
     await s.send(StateMsg(entity="order", id=order["id"], state="DRAFT", summary=f"OPEN_URL {res['fallbackUrl']}"))
     first = t("k2.order.call" if res.get("channel") == "call" else "k2.order.fallback", s.lang,
               supplier=order["supplierName"], items=items_text(order["items"]))
+    reason = res.get("reason")
+    if reason and reason.startswith("telegram"):   # never silent: say why the Telegram bot did not send it
+        first = f"{t('k2.order.no_telegram', s.lang, supplier=order['supplierName'])} {first}"
     follow = await confirm.propose("generic", t("k2.order.mark_sent_q", s.lang, supplier=order["supplierName"]),
                                    {"order_id": order["id"], "idem": payload.get("idem") or order.get("idemKey")},
                                    "order.mark_sent")
-    return {**follow, "ok": True, "orderId": order["id"], "fallbackUrl": res["fallbackUrl"],
-            "say": f"{first} {follow['say']}"}
+    out = {**follow, "ok": True, "orderId": order["id"], "fallbackUrl": res["fallbackUrl"],
+           "say": f"{first} {follow['say']}"}
+    if reason:
+        out["reason"] = reason
+    return out
 
 
 async def _commit_mark_sent(payload: dict, value: str | None) -> dict:

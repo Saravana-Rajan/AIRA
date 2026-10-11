@@ -97,13 +97,15 @@ class LiveBridge:
     MAX_PENDING_TEXT = 20
 
     def __init__(self, session: Session, backend_factory: Callable[[], LiveBackend], system_prompt: str,
-                 tools: list):
+                 tools: list, resume_handle: str | None = None):
         self.session = session
         self._factory = backend_factory
         self.system_prompt = system_prompt
         self.tools = tools
         self._backend: LiveBackend | None = None
-        self._handle: str | None = None
+        # The Live resumption handle: updated by Live while connected, seeded from the previous bridge when a
+        # phone reconnects with hello.resume (main.py), so the conversation continues instead of restarting.
+        self._handle: str | None = resume_handle
         self._connected = False
         self._closed = False
         self._muted = False

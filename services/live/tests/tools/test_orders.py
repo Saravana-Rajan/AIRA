@@ -443,3 +443,18 @@ async def test_order_status_none(store, session):
     assert r["ok"] is False and r["say"] == "No open order found."
     missing = await orders.order_status("nope")
     assert missing["ok"] is False and missing["say"] == "No open order found."
+
+
+async def test_commit_send_telegram_fallback_says_the_bot_is_not_linked(store, session, proposals, phone, monkeypatch):
+    """A Telegram vendor without a chat id (or no bot token) never fails silently: AIRA says so, then hands over the link."""
+    payload = await _drafted(proposals)
+    url = "https://wa.me/919000000002?text=x"
+    monkeypatch.setattr(messaging, "send_order",
+                        fake_send({"channel": "whatsapp_link", "fallbackUrl": url, "reason": "telegram_not_linked"}))
+    r = await orders._commit_send(payload, None)
+    assert (await _repo.get_order(SHOP, payload["order_id"]))["state"] == "DRAFT"
+    assert phone.of(StateMsg)[-1].summary == f"OPEN_URL {url}"
+    assert r["say"] == ("Sakthi curd vendor is not on the AIRA Telegram bot yet. "
+                        "The order message is ready. Double-tap Send, then tell me when it is sent. "
+                        "Did you send the order to Sakthi curd vendor?")
+    assert r["reason"] == "telegram_not_linked"

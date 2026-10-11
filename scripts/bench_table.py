@@ -77,7 +77,7 @@ def load_rows(paths: list[Path]) -> list[dict]:
     rows: list[dict] = []
     for p in paths:
         p = Path(p)
-        with p.open(newline="", encoding="utf-8") as f:
+        with p.open(newline="", encoding="utf-8-sig") as f:  # -sig: a CSV saved by Excel starts with a BOM
             reader = csv.DictReader(f)
             if reader.fieldnames != HEADER:
                 raise ValueError(f"{p}: header must be {','.join(HEADER)}")

@@ -19,8 +19,10 @@ import importlib
 import inspect
 import json
 import logging
+import os
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, ValidationError
 
 from aira_live import config, confirm, sessions
@@ -50,10 +52,26 @@ from aira_live.tools import NON_BLOCKING_TOOLS, TOOL_FUNCS
 
 log = logging.getLogger(__name__)
 
-# APIRouter modules of other lanes, mounted when present: jobs (saravana/02), WhatsApp/Telegram webhooks (kanish/02).
-OPTIONAL_ROUTERS: tuple[str, ...] = ("aira_live.jobs", "aira_live.messaging.webhooks")
+# APIRouter modules of other lanes, mounted when present: jobs (saravana/02), WhatsApp/Telegram webhooks (kanish/02),
+# the dashboard's read-only HTTP API (api).
+OPTIONAL_ROUTERS: tuple[str, ...] = ("aira_live.jobs", "aira_live.messaging.webhooks", "aira_live.api")
+
+# The service is public (--allow-unauthenticated) and runs on one instance: this many phones at once is plenty
+# for the one-shop demo and bounds what a stranger with the URL can spend on Gemini Live.
+MAX_SESSIONS = 3
+
+# Browser origins allowed to call the HTTP API (the dashboard's forecast card). The Firebase Hosting site plus
+# any extra origins in env AIRA_CORS_ORIGINS (comma-separated, e.g. a local Vite dev server).
+HOSTING_ORIGINS = ("https://aira-shop.web.app", "https://aira-shop.firebaseapp.com")
+
+
+def cors_origins() -> list[str]:
+    extra = [o.strip().rstrip("/") for o in os.getenv("AIRA_CORS_ORIGINS", "").split(",") if o.strip()]
+    return [*HOSTING_ORIGINS, *extra]
+
 
 app = FastAPI(title="aira-live")
+app.add_middleware(CORSMiddleware, allow_origins=cors_origins(), allow_methods=["GET"], allow_headers=[])
 # Session -> LiveBackend for each Live connection (tests swap in a fake).
 app.state.backend_factory = lambda session: AdkLiveBackend(session)
 
@@ -109,13 +127,15 @@ async def _guidance_hook(name: str, *args) -> None:
         log.exception("guidance hook %s failed", name)
 
 
-async def _start_live(session: Session) -> LiveBridge | None:
-    """Real mode: connect ``session`` to Gemini Live. On failure, tell the phone and return ``None``."""
+async def _start_live(session: Session, resume_handle: str | None = None) -> LiveBridge | None:
+    """Real mode: connect ``session`` to Gemini Live (resuming the previous Live conversation when a reconnecting
+    phone brought its handle). On failure, tell the phone and return ``None``."""
     bridge: LiveBridge | None = None
     try:
         prompt = await build_system_prompt(session.shop_id, session.lang, session.verbosity)
         tools = live_tools(TOOL_FUNCS, session, NON_BLOCKING_TOOLS)
-        bridge = LiveBridge(session, lambda: app.state.backend_factory(session), prompt, tools)
+        bridge = LiveBridge(session, lambda: app.state.backend_factory(session), prompt, tools,
+                            resume_handle=resume_handle)
         await bridge.start()
     except Exception:
         log.exception("live start failed for session %s", session.session_id)
@@ -128,8 +148,13 @@ async def _start_live(session: Session) -> LiveBridge | None:
 
 
 async def _end_session(session: Session, bridge: LiveBridge | None) -> None:
-    """Disconnect or a replacing hello: stop alerts, guidance and Live for this session."""
+    """Disconnect or a replacing hello: stop alerts, guidance and Live for this session.
+
+    The session stays resumable for ``sessions.RESUME_WINDOW_S``: a hello with ``resume=<its id>`` from the same
+    phone (a network blip, a locked screen) gets the same session id and the last Live resumption handle.
+    """
     sessions.unregister(session.session_id)
+    sessions.remember_ended(session.session_id, bridge._handle if bridge is not None else None)
     await _guidance_hook("stop_guidance", session)
     if bridge is not None:
         await bridge.close()
@@ -186,12 +211,19 @@ async def ws_endpoint(ws: WebSocket) -> None:
                 if session:  # a second hello replaces the session
                     await _end_session(session, bridge)
                     bridge = None
-                session = Session(who.uid, who.shop_id, msg.lang, msg.verbosity, send)
+                elif sessions.count() >= MAX_SESSIONS:  # bound Gemini spend on the public URL
+                    log.warning("hello refused: %d live sessions already", sessions.count())
+                    await send(ErrorMsg(code="permission", say=t("auth.busy", msg.lang)))
+                    await ws.close(code=4403)
+                    return
+                resumed, handle = sessions.take_ended(msg.resume)
+                session = Session(who.uid, who.shop_id, msg.lang, msg.verbosity, send,
+                                  session_id=msg.resume if resumed else None)
                 lang = msg.lang
                 current_session.set(session)
                 sessions.register(session)
                 if not settings.mock:
-                    bridge = await _start_live(session)
+                    bridge = await _start_live(session, handle)
                 await send(ReadyMsg(session_id=session.session_id, resume=session.session_id, mock=settings.mock))
             elif isinstance(msg, StopMsg):  # long-press: stop guidance and the answer being spoken
                 if session:

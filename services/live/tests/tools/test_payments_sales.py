@@ -184,8 +184,23 @@ async def test_supplier_pay_cash_proposes_after_correct_cash(store, session, pho
     assert notified[0][1].startswith("Pay 150 rupees:")
     assert r["needs_confirm"] is True and proposals[0]["committer"] == "supplier_pay.cash"
     assert proposals[0]["kind"] == "payment"
-    assert (await _repo.get_order(SHOP, "o1"))["state"] == "PAYMENT_PENDING"
-    assert ("orders", {"shop_id": SHOP, "order_id": "o1", "state": "PAYMENT_PENDING"}) in published
+    # the model proposes, the backend commits: nothing about money or state moves before the owner's yes
+    assert (await _repo.get_order(SHOP, "o1"))["state"] == "DELIVERY_RECONCILED"
+    assert not [k for k in store.data if "/payments/" in k] and not [p for tpc, p in published if tpc == "orders"]
+
+
+async def test_supplier_pay_no_leaves_no_pending_payment_or_state(store, session, proposals, notified, published):
+    await _reconciled(store)
+    r = await pay.supplier_pay("o1", "upi")
+    out = await confirm.resolve(r["confirm_id"], "no")
+    assert out["status"] == "rejected"
+    order = await _repo.get_order(SHOP, "o1")
+    assert order["state"] == "DELIVERY_RECONCILED" and "paymentId" not in order
+    assert not [k for k in store.data if "/payments/" in k] and not [p for tpc, p in published if tpc == "orders"]
+    # the owner can simply ask again
+    use_call("tc-2")
+    again = await pay.supplier_pay("o1", "upi")
+    assert again["needs_confirm"] is True
 
 
 async def test_supplier_pay_cash_hint_key_retake(store, session, phone, proposals, notified, monkeypatch):
@@ -234,12 +249,14 @@ async def test_supplier_pay_commit_confirms_payment_and_order(store, session, ph
     first = await pay._commit_supplier_cash(payload, None)
     again = await pay._commit_supplier_cash(payload, None)
     assert first["say"] == again["say"] == "Payment of 150 rupees to Sakthi curd vendor recorded."
-    paid = await store.get(paths.payment(SHOP, payload["payment_id"]))
+    assert first["paymentId"] == again["paymentId"]
+    paid = await store.get(paths.payment(SHOP, first["paymentId"]))
     assert (paid["state"], paid["direction"], paid["method"], paid["amount"]) == ("CONFIRMED", "out", "cash", 150)
     assert paid["evidence"]["type"] == "cash_count"
-    assert (await _repo.get_order(SHOP, "o1"))["state"] == "PAYMENT_CONFIRMED"
-    assert [p for tpc, p in published if tpc == "orders" and p["state"] == "PAYMENT_CONFIRMED"] == [
-        {"shop_id": SHOP, "order_id": "o1", "state": "PAYMENT_CONFIRMED"}]
+    order = await _repo.get_order(SHOP, "o1")
+    assert order["state"] == "PAYMENT_CONFIRMED" and order["paymentId"] == first["paymentId"]
+    assert [p["state"] for tpc, p in published if tpc == "orders"] == ["PAYMENT_PENDING", "PAYMENT_CONFIRMED"]
+    assert len([k for k in store.data if "/payments/" in k]) == 1  # the retried confirm records nothing twice
 
 
 async def test_supplier_pay_upi_commits_through_confirm_yes(store, session, proposals, notified):
@@ -249,7 +266,7 @@ async def test_supplier_pay_upi_commits_through_confirm_yes(store, session, prop
     assert proposals[0]["committer"] == "supplier_pay.upi"
     out = await confirm.resolve(r["confirm_id"], "yes")
     assert out["ok"] is True
-    paid = await store.get(paths.payment(SHOP, proposals[0]["payload"]["payment_id"]))
+    paid = await store.get(paths.payment(SHOP, out["paymentId"]))
     assert (paid["state"], paid["method"], paid["evidence"]["type"]) == ("CONFIRMED", "upi", "user_confirm")
     assert (await _repo.get_order(SHOP, "o1"))["state"] == "PAYMENT_CONFIRMED"
 

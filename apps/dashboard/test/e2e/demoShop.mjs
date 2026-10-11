@@ -91,7 +91,9 @@ export function buildDemoShop(nowMs, catalog = loadCatalog()) {
       path: shop("orders/e2e_order_1"),
       data: {
         id: "e2e_order_1", supplierId: supplier.id, items: [{ sku: CURD, qty: 30 }], state: "DISCREPANCY",
-        vendorReply: "OK, delivery at 6 pm", idemKey: "e2e-order-1", createdAt: iso(ago(3 * 3_600_000)), updatedAt: iso(nowMs),
+        // the shape messaging/webhooks.py stores (contracts VendorReply)
+        vendorReply: { text: "OK, delivery at 6 pm", at: iso(ago(2 * 3_600_000)), channel: "whatsapp" },
+        idemKey: "e2e-order-1", createdAt: iso(ago(3 * 3_600_000)), updatedAt: iso(nowMs),
       },
     },
     {

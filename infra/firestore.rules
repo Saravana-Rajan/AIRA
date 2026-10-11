@@ -2,19 +2,31 @@ rules_version = '2';
 
 // Rules for the Firestore database "aira" (firebase.json → firestore[{ "database": "aira" }]).
 // There is no Firebase Auth in this build:
-// - murugan_dairy is the public demo shop shown on the Shop Dashboard (demo data only), so anyone can read it.
+// - murugan_dairy is the public demo shop shown on the Shop Dashboard (demo data only), so anyone can read the
+//   shop doc and the collections the dashboard draws (apps/dashboard/src/lib/live.ts): products, inventory,
+//   sales, payments, orders, deliveries, auditLogs.
+// - Everything else under the shop is server-only and stays closed: suppliers (vendor phone numbers, Telegram
+//   chat ids), msgIndex / contactIndex, proposals (pending payloads + session ids), ledger, prefs,
+//   memoryEvents, events, locations.
 // - Every client write is denied. aira-live writes with its service account (server SDK, rules don't apply):
 //   the model proposes, the backend commits.
 service cloud.firestore {
   match /databases/{database}/documents {
 
-    // The shop doc itself and every subcollection (products, inventory, ledger, sales, orders, ...).
-    match /shops/{shopId}/{document=**} {
+    // The shop doc itself (name, city).
+    match /shops/{shopId} {
       allow read: if shopId == 'murugan_dairy';
       allow write: if false;
     }
 
-    // Everything else (idempotency/, config/, other shops) is server-only.
+    // Only the dashboard's collections of the demo shop.
+    match /shops/{shopId}/{coll}/{doc} {
+      allow read: if shopId == 'murugan_dairy'
+                  && coll in ['products', 'inventory', 'sales', 'payments', 'orders', 'deliveries', 'auditLogs'];
+      allow write: if false;
+    }
+
+    // Everything else (server-only subcollections, idempotency/, config/, other shops) is closed.
     match /{document=**} {
       allow read, write: if false;
     }

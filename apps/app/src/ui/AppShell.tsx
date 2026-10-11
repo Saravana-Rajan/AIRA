@@ -15,20 +15,41 @@ type LabelKey = keyof typeof LABELS;
 const BY_ENGLISH = new Map<string, LabelKey>(
   (Object.keys(LABELS) as LabelKey[]).map((k) => [LABELS[k].en, k]),
 );
+/** Labels the reducer builds with a number or a count ("3 short", "12 / 30 counted"). */
+const PARAMETERISED: Array<{ key: "short" | "extra" | "counted"; re: RegExp }> = [
+  { key: "short", re: /^(\d+) short$/ },
+  { key: "extra", re: /^(\d+) extra$/ },
+  { key: "counted", re: /^(.+) counted$/ },
+];
+
+/** One English label from the reducer in the owner's language; unknown text stays as sent. */
+export function localizeLabel(label: string, lang: Lang): string {
+  const k = BY_ENGLISH.get(label);
+  if (k) return LABELS[k][lang];
+  for (const p of PARAMETERISED) {
+    const m = p.re.exec(label);
+    if (m) return LABELS[p.key][lang].replace("{n}", m[1]);
+  }
+  return label;
+}
 
 /**
- * The screen reducer writes English chip labels. Shows the standard ones in the owner's
- * language ("Ready" → "தயார்", "Counting 12 / 30" → "எண்ணுகிறேன் 12 / 30"); others stay as sent.
+ * The screen reducer writes English chip and task-card labels. Shows the standard ones in the owner's
+ * language ("Ready" → "தயார்", "Counting 12 / 30" → "எண்ணுகிறேன் 12 / 30", "Mismatch" → "பொருந்தவில்லை",
+ * task "Delivery / 12 / 30 counted" → "டெலிவரி / 12 / 30 எண்ணப்பட்டது"); server text (a prompt, a summary) and
+ * anything else stay as sent.
  */
 export function localizeStatus(s: ScreenState, lang: Lang, progress: CountProgress | null): ScreenState {
   const { kind, label } = s.status;
-  let next = label;
-  if (kind === "counting" && progress) next = statusLabel("counting", lang, progress);
-  else {
-    const k = BY_ENGLISH.get(label);
-    if (k) next = LABELS[k][lang];
+  const next = kind === "counting" && progress ? statusLabel("counting", lang, progress) : localizeLabel(label, lang);
+  let task = s.task;
+  if (task) {
+    const title = localizeLabel(task.title, lang);
+    const detail = localizeLabel(task.detail, lang);
+    if (title !== task.title || detail !== task.detail) task = { ...task, title, detail };
   }
-  return next === label ? s : { ...s, status: { kind, label: next } };
+  if (next === label && task === s.task) return s;
+  return { ...s, status: { kind, label: next }, task };
 }
 
 function useWiredView(w: WiredApp | null): AppView | null {

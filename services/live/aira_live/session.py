@@ -12,8 +12,10 @@ SendFn = Callable[[BaseModel], Awaitable[None]]
 
 
 class Session:
-    def __init__(self, uid: str, shop_id: str, lang: str, verbosity: str, send: SendFn):
-        self.session_id = uuid.uuid4().hex[:12]
+    def __init__(self, uid: str, shop_id: str, lang: str, verbosity: str, send: SendFn,
+                 session_id: str | None = None):
+        # ``session_id`` is given only when a hello resumes a session that just ended (sessions.take_ended).
+        self.session_id = session_id or uuid.uuid4().hex[:12]
         self.uid, self.shop_id, self.lang, self.verbosity = uid, shop_id, lang, verbosity
         self.frames = FrameStore()
         self.tool_results: list[dict] = []

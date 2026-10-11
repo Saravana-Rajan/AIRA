@@ -51,13 +51,27 @@ describe("request_frame handler", () => {
     expect(s.sent).toHaveLength(2);
   });
 
-  it("a second continuous request replaces the first", async () => {
+  it("a second continuous request of the same purpose replaces the first", async () => {
     const s = setup();
     await s.handle({ t: "request_frame", purpose: "guide", continuous: true });
-    await s.handle({ t: "request_frame", purpose: "count", continuous: true });
+    await s.handle({ t: "request_frame", purpose: "guide", continuous: true });
     expect(s.stops).toEqual(["guide"]);
-    await s.handle({ t: "request_frame", purpose: "count", stop: true });
-    expect(s.stops).toEqual(["guide", "count"]);
+    await s.handle({ t: "request_frame", purpose: "guide", stop: true });
+    expect(s.stops).toEqual(["guide", "guide"]);
+  });
+
+  it("continuous streams are tracked per purpose: guidance and a delivery count run side by side", async () => {
+    // product_find guidance streams `guide`; delivery_count streams `identify`. Ending one must not kill the other.
+    const s = setup();
+    await s.handle({ t: "request_frame", purpose: "guide", continuous: true });
+    await s.handle({ t: "request_frame", purpose: "identify", continuous: true });
+    expect(s.stops).toEqual([]);
+    expect(s.deps.startContinuous).toHaveBeenCalledTimes(2);
+    await s.handle({ t: "request_frame", purpose: "guide", stop: true });   // the guidance loop timed out
+    expect(s.stops).toEqual(["guide"]);                                    // identify keeps running
+    await s.handle({ t: "request_frame", purpose: "guide", stop: true });   // a second stop does nothing
+    await s.handle({ t: "request_frame", purpose: "identify", stop: true });
+    expect(s.stops).toEqual(["guide", "identify"]);
   });
 
   it("stop with nothing running is a no-op, and a second stop does nothing", async () => {

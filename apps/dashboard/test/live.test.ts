@@ -71,8 +71,9 @@ describe("listenShop", () => {
       "shops/murugan_dairy/products",
       "shops/murugan_dairy/sales",
       "shops/murugan_dairy/sales",
-      "shops/murugan_dairy/suppliers",
     ]);
+    // suppliers (vendor phones, Telegram chat ids) is server-only in infra/firestore.rules: never subscribed
+    expect(paths).not.toContain("shops/murugan_dairy/suppliers");
     for (const s of live()) {
       const fields = new Set(s.q.constraints.filter((c) => c.field).map((c) => c.field));
       expect(fields.size, s.q.path).toBeLessThanOrEqual(1);

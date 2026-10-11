@@ -24,6 +24,8 @@ export const APP_VERSION = "0.1.0";
 export const MIC_IDLE_MS = 30_000;
 /** The soft thinking sound repeats at this interval until AIRA answers. */
 export const THINKING_LOOP_MS = 1200;
+/** The same sentence handed to speak() twice within this window is announced or spoken once. */
+export const SPEAK_DEDUPE_MS = 3000;
 export const UID_KEY = "aira.uid";
 const DEFAULT_WS = "ws://localhost:8080/ws";
 
@@ -84,6 +86,8 @@ export interface WireOpts {
   wsUrl?: string;
   /** false: wire everything but send no hello (the demo page connects the socket itself). */
   connect?: boolean;
+  /** Shared app key sent as hello.idToken. Defaults to the build's VITE_AIRA_APP_KEY; "" sends none. */
+  appKey?: string;
   env?: Partial<WireEnv>;
 }
 
@@ -193,6 +197,19 @@ function wsDefault(): string {
 }
 
 /**
+ * The shared app key the hosting build bakes in (VITE_AIRA_APP_KEY, from Secret Manager aira-app-key). Sent as
+ * hello.idToken; aira-live refuses a hello without it when AIRA_APP_KEY is set. No login step for the owner.
+ */
+function appKey(): string | undefined {
+  try {
+    const key = (import.meta as { env?: Record<string, string | undefined> }).env?.VITE_AIRA_APP_KEY?.trim();
+    return key || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
  * Call once, synchronously, inside the onboarding Start tap: that tap is the user gesture
  * that unlocks audio playback, the mic and camera prompts and the wake lock.
  * Fills the `app` singleton (core/app.ts) and returns the gesture handlers and view state.
@@ -224,10 +241,17 @@ export function wireApp(opts: WireOpts): WiredApp {
   let mock = false;
 
   // ---- the app singleton ----
+  // No double speech: the confirm card, the AIRA caption and a notice can carry the same sentence within the
+  // same moment. The same text within SPEAK_DEDUPE_MS is announced (aria-live) or spoken (TTS) once; both
+  // stay visible on screen.
+  let lastSpoken: { text: string; at: number } | null = null;
   const api = initApp({
     socket,
     settings,
     speakImpl: (text, s) => {
+      const now = Date.now();
+      if (lastSpoken && lastSpoken.text === text && now - lastSpoken.at < SPEAK_DEDUPE_MS) return;
+      lastSpoken = { text, at: now };
       if (s.screenReaderMode) env.announce(text);
       else env.speech?.speak(text, s.lang, s.speechRate);
     },
@@ -433,9 +457,11 @@ export function wireApp(opts: WireOpts): WiredApp {
   });
 
   if (opts.connect !== false) {
+    const key = (opts.appKey ?? appKey() ?? "").trim() || undefined;
     socket.connect({
       t: "hello",
       uid: deviceUid(env.storage),
+      ...(key ? { idToken: key } : {}),
       shopId: settings.shopId,
       lang: settings.lang,
       verbosity: settings.verbosity,

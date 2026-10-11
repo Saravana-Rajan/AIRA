@@ -46,7 +46,7 @@ copy.
 | I agree to take part in the study | ☐ | ☐ |
 | I agree that my hands, the shop and my voice may be filmed for the competition video | ☐ | ☐ |
 | I agree that my face may appear in the video | ☐ | ☐ |
-| I agree that my words may be quoted (without my name) in the slides | ☐ | ☐ |
+| I agree that my words may be quoted (without my name) in the slides, the demo video and the public code repository | ☐ | ☐ |
 
 Participant ID: ______  Date: ______  Signature or thumb impression: ______
 
@@ -96,7 +96,7 @@ Hack2skill (Google Cloud AI Builder Cup) சமர்ப்பிக்கப்
 | இந்த ஆய்வில் பங்கேற்க ஒப்புக்கொள்கிறேன் | ☐ | ☐ |
 | போட்டி வீடியோவுக்காக என் கைகள், கடை மற்றும் என் குரலைப் படம் பிடிக்க ஒப்புக்கொள்கிறேன் | ☐ | ☐ |
 | வீடியோவில் என் முகம் வர ஒப்புக்கொள்கிறேன் | ☐ | ☐ |
-| என் வார்த்தைகளை (என் பெயர் இல்லாமல்) ஸ்லைடுகளில் மேற்கோள் காட்ட ஒப்புக்கொள்கிறேன் | ☐ | ☐ |
+| என் வார்த்தைகளை (என் பெயர் இல்லாமல்) ஸ்லைடுகள், டெமோ வீடியோ மற்றும் பொதுக் குறியீடு களஞ்சியத்தில் மேற்கோள் காட்ட ஒப்புக்கொள்கிறேன் | ☐ | ☐ |
 
 பங்கேற்பாளர் எண்: ______  தேதி: ______  கையொப்பம் அல்லது கைரேகை: ______
 

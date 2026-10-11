@@ -5,6 +5,7 @@ holds the phone's WebSocket. Each entry is a ``Session`` plus its ``LiveBridge``
 Live is still connecting).
 """
 import logging
+import time
 
 from aira_live.contracts import CueMsg, TranscriptMsg
 from aira_live.session import Session
@@ -13,9 +14,38 @@ log = logging.getLogger(__name__)
 
 _REG: dict[str, tuple[Session, object | None]] = {}  # session_id -> (session, bridge)
 
+# A session that just ended (WebSocket blip: screen lock, network switch) can be resumed by a hello carrying
+# ``resume=<session_id>`` within this window: it keeps its session id (so pending proposals, the active delivery
+# and the pending sale still belong to it) and its Live resumption handle.
+RESUME_WINDOW_S = 60.0
+_ENDED: dict[str, tuple[float, str | None]] = {}  # session_id -> (ended at, Live resumption handle)
+
 
 def register(session: Session, bridge: object | None = None) -> None:
     _REG[session.session_id] = (session, bridge)
+
+
+def count() -> int:
+    """How many live sessions are registered (all shops)."""
+    return len(_REG)
+
+
+def remember_ended(session_id: str, handle: str | None) -> None:
+    """Keep a just-ended session resumable for ``RESUME_WINDOW_S`` seconds."""
+    now = time.monotonic()
+    for stale in [sid for sid, (at, _) in _ENDED.items() if now - at > RESUME_WINDOW_S]:
+        del _ENDED[stale]
+    _ENDED[session_id] = (now, handle)
+
+
+def take_ended(session_id: str | None) -> tuple[bool, str | None]:
+    """``(found, handle)`` for a resumable session; consumes it. Unknown, stale or live ids give ``(False, None)``."""
+    if not session_id or session_id in _REG:
+        return False, None
+    entry = _ENDED.pop(session_id, None)
+    if entry is None or time.monotonic() - entry[0] > RESUME_WINDOW_S:
+        return False, None
+    return True, entry[1]
 
 
 def attach_bridge(session_id: str, bridge: object) -> None:

@@ -47,6 +47,16 @@ def test_say_speaks_suggested_orders_in_litres_not_bare_numbers():
     assert "23 लीटर Aavin Milk 500 ml" in sm.say(d, "hi")
 
 
+def test_say_marks_a_suggestion_built_on_demo_history():
+    d = {"sales_count": 0, "names": {"aavin_ghee_200ml": "Aavin Ghee"}, "demo_history": True,
+         "suggested_orders": [{"sku": "aavin_ghee_200ml", "qty": 2, "unit": "jar"}]}
+    assert sm.say(d, "en") == ("No sales recorded today yet. Based on demo sales history. "
+                               "Suggested order for tomorrow: 2 jars of Aavin Ghee.")
+    assert sm.say({**d, "suggested_orders": []}, "en") == "No sales recorded today yet."  # nothing to mark
+    assert sm.say({**d, "demo_history": False}, "en") == ("No sales recorded today yet. "
+                                                          "Suggested order for tomorrow: 2 jars of Aavin Ghee.")
+
+
 def test_suggest_qty_rounds_up_with_safety_and_never_negative():
     assert sm.suggest_qty(26.0, 2) == 28        # ceil(26 * 1.15 - 2) = ceil(27.9)
     assert sm.suggest_qty(5.0, 40) == 0

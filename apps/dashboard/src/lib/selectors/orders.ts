@@ -18,12 +18,6 @@ function textOrNull(v: unknown): string | null {
   return typeof v === "string" && v.trim() ? v : null;
 }
 
-/** The contracts type vendorReply as a string; the order flow saves { text, at, channel }. Read both. */
-function replyText(v: unknown): string | null {
-  if (typeof v === "object" && v !== null) return textOrNull((v as { text?: unknown }).text);
-  return textOrNull(v);
-}
-
 export function orderRows(
   orders: Normalized<Order>[], deliveries: Normalized<Delivery>[],
   suppliers: Normalized<Supplier>[], products: Normalized<Product>[],
@@ -49,15 +43,15 @@ export function orderRows(
       const updatedMs = updated(o);
       return {
         id: o.id,
-        supplierName: supplierNames.get(o.supplierId) ?? textOrNull((o as Record<string, unknown>).supplierName) ?? o.supplierId,
+        supplierName: supplierNames.get(o.supplierId) ?? textOrNull(o.supplierName) ?? o.supplierId,
         itemsText: (o.items ?? [])
-          .map((it) => `${productName(it.sku, (it as { name?: unknown }).name)} × ${it.qty}`)
+          .map((it) => `${productName(it.sku, it.name)} × ${it.qty}`)
           .join(", "),
         state,
         stateLabel: stateLabel(state),
         stepIndex,
         isDiscrepancy,
-        vendorReply: replyText(o.vendorReply),
+        vendorReply: textOrNull(o.vendorReply?.text),
         discrepancyTexts,
         updatedText: updatedMs !== null ? formatTimeIST(updatedMs) : "",
       };

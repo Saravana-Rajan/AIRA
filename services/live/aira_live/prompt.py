@@ -83,15 +83,11 @@ RULES = (
         "sale_start."
     ),
     (
-        '8. If the phone sends the text "check touch <label>", call product_find for that label to check what the '
-        "owner is touching, and say only the result."
-    ),
-    (
-        "9. Payments are cash or UPI only. A payment counts only after a cash count, the soundbox announcement or "
+        "8. Payments are cash or UPI only. A payment counts only after a cash count, the soundbox announcement or "
         "the owner's yes."
     ),
     (
-        "10. Evidence before state: an order is not a delivery, an invoice is not proof of receipt, and a saved "
+        "9. Evidence before state: an order is not a delivery, an invoice is not proof of receipt, and a saved "
         "location is not proof the product is still there. Check with a tool before you say it is done."
     ),
 )

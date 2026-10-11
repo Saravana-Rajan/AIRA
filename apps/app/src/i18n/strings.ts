@@ -16,9 +16,17 @@ export const STRINGS: Record<"offline" | "online" | "reconnecting" | "paused" | 
   confirmPending: { en: "Double-tap for yes, long-press for no.", ta: "ஆம் என்றால் இருமுறை தட்டுங்கள், இல்லை என்றால் அழுத்திப் பிடியுங்கள்.", hi: "हाँ के लिए दो बार टैप, ना के लिए दबाकर रखें।" },
 };
 
-/** Short labels drawn on the screen (status chip, caption speakers, idle hint). */
+/**
+ * Short labels drawn on the screen (status chip, task card, caption speakers, idle hint). The screen reducer
+ * writes the `en` text; AppShell.localizeStatus looks it up here by its English text (or by the `{n}` pattern
+ * for the parameterised ones) and draws the owner's language.
+ */
 export const LABELS: Record<
-  "connecting" | "ready" | "listening" | "thinking" | "counting" | "warning" | "offline" | "stop" | "you" | "aira" | "hintTalk",
+  | "connecting" | "ready" | "listening" | "thinking" | "counting" | "warning" | "offline" | "stop" | "you" | "aira"
+  | "hintTalk"
+  | "mismatch" | "unsure" | "reconnecting" | "yesOrNo" | "short" | "extra" | "counted"
+  | "order" | "delivery" | "sale" | "payment" | "stock"
+  | "confirmOrder" | "confirmPayment" | "confirmSale" | "confirmDiscrepancy" | "confirm",
   S
 > = {
   connecting: { en: "Connecting", ta: "இணைக்கிறது", hi: "जुड़ रहा है" },
@@ -31,6 +39,25 @@ export const LABELS: Record<
   stop:       { en: "Stop!", ta: "நில்லுங்கள்!", hi: "रुकिए!" },
   you:        { en: "You", ta: "நீங்கள்", hi: "आप" },
   aira:       { en: "AIRA", ta: "AIRA", hi: "AIRA" },
+  // chip states the reducer emits for cues, confirms and the count outcome
+  mismatch:     { en: "Mismatch", ta: "பொருந்தவில்லை", hi: "मेल नहीं खाता" },
+  unsure:       { en: "Not sure", ta: "உறுதியில்லை", hi: "पक्का नहीं" },
+  reconnecting: { en: "Reconnecting", ta: "மீண்டும் இணைக்கிறது", hi: "फिर से जुड़ रहा है" },
+  yesOrNo:      { en: "Yes or no?", ta: "ஆமா இல்லையா?", hi: "हाँ या ना?" },
+  short:        { en: "{n} short", ta: "{n} குறைவு", hi: "{n} कम" },
+  extra:        { en: "{n} extra", ta: "{n} கூடுதல்", hi: "{n} ज़्यादा" },
+  counted:      { en: "{n} counted", ta: "{n} எண்ணப்பட்டது", hi: "{n} गिने" },
+  // task card titles (state messages and confirms)
+  order:    { en: "Order", ta: "ஆர்டர்", hi: "ऑर्डर" },
+  delivery: { en: "Delivery", ta: "டெலிவரி", hi: "डिलीवरी" },
+  sale:     { en: "Sale", ta: "விற்பனை", hi: "बिक्री" },
+  payment:  { en: "Payment", ta: "பணம்", hi: "भुगतान" },
+  stock:    { en: "Stock", ta: "சரக்கு", hi: "स्टॉक" },
+  confirmOrder:       { en: "Confirm order", ta: "ஆர்டரை உறுதி செய்யவா?", hi: "ऑर्डर पक्का करें?" },
+  confirmPayment:     { en: "Confirm payment", ta: "பணம் உறுதி செய்யவா?", hi: "भुगतान पक्का करें?" },
+  confirmSale:        { en: "Confirm sale", ta: "விற்பனை உறுதி செய்யவா?", hi: "बिक्री पक्का करें?" },
+  confirmDiscrepancy: { en: "Confirm discrepancy", ta: "வித்தியாசம் உறுதி செய்யவா?", hi: "अंतर पक्का करें?" },
+  confirm:            { en: "Confirm", ta: "உறுதி செய்யவா?", hi: "पक्का करें?" },
   hintTalk:   {
     en: "Double-tap anywhere to talk. Long-press to stop.",
     ta: "பேச எங்கும் இருமுறை தட்டுங்கள். நிறுத்த அழுத்திப் பிடியுங்கள்.",

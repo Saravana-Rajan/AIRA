@@ -86,20 +86,9 @@ async def supplier_pay(order_id: str, method: Literal["cash", "upi"]) -> dict:
     amount = reconcile.payable(order["items"], counted)
     if amount <= 0:
         return {"ok": False, "say": t("k2.pay.not_ready", s.lang)}
-    idem = ids.current_idem_key()
-    existing = await get_store().get(paths.payment(s.shop_id, order["paymentId"])) if order.get("paymentId") else None
-    if existing is None or existing["method"] != method or existing["amount"] != amount:
-        p = await payments.record(s.shop_id, "out", method, amount, "order", order["id"], f"{idem}:{method}")
-        order = {**order, "paymentId": p["id"]}
-    order = {**order, "updatedAt": now_iso()}
-    moved = order["state"] != "PAYMENT_PENDING"
-    if moved:
-        order["state"] = transition("order", order["state"], "PAYMENT_PENDING")
-    await _repo.save_order(s.shop_id, order)
-    if moved:
-        await outbox.order_state(s.shop_id, order["id"], "PAYMENT_PENDING")
-        await s.send(StateMsg(entity="order", id=order["id"], state="PAYMENT_PENDING", summary=str(amount)))
-    base = {"order_id": order["id"], "payment_id": order["paymentId"], "amount": amount, "idem": idem}
+    # Nothing is written here: the payment doc and the PAYMENT_PENDING -> PAYMENT_CONFIRMED moves happen in the
+    # committer, after the owner's yes. A "no" therefore leaves no pending payment behind.
+    base = {"order_id": order["id"], "method": method, "amount": amount, "idem": ids.current_idem_key()}
     supplier = order.get("supplierName") or order.get("supplierId", "")
     if method == "upi":
         return await confirm.propose("payment", t("k2.pay.upi_q", s.lang, amount=amount, supplier=supplier),
@@ -119,28 +108,36 @@ async def supplier_pay(order_id: str, method: Literal["cash", "upi"]) -> dict:
 
 
 async def _commit_supplier(payload: dict, evidence: dict) -> dict:
+    """Committers "supplier_pay.cash" / "supplier_pay.upi": record the payment (idempotent on the proposal's
+    idem key), confirm it with the evidence and move the order PAYMENT_PENDING -> PAYMENT_CONFIRMED. A retried
+    confirm finds the order paid and changes nothing."""
     s = get_session()
     order = await _repo.get_order(s.shop_id, payload["order_id"])
     if order is None:
         return {"ok": False, "say": t("k2.order.none", s.lang)}
-    done = t("k2.pay.done", s.lang, amount=payload["amount"],
-             supplier=order.get("supplierName") or order.get("supplierId", ""))
+    amount, method = payload["amount"], payload["method"]
+    done = t("k2.pay.done", s.lang, amount=amount, supplier=order.get("supplierName") or order.get("supplierId", ""))
     if order["state"] == "PAYMENT_CONFIRMED":
-        return {"ok": True, "orderId": order["id"], "say": done}             # retried confirm
-    if order.get("paymentId") != payload["payment_id"]:                      # superseded by a newer proposal
+        return {"ok": True, "orderId": order["id"], "paymentId": order.get("paymentId"), "say": done}  # retried
+    if order["state"] not in PAYABLE_STATES:
         return {"ok": False, "say": hints.say("PaymentMismatch", s.lang)}
+    was_pending = order["state"] == "PAYMENT_PENDING"
     try:
-        await payments.confirm(s.shop_id, payload["payment_id"], evidence)
-        state = transition("order", order["state"], "PAYMENT_CONFIRMED")
-    except (PaymentMismatch, InvalidTransition):
+        p = await payments.record(s.shop_id, "out", method, amount, "order", order["id"], f"{payload['idem']}:{method}")
+        pending = order["state"] if was_pending else transition("order", order["state"], "PAYMENT_PENDING")
+        await payments.confirm(s.shop_id, p["id"], evidence)
+        state = transition("order", pending, "PAYMENT_CONFIRMED")
+    except (PaymentMismatch, InvalidTransition, ValueError):
         return {"ok": False, "say": hints.say("PaymentMismatch", s.lang)}
-    order = {**order, "state": state, "updatedAt": now_iso()}
+    order = {**order, "state": state, "paymentId": p["id"], "updatedAt": now_iso()}
     await _repo.save_order(s.shop_id, order)
+    if not was_pending:  # analytics sees every state once, the pass through PAYMENT_PENDING included
+        await outbox.order_state(s.shop_id, order["id"], "PAYMENT_PENDING")
     await outbox.order_state(s.shop_id, order["id"], "PAYMENT_CONFIRMED")
-    await audit.log(s.shop_id, "owner", "supplier_paid", "order", order["id"], f"{evidence['type']}:{payload['amount']}")
-    await s.send(StateMsg(entity="order", id=order["id"], state="PAYMENT_CONFIRMED", summary=str(payload["amount"])))
+    await audit.log(s.shop_id, "owner", "supplier_paid", "order", order["id"], f"{evidence['type']}:{amount}")
+    await s.send(StateMsg(entity="order", id=order["id"], state="PAYMENT_CONFIRMED", summary=str(amount)))
     await s.send(CueMsg(cue="done"))
-    return {"ok": True, "orderId": order["id"], "say": done}
+    return {"ok": True, "orderId": order["id"], "paymentId": p["id"], "say": done}
 
 
 async def _commit_supplier_cash(payload: dict, value: str | None) -> dict:
@@ -155,7 +152,10 @@ async def _commit_supplier_upi(payload: dict, value: str | None) -> dict:
 
 async def _sale(s: Session, sale_id: str | None) -> dict | None:
     sid = sale_id or sale_tools.active_sale.get(s.session_id)
-    doc = await get_store().get(paths.sale(s.shop_id, sid)) if sid else None
+    try:
+        doc = await get_store().get(paths.sale(s.shop_id, sid)) if sid else None
+    except ValueError:  # a model-supplied id that is not a document id: "no such sale", never a path error
+        return None
     return {**doc, "id": sid} if doc else None
 
 

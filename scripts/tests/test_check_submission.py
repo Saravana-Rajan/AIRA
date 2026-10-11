@@ -106,6 +106,39 @@ def test_main_exit_codes(tmp_path):
     assert cs.main(["--description", str(d)]) == 1
 
 
+def test_links_reject_urls_that_expose_the_gcp_project():
+    """The links file is committed and pasted into a public form: no project number or id may appear in it."""
+    calls: list[str] = []
+
+    def fetch(u):
+        calls.append(u)
+        return 200, u
+
+    env = {"GCP_PROJECT": "demo-shop-123456", "GCP_PROJECT_NUMBER": "987654321012"}
+    errs = cs.check_links(
+        {
+            "api_health": "https://aira-live-987654321012.asia-south1.run.app/health",
+            "app": "https://aira-shop.web.app",
+            "console": "https://console.cloud.google.com/run?project=demo-shop-123456",
+            "logs": "https://example.com/987654321012/x",
+        },
+        fetch=fetch,
+        env=env,
+    )
+    assert len(errs) == 3
+    assert any(e.startswith("api_health:") and "project number" in e for e in errs)
+    assert any(e.startswith("console:") and "GCP_PROJECT" in e for e in errs)
+    assert any(e.startswith("logs:") and "GCP_PROJECT_NUMBER" in e for e in errs)
+    assert calls == ["https://aira-shop.web.app"]  # an exposing link is never even fetched
+
+
+def test_links_without_project_env_still_catch_run_app_numbers():
+    errs = cs.check_links({"api_health": "https://aira-live-123456789.europe-west1.run.app"},
+                          fetch=lambda u: (200, u), env={})
+    assert errs and "project number" in errs[0]
+    assert cs.check_links({"ok": "https://aira-live.example.run.app/health"}, fetch=lambda u: (200, u), env={}) == []
+
+
 def test_links_reject_plain_http():
     errs = cs.check_links({"app": "http://plain.example"}, fetch=lambda u: (200, u))
     assert errs == ["app: URL must start with https:// (http://plain.example)"]

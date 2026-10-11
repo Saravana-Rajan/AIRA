@@ -1,52 +1,36 @@
+// Entry point. Three routes (demo/router.ts):
+//   /try (or /?demo=1)  the judge demo page; it wires and connects the app itself on the first tap
+//   /bench              the benchmark export page; no owner socket is opened
+//   everything else     the shopkeeper app: onboarding, then the single gesture surface
+// AppShell / TryAira run `onWired` inside the Start tap, which is where the camera, hand guidance, the bump
+// guard (owner app only) and the in-app benchmark collector join the wired voice app.
 import { render } from "preact";
-import { useEffect, useReducer } from "preact/hooks";
-import "./ui/app.css";
-import { AiraSocket } from "./net/socket";
-import { Screen } from "./ui/Screen";
-import { initialScreen, reduceScreen } from "./ui/screenState";
+import { AppShell } from "./ui/AppShell";
+import { TryAira } from "./demo/TryAira";
+import { BenchPage } from "./bench/BenchPage";
+import { routeFor } from "./demo/router";
+import { wireCameraIntoApp } from "./camera/wire";
+import { installBenchIfEnabled } from "./bench/install";
+import { registerServiceWorker } from "./pwa/registerSW";
 
-const url = import.meta.env.VITE_AIRA_LIVE_WS ?? "ws://localhost:8080/ws";
-const socket = new AiraSocket(url);
+void registerServiceWorker(); // production only; never throws
 
-// No Firebase Auth in this build: hello carries no idToken; the server maps it to the demo shop.
-const HELLO = {
-  t: "hello",
-  uid: "owner",
-  shopId: "murugan_dairy",
-  lang: "en",
-  verbosity: "short",
-  appVersion: "0.1.0",
-} as const;
+const route = routeFor(location.pathname, location.search);
+const root = document.getElementById("root")!;
 
-function App() {
-  const [state, dispatch] = useReducer(reduceScreen, initialScreen);
-
-  useEffect(() => {
-    const off = socket.on((m) => {
-      if (import.meta.env.DEV) console.log("[aira]", m);
-      dispatch(m);
-    });
-    socket.connect(HELLO);
-    return () => {
-      off();
-      socket.close();
-    };
-  }, []);
-
-  return (
-    <Screen
-      state={state}
-      shopName="Murugan Dairy"
-      onTalk={() => {
-        dispatch({ t: "local", event: "talk" });
-        socket.send({ t: "text", text: "hello aira" });
+if (route === "bench") {
+  render(<BenchPage />, root);
+} else if (route === "try") {
+  // No bump guard on the demo page: no object-detector download, nobody is walking.
+  render(<TryAira onWired={(w) => { wireCameraIntoApp(w, { bumpGuard: false }); }} />, root);
+} else {
+  render(
+    <AppShell
+      onWired={(w) => {
+        wireCameraIntoApp(w);
+        installBenchIfEnabled(); // records only when /bench switched recording on
       }}
-      onStop={() => {
-        dispatch({ t: "local", event: "stop" });
-        socket.send({ t: "stop" });
-      }}
-    />
+    />,
+    root,
   );
 }
-
-render(<App />, document.getElementById("root")!);

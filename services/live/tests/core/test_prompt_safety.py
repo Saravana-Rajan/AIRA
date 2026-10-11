@@ -35,7 +35,11 @@ def test_render_prompt_has_shop_products_suppliers_language_and_rules():
     low = p.lower()
     assert "read it back" in low and "confirm_action" in p
     assert "never say a number" in low and "not sure" in low
-    assert "count_needed" in p and '"check touch <label>"' in p
+    assert "count_needed" in p
+    # the touch check is a client event (fingertip_in_target → guidance.handle_client_event), never a text the
+    # phone sends: a dead "check touch" rule would only cause spurious product_find calls
+    assert "check touch" not in low
+    assert "8. Payments" in p and "9. Evidence" in p and "10." not in p
     assert "credit" not in low
 
 

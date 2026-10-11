@@ -66,11 +66,15 @@ describe("guidance session", () => {
     expect(g.deps.track).toHaveBeenCalledTimes(1);   // tracking reused
   });
 
-  it("done / match / interrupted cue ends guidance (stops tracking and tone)", async () => {
-    for (const cue of ["done", "match", "interrupted"] as const) {
+  it("done / interrupted cue and the server's guide-stream stop end guidance (stops tracking and tone)", async () => {
+    const endings = [
+      { t: "cue", cue: "done" }, { t: "cue", cue: "interrupted" },
+      { t: "request_frame", purpose: "guide", stop: true },   // guidance.py stop(): the loop is over
+    ] as const;
+    for (const m of endings) {
       const g = setup();
       g.s.onServerMsg(target); await flush();
-      g.s.onServerMsg({ t: "cue", cue });
+      g.s.onServerMsg(m);
       expect(g.stopTrack).toHaveBeenCalledTimes(1);
       expect(g.deps.stopTone).toHaveBeenCalled();
     }
@@ -80,6 +84,11 @@ describe("guidance session", () => {
     const g = setup();
     g.s.onServerMsg(target); await flush();
     g.s.onServerMsg({ t: "cue", cue: "thinking" });
+    // `match` is spoken for an intermediate pick ("Take 1 more") while the loop keeps sending targets, and for a
+    // cash match: neither ends hand guidance, so dwell state and tone survive between picks
+    g.s.onServerMsg({ t: "cue", cue: "match" });
+    g.s.onServerMsg({ t: "request_frame", purpose: "identify", stop: true });
+    g.s.onServerMsg({ t: "request_frame", purpose: "guide", continuous: true });
     g.s.onServerMsg({ t: "transcript", role: "aira", text: "left", final: true });
     expect(g.stopTrack).not.toHaveBeenCalled();
   });

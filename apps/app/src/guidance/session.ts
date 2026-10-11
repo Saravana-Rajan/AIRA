@@ -20,7 +20,11 @@ export interface GuidanceDeps {
 }
 
 type TargetMsg = Extract<ServerMsg, { t: "target" }>;
-const ENDING_CUES = new Set(["done", "match", "interrupted"]);
+// Guidance ends on the server's own end signal: the guidance loop always sends `request_frame {guide, stop}`
+// when it finishes (tools/guidance.py stop()), and `done` / `interrupted` come from the long-press stop and
+// barge-in. `match` is NOT an ending: the server speaks it for an intermediate pick ("Take 1 more") while it
+// keeps sending targets, and the payment flow uses it for a cash match.
+const ENDING_CUES = new Set(["done", "interrupted"]);
 
 export function createGuidanceSession(deps: GuidanceDeps) {
   let target: { frameId: string; label: string; point: Point; box?: Box } | null = null;
@@ -86,6 +90,7 @@ export function createGuidanceSession(deps: GuidanceDeps) {
     onServerMsg(m: ServerMsg) {
       if (m.t === "target") onTarget(m);
       else if (m.t === "cue" && ENDING_CUES.has(m.cue)) end();
+      else if (m.t === "request_frame" && m.purpose === "guide" && m.stop) end();
     },
     end,
     _onTip: onTip,

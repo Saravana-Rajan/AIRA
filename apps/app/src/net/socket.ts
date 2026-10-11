@@ -15,7 +15,8 @@ export class AiraSocket {
   private ws: WebSocket | null = null;
   private handlers = new Set<Handler>();
   private attempt = 0;
-  private hello: Hello | null = null;
+  /** The hello sent on every (re)connect. Public so tests and the wiring can read what was sent. */
+  hello: Hello | null = null;
   private closedByUser = false;
   private retryTimer: ReturnType<typeof setTimeout> | null = null;
   private readonly WS: typeof WebSocket;
@@ -62,7 +63,11 @@ export class AiraSocket {
     };
     ws.onmessage = (e: MessageEvent | { data: string }) => {
       const m = parseServerMsg(String(e.data));
-      if (m) this.handlers.forEach((h) => h(m));
+      if (!m) return;
+      // Every reconnect hello carries the server's resume handle, so a WebSocket blip (screen lock, network
+      // switch) continues the same session: same session id, same Live conversation, pending confirm intact.
+      if (m.t === "ready" && this.hello) this.hello = { ...this.hello, resume: m.resume };
+      this.handlers.forEach((h) => h(m));
     };
     ws.onclose = () => {
       if (this.ws !== ws || this.closedByUser || !this.hello) return;

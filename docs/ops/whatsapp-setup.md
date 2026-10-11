@@ -1,6 +1,6 @@
 # WhatsApp setup for AIRA (Meta Cloud API test number)
 
-This guide gets the credentials AIRA needs to send orders to the milk vendors on WhatsApp and to hear their replies. It takes about 30 minutes, plus up to 24 hours for Meta to approve the order template.
+Telegram is the vendor channel for now (`docs/ops/telegram-setup.md`); WhatsApp Cloud API stays in the code for later. This guide gets the credentials AIRA needs to send orders on WhatsApp and to hear the replies. It takes about 30 minutes, plus up to 24 hours for Meta to approve the order template.
 
 **What you end up with**
 
@@ -249,7 +249,7 @@ A reply to a test message is not linked to any order, so AIRA says nothing. That
 
 The owner double-taps **Send**, then tells AIRA the order was sent. The order stays `DRAFT` until then. The vendor's reply lands in the owner's own WhatsApp, so AIRA does not speak it.
 
-**Telegram bot (optional, free).** The vendor must open the bot and press **Start** first.
+**Telegram bot: the vendor channel for now.** Full steps, including the `/start` deep links that link each vendor automatically, are in `docs/ops/telegram-setup.md`. The short form:
 
 1. In Telegram, message **@BotFather**, send `/newbot`, and pick a name and a username ending in `bot`. BotFather replies with the token.
 2. Store the token, plus a random webhook secret:

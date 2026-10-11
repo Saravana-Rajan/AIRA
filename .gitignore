@@ -15,7 +15,9 @@ __pycache__/
 # private benchmark media (faces, real UPI screens) — share via Cloud Storage, not git
 bench/data/private/
 # benchmark run outputs (CSV/JSON); regenerate them with the bench scripts
-bench/results/
+bench/results/*
+# the user-study rows are committed: slide 12 must trace back to data in git
+!bench/results/user_study.csv
 # exported deck PDF (uploaded to the submission form, never committed)
 docs/submission/*.pdf
 # demo video cuts (uploaded to YouTube, never committed)

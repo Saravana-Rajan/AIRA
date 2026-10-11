@@ -16,6 +16,10 @@ export interface ShopData {
   payments: Normalized<Payment>[];
   orders: Normalized<Order>[];
   deliveries: Normalized<Delivery>[];
+  /**
+   * Always empty: `suppliers` holds vendor phone numbers and Telegram chat ids, so the Firestore rules keep it
+   * server-only. Orders carry `supplierName`, which the order rows use instead.
+   */
   suppliers: Normalized<Supplier>[];
   auditLogs: Normalized<AuditLog>[];
 }
@@ -48,7 +52,6 @@ function shopSources(shopId: string, nowMs: number): Source[] {
   return [
     all("products"),
     all("inventory"),
-    all("suppliers"),
     ...since("sales", "completedAt"),
     ...since("payments", "createdAt"),
     { name: "orders", key: "orders", q: query(col("orders"), orderBy("updatedAt", "desc"), limit(20)) },

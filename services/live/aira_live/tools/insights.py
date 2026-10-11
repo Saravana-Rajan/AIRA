@@ -102,9 +102,11 @@ async def reorder_suggest(product: str | None = None) -> dict:
     def amount(x: dict, field: str) -> str:
         return summary.amount(x[field], x["unit"], s.lang, _fmt)
 
-    say = " ".join(
+    lines = [
         t("insights.reorder_item" if x["supplier"] else "insights.reorder_item_no_supplier", s.lang,
           name=x["name"], on_hand=amount(x, "on_hand"), forecast=amount(x, "forecast"), qty=amount(x, "qty"),
           supplier=x["supplier"] or "")
-        for x in suggestions)
-    return {"say": say, "suggestions": suggestions, "next_tool": "order_create"}
+        for x in suggestions]
+    if forecast.demo_history_included():  # backfilled demo rows feed the number: say so, never present as real
+        lines.insert(0, t("insights.demo_history", s.lang))
+    return {"say": " ".join(lines), "suggestions": suggestions, "next_tool": "order_create"}

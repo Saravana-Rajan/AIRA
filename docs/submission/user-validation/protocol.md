@@ -113,8 +113,10 @@ A task that was not run gets no row. Never fill in a value that was not observed
 
 ## Convert to benchmark rows (manual, about 5 minutes)
 
-Append to `bench/results/user_study.csv`, one line per participant per metric. Write the header line
-first if the file is new:
+Append to `bench/results/user_study.csv`, one line per participant per metric. That file is the one
+exception to the git-ignored `bench/results/` folder (`!bench/results/user_study.csv` in `.gitignore`): commit it,
+so the slide 12 numbers trace back to committed data on every laptop. Write the header line first if the file
+is new:
 
 ```csv
 metric,value,unit,device,build,ts

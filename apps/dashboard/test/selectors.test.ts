@@ -137,7 +137,7 @@ describe("todaySummary", () => {
 describe("orderRows", () => {
   const suppliers: any[] = [{ id: "sakthi_vendor", name: "Sakthi vendor" }];
   const orders: any[] = [
-    { id: "o1", supplierId: "sakthi_vendor", items: [{ sku: "sakthi_curd_1l", qty: 30 }], state: "DISCREPANCY", vendorReply: "OK, delivery at 6 pm", updatedAt: Date.UTC(2026, 9, 10, 12, 35) },
+    { id: "o1", supplierId: "sakthi_vendor", items: [{ sku: "sakthi_curd_1l", qty: 30 }], state: "DISCREPANCY", vendorReply: { text: "OK, delivery at 6 pm", at: "2026-10-10T12:30:00Z", channel: "whatsapp" }, updatedAt: Date.UTC(2026, 9, 10, 12, 35) },
     { id: "o2", supplierId: "missing_vendor", items: [{ sku: "aavin_milk_500ml", qty: 20 }], state: "ORDER_PLACED", updatedAt: Date.UTC(2026, 9, 10, 4, 0) },
   ];
   const deliveries: any[] = [

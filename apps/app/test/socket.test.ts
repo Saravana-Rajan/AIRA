@@ -54,6 +54,24 @@ describe("AiraSocket", () => {
     expect(JSON.parse(second.sent[0]).t).toBe("hello");
   });
 
+  it("carries the server's resume handle in every reconnect hello", () => {
+    vi.useFakeTimers();
+    const s = new AiraSocket("ws://x", { WebSocketImpl: FakeWS as any });
+    s.connect(HELLO);
+    const first = FakeWS.instances.at(-1)!;
+    first.open();
+    expect("resume" in JSON.parse(first.sent[0])).toBe(false);
+    first.onmessage!({ data: JSON.stringify({ t: "ready", sessionId: "s1", resume: "s1", mock: false }) });
+    first.close();
+    vi.advanceTimersByTime(500);
+    const second = FakeWS.instances.at(-1)!;
+    second.open();
+    expect(JSON.parse(second.sent[0])).toMatchObject({ t: "hello", resume: "s1" });
+    // a later ready (a new session after the window closed) replaces it
+    second.onmessage!({ data: JSON.stringify({ t: "ready", sessionId: "s2", resume: "s2", mock: false }) });
+    expect(s.hello).toMatchObject({ resume: "s2" });
+  });
+
   it("send returns false while disconnected", () => {
     expect(new AiraSocket("ws://x", { WebSocketImpl: FakeWS as any }).send({ t: "stop" })).toBe(false);
   });

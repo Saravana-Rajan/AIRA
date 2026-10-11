@@ -25,6 +25,9 @@ async def send_order(shop_id: str, supplier: dict, order: dict) -> dict:
 
     Returns {"channel": "whatsapp" | "telegram", "messageId": str} when a message went out, otherwise
     {"channel": "whatsapp_link" | "call", "fallbackUrl": str} for the app to open (OPEN_URL hand-off).
+    A Telegram supplier that could not be messaged also gets "reason": "telegram_not_linked" (no telegramChatId:
+    the vendor has not opened the bot's /start link), "telegram_not_configured" (no TELEGRAM_TOKEN on the
+    service) or "telegram_failed", so the caller can say why the owner has to send it himself.
     """
     shop = await get_store().get(paths.shop(shop_id)) or {}
     shop_name = shop.get("name") or shop_id
@@ -35,16 +38,25 @@ async def send_order(shop_id: str, supplier: dict, order: dict) -> dict:
     if channel == "call":
         return {"channel": "call", "fallbackUrl": clicktochat.tel_link(phone)}
 
+    reason: str | None = None
     chat = str(supplier.get("telegramChatId") or "")
-    if channel == "telegram" and chat and telegram.configured():
-        try:
-            mid = await telegram.send_message(chat, clicktochat.order_text(shop_name, items))
-        except telegram.TelegramError as exc:
-            log.warning("telegram order %s to %s failed: %s", order["id"], supplier.get("id"), exc)
+    if channel == "telegram":
+        if not chat:
+            reason = "telegram_not_linked"
+        elif not telegram.configured():
+            reason = "telegram_not_configured"
         else:
-            await _repo.index_message("telegram", f"{chat}:{mid}", shop_id, order["id"])
-            await _repo.index_contact("telegram", chat, shop_id, supplier["id"])
-            return {"channel": "telegram", "messageId": mid}
+            try:
+                mid = await telegram.send_message(chat, clicktochat.order_text(shop_name, items))
+            except telegram.TelegramError as exc:
+                log.warning("telegram order %s to %s failed: %s", order["id"], supplier.get("id"), exc)
+                reason = "telegram_failed"
+            else:
+                await _repo.index_message("telegram", f"{chat}:{mid}", shop_id, order["id"])
+                await _repo.index_contact("telegram", chat, shop_id, supplier["id"])
+                return {"channel": "telegram", "messageId": mid}
+        log.warning("telegram order %s to %s not sent (%s): falling back to click-to-chat",
+                    order["id"], supplier.get("id"), reason)
 
     to = clicktochat.normalize_in_phone(phone)
     if to and _whatsapp_enabled() and whatsapp.configured():
@@ -58,4 +70,7 @@ async def send_order(shop_id: str, supplier: dict, order: dict) -> dict:
             return {"channel": "whatsapp", "messageId": mid}
 
     text = clicktochat.order_text(shop_name, items)
-    return {"channel": "whatsapp_link", "fallbackUrl": clicktochat.wa_link(phone, text)}
+    out = {"channel": "whatsapp_link", "fallbackUrl": clicktochat.wa_link(phone, text)}
+    if reason:
+        out["reason"] = reason
+    return out

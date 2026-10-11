@@ -299,3 +299,38 @@ async def test_send_order_telegram_failure_falls_back_to_link(store, monkeypatch
     res = await messaging.send_order(SHOP, supplier, ORDER)
     assert res["channel"] == "whatsapp_link" and "919000000001" in res["fallbackUrl"]
     assert not any("/msgIndex/" in p for p in store.data)
+
+
+# ---------------------------------------------------------------- Telegram is the vendor channel: say why it fell back
+async def test_send_order_telegram_not_linked_falls_back_with_a_reason(store, monkeypatch):
+    monkeypatch.setattr(telegram, "configured", lambda: True)
+    monkeypatch.setattr(messaging, "_whatsapp_enabled", lambda: False)
+    res = await messaging.send_order(SHOP, await supplier_doc(store, "sakthi_vendor"), ORDER)
+    assert res["channel"] == "whatsapp_link" and "919000000002" in res["fallbackUrl"]
+    assert res["reason"] == "telegram_not_linked"
+
+
+async def test_send_order_telegram_not_configured_falls_back_with_a_reason(store, monkeypatch):
+    monkeypatch.setattr(messaging, "_whatsapp_enabled", lambda: False)
+    supplier = {**(await supplier_doc(store, "sakthi_vendor")), "telegramChatId": "555"}
+    res = await messaging.send_order(SHOP, supplier, ORDER)       # TELEGRAM_TOKEN is cleared by the conftest
+    assert res["channel"] == "whatsapp_link" and res["reason"] == "telegram_not_configured"
+
+
+async def test_send_order_telegram_failure_reason(store, monkeypatch):
+    monkeypatch.setattr(telegram, "configured", lambda: True)
+    monkeypatch.setattr(messaging, "_whatsapp_enabled", lambda: False)
+
+    async def failing(*a, **kw):
+        raise telegram.TelegramError("chat not found")
+
+    monkeypatch.setattr(telegram, "send_message", failing)
+    supplier = {**(await supplier_doc(store, "aavin_vendor")), "telegramChatId": "555"}
+    res = await messaging.send_order(SHOP, supplier, ORDER)
+    assert res["reason"] == "telegram_failed"
+
+
+async def test_send_order_whatsapp_fallback_has_no_telegram_reason(store, monkeypatch):
+    supplier = {**(await supplier_doc(store, "sakthi_vendor")), "channel": "whatsapp"}
+    res = await messaging.send_order(SHOP, supplier, ORDER)
+    assert res["channel"] == "whatsapp_link" and "reason" not in res

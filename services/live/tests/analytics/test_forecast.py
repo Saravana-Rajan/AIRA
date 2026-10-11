@@ -166,6 +166,17 @@ def test_fold_sales_counts_only_sale_rows():
     assert active == {d1, d2}
 
 
+def test_fold_sales_skips_demo_backfill_rows_unless_opted_in(monkeypatch):
+    """scripts/backfill_demo_sales.py invents 30 days of SALE rows (refType demo_backfill). They never feed a
+    spoken number unless AIRA_INCLUDE_DEMO_HISTORY=1, and then the speech says the history is demo data."""
+    d1 = TODAY - timedelta(days=1)
+    rows = [sale("a", 2, d1), {**sale("a", 30, d1), "refType": fc.DEMO_REF_TYPE}]
+    monkeypatch.delenv("AIRA_INCLUDE_DEMO_HISTORY", raising=False)
+    assert fc.fold_sales(rows) == ({"a": {d1: 2.0}}, {d1}) and fc.demo_history_included() is False
+    monkeypatch.setenv("AIRA_INCLUDE_DEMO_HISTORY", "1")
+    assert fc.fold_sales(rows) == ({"a": {d1: 32.0}}, {d1}) and fc.demo_history_included() is True
+
+
 # ---------- daily_demand against the Firestore ledger ----------
 
 @pytest.mark.asyncio
@@ -263,7 +274,8 @@ async def test_daily_demand_all_includes_sold_skus_missing_from_products(ledger)
 
 
 @pytest.mark.asyncio
-async def test_backfilled_demo_sales_give_a_plausible_forecast(ledger):
+async def test_backfilled_demo_sales_give_a_plausible_forecast(ledger, monkeypatch):
+    monkeypatch.setenv("AIRA_INCLUDE_DEMO_HISTORY", "1")  # demo rows feed the forecast only when opted in
     bf = _backfill_module()
     products = [{"sku": "sakthi_curd_1l", "unit": "L", "packSizeL": 1},
                 {"sku": "aavin_milk_500ml", "unit": "L", "packSizeL": 0.5},
@@ -284,7 +296,8 @@ def _backfill_module():
 
 
 @pytest.mark.asyncio
-async def test_backfilled_catalog_gives_a_positive_forecast_for_every_product(ledger):
+async def test_backfilled_catalog_gives_a_positive_forecast_for_every_product(ledger, monkeypatch):
+    monkeypatch.setenv("AIRA_INCLUDE_DEMO_HISTORY", "1")
     bf = _backfill_module()
     catalog = json.loads(bf.DEFAULT_CATALOG.read_text(encoding="utf-8"))
     for p in catalog["products"]:

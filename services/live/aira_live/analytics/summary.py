@@ -56,6 +56,8 @@ def say(d: dict, lang: str) -> str:
     orders = d.get("suggested_orders") or []
     if orders:
         items = ", ".join(item(o["qty"], o.get("unit"), names.get(o["sku"], o["sku"]), lang) for o in orders)
+        if d.get("demo_history"):  # the forecast includes backfilled demo rows: never present it as real data
+            text = f"{text} {t('insights.demo_history', lang)}"
         text = f"{text} {t('insights.tomorrow_order', lang, items=items)}"
     return text
 
@@ -127,4 +129,5 @@ async def today(shop_id: str, now: datetime | None = None) -> dict:
     values = await asyncio.gather(*(forecast.daily_demand(shop_id, sku) for sku in products))
     out = summarize(list(sales.values()), products, inventory, dict(zip(products, values)), len(disc))
     out["names"] = {sku: p.get("name", sku) for sku, p in products.items()}
+    out["demo_history"] = forecast.demo_history_included()
     return out

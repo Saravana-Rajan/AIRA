@@ -352,6 +352,90 @@ def test_confirm_reply_in_real_mode_tells_the_model(real_mode, mem_store):
         assert "Order sent to Sakthi vendor." in fb.sent_text[0]
 
 
+# ---------- app key (AIRA_APP_KEY): a speed bump on the public URL, no login step ----------
+async def test_app_key_is_required_in_hello_when_configured(monkeypatch):
+    monkeypatch.setenv("AIRA_ALLOW_NO_TOKEN", "1")
+    monkeypatch.setenv("AIRA_APP_KEY", "k-demo")
+    assert (await auth.verify_hello("k-demo", "u1", DEMO, mock=False)).shop_id == DEMO
+    for bad in (None, "", "wrong", "k-demo "):
+        with pytest.raises(auth.AuthError):
+            await auth.verify_hello(bad, "u1", DEMO, mock=False)
+
+
+async def test_app_key_is_not_checked_in_mock_mode_or_when_unset(monkeypatch):
+    monkeypatch.setenv("AIRA_ALLOW_NO_TOKEN", "1")
+    assert (await auth.verify_hello(None, "u1", DEMO, mock=False)).shop_id == DEMO  # unset: local runs as today
+    monkeypatch.setenv("AIRA_APP_KEY", "k-demo")
+    assert (await auth.verify_hello(None, "dev", DEMO, mock=True)).shop_id == DEMO  # mock: no key needed
+
+
+def test_ws_refuses_hello_with_the_wrong_app_key(real_mode, monkeypatch):
+    monkeypatch.setenv("AIRA_APP_KEY", "k-demo")
+    with TestClient(main_mod.app).websocket_connect("/ws") as ws:
+        ws.send_json({**HELLO, "idToken": "nope"})
+        assert ws.receive_json()["code"] == "permission"
+        with pytest.raises(WebSocketDisconnect):
+            ws.receive_json()
+    assert real_mode == []
+    with TestClient(main_mod.app).websocket_connect("/ws") as ws:
+        ws.send_json({**HELLO, "idToken": "k-demo"})
+        assert ws.receive_json()["t"] == "ready"
+
+
+def test_ws_caps_concurrent_live_sessions(real_mode, monkeypatch):
+    """Bounds Gemini spend on the public URL: the fourth phone gets error/permission and is closed."""
+    monkeypatch.setattr(main_mod, "MAX_SESSIONS", 2)
+    clients = [TestClient(main_mod.app).websocket_connect("/ws").__enter__() for _ in range(2)]
+    try:
+        for ws in clients:
+            ws.send_json(HELLO)
+            assert ws.receive_json()["t"] == "ready"
+        with TestClient(main_mod.app).websocket_connect("/ws") as ws:
+            ws.send_json(HELLO)
+            assert ws.receive_json() == {"t": "error", "code": "permission", "say": t("auth.busy", "en")}
+            with pytest.raises(WebSocketDisconnect) as closed:
+                ws.receive_json()
+            assert closed.value.code == 4403
+        assert len(real_mode) == 2
+        # a second hello on an existing socket replaces its own session, so it never counts twice
+        clients[0].send_json({**HELLO, "lang": "ta"})
+        assert clients[0].receive_json()["t"] == "ready"
+    finally:
+        for ws in clients:
+            ws.__exit__(None, None, None)
+
+
+# ---------- resume after a WebSocket blip ----------
+def test_hello_with_resume_keeps_the_session_id_and_the_live_handle(real_mode):
+    with TestClient(main_mod.app).websocket_connect("/ws") as ws:
+        ws.send_json(HELLO)
+        ready = ws.receive_json()
+        sid = ready["sessionId"]
+        assert ready["resume"] == sid
+        real_mode[0].push(LiveEvent("resumption_handle", handle="h-123"))
+        _wait(lambda: any(b is not None and b._handle == "h-123" for _, b in sessions.by_shop(DEMO)))
+    _wait(lambda: real_mode[0].closed)
+    with TestClient(main_mod.app).websocket_connect("/ws") as ws:
+        ws.send_json({**HELLO, "resume": sid})
+        again = ws.receive_json()
+        assert again["sessionId"] == sid and again["resume"] == sid
+        assert len(real_mode) == 2 and real_mode[1].started_with == ["h-123"]
+        assert sid in _registered(DEMO)
+
+
+def test_resume_of_an_unknown_or_stale_session_starts_a_new_one(real_mode, monkeypatch):
+    with TestClient(main_mod.app).websocket_connect("/ws") as ws:
+        ws.send_json({**HELLO, "resume": "never-existed"})
+        first = ws.receive_json()["sessionId"]
+        assert first != "never-existed"
+    _wait(lambda: real_mode[0].closed)
+    monkeypatch.setattr(sessions, "RESUME_WINDOW_S", 0.0)
+    with TestClient(main_mod.app).websocket_connect("/ws") as ws:
+        ws.send_json({**HELLO, "resume": first})
+        second = ws.receive_json()["sessionId"]
+        assert second != first and real_mode[1].started_with == [None]
+
+
 def test_second_hello_replaces_the_session_and_closes_its_bridge(real_mode):
     with TestClient(main_mod.app).websocket_connect("/ws") as ws:
         ws.send_json(HELLO)

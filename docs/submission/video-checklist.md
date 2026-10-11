@@ -39,7 +39,7 @@ Check the support thread from `docs/submission/support-email.md`.
 - [ ] Note the real prices on filming day. Keep every ₹ amount consistent across scenes.
 - [ ] Deployed build tagged; note `git describe --tags`. Film only the real deployed app: no mockups and no scripted responses.
 - [ ] Vendor channel decided and tested once, end to end, the day before. Check the Sakthi vendor's `channel` in `content/catalog/murugan_dairy.json`:
-  - `telegram` (the current setting): `TELEGRAM_TOKEN` is live, the vendor phone has opened the AIRA bot in Telegram and pressed **Start**, and the supplier has a `telegramChatId` (steps in `docs/ops/whatsapp-setup.md`).
+  - `telegram` (the current setting): `TELEGRAM_TOKEN` is attached to `aira-live`, `scripts/telegram_setup.py` has set the webhook, the vendor phone has opened its Telegram deep link `t.me/<bot>?start=<supplier_id>` and pressed **Start**, and the supplier doc has a `telegramChatId` (steps in `docs/ops/telegram-setup.md`).
   - `whatsapp`: the Cloud API tokens are live and the vendor phone is a registered test recipient.
   - Otherwise click-to-chat: a pre-typed WhatsApp message sent with one tap.
   - Write down the channel used. The order caption depends on it.
@@ -54,12 +54,12 @@ Check the support thread from `docs/submission/support-email.md`.
 | Time | Scene | Must be visible or audible |
 |---|---|---|
 | 0:00–0:25 | Hook: a blind owner opens the shop alone | White cane, chest phone, shutter, the first "AIRA" and the low-stock line |
-| 0:25–0:55 | Vendor order by voice | Order read-back, the spoken "yes", the vendor phone receiving it, the vendor reply spoken back (Telegram or Cloud API only) |
+| 0:25–0:55 | Vendor order by voice | Order read-back, the spoken "yes", the vendor phone receiving it in Telegram, the vendor reply spoken back (needs the Telegram bot set up per `docs/ops/telegram-setup.md`; WhatsApp Cloud API is ready and next, not filmed) |
 | 0:55–1:40 | Delivery count + invoice check | Count reaching 28, "2 short", the bill for 30 vs 28 received flagged |
 | 1:40–2:05 | Pay the vendor | Cash slot guidance, the notes shown, the total read back as correct |
 | 2:05–2:55 | Customer sale | Hand guided to the curd, pack confirmed, change computed, then a UPI payment matched to the soundbox announcement |
 | 2:55–3:20 | Low stock, expiry and forecast reorder | Spoken alerts and the suggested order |
-| 3:20–3:40 | Proof of deployment | Shop Dashboard updating live, then the Cloud Run and Firestore consoles and the Firebase Hosting URL |
+| 3:20–3:40 | Proof of deployment | Shop Dashboard updating live, then the Cloud Run and Firestore consoles and the Firebase Hosting URL. Before filming the consoles, hide or blur the project picker, the browser URL bar, the project ID, the project number and every `*.run.app` URL; prefer showing `aira-shop.web.app` and `/dashboard` |
 | 3:40–3:50 | Numbers and a quote | 2–3 measured numbers from slide 12 and a participant quote |
 
 ## Fallback cut (2:55 or less)
@@ -74,7 +74,7 @@ Same footage, trimmed. Scene times are in seconds.
 | Pay the vendor | 25 | 15 | One cash slot, then the total |
 | Customer sale (cash + UPI) | 50 | 40 | Keep the hand guidance and the soundbox match; shorter change scene |
 | Alerts + reorder | 25 | 15 | One alert and the suggested order |
-| Proof of deployment | 20 | 10 | Dashboard, then one console shot |
+| Proof of deployment | 20 | 10 | Dashboard, then one console shot (project ID, project number and run.app URL hidden or blurred) |
 | Numbers + quote | 10 | 5 | One number or the quote |
 
 Total: 155 s (2:35), plus up to 20 s for transitions. The finished file must be **2:55 or less**.
@@ -85,7 +85,7 @@ Total: 155 s (2:35), plus up to 20 s for transitions. The finished file must be 
 - [ ] English captions for every spoken line. Tamil speech gets English subtitles. Large, high-contrast text.
 - [ ] Numbers on screen come only from `bench/results/*.csv` through `scripts/bench_table.py`. A metric shown as `pending` is left out of the video; never put a guessed number on screen.
 - [ ] If no measured numbers exist yet, the last scene shows the quote or the AIRA logo, not placeholder numbers.
-- [ ] Console and phone shots: crop or blur the project ID, the signed-in account email and any billing page. Blur phone numbers and chat names on the vendor phone.
+- [ ] Console and phone shots: crop or blur the project ID, the project number, the project picker, the browser URL bar, every `*.run.app` URL, the signed-in account email and any billing page. Blur phone numbers and chat names on the vendor phone.
 - [ ] Export both cuts as 1080p H.264 MP4: `docs/submission/aira-demo.mp4` and `docs/submission/aira-demo-short.mp4`.
 - [ ] Check the main cut (should pass with one WARN, because it is over 2:59):
 
@@ -98,7 +98,7 @@ python3 scripts/check_submission.py --description docs/submission/description.tx
 
 ```bash
 python3 scripts/check_submission.py --description docs/submission/description.txt \
-  --video docs/submission/aira-demo-short.mp4 --max-video 179
+  --video docs/submission/aira-demo-short.mp4 --max-video 175
 ```
 
 ## Upload (Oct 18, before the 18:15 link check in `docs/submission/freeze-runbook.md`)
@@ -112,6 +112,7 @@ python3 scripts/check_submission.py --description docs/submission/description.tx
 ## Honesty rules (every cut)
 
 - [ ] Every AIRA line comes from the working app. If a take fails, reshoot; never dub or fake a response.
+- [ ] Console shots: hide or blur the project ID and the project number before filming the Cloud Run and Firestore consoles.
 - [ ] The vendor order caption matches the channel that really sent it:
   - "Sent by the AIRA Telegram bot", only if the Telegram bot sent it.
   - "Sent with the WhatsApp Business Cloud API", only if the Cloud API sent it.

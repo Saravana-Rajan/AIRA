@@ -204,3 +204,11 @@ def test_merge_keeps_raw_rows_and_creates_parent(tmp_path):
     assert text[0] == "metric,value,unit,device,build,ts"
     assert text[1] == "first_audio_ms,650,ms,Redmi Note 13,0.1.0,2026-10-15T10:00:00Z"
     assert len(text) == 3
+
+
+def test_load_rows_accepts_a_bom_from_excel(tmp_path):
+    """A 'CSV UTF-8' saved by Excel starts with a BOM; the header must still match."""
+    p = tmp_path / "user_study.csv"
+    p.write_bytes(b"\xef\xbb\xbf" + HEADER.encode() + b"sale_time_with_aira,41,s,Pixel 7a,1.0,2026-10-15T10:00:00Z\n")
+    rows = bt.load_rows([p])
+    assert rows[0]["metric"] == "sale_time_with_aira" and rows[0]["value"] == "41"
