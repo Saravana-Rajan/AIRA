@@ -1,9 +1,9 @@
 # Push to main of Saravana-Rajan/AIRA: run the tests, then deploy aira-live (Cloud Run) and the
-# aira-shop Hosting site. Keyless auth through Workload Identity Federation (infra/setup_github_deploy.sh).
+# aira-shop Hosting site. Keyless auth through Workload Identity Federation (shared/infra/setup_github_deploy.sh).
 # Repository SECRETS (the repo is public; secrets are masked in logs):
 #   GCP_PROJECT, GCP_WIF_PROVIDER, GCP_DEPLOY_SA, VITE_FIREBASE_*, VITE_AIRA_APP_KEY (the shared demo
 #   key the app sends as hello.idToken; the same value is Secret Manager aira-app-key -> AIRA_APP_KEY on
-#   aira-live; docs/ops/security.md).
+#   aira-live; shared/docs/ops/security.md).
 # The aira-live image is built in the runner and pushed to Artifact Registry (no Cloud Build).
 name: Deploy
 
@@ -38,10 +38,10 @@ jobs:
       - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
         with:
           enable-cache: true
-          cache-dependency-glob: services/live/uv.lock
+          cache-dependency-glob: backend/uv.lock
 
-      - name: services/live
-        run: cd services/live && uv sync --frozen && uv run pytest -q
+      - name: backend
+        run: cd backend && uv sync --frozen && uv run pytest -q
 
   deploy:
     name: Deploy
@@ -64,7 +64,7 @@ jobs:
           missing=0
           for name in GCP_PROJECT GCP_WIF_PROVIDER GCP_DEPLOY_SA; do
             if [ -z "${!name}" ]; then
-              echo "::error::Repository secret $name is not set (see infra/setup_github_deploy.sh)"
+              echo "::error::Repository secret $name is not set (see shared/infra/setup_github_deploy.sh)"
               missing=1
             fi
           done
@@ -91,7 +91,7 @@ jobs:
         run: gcloud auth configure-docker asia-south1-docker.pkg.dev --quiet
 
       - name: Build the aira-live image
-        run: docker build -t asia-south1-docker.pkg.dev/${{ secrets.GCP_PROJECT }}/aira/aira-live:${{ github.sha }} services/live
+        run: docker build -t asia-south1-docker.pkg.dev/${{ secrets.GCP_PROJECT }}/aira/aira-live:${{ github.sha }} backend
 
       - name: Push the aira-live image
         run: docker push asia-south1-docker.pkg.dev/${{ secrets.GCP_PROJECT }}/aira/aira-live:${{ github.sha }}
@@ -106,8 +106,12 @@ jobs:
             --region asia-south1 \
             --project ${{ secrets.GCP_PROJECT }} \
             --service-account aira-live@${{ secrets.GCP_PROJECT }}.iam.gserviceaccount.com \
-            --min-instances 1 \
+            --min-instances 0 \
             --max-instances 1 \
+            --cpu 1 \
+            --memory 512Mi \
+            --no-cpu-boost \
+            --cpu-throttling \
             --timeout 3600 \
             --session-affinity \
             --update-secrets GEMINI_API_KEY=aira-gemini-api-key:latest,AIRA_JOB_TOKEN=aira-job-token:latest,WHATSAPP_VERIFY_TOKEN=aira-whatsapp-verify-token:latest,TELEGRAM_WEBHOOK_SECRET=aira-telegram-webhook-secret:latest,AIRA_APP_KEY=aira-app-key:latest \
@@ -131,7 +135,7 @@ jobs:
           VITE_FIREBASE_STORAGE_BUCKET: ${{ secrets.VITE_FIREBASE_STORAGE_BUCKET }}
           VITE_FIREBASE_MESSAGING_SENDER_ID: ${{ secrets.VITE_FIREBASE_MESSAGING_SENDER_ID }}
           VITE_FIREBASE_APP_ID: ${{ secrets.VITE_FIREBASE_APP_ID }}
-        run: bash scripts/build_hosting.sh
+        run: bash shared/scripts/build_hosting.sh
 
       - name: Deploy hosting (aira-shop)
         run: npx firebase-tools@15.33.0 deploy --only hosting:aira-shop --project ${{ secrets.GCP_PROJECT }} --non-interactive

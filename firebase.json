@@ -2,8 +2,8 @@
   "firestore": [
     {
       "database": "aira",
-      "rules": "infra/firestore.rules",
-      "indexes": "infra/firestore.indexes.json"
+      "rules": "shared/infra/firestore.rules",
+      "indexes": "shared/infra/firestore.indexes.json"
     }
   ],
   "hosting": {

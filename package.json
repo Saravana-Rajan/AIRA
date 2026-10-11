@@ -1,7 +1,7 @@
 {
   "name": "aira",
   "private": true,
-  "workspaces": ["apps/*", "packages/*"],
+  "workspaces": ["frontend/*", "shared/contracts"],
   "scripts": {
     "test": "npm run -ws --if-present test",
     "build": "npm run -ws --if-present build",

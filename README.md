@@ -1,4 +1,4 @@
-<p align="center"><img src="assets/logo/aira-logo-512.png" alt="AIRA logo" width="220"></p>
+<p align="center"><img src="shared/assets/logo/aira-logo-512.png" alt="AIRA logo" width="220"></p>
 
 <h1 align="center">AIRA</h1>
 <p align="center"><b>A blind person can run their own shop. Alone.</b><br>
@@ -14,7 +14,7 @@ AIRA is a voice-first assistant that lets a blind shopkeeper run a small shop al
 |---|---|
 | AIRA phone app (judge demo mode) | https://aira-shop.web.app |
 | Shop Dashboard (live, read-only) | https://aira-shop.web.app/dashboard |
-| Architecture | [docs/architecture.md](docs/architecture.md) |
+| Architecture | [shared/docs/architecture.md](shared/docs/architecture.md) |
 
 ## What AIRA does
 
@@ -47,24 +47,24 @@ AIRA is a voice-first assistant that lets a blind shopkeeper run a small shop al
 | **GitHub Actions + Workload Identity Federation** | Tests and deploys on every push to `main`. Keyless: no JSON service account key exists |
 | **MediaPipe** (on the phone) | Hand Landmarker tracks his fingertip for hand guidance. Object Detector powers the bump guard |
 
-Model IDs live in one file: `services/live/aira_live/models.py`.
+Model IDs live in one file: `backend/aira_live/models.py`.
 
 ## Repository layout
 
 ```
-apps/app/            AIRA phone app (Vite + TypeScript + Preact, installable PWA)
-apps/dashboard/      Shop Dashboard (Vite + TypeScript + Preact, Firestore realtime)
-packages/contracts/  shared WebSocket protocol + Firestore types + JSON fixtures
-services/live/       aira-live on Cloud Run (Python 3.12, FastAPI, Gemini Live)
+frontend/app/        AIRA phone app (Vite + TypeScript + Preact, installable PWA)
+frontend/dashboard/  Shop Dashboard (Vite + TypeScript + Preact, Firestore realtime)
+backend/             aira-live on Cloud Run (Python 3.12, FastAPI, Gemini Live)
   aira_live/         voice session, tools, vision, memory, business engine, messaging
   tests/             pytest suite (runs offline with fakes)
-content/catalog/     demo shop products and suppliers (murugan_dairy.json)
-infra/               GCP bootstrap, Firestore rules and indexes, keyless deploy setup
-scripts/             seed_firestore.py, build_hosting.sh
-bench/               benchmark data formats and scorers
+shared/contracts/    shared WebSocket protocol + Firestore types + JSON fixtures
+shared/catalog/      demo shop products and suppliers (sunrise_dairy.json) + schemas/
+shared/infra/        GCP bootstrap, Firestore rules and indexes, keyless deploy setup
+shared/scripts/      seed_firestore.py, build_hosting.sh
+shared/bench/        benchmark data formats and scorers
+shared/docs/         design spec, plans, architecture, research
+shared/assets/logo/  AIRA logo
 .github/workflows/   ci.yml (pull requests) · deploy.yml (push to main)
-docs/                design spec, plans, architecture, research
-assets/logo/         AIRA logo
 ```
 
 ## Run it locally
@@ -76,32 +76,32 @@ You need Node 20+, Python 3.12 and [uv](https://docs.astral.sh/uv/).
 cp .env.example .env
 
 # 2. Backend on http://localhost:8080 (WebSocket at ws://localhost:8080/ws)
-cd services/live
+cd backend
 uv sync
-uv run uvicorn aira_live.main:app --reload --port 8080 --env-file ../../.env
+uv run uvicorn aira_live.main:app --reload --port 8080 --env-file ../.env
 
 # 3. Phone app (new terminal, repo root). It connects to ws://localhost:8080/ws by default.
 npm ci
-npm run dev -w apps/app
+npm run dev -w frontend/app
 
 # 4. Optional: Shop Dashboard. Set the VITE_FIREBASE_* values,
 #    or VITE_USE_EMULATOR=1 with the Firestore emulator on port 8085.
-npm run dev -w apps/dashboard
+npm run dev -w frontend/dashboard
 
 # 5. Optional: seed the demo shop into Firestore database "aira"
-uv run --project services/live python scripts/seed_firestore.py
+uv run --project backend python shared/scripts/seed_firestore.py
 ```
 
 ## Tests
 
 ```bash
-cd services/live && uv run pytest -q   # backend: business engine, tools, protocol, rules
+cd backend && uv run pytest -q   # backend: business engine, tools, protocol, rules
 npm test                               # all TypeScript workspaces (vitest)
 ```
 
 The default suites run offline. Real Gemini calls only run in opt-in tests (`AIRA_LIVE_TESTS=1`).
 
-Accuracy and latency numbers are measured in `bench/results`. We do not quote numbers we have not measured.
+Accuracy and latency numbers are measured in `shared/bench/results`. We do not quote numbers we have not measured.
 
 ## Deploy
 
@@ -113,7 +113,7 @@ Every push to `main` deploys through [`.github/workflows/deploy.yml`](.github/wo
 4. Build the app and the dashboard. The backend URL is injected at build time.
 5. Deploy both to Firebase Hosting.
 
-No project ID, key or service URL is stored in this repository. `infra/setup_github_deploy.sh` documents the one-time GCP setup.
+No project ID, key or service URL is stored in this repository. `shared/infra/setup_github_deploy.sh` documents the one-time GCP setup.
 
 ## Safety principles
 

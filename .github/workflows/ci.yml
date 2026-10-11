@@ -34,7 +34,7 @@ jobs:
       - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
         with:
           enable-cache: true
-          cache-dependency-glob: services/live/uv.lock
+          cache-dependency-glob: backend/uv.lock
 
-      - name: services/live
-        run: cd services/live && uv sync --frozen && uv run pytest -q
+      - name: backend
+        run: cd backend && uv sync --frozen && uv run pytest -q
