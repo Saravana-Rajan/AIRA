@@ -8,17 +8,17 @@ Usage (from the repo root, after the bot token is attached to the service; docs/
 What it does:
   1. setWebhook(url=<aira-live>/webhooks/telegram, secret_token=TELEGRAM_WEBHOOK_SECRET, allowed_updates=["message"])
   2. getMe, to learn the bot's username
-  3. prints https://t.me/<username>?start=<supplier_id>.<tag> for every supplier whose catalog channel is
-     "telegram"; the tag is an HMAC of the supplier id under TELEGRAM_WEBHOOK_SECRET, so the link cannot be guessed
+  3. prints https://t.me/<username>?start=<supplier_id> for every supplier whose catalog channel is "telegram"
 Send each vendor their link. When they press Start, aira-live stores their chat id on the supplier doc
-(messaging/webhooks.py) and replies "AIRA: you will receive Murugan Dairy orders here."
+(messaging/webhooks.py) and replies "AIRA: you will receive Murugan Dairy orders here." Linking is first-come:
+the supplier ids are public, so once a chat is linked another chat cannot take the vendor over. To move a vendor
+to a new phone, set AIRA_TELEGRAM_LINK_CODE on aira-live and send the re-link form ?start=<supplier_id>-<code>
+(printed here when AIRA_TELEGRAM_LINK_CODE is in the environment).
 
 The token is read from the environment and never printed, not even inside an error message.
 """
 from __future__ import annotations
 
-import hashlib
-import hmac
 import json
 import os
 import sys
@@ -86,16 +86,16 @@ def get_me(token: str, http: Http = _http) -> str:
     return str(username)
 
 
-def start_param(supplier_id: str, secret: str) -> str:
-    """``<supplier_id>.<tag>``, the ``?start=`` value of a vendor's link. The tag is the first 12 hex digits of
-    HMAC-SHA256(TELEGRAM_WEBHOOK_SECRET, supplier_id); aira_live.messaging.webhooks.start_tag computes the same and
-    refuses a /start without it (the supplier ids are public, the secret is not)."""
-    return f"{supplier_id}.{hmac.new(secret.encode(), supplier_id.encode(), hashlib.sha256).hexdigest()[:12]}"
+def start_param(supplier_id: str, code: str | None = None) -> str:
+    """The ``?start=`` value of a vendor's link: ``<supplier_id>`` for the first link, ``<supplier_id>-<code>`` to
+    move a linked vendor to a new phone (aira_live.messaging.webhooks checks the code against
+    AIRA_TELEGRAM_LINK_CODE)."""
+    return f"{supplier_id}-{code}" if code else supplier_id
 
 
-def deep_links(username: str, catalog: dict, secret: str) -> list[tuple[str, str, str]]:
-    """(supplier_id, name, https://t.me/<username>?start=<supplier_id>.<tag>) per telegram supplier, in catalog order."""
-    return [(s["id"], s.get("name", s["id"]), f"https://t.me/{username}?start={start_param(s['id'], secret)}")
+def deep_links(username: str, catalog: dict, code: str | None = None) -> list[tuple[str, str, str]]:
+    """(supplier_id, name, https://t.me/<username>?start=<param>) per telegram supplier, in catalog order."""
+    return [(s["id"], s.get("name", s["id"]), f"https://t.me/{username}?start={start_param(s['id'], code)}")
             for s in catalog.get("suppliers", []) if s.get("channel") == "telegram"]
 
 
@@ -125,8 +125,16 @@ def main(argv: list[str] | None = None, env: Mapping[str, str] | None = None, ht
     print(f"Webhook set: {url} (allowed_updates: message, secret header on)")
     print(f"Bot: @{username}")
     print("Send each vendor their link. They open it and press Start; AIRA then messages them orders there:")
-    for sid, name, link in deep_links(username, catalog, secret):
+    for sid, name, link in deep_links(username, catalog):
         print(f"  {name} ({sid}): {link}")
+    code = env.get("AIRA_TELEGRAM_LINK_CODE")
+    if code:
+        print("Re-link links (a vendor moving to a new phone; AIRA_TELEGRAM_LINK_CODE must be set on aira-live):")
+        for sid, name, link in deep_links(username, catalog, code):
+            print(f"  {name} ({sid}): {link}")
+    else:
+        print("A linked vendor stays linked (first come). To move one to a new phone, set AIRA_TELEGRAM_LINK_CODE "
+              "on aira-live and in this shell, then run this again for the re-link links.")
     return 0
 
 

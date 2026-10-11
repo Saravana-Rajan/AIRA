@@ -13,6 +13,7 @@ from aira_live.session import Session
 log = logging.getLogger(__name__)
 
 _REG: dict[str, tuple[Session, object | None]] = {}  # session_id -> (session, bridge)
+_IPS: dict[str, str] = {}  # session_id -> client address (main.MAX_SESSIONS_PER_IP)
 
 # A session that just ended (WebSocket blip: screen lock, network switch) can be resumed by a hello carrying
 # ``resume=<session_id>`` within this window: it keeps its session id (so pending proposals, the active delivery
@@ -21,13 +22,17 @@ RESUME_WINDOW_S = 60.0
 _ENDED: dict[str, tuple[float, str | None]] = {}  # session_id -> (ended at, Live resumption handle)
 
 
-def register(session: Session, bridge: object | None = None) -> None:
+def register(session: Session, bridge: object | None = None, ip: str | None = None) -> None:
     _REG[session.session_id] = (session, bridge)
+    if ip:
+        _IPS[session.session_id] = ip
 
 
-def count() -> int:
-    """How many live sessions are registered (all shops)."""
-    return len(_REG)
+def count(ip: str | None = None) -> int:
+    """How many live sessions are registered (all shops), or how many came from ``ip``."""
+    if ip is None:
+        return len(_REG)
+    return sum(1 for sid, addr in _IPS.items() if addr == ip and sid in _REG)
 
 
 def remember_ended(session_id: str, handle: str | None) -> None:
@@ -57,7 +62,9 @@ def attach_bridge(session_id: str, bridge: object) -> None:
 
 def unregister(session: Session | str) -> None:
     """Remove a session, given the ``Session`` or its ``session_id``. Unknown sessions are ignored."""
-    _REG.pop(session if isinstance(session, str) else session.session_id, None)
+    sid = session if isinstance(session, str) else session.session_id
+    _REG.pop(sid, None)
+    _IPS.pop(sid, None)
 
 
 def by_shop(shop_id: str) -> list[tuple[Session, object | None]]:

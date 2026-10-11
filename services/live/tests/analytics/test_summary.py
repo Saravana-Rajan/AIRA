@@ -199,6 +199,19 @@ async def test_today_utc_clock_still_uses_the_ist_day(monkeypatch, forecasts):
     assert out["sales_count"] == 1 and out["revenue"] == 44
 
 
+async def test_today_carries_the_demo_history_flag(monkeypatch, forecasts):
+    """Backfilled demo rows feeding the forecast make the day summary say "demo history" (summary.say)."""
+    shop = {"products": PRODUCTS, "inventory": {}, "sales": {}, "orders": {}}
+    monkeypatch.setattr(sm, "db", lambda: _FakeDb({"murugan_dairy": shop}))
+
+    async def demo(shop_id):
+        assert shop_id == "murugan_dairy"
+        return True
+
+    monkeypatch.setattr(sm.forecast, "demo_history", demo)
+    assert (await sm.today("murugan_dairy"))["demo_history"] is True
+
+
 async def test_today_without_forecast_suggests_nothing(monkeypatch, forecasts):
     shop = {"products": PRODUCTS, "inventory": {}, "sales": {}, "orders": {}}
     monkeypatch.setattr(sm, "db", lambda: _FakeDb({"murugan_dairy": shop}))

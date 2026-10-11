@@ -24,7 +24,7 @@ describe("forecastLoader", () => {
   it("fetches GET {base}/api/forecast?shop= when aira-live is configured", async () => {
     const fetchImpl = vi.fn(async () => new Response(JSON.stringify({ items: [] }), { status: 200 }));
     const load = forecastLoader({ VITE_AIRA_LIVE_WS: "wss://live.example/ws" }, fetchImpl as unknown as typeof fetch);
-    await expect(load("murugan_dairy")).resolves.toEqual([]);
+    await expect(load("murugan_dairy")).resolves.toEqual({ items: [], demoHistory: false });
     expect((fetchImpl.mock.calls[0] as unknown[])[0]).toBe("https://live.example/api/forecast?shop=murugan_dairy");
   });
   it("resolves null without any request when aira-live is not configured", async () => {

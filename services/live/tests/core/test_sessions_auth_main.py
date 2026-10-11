@@ -352,38 +352,64 @@ def test_confirm_reply_in_real_mode_tells_the_model(real_mode, mem_store):
         assert "Order sent to Sakthi vendor." in fb.sent_text[0]
 
 
-# ---------- app key (AIRA_APP_KEY): a speed bump on the public URL, no login step ----------
-async def test_app_key_is_required_in_hello_when_configured(monkeypatch):
-    monkeypatch.setenv("AIRA_ALLOW_NO_TOKEN", "1")
-    monkeypatch.setenv("AIRA_APP_KEY", "k-demo")
-    assert (await auth.verify_hello("k-demo", "u1", DEMO, mock=False)).shop_id == DEMO
-    for bad in (None, "", "wrong", "k-demo "):
-        with pytest.raises(auth.AuthError):
-            await auth.verify_hello(bad, "u1", DEMO, mock=False)
+# ---------- tokenless mode guards: browser Origin allowlist + per-IP session cap (docs/ops/security.md) ----------
+def test_allowed_origins_default_to_the_hosting_site_and_local_vite(monkeypatch):
+    monkeypatch.delenv("AIRA_ALLOWED_ORIGINS", raising=False)
+    assert main_mod.allowed_origins() == ["https://aira-shop.web.app", "https://aira-shop.firebaseapp.com",
+                                          "http://localhost:5173", "http://localhost:4173"]
+    monkeypatch.setenv("AIRA_ALLOWED_ORIGINS", "https://demo.example/, http://127.0.0.1:5173 ,,")
+    assert main_mod.allowed_origins() == ["https://demo.example", "http://127.0.0.1:5173"]  # the env list replaces
+    assert main_mod.origin_allowed("https://demo.example") and main_mod.origin_allowed("https://demo.example/")
+    assert not main_mod.origin_allowed("https://aira-shop.web.app")
+    assert main_mod.origin_allowed(None)  # no Origin header: not a browser page; nothing to check
 
 
-async def test_app_key_is_not_checked_in_mock_mode_or_when_unset(monkeypatch):
-    monkeypatch.setenv("AIRA_ALLOW_NO_TOKEN", "1")
-    assert (await auth.verify_hello(None, "u1", DEMO, mock=False)).shop_id == DEMO  # unset: local runs as today
-    monkeypatch.setenv("AIRA_APP_KEY", "k-demo")
-    assert (await auth.verify_hello(None, "dev", DEMO, mock=True)).shop_id == DEMO  # mock: no key needed
-
-
-def test_ws_refuses_hello_with_the_wrong_app_key(real_mode, monkeypatch):
-    monkeypatch.setenv("AIRA_APP_KEY", "k-demo")
-    with TestClient(main_mod.app).websocket_connect("/ws") as ws:
-        ws.send_json({**HELLO, "idToken": "nope"})
-        assert ws.receive_json()["code"] == "permission"
-        with pytest.raises(WebSocketDisconnect):
+def test_ws_refuses_a_browser_origin_that_is_not_allowed(real_mode):
+    with pytest.raises(WebSocketDisconnect) as closed:
+        with TestClient(main_mod.app).websocket_connect("/ws", headers={"Origin": "https://evil.example"}) as ws:
+            ws.send_json(HELLO)
             ws.receive_json()
-    assert real_mode == []
-    with TestClient(main_mod.app).websocket_connect("/ws") as ws:
-        ws.send_json({**HELLO, "idToken": "k-demo"})
+    assert closed.value.code == 4403
+    assert real_mode == []  # refused before hello: Live was never started
+    with TestClient(main_mod.app).websocket_connect("/ws", headers={"Origin": "https://aira-shop.web.app"}) as ws:
+        ws.send_json(HELLO)
         assert ws.receive_json()["t"] == "ready"
 
 
+def test_ws_allowed_origins_come_from_env(real_mode, monkeypatch):
+    monkeypatch.setenv("AIRA_ALLOWED_ORIGINS", "https://judge.example")
+    with TestClient(main_mod.app).websocket_connect("/ws", headers={"Origin": "https://judge.example"}) as ws:
+        ws.send_json(HELLO)
+        assert ws.receive_json()["t"] == "ready"
+    with pytest.raises(WebSocketDisconnect):
+        with TestClient(main_mod.app).websocket_connect("/ws", headers={"Origin": "https://aira-shop.web.app"}):
+            pass
+
+
+def test_client_ip_prefers_the_first_forwarded_address():
+    ws = SimpleNamespace(headers={"x-forwarded-for": " 203.0.113.9 , 10.0.0.1"}, client=SimpleNamespace(host="10.1.1.1"))
+    assert main_mod.client_ip(ws) == "203.0.113.9"
+    assert main_mod.client_ip(SimpleNamespace(headers={}, client=SimpleNamespace(host="10.1.1.1"))) == "10.1.1.1"
+    assert main_mod.client_ip(SimpleNamespace(headers={}, client=None)) == "unknown"
+
+
+def test_sessions_count_per_ip(mk_session):
+    a, _ = mk_session(shop="ip_shop")
+    b, _ = mk_session(shop="ip_shop")
+    c, _ = mk_session(shop="ip_shop")
+    sessions.register(a, ip="1.1.1.1")
+    sessions.register(b, ip="1.1.1.1")
+    sessions.register(c, ip="2.2.2.2")
+    try:
+        assert sessions.count() == 3 and sessions.count("1.1.1.1") == 2 and sessions.count("3.3.3.3") == 0
+    finally:
+        for s in (a, b, c):
+            sessions.unregister(s)
+    assert sessions.count("1.1.1.1") == 0
+
+
 def test_ws_caps_concurrent_live_sessions(real_mode, monkeypatch):
-    """Bounds Gemini spend on the public URL: the fourth phone gets error/permission and is closed."""
+    """Bounds Gemini spend on the public URL: one phone over the cap gets error/permission and is closed."""
     monkeypatch.setattr(main_mod, "MAX_SESSIONS", 2)
     clients = [TestClient(main_mod.app).websocket_connect("/ws").__enter__() for _ in range(2)]
     try:
@@ -400,6 +426,30 @@ def test_ws_caps_concurrent_live_sessions(real_mode, monkeypatch):
         # a second hello on an existing socket replaces its own session, so it never counts twice
         clients[0].send_json({**HELLO, "lang": "ta"})
         assert clients[0].receive_json()["t"] == "ready"
+    finally:
+        for ws in clients:
+            ws.__exit__(None, None, None)
+
+
+def test_ws_caps_concurrent_sessions_per_ip(real_mode, monkeypatch):
+    """A stranger with the URL gets MAX_SESSIONS_PER_IP sessions, not the whole service."""
+    monkeypatch.setattr(main_mod, "MAX_SESSIONS_PER_IP", 2)
+    monkeypatch.setattr(main_mod, "MAX_SESSIONS", 10)
+    same = {"X-Forwarded-For": "203.0.113.9"}
+    clients = [TestClient(main_mod.app).websocket_connect("/ws", headers=same).__enter__() for _ in range(2)]
+    try:
+        for ws in clients:
+            ws.send_json(HELLO)
+            assert ws.receive_json()["t"] == "ready"
+        with TestClient(main_mod.app).websocket_connect("/ws", headers=same) as ws:
+            ws.send_json(HELLO)
+            assert ws.receive_json() == {"t": "error", "code": "permission", "say": t("auth.busy", "en")}
+            with pytest.raises(WebSocketDisconnect):
+                ws.receive_json()
+        with TestClient(main_mod.app).websocket_connect("/ws", headers={"X-Forwarded-For": "198.51.100.2"}) as ws:
+            ws.send_json(HELLO)
+            assert ws.receive_json()["t"] == "ready"  # another phone is still served
+        assert len(real_mode) == 3
     finally:
         for ws in clients:
             ws.__exit__(None, None, None)

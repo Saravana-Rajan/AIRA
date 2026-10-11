@@ -85,3 +85,10 @@ async def index_contact(channel: str, contact: str, shop_id: str, supplier_id: s
 
 async def lookup_contact(channel: str, contact: str, shop_id: str | None = None) -> dict | None:
     return await get_store().get(_index_path(shop_id or config.load().demo_shop_id, "contactIndex", channel, contact))
+
+
+async def unlink_contact(channel: str, contact: str, shop_id: str | None = None) -> None:
+    """Forget which supplier a contact spoke for (a Telegram re-link). The Store has no delete, so the index doc
+    keeps the shop and loses its supplier; readers treat a missing ``supplierId`` as unknown."""
+    shop_id = shop_id or config.load().demo_shop_id
+    await get_store().set(_index_path(shop_id, "contactIndex", channel, contact), {"shopId": shop_id, "supplierId": None})

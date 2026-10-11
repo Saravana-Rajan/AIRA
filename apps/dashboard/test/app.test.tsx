@@ -3,7 +3,7 @@ import { act } from "preact/test-utils";
 import { cleanup, findAllByText, flush, mount, text } from "./helpers/render";
 import { App, type ListenFn } from "../src/components/App";
 import type { LiveStatus, ShopData } from "../src/lib/live";
-import type { ForecastItem } from "../src/lib/forecast";
+import type { Forecast, ForecastItem } from "../src/lib/forecast";
 
 const NOW = Date.UTC(2026, 9, 10, 6, 30); // 2026-10-10 12:00 IST
 
@@ -127,15 +127,17 @@ describe("App", () => {
 
   it("loads the forecast once and shows suggestions", async () => {
     const { listen, push } = fakeLive();
-    let resolve!: (v: ForecastItem[] | null) => void;
-    const loadForecast = vi.fn(() => new Promise<ForecastItem[] | null>((r) => (resolve = r)));
+    let resolve!: (v: Forecast | null) => void;
+    const loadForecast = vi.fn(() => new Promise<Forecast | null>((r) => (resolve = r)));
     const el = mount(<App listen={listen} loadForecast={loadForecast} now={() => NOW} />);
     push();
     go("#/forecast");
     expect(text(el)).toContain("Loading forecast…");
-    resolve([{ sku: "sakthi_curd_1l", name: "Sakthi Curd 1 L", dailyDemand: 26.4, onHand: 28, suggestedOrder: 30 }]);
+    const items: ForecastItem[] = [{ sku: "sakthi_curd_1l", name: "Sakthi Curd 1 L", dailyDemand: 26.4, onHand: 28, suggestedOrder: 30 }];
+    resolve({ items, demoHistory: true });
     await flush();
     expect(text(el.querySelector("tbody"))).toContain("Sakthi Curd 1 L");
+    expect(text(el)).toContain("Demo history");
     expect(loadForecast).toHaveBeenCalledTimes(1);
     expect(loadForecast).toHaveBeenCalledWith("murugan_dairy");
   });

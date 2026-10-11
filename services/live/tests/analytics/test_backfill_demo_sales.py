@@ -23,7 +23,7 @@ PACK_L = {"aavin_milk_500ml": 0.5, "aavin_milk_1l": 1.0, "sakthi_curd_500ml": 0.
 PRODUCTS = [{"sku": s, "unit": "L", "packSizeL": PACK_L[s]} if s in PACK_L else {"sku": s, "unit": "pack"}
             for s in ALL_SKUS]
 # The shape business.ledger.prepare_movement writes (contract LedgerTxn needs `id`; the ledger also keeps `unit`).
-LEDGER_KEYS = {"id", "sku", "delta", "unit", "reason", "refType", "refId", "idemKey", "at", "actor"}
+LEDGER_KEYS = {"id", "sku", "delta", "unit", "reason", "refType", "demo", "refId", "idemKey", "at", "actor"}
 UNIT = {p["sku"]: p["unit"] for p in PRODUCTS}
 
 
@@ -64,6 +64,7 @@ def test_rows_are_sale_ledger_docs_with_fixed_ids():
         assert set(data) == LEDGER_KEYS
         assert data["reason"] == "SALE" and data["delta"] < 0 and data["actor"] == "system"
         assert data["refType"] == bf.REF_TYPE == "demo_backfill" and data["idemKey"] == path.rsplit("/", 1)[1]
+        assert data["demo"] is True                                                   # invented rows are labelled
         assert data["id"] == path.rsplit("/", 1)[1] and data["unit"] == UNIT[data["sku"]]
         assert datetime.fromisoformat(data["at"]).utcoffset() == timedelta(0)        # ISO-8601 UTC, like now_iso()
         assert 6 <= datetime.fromisoformat(data["at"]).astimezone(IST).hour < 21      # shop hours

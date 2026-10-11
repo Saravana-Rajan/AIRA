@@ -32,7 +32,7 @@ class FakeSocket {
   get handlers() { return this.hs.size; }
 }
 
-function setup(over: { settings?: Partial<Settings>; env?: Partial<WireEnv>; connect?: boolean; storage?: Storage; appKey?: string } = {}) {
+function setup(over: { settings?: Partial<Settings>; env?: Partial<WireEnv>; connect?: boolean; storage?: Storage } = {}) {
   const storage = over.storage ?? new MemStorage();
   let socket!: FakeSocket;
   const mic = { stop: vi.fn() };
@@ -63,7 +63,6 @@ function setup(over: { settings?: Partial<Settings>; env?: Partial<WireEnv>; con
     settings: { ...DEFAULT_SETTINGS, onboarded: true, ...over.settings },
     wsUrl: "ws://test/ws",
     connect: over.connect,
-    appKey: over.appKey ?? "",
     env,
   });
   wired.push(w);
@@ -87,13 +86,6 @@ const flush = async () => { for (let i = 0; i < 10; i++) await Promise.resolve()
 const CONFIRM: ServerMsg = { t: "confirm", id: "c1", kind: "sale", prompt: "Sell 2 Sakthi curd for 120 rupees?" };
 
 describe("wireApp: connection", () => {
-  it("sends the baked-in app key as idToken when the build has one", () => {
-    const a = setup({ storage: new MemStorage(), appKey: " k-demo " });
-    expect(a.socket.hello).toMatchObject({ t: "hello", idToken: "k-demo" });
-    const none = setup({ storage: new MemStorage(), appKey: "" });
-    expect("idToken" in none.socket.hello!).toBe(false);
-  });
-
   it("says hello without an idToken, for the demo shop, with a stable device uid", () => {
     const storage = new MemStorage();
     const a = setup({ storage, settings: { lang: "ta" } });

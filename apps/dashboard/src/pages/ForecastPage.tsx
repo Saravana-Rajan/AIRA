@@ -1,7 +1,11 @@
 import type { ForecastItem } from "../lib/forecast";
 
-/** Reorder suggestions from aira-live (average daily sales vs stock on hand). */
-export function ForecastPage(props: { items: ForecastItem[] | null; loading: boolean }) {
+/**
+ * Reorder suggestions from aira-live (average daily sales vs stock on hand). `demoHistory` means backfilled
+ * demo sales feed the numbers: the card says so, and never presents them as real shop sales.
+ */
+export function ForecastPage(props: { items: ForecastItem[] | null; loading: boolean; demoHistory?: boolean }) {
+  const demo = props.demoHistory === true && !props.loading && props.items !== null;
   return (
     <section class="card card--forecast" aria-labelledby="forecast-title">
       <h2 id="forecast-title" class="card__title">Forecast</h2>
@@ -9,13 +13,16 @@ export function ForecastPage(props: { items: ForecastItem[] | null; loading: boo
       {!props.loading && props.items === null && (
         <p role="status" class="empty">Forecast unavailable</p>
       )}
+      {demo && (
+        <p role="note" class="notice">Demo history: these numbers come from backfilled demo sales, not real shop sales.</p>
+      )}
       {!props.loading && props.items !== null && props.items.length === 0 && (
         <p class="empty">No reorders needed right now.</p>
       )}
       {!props.loading && props.items !== null && props.items.length > 0 && (
         <div class="table-wrap">
           <table class="table">
-            <caption>Suggested reorders, from average daily sales</caption>
+            <caption>{demo ? "Suggested reorders, from average daily sales (demo history)" : "Suggested reorders, from average daily sales"}</caption>
             <thead>
               <tr>
                 <th scope="col">Product</th>

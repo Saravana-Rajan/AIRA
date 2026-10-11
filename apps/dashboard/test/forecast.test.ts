@@ -5,7 +5,11 @@ const good = { items: [{ sku: "sakthi_curd_1l", name: "Sakthi curd 1 L", dailyDe
 
 describe("parseForecast", () => {
   it("accepts the documented shape", () => {
-    expect(parseForecast(good)).toEqual(good.items);
+    expect(parseForecast(good)).toEqual({ items: good.items, demoHistory: false });
+  });
+  it("carries the demo-history flag (backfilled demo sales feed the numbers)", () => {
+    expect(parseForecast({ ...good, demoHistory: true })).toEqual({ items: good.items, demoHistory: true });
+    expect(parseForecast({ ...good, demoHistory: "yes" })?.demoHistory).toBe(false);
   });
   it("rejects malformed payloads", () => {
     expect(parseForecast(null)).toBeNull();
@@ -17,7 +21,7 @@ describe("parseForecast", () => {
 describe("fetchForecast", () => {
   it("returns items on 200", async () => {
     const f = (async () => new Response(JSON.stringify(good), { status: 200 })) as typeof fetch;
-    expect(await fetchForecast("https://live.example", "demo", f)).toEqual(good.items);
+    expect(await fetchForecast("https://live.example", "demo", f)).toEqual({ items: good.items, demoHistory: false });
   });
   it("returns null on HTTP error, network error or bad JSON", async () => {
     const http500 = (async () => new Response("boom", { status: 500 })) as typeof fetch;

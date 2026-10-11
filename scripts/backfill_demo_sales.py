@@ -4,7 +4,9 @@ Writes SALE rows to shops/{shop}/ledger/{txnId} with the spec §5 ledger fields,
 business.ledger writes for a real sale, so aira_live.analytics.forecast has a 7-day moving average on demo
 day. Rows are seeded and use fixed doc ids (backfill-<day>-<sku>), so a re-run overwrites instead of adding.
 Only ledger history is written: inventory, sales and payment docs are not touched. The window ends yesterday
-(Asia/Kolkata), so today's live demo sales stay separate. Rows carry refType "demo_backfill".
+(Asia/Kolkata), so today's live demo sales stay separate. Every row is labelled demo:true (refType
+"demo_backfill"): nothing invented is ever presented as real. While these rows are in the forecast window,
+reorder_suggest, the day summary and the dashboard's Forecast card say "demo history".
 
 Safe by default: without a write flag it is a dry run and writes nothing.
 - --emulator writes to the Firestore emulator. The host comes from FIRESTORE_EMULATOR_HOST (environment or
@@ -95,6 +97,7 @@ def generate(products: list[dict], days: int, end: date, seed: int,
                 "unit": product.get("unit", "pack"),
                 "reason": "SALE",
                 "refType": REF_TYPE,
+                "demo": True,  # invented history: the forecast, day summary and dashboard say "demo history"
                 "refId": f"backfill-{day.isoformat()}",
                 "idemKey": doc_id,
                 "at": at.isoformat(),

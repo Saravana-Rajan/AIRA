@@ -5,12 +5,10 @@ on the deployed service), and it always lands in the configured demo shop (env `
 ``murugan_dairy``) as its owner. The ``shopId`` the client sends is ignored, so no phone can reach another
 shop's data by naming it.
 
-Without Firebase Auth there is nothing to verify an ``idToken`` against. The deployed service instead holds a
-shared app key (``AIRA_APP_KEY``, Secret Manager ``aira-app-key``) that the hosting build bakes into the app as
-``VITE_AIRA_APP_KEY`` and the app sends as ``hello.idToken``. It is a speed bump on the public URL, not a login:
-the owner taps Start as before. When no key is configured (local runs) a token is ignored, as before.
+Without Firebase Auth there is nothing to verify an ``idToken`` against, so a token is ignored. What keeps a
+stranger with the URL out is in ``main.py`` (docs/ops/security.md): the browser Origin allowlist on ``/ws`` and
+the per-address cap on live sessions.
 """
-import hmac
 import logging
 from dataclasses import dataclass
 from typing import Literal
@@ -38,9 +36,6 @@ async def verify_hello(id_token: str | None, uid: str, shop_id: str, mock: bool)
     settings = config.load()
     if not (mock or settings.allow_no_token):
         raise AuthError("hello refused: tokenless mode is off and there is no Firebase Auth to check a token")
-    if settings.app_key and not mock:
-        if not id_token or not hmac.compare_digest(id_token.encode(), settings.app_key.encode()):
-            raise AuthError("hello refused: idToken does not match AIRA_APP_KEY")
     if shop_id != settings.demo_shop_id:
         log.info("hello for shop %r served as demo shop %r", shop_id, settings.demo_shop_id)
     return AuthResult(uid=uid, shop_id=settings.demo_shop_id, role="owner")

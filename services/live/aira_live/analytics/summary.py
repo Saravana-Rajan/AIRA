@@ -129,5 +129,5 @@ async def today(shop_id: str, now: datetime | None = None) -> dict:
     values = await asyncio.gather(*(forecast.daily_demand(shop_id, sku) for sku in products))
     out = summarize(list(sales.values()), products, inventory, dict(zip(products, values)), len(disc))
     out["names"] = {sku: p.get("name", sku) for sku, p in products.items()}
-    out["demo_history"] = forecast.demo_history_included()
+    out["demo_history"] = await forecast.demo_history(shop_id)  # backfilled demo rows feed the suggestions
     return out

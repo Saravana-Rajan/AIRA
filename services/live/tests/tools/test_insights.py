@@ -45,16 +45,20 @@ def shop(monkeypatch, fake_db):
         "shops/murugan_dairy/products/sakthi_curd_1l": {"name": "Sakthi curd", "unit": "L", "reorderThreshold": 5},
         "shops/murugan_dairy/suppliers/sakthi_vendor": {"name": "Sakthi vendor", "products": ["sakthi_curd_1l"]},
     })
-    state = {"db": fake_db, "forecast": {}, "on_hand": {}, "on_hand_calls": []}
+    state = {"db": fake_db, "forecast": {}, "on_hand": {}, "on_hand_calls": [], "demo_history": False}
 
     async def daily_demand(shop_id, sku):
         return state["forecast"].get(sku)
+
+    async def demo_history(shop_id):
+        return state["demo_history"]
 
     async def on_hand(shop_id, sku):
         state["on_hand_calls"].append((shop_id, sku))
         return state["on_hand"].get(sku, 0.0)
 
     monkeypatch.setattr(forecast, "daily_demand", daily_demand)
+    monkeypatch.setattr(forecast, "demo_history", demo_history)
     monkeypatch.setattr(_business(monkeypatch, "ledger"), "on_hand", on_hand, raising=False)
     return state
 
@@ -135,11 +139,11 @@ async def test_reorder_suggest_low_stock_suggests_order(shop, session):
     assert shop["on_hand_calls"] == [("murugan_dairy", "sakthi_curd_1l")]
 
 
-async def test_reorder_suggest_says_when_the_history_is_demo_data(shop, session, monkeypatch):
-    """With AIRA_INCLUDE_DEMO_HISTORY=1 the backfilled rows feed the number, so AIRA says so first."""
+async def test_reorder_suggest_says_when_the_history_is_demo_data(shop, session):
+    """Backfilled demo rows (demo:true) feed the number, so AIRA says so first."""
     shop["forecast"]["sakthi_curd_1l"] = 26.0
     shop["on_hand"]["sakthi_curd_1l"] = 2.0
-    monkeypatch.setenv("AIRA_INCLUDE_DEMO_HISTORY", "1")
+    shop["demo_history"] = True
     out = await insights.reorder_suggest()
     assert out["say"].startswith("Based on demo sales history. Sakthi curd: 2 litres left")
     assert out["suggestions"][0]["qty"] == 28

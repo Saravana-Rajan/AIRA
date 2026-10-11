@@ -1,5 +1,5 @@
 import type { DashboardViews } from "../lib/views";
-import type { ForecastItem } from "../lib/forecast";
+import type { Forecast } from "../lib/forecast";
 import { TodayPage } from "./TodayPage";
 import { StockPage } from "./StockPage";
 import { OrdersPage } from "./OrdersPage";
@@ -14,7 +14,7 @@ const OVERVIEW_ACTIONS = 8;
 /** The overview: every section as a card. The grid places them (1 column on a phone, 2–3 on a laptop). */
 export function HomePage(props: {
   views: DashboardViews;
-  forecast: ForecastItem[] | null;
+  forecast: Forecast | null;
   forecastLoading: boolean;
   resolveEvidence: ResolveEvidence;
 }) {
@@ -25,7 +25,11 @@ export function HomePage(props: {
       <TodayPage summary={props.views.today} />
       <StockPage rows={props.views.stock} />
       <OrdersPage rows={orders} limit={OVERVIEW_ORDERS} />
-      <ForecastPage items={props.forecast} loading={props.forecastLoading} />
+      <ForecastPage
+        items={props.forecast?.items ?? null}
+        demoHistory={props.forecast?.demoHistory ?? false}
+        loading={props.forecastLoading}
+      />
       <AuditPage rows={props.views.audit} resolveEvidence={props.resolveEvidence} limit={OVERVIEW_ACTIONS} />
     </>
   );

@@ -1,7 +1,7 @@
 // How the dashboard reaches its data: Firestore (loaded on demand, so the first paint does not wait
 // for the SDK) and the aira-live forecast endpoint. No Firebase Auth or Storage in this build.
 import type { LiveStatus, ShopData } from "./live";
-import { fetchForecast, type ForecastItem } from "./forecast";
+import { fetchForecast, type Forecast } from "./forecast";
 
 type Env = Record<string, unknown>;
 
@@ -29,7 +29,7 @@ export function liveHttpBase(env: Env): string | null {
 }
 
 /** Loads reorder suggestions for a shop; resolves null (shown as "Forecast unavailable") when aira-live is not configured. */
-export function forecastLoader(env: Env, fetchImpl: typeof fetch = fetch): (shopId: string) => Promise<ForecastItem[] | null> {
+export function forecastLoader(env: Env, fetchImpl: typeof fetch = fetch): (shopId: string) => Promise<Forecast | null> {
   const base = liveHttpBase(env);
   return (shopId) => (base ? fetchForecast(base, shopId, fetchImpl) : Promise.resolve(null));
 }

@@ -29,19 +29,20 @@ WINDOW_DAYS = 7
 MIN_DAYS = 3
 CACHE_TTL_S = 60.0
 SALE = "SALE"
-# scripts/backfill_demo_sales.py writes invented SALE rows with this refType. They are skipped unless the
-# operator opts in with AIRA_INCLUDE_DEMO_HISTORY=1, and then every spoken suggestion says it is demo history
+# scripts/backfill_demo_sales.py writes invented SALE rows labelled ``demo: true`` (refType "demo_backfill"), so
+# the demo shop has a forecast on demo day. They feed the number like any sale, but the window remembers that
+# they did (``demo_history``), and every suggestion built on them is spoken and shown as "demo history"
 # (CLAUDE.md: never invent counts or amounts; nothing fabricated is presented as real).
 DEMO_REF_TYPE = "demo_backfill"
-DEMO_HISTORY_ENV = "AIRA_INCLUDE_DEMO_HISTORY"
 
 
-def demo_history_included() -> bool:
-    """True when backfilled demo rows feed the forecast (env AIRA_INCLUDE_DEMO_HISTORY=1)."""
-    return os.getenv(DEMO_HISTORY_ENV, "0") == "1"
+def is_demo_row(row: Mapping) -> bool:
+    return row.get("demo") is True or row.get("refType") == DEMO_REF_TYPE
+
 
 Daily = dict[date, float]
-Window = tuple[dict[str, Daily], set[date]]
+# ({sku: {day: units sold}}, days on which the shop sold anything, whether any demo row contributed)
+Window = tuple[dict[str, Daily], set[date], bool]
 
 
 def ist_day(at: object) -> date | None:
@@ -59,15 +60,13 @@ def ist_day(at: object) -> date | None:
 
 
 def fold_sales(rows: Iterable[Mapping]) -> Window:
-    """Ledger rows → ({sku: {day: units sold}}, days on which the shop sold anything). Non-SALE rows are ignored,
-    and so are backfilled demo rows unless ``demo_history_included()``."""
+    """Ledger rows → ({sku: {day: units sold}}, days on which the shop sold anything, demo rows seen).
+    Non-SALE rows are ignored."""
     by_sku: dict[str, Daily] = defaultdict(dict)
     active: set[date] = set()
-    include_demo = demo_history_included()
+    demo = False
     for row in rows:
         if row.get("reason") != SALE:
-            continue
-        if not include_demo and row.get("refType") == DEMO_REF_TYPE:
             continue
         sku, day = row.get("sku"), ist_day(row.get("at"))
         try:
@@ -77,8 +76,9 @@ def fold_sales(rows: Iterable[Mapping]) -> Window:
         if not sku or day is None:
             continue
         active.add(day)
+        demo = demo or is_demo_row(row)
         by_sku[sku][day] = by_sku[sku].get(day, 0.0) + units
-    return dict(by_sku), active
+    return dict(by_sku), active, demo
 
 
 def moving_average_7(daily: Mapping[date, float], today: date, active_days: Iterable[date] = ()) -> float | None:
@@ -180,11 +180,23 @@ async def daily_demand(shop_id: str, sku: str) -> float | None:
         return None
     today = _today()
     try:
-        by_sku, active = await _window(shop_id, today)
+        by_sku, active, _ = await _window(shop_id, today)
     except Exception as exc:  # never break a voice tool over analytics
         log.warning("forecast: ledger read failed for %s: %s", shop_id, exc)
         return None
     return moving_average_7(by_sku.get(sku, {}), today, active)
+
+
+async def demo_history(shop_id: str) -> bool:
+    """True when a backfilled demo row (``is_demo_row``) is in the shop's forecast window, so whatever is said or
+    shown from the forecast must be marked "demo history". False in mock mode or when Firestore can't be read."""
+    if not _enabled():
+        return False
+    try:
+        return (await _window(shop_id, _today()))[2]
+    except Exception as exc:
+        log.warning("forecast: ledger read failed for %s: %s", shop_id, exc)
+        return False
 
 
 async def daily_demand_all(shop_id: str, *, ops: bool = False) -> dict[str, float | None]:
@@ -194,7 +206,7 @@ async def daily_demand_all(shop_id: str, *, ops: bool = False) -> dict[str, floa
     today = _today()
     try:
         skus = await _product_skus(shop_id)
-        by_sku, active = await _window(shop_id, today)
+        by_sku, active, _ = await _window(shop_id, today)
     except Exception as exc:
         log.warning("forecast: Firestore read failed for %s: %s", shop_id, exc)
         return {}

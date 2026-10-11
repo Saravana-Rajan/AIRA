@@ -86,8 +86,6 @@ export interface WireOpts {
   wsUrl?: string;
   /** false: wire everything but send no hello (the demo page connects the socket itself). */
   connect?: boolean;
-  /** Shared app key sent as hello.idToken. Defaults to the build's VITE_AIRA_APP_KEY; "" sends none. */
-  appKey?: string;
   env?: Partial<WireEnv>;
 }
 
@@ -193,19 +191,6 @@ function wsDefault(): string {
     return (import.meta as { env?: Record<string, string | undefined> }).env?.VITE_AIRA_LIVE_WS ?? DEFAULT_WS;
   } catch {
     return DEFAULT_WS;
-  }
-}
-
-/**
- * The shared app key the hosting build bakes in (VITE_AIRA_APP_KEY, from Secret Manager aira-app-key). Sent as
- * hello.idToken; aira-live refuses a hello without it when AIRA_APP_KEY is set. No login step for the owner.
- */
-function appKey(): string | undefined {
-  try {
-    const key = (import.meta as { env?: Record<string, string | undefined> }).env?.VITE_AIRA_APP_KEY?.trim();
-    return key || undefined;
-  } catch {
-    return undefined;
   }
 }
 
@@ -457,11 +442,11 @@ export function wireApp(opts: WireOpts): WiredApp {
   });
 
   if (opts.connect !== false) {
-    const key = (opts.appKey ?? appKey() ?? "").trim() || undefined;
+    // No idToken: there is no Firebase Auth in this build (docs/ops/security.md). The server checks the
+    // page's Origin and caps sessions per address instead.
     socket.connect({
       t: "hello",
       uid: deviceUid(env.storage),
-      ...(key ? { idToken: key } : {}),
       shopId: settings.shopId,
       lang: settings.lang,
       verbosity: settings.verbosity,

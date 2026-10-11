@@ -1,12 +1,15 @@
 """Read-only HTTP API for the Shop Dashboard (mounted by main.py through OPTIONAL_ROUTERS).
 
-GET /api/forecast?shop=<id> -> {"items": [{sku, name, dailyDemand, onHand, suggestedOrder}, ...]}
+GET /api/forecast?shop=<id> -> {"items": [{sku, name, dailyDemand, onHand, suggestedOrder}, ...],
+                                "demoHistory": bool}
   The dashboard's Forecast card (apps/dashboard/src/lib/forecast.ts). Only the demo shop is served; any other
   shop id is refused (403). A SKU with no forecast (not enough sales history, mock mode) is left out, so the
   card never shows an invented number. Numbers are in the product's selling unit (litres for milk and curd).
+  ``demoHistory`` is true when backfilled demo sales (scripts/backfill_demo_sales.py, rows labelled demo:true)
+  feed the numbers; the card then says "demo history" instead of presenting them as real shop sales.
 
 Everything here only reads: the forecast window (analytics.forecast), the product names and the stock on hand
-(business.ledger). Browser calls are allowed from the hosting origin only (CORS in main.py).
+(business.ledger). Browser calls are allowed from AIRA_ALLOWED_ORIGINS only (CORS in main.py).
 """
 from __future__ import annotations
 
@@ -31,6 +34,7 @@ async def forecast_items(shop: Annotated[str, Query(pattern=SHOP_ID)]) -> dict:
     if shop != config.load().demo_shop_id:
         raise HTTPException(status_code=403, detail="only the demo shop is served")
     demand = await forecast.daily_demand_all(shop)  # {} in mock mode or when Firestore can't be read
+    demo = await forecast.demo_history(shop)
     try:
         rows = await get_store().list(paths.products(shop))
         names = {sku: (doc or {}).get("name") or sku for sku, doc in rows}
@@ -45,4 +49,4 @@ async def forecast_items(shop: Annotated[str, Query(pattern=SHOP_ID)]) -> dict:
     except Exception as exc:  # the dashboard shows "Forecast unavailable"; never a half-made list
         log.warning("forecast api: read failed for %s: %s", shop, exc)
         raise HTTPException(status_code=503, detail="forecast unavailable") from None
-    return {"items": items}
+    return {"items": items, "demoHistory": demo}

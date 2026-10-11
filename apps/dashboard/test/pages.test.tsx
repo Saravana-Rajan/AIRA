@@ -213,6 +213,16 @@ describe("ForecastPage", () => {
   it("says so when no reorder is needed", () => {
     const el = mount(<ForecastPage loading={false} items={[]} />);
     expect(text(el)).toContain("No reorders needed right now");
+    expect(text(el)).not.toContain("Demo history");
+  });
+
+  it("says 'demo history' when backfilled demo sales feed the numbers", () => {
+    const items = [{ sku: "s", name: "Sakthi curd 1 L", dailyDemand: 26.4, onHand: 12, suggestedOrder: 30 }];
+    const el = mount(<ForecastPage loading={false} items={items} demoHistory={true} />);
+    expect(findAllByText(el, "[role=note]", /^Demo history/)).toHaveLength(1);
+    expect(text(el.querySelector("caption"))).toContain("demo history");
+    const real = mount(<ForecastPage loading={false} items={items} demoHistory={false} />);
+    expect(text(real)).not.toContain("Demo history");
   });
 });
 

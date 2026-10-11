@@ -107,6 +107,6 @@ async def reorder_suggest(product: str | None = None) -> dict:
           name=x["name"], on_hand=amount(x, "on_hand"), forecast=amount(x, "forecast"), qty=amount(x, "qty"),
           supplier=x["supplier"] or "")
         for x in suggestions]
-    if forecast.demo_history_included():  # backfilled demo rows feed the number: say so, never present as real
+    if await forecast.demo_history(s.shop_id):  # backfilled demo rows feed the number: say so, never as real
         lines.insert(0, t("insights.demo_history", s.lang))
     return {"say": " ".join(lines), "suggestions": suggestions, "next_tool": "order_create"}

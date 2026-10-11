@@ -307,14 +307,19 @@ def start(chat_id: int, text: str) -> dict:
     return {"update_id": 1, "message": {"message_id": 5, "chat": {"id": chat_id, "type": "private"}, "text": text}}
 
 
-def deep(supplier_id: str, secret: str = TG_SECRET) -> str:
-    """The `start` parameter of a vendor's deep link: <supplier_id>.<12 hex of HMAC-SHA256(secret, supplier_id)>."""
-    return f"{supplier_id}.{hmac.new(secret.encode(), supplier_id.encode(), hashlib.sha256).hexdigest()[:12]}"
+@pytest.fixture(autouse=True)
+def _no_link_code(monkeypatch):
+    """First-come-only unless a test sets AIRA_TELEGRAM_LINK_CODE."""
+    monkeypatch.delenv("AIRA_TELEGRAM_LINK_CODE", raising=False)
+
+
+async def _chat_of(store, supplier_id: str) -> str | None:
+    return (await store.get(f"shops/{SHOP}/suppliers/{supplier_id}")).get("telegramChatId")
 
 
 async def test_start_with_a_known_supplier_links_the_chat_and_replies(store, notified, tg_sent):
     async with client() as c:
-        r = await c.post("/webhooks/telegram", json=start(777, f"/start {deep('sakthi_vendor')}"), headers=TG)
+        r = await c.post("/webhooks/telegram", json=start(777, "/start sakthi_vendor"), headers=TG)
     assert r.status_code == 200 and r.json() == {"ok": True, "handled": 1, "linked": "sakthi_vendor"}
     doc = await store.get(f"shops/{SHOP}/suppliers/sakthi_vendor")
     assert doc["telegramChatId"] == "777"
@@ -324,26 +329,56 @@ async def test_start_with_a_known_supplier_links_the_chat_and_replies(store, not
     assert notified == []                                                 # onboarding is not spoken to the owner
 
 
-async def test_start_accepts_the_bot_mention_form_and_overwrites_the_same_supplier(store, notified, tg_sent):
+async def test_start_is_first_come_only_once_a_chat_is_linked(store, notified, tg_sent):
+    """The supplier ids are public (content/catalog): a second chat must not take over a linked vendor."""
     async with client() as c:
-        await c.post("/webhooks/telegram", json=start(777, f"/start {deep('sakthi_vendor')}"), headers=TG)
-        r = await c.post("/webhooks/telegram", json=start(888, f"/start@AiraShopBot {deep('sakthi_vendor')}"), headers=TG)
-    assert r.json()["linked"] == "sakthi_vendor"
-    assert (await store.get(f"shops/{SHOP}/suppliers/sakthi_vendor"))["telegramChatId"] == "888"
+        await c.post("/webhooks/telegram", json=start(777, "/start sakthi_vendor"), headers=TG)
+        again = await c.post("/webhooks/telegram", json=start(777, "/start@AiraShopBot sakthi_vendor"), headers=TG)
+        hijack = await c.post("/webhooks/telegram", json=start(888, "/start sakthi_vendor"), headers=TG)
+    assert again.json()["linked"] == "sakthi_vendor"                     # the same chat may press Start again
+    assert hijack.json() == {"ok": True, "handled": 0}                    # another chat is ignored, silently
+    assert await _chat_of(store, "sakthi_vendor") == "777"
+    assert await _repo.lookup_contact("telegram", "888") is None
+    assert [c for c, _ in tg_sent] == ["777", "777"]
+
+
+async def test_relink_needs_the_one_time_code(store, notified, tg_sent, monkeypatch):
+    """A vendor moves to a new phone: the operator sets AIRA_TELEGRAM_LINK_CODE and sends /start <id>-<code>."""
+    async with client() as c:
+        await c.post("/webhooks/telegram", json=start(777, "/start sakthi_vendor"), headers=TG)
+        unset = await c.post("/webhooks/telegram", json=start(888, "/start sakthi_vendor-abc123"), headers=TG)
+    assert unset.json() == {"ok": True, "handled": 0}                     # no code configured: first-come only
+    assert await _chat_of(store, "sakthi_vendor") == "777"
+    monkeypatch.setenv("AIRA_TELEGRAM_LINK_CODE", "abc123")
+    async with client() as c:
+        wrong = await c.post("/webhooks/telegram", json=start(888, "/start sakthi_vendor-nope"), headers=TG)
+        bare = await c.post("/webhooks/telegram", json=start(888, "/start sakthi_vendor"), headers=TG)
+        ok = await c.post("/webhooks/telegram", json=start(888, "/start sakthi_vendor-abc123"), headers=TG)
+    assert wrong.json()["handled"] == 0 and bare.json()["handled"] == 0
+    assert ok.json() == {"ok": True, "handled": 1, "linked": "sakthi_vendor"}
+    assert await _chat_of(store, "sakthi_vendor") == "888"
     assert await _repo.lookup_contact("telegram", "888") == {"shopId": SHOP, "supplierId": "sakthi_vendor"}
     assert [c for c, _ in tg_sent] == ["777", "888"]
+    # the old phone no longer speaks for the vendor
+    await _order("o8", "ORDER_PLACED", "2026-10-12T10:00:00")
+    async with client() as c:
+        old = await c.post("/webhooks/telegram", json={"message": {"chat": {"id": 777}, "text": "OK"}}, headers=TG)
+    assert old.json()["handled"] == 0 and notified == []
+
+
+async def test_first_link_never_needs_the_code(store, notified, tg_sent, monkeypatch):
+    monkeypatch.setenv("AIRA_TELEGRAM_LINK_CODE", "abc123")
+    async with client() as c:
+        r = await c.post("/webhooks/telegram", json=start(777, "/start aavin_vendor"), headers=TG)
+    assert r.json()["linked"] == "aavin_vendor" and await _chat_of(store, "aavin_vendor") == "777"
 
 
 async def test_start_with_an_unknown_or_missing_id_is_ignored(store, notified, tg_sent):
     async with client() as c:
-        unknown = await c.post("/webhooks/telegram", json=start(777, f"/start {deep('nobody_vendor')}"), headers=TG)
+        unknown = await c.post("/webhooks/telegram", json=start(777, "/start nobody_vendor"), headers=TG)
         bare = await c.post("/webhooks/telegram", json=start(777, "/start"), headers=TG)
-        path = await c.post("/webhooks/telegram", json=start(777, f"/start {deep('../sakthi_vendor')}"), headers=TG)
-        # the supplier ids are public (content/catalog): without the HMAC tag anyone could hijack a vendor
-        untagged = await c.post("/webhooks/telegram", json=start(777, "/start sakthi_vendor"), headers=TG)
-        forged = await c.post("/webhooks/telegram", json=start(777, f"/start {deep('sakthi_vendor', 'guess')}"),
-                              headers=TG)
-    for r in (unknown, bare, path, untagged, forged):
+        path = await c.post("/webhooks/telegram", json=start(777, "/start ../sakthi_vendor"), headers=TG)
+    for r in (unknown, bare, path):
         assert r.status_code == 200 and r.json() == {"ok": True, "handled": 0}
     assert tg_sent == []
     assert await _repo.lookup_contact("telegram", "777") is None
@@ -360,7 +395,7 @@ async def test_start_links_even_when_the_welcome_cannot_be_sent(store, notified,
     monkeypatch.setattr(telegram, "send_message", failing)
     monkeypatch.setattr(telegram, "configured", lambda: True)
     async with client() as c:
-        r = await c.post("/webhooks/telegram", json=start(777, f"/start {deep('aavin_vendor')}"), headers=TG)
+        r = await c.post("/webhooks/telegram", json=start(777, "/start aavin_vendor"), headers=TG)
     assert r.json() == {"ok": True, "handled": 1, "linked": "aavin_vendor"}
     assert (await store.get(f"shops/{SHOP}/suppliers/aavin_vendor"))["telegramChatId"] == "777"
 
@@ -368,7 +403,7 @@ async def test_start_links_even_when_the_welcome_cannot_be_sent(store, notified,
 async def test_a_linked_vendor_reply_reaches_the_owner_after_start(store, notified, tg_sent):
     """The whole onboarding loop: /start links the chat, the next order is matched by that chat id."""
     async with client() as c:
-        await c.post("/webhooks/telegram", json=start(777, f"/start {deep('sakthi_vendor')}"), headers=TG)
+        await c.post("/webhooks/telegram", json=start(777, "/start sakthi_vendor"), headers=TG)
     await _order("o9", "ORDER_PLACED", "2026-10-12T10:00:00")
     async with client() as c:
         r = await c.post("/webhooks/telegram", json={"message": {"chat": {"id": 777}, "text": "OK 6 pm"}}, headers=TG)

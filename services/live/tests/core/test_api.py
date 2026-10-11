@@ -15,7 +15,15 @@ CURD, MILK = "sakthi_curd_1l", "aavin_milk_500ml"
 @pytest.fixture(autouse=True)
 def clean_env(monkeypatch):
     monkeypatch.delenv("AIRA_DEMO_SHOP", raising=False)
-    monkeypatch.delenv("AIRA_CORS_ORIGINS", raising=False)
+    monkeypatch.delenv("AIRA_ALLOWED_ORIGINS", raising=False)
+
+
+@pytest.fixture(autouse=True)
+def no_demo_history(monkeypatch):
+    async def fake(shop_id):
+        return False
+
+    monkeypatch.setattr(forecast, "demo_history", fake)
 
 
 @pytest.fixture
@@ -55,7 +63,18 @@ async def test_forecast_lists_only_skus_with_a_forecast(store, demand):
     assert r.status_code == 200
     assert r.json() == {"items": [
         {"sku": CURD, "name": "Sakthi Curd 1 L", "dailyDemand": 10.0, "onHand": 4.0, "suggestedOrder": 8},
-    ]}  # ceil(10 * 1.15 - 4) = 8; milk has no history, so it is skipped rather than guessed
+    ], "demoHistory": False}  # ceil(10 * 1.15 - 4) = 8; milk has no history, so it is skipped rather than guessed
+
+
+async def test_forecast_says_when_it_is_built_on_demo_history(store, demand, monkeypatch):
+    """Backfilled demo rows (scripts/backfill_demo_sales.py) feed the number: the card must say "demo history"."""
+    async def demo(shop_id):
+        return True
+
+    monkeypatch.setattr(forecast, "demo_history", demo)
+    async with client() as c:
+        r = await c.get("/api/forecast", params={"shop": DEMO})
+    assert r.status_code == 200 and r.json()["demoHistory"] is True and len(r.json()["items"]) == 1
 
 
 async def test_forecast_refuses_other_shops_and_bad_ids(store, demand):
@@ -73,7 +92,7 @@ async def test_forecast_is_empty_without_history(store, monkeypatch):
     monkeypatch.setattr(forecast, "daily_demand_all", nothing)
     async with client() as c:
         r = await c.get("/api/forecast", params={"shop": DEMO})
-    assert r.status_code == 200 and r.json() == {"items": []}
+    assert r.status_code == 200 and r.json() == {"items": [], "demoHistory": False}
 
 
 async def test_forecast_is_503_when_the_store_fails(demand, monkeypatch):
@@ -90,18 +109,16 @@ async def test_forecast_is_503_when_the_store_fails(demand, monkeypatch):
     assert r.status_code == 503
 
 
-async def test_cors_allows_the_hosting_origin_only(store, demand):
+async def test_cors_allows_the_allowed_origins_only(store, demand):
+    """The same AIRA_ALLOWED_ORIGINS list guards /ws (browser Origin) and the HTTP API (CORS)."""
     async with client() as c:
         ok = await c.get("/api/forecast", params={"shop": DEMO}, headers={"Origin": "https://aira-shop.web.app"})
         alias = await c.get("/api/forecast", params={"shop": DEMO},
                             headers={"Origin": "https://aira-shop.firebaseapp.com"})
+        local = await c.get("/api/forecast", params={"shop": DEMO}, headers={"Origin": "http://localhost:5173"})
         other = await c.get("/api/forecast", params={"shop": DEMO}, headers={"Origin": "https://evil.example"})
     assert ok.headers.get("access-control-allow-origin") == "https://aira-shop.web.app"
     assert alias.headers.get("access-control-allow-origin") == "https://aira-shop.firebaseapp.com"
+    assert local.headers.get("access-control-allow-origin") == "http://localhost:5173"
     assert "access-control-allow-origin" not in other.headers
-
-
-def test_cors_origins_adds_env_origins(monkeypatch):
-    assert main_mod.cors_origins() == list(main_mod.HOSTING_ORIGINS)
-    monkeypatch.setenv("AIRA_CORS_ORIGINS", "http://localhost:5173/, http://127.0.0.1:5173")
-    assert main_mod.cors_origins() == [*main_mod.HOSTING_ORIGINS, "http://localhost:5173", "http://127.0.0.1:5173"]
+    assert main_mod.CORS_ORIGINS == main_mod.allowed_origins()

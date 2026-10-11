@@ -13,6 +13,7 @@ It takes about 15 minutes. Nothing here needs Meta approval.
 |---|---|---|
 | `TELEGRAM_TOKEN` | BotFather (step 1) | secret `aira-telegram-token` |
 | `TELEGRAM_WEBHOOK_SECRET` | already created and attached | secret `aira-telegram-webhook-secret` |
+| `AIRA_TELEGRAM_LINK_CODE` (optional) | you, only while moving a vendor to a new phone (step 5) | plain env var, removed afterwards |
 
 **Rules**
 
@@ -98,8 +99,9 @@ Expected output:
 Webhook set: https://<aira-live host>/webhooks/telegram (allowed_updates: message, secret header on)
 Bot: @AiraMuruganDairyBot
 Send each vendor their link. They open it and press Start; AIRA then messages them orders there:
-  Aavin vendor (aavin_vendor): https://t.me/AiraMuruganDairyBot?start=aavin_vendor.3f9a1c2b7d4e
-  Sakthi curd vendor (sakthi_vendor): https://t.me/AiraMuruganDairyBot?start=sakthi_vendor.8c2d0e5f6a1b
+  Aavin vendor (aavin_vendor): https://t.me/AiraMuruganDairyBot?start=aavin_vendor
+  Sakthi curd vendor (sakthi_vendor): https://t.me/AiraMuruganDairyBot?start=sakthi_vendor
+A linked vendor stays linked (first come). To move one to a new phone, set AIRA_TELEGRAM_LINK_CODE on aira-live and in this shell, then run this again for the re-link links.
 ```
 
 Run it again whenever the service URL changes. Setting the webhook turns `getUpdates` off, which is fine:
@@ -108,14 +110,30 @@ AIRA only uses the webhook.
 ## 5. Onboard each vendor (deep link)
 
 1. Send each vendor **their own** link from the output above, by any channel (SMS, WhatsApp, in person).
-2. The vendor opens it and presses **Start**. Telegram sends `/start <supplier_id>.<tag>` to the webhook. The tag
-   is an HMAC of the supplier id under `TELEGRAM_WEBHOOK_SECRET`, so a bare `/start <supplier_id>` links nobody
-   (the supplier ids are in the public catalog).
+2. The vendor opens it and presses **Start**. Telegram sends `/start <supplier_id>` to the webhook.
 3. `aira-live` checks that `<supplier_id>` is a supplier of the demo shop, stores the sender's chat id as
    `telegramChatId` on `shops/murugan_dairy/suppliers/<supplier_id>` (database `aira`), and replies
    "AIRA: you will receive Murugan Dairy orders here." Unknown ids are ignored, silently.
-4. A vendor who changes phones just opens the same link again: the same supplier link may overwrite its own
-   chat id. No other link can.
+4. **First come.** The supplier ids are in the public catalog, so once a chat is linked, a `/start` for that
+   supplier from any other chat is ignored (nothing written, no reply). The linked chat may press Start again.
+5. **Moving a vendor to a new phone** needs a one-time code:
+
+   ```bash
+   gcloud run services update aira-live --region asia-south1 --project "$PROJECT_ID" \
+     --update-env-vars AIRA_TELEGRAM_LINK_CODE=<a short random code>
+   AIRA_TELEGRAM_LINK_CODE=<the same code> TELEGRAM_TOKEN=... TELEGRAM_WEBHOOK_SECRET=... \
+     python3 scripts/telegram_setup.py "$URL"      # now also prints ?start=<supplier_id>-<code> links
+   ```
+
+   Send the vendor the re-link link (`/start <supplier_id>-<code>`). The new chat takes over and the old chat is
+   unlinked (its replies no longer count as the vendor's). Then remove the code again:
+
+   ```bash
+   gcloud run services update aira-live --region asia-south1 --project "$PROJECT_ID" \
+     --remove-env-vars AIRA_TELEGRAM_LINK_CODE
+   ```
+
+   With the code unset, no re-link is possible at all.
 
 Check in the Firestore console that the supplier doc now has `telegramChatId`. Never copy that id anywhere.
 
@@ -140,6 +158,7 @@ asks whether you sent it. Nothing fails silently; the order stays `DRAFT` until 
 | Webhook logs show `403` | The `X-Telegram-Bot-Api-Secret-Token` header does not match `TELEGRAM_WEBHOOK_SECRET`, or the secret is unset. Run step 4 again after fixing the service. |
 | Order falls back to click-to-chat | Listen to AIRA: "not on the AIRA Telegram bot yet" means the vendor has not opened their link. Check `telegramChatId` on the supplier doc. |
 | Replies never reach the owner | The reply must come from the chat that pressed Start. Check the Cloud Run logs for `POST /webhooks/telegram` with status `200`. |
+| Vendor's new phone presses Start and nothing happens | The supplier is already linked to the old chat. Use the re-link link with `AIRA_TELEGRAM_LINK_CODE` (step 5). |
 
 Sources: Telegram Bot API [setWebhook](https://core.telegram.org/bots/api#setwebhook),
 [deep linking](https://core.telegram.org/bots/features#deep-linking),

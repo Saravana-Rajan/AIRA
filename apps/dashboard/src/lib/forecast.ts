@@ -1,13 +1,16 @@
 // Reorder suggestions from aira-live: GET {base}/api/forecast?shop={shopId}
-// -> { items: ForecastItem[] }. Any failure yields null so the page can say "Forecast unavailable".
+// -> { items: ForecastItem[], demoHistory: boolean }. Any failure yields null so the page can say
+// "Forecast unavailable". demoHistory is true when backfilled demo sales (scripts/backfill_demo_sales.py,
+// ledger rows labelled demo:true) feed the numbers: the card then says "demo history", never real sales.
 
 export interface ForecastItem { sku: string; name: string; dailyDemand: number; onHand: number; suggestedOrder: number }
+export interface Forecast { items: ForecastItem[]; demoHistory: boolean }
 
 const isNum = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
 
-export function parseForecast(json: unknown): ForecastItem[] | null {
+export function parseForecast(json: unknown): Forecast | null {
   if (typeof json !== "object" || json === null) return null;
-  const items = (json as { items?: unknown }).items;
+  const { items, demoHistory } = json as { items?: unknown; demoHistory?: unknown };
   if (!Array.isArray(items)) return null;
   const out: ForecastItem[] = [];
   for (const it of items) {
@@ -17,12 +20,12 @@ export function parseForecast(json: unknown): ForecastItem[] | null {
     if (!isNum(x.dailyDemand) || !isNum(x.onHand) || !isNum(x.suggestedOrder)) return null;
     out.push({ sku: x.sku, name: x.name, dailyDemand: x.dailyDemand, onHand: x.onHand, suggestedOrder: x.suggestedOrder });
   }
-  return out;
+  return { items: out, demoHistory: demoHistory === true };
 }
 
 export async function fetchForecast(
   base: string, shopId: string, fetchImpl: typeof fetch = fetch, timeoutMs = 5000,
-): Promise<ForecastItem[] | null> {
+): Promise<Forecast | null> {
   const url = `${base.replace(/\/+$/, "")}/api/forecast?shop=${encodeURIComponent(shopId)}`;
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), timeoutMs);

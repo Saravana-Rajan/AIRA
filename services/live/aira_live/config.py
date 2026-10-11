@@ -20,9 +20,6 @@ class Settings:
     firestore_database: str = "aira"  # never "(default)"
     allow_no_token: bool = False  # hello without idToken is accepted (no Firebase Auth)
     job_token: str | None = None  # X-AIRA-Job-Token for /jobs/*
-    # Shared app key (Secret Manager aira-app-key, baked into the app as VITE_AIRA_APP_KEY and sent as
-    # hello.idToken). When set, a hello without it is refused. Unset: local runs need nothing.
-    app_key: str | None = None
 
 
 def _env(name: str) -> str | None:
@@ -43,5 +40,4 @@ def load() -> Settings:
         firestore_database=_env("FIRESTORE_DATABASE") or "aira",
         allow_no_token=os.getenv("AIRA_ALLOW_NO_TOKEN", "0") == "1",
         job_token=_env("AIRA_JOB_TOKEN"),
-        app_key=_env("AIRA_APP_KEY"),
     )

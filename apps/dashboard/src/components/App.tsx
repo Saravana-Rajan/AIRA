@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "preact/hooks";
 import { resolveAccess } from "../lib/access";
 import type { LiveStatus, ShopData } from "../lib/live";
-import type { ForecastItem } from "../lib/forecast";
+import type { Forecast } from "../lib/forecast";
 import { formatTimeIST } from "../lib/format";
 import { buildViews } from "../lib/views";
 import { publicEvidenceUrl, type ListenFn } from "../lib/connect";
@@ -18,8 +18,8 @@ export type { ListenFn };
 export interface AppProps {
   /** Realtime shop data (main.tsx passes lazyListen(): Firestore database "aira"). */
   listen: ListenFn;
-  /** Reorder suggestions; null means unavailable. */
-  loadForecast: (shopId: string) => Promise<ForecastItem[] | null>;
+  /** Reorder suggestions (with the demo-history flag); null means unavailable. */
+  loadForecast: (shopId: string) => Promise<Forecast | null>;
   resolveEvidence?: ResolveEvidence;
   now?: () => number;
 }
@@ -37,7 +37,7 @@ export function App({ listen, loadForecast, resolveEvidence = publicEvidenceUrl,
   const [status, setStatus] = useState<LiveStatus>("connecting");
   const [updatedAt, setUpdatedAt] = useState<number | null>(null);
   const [clock, setClock] = useState(now);
-  const [forecast, setForecast] = useState<ForecastItem[] | null>(null);
+  const [forecast, setForecast] = useState<Forecast | null>(null);
   const [forecastLoading, setForecastLoading] = useState(true);
   const shopId = access.mode === "denied" ? null : access.shopId;
 
@@ -97,7 +97,9 @@ export function App({ listen, loadForecast, resolveEvidence = publicEvidenceUrl,
     );
   }
 
-  const forecastPage = <ForecastPage items={forecast} loading={forecastLoading} />;
+  const forecastPage = (
+    <ForecastPage items={forecast?.items ?? null} demoHistory={forecast?.demoHistory ?? false} loading={forecastLoading} />
+  );
   let body;
   if (route === "#/forecast") body = forecastPage;
   else if (!views) {

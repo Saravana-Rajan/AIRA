@@ -5,6 +5,8 @@
 - ``WS /ws`` speaks the final protocol (``aira_live.contracts``):
   - ``hello`` is checked by ``auth.verify_hello`` (no Firebase Auth): tokenless phones always land in the demo
     shop, and with tokenless mode off the socket gets ``error/permission`` and is closed.
+  - Tokenless-mode guards (docs/ops/security.md): a browser Origin outside ``AIRA_ALLOWED_ORIGINS`` is refused
+    before the upgrade, and a hello over ``MAX_SESSIONS_PER_IP`` (or ``MAX_SESSIONS``) gets ``error/permission``.
   - Real mode: each session gets a ``LiveBridge`` to Gemini Live (``model_for("live")``). Mic audio and typed
     text go to Live; Live's audio, captions and cues come back through the bridge.
   - Mock mode: text is echoed, and audio is accepted and dropped.
@@ -56,22 +58,43 @@ log = logging.getLogger(__name__)
 # the dashboard's read-only HTTP API (api).
 OPTIONAL_ROUTERS: tuple[str, ...] = ("aira_live.jobs", "aira_live.messaging.webhooks", "aira_live.api")
 
-# The service is public (--allow-unauthenticated) and runs on one instance: this many phones at once is plenty
-# for the one-shop demo and bounds what a stranger with the URL can spend on Gemini Live.
-MAX_SESSIONS = 3
+# Tokenless-mode guards (docs/ops/security.md). The service is public (--allow-unauthenticated), there is no
+# login, and it runs on one instance, so two small checks bound what a stranger with the URL can do:
+# - a browser page may open /ws (and call the HTTP API) only from an allowed origin;
+# - one address gets at most MAX_SESSIONS_PER_IP live sessions, and the service MAX_SESSIONS in all,
+#   which caps what can be spent on Gemini Live. The owner's one phone never reaches either limit.
+MAX_SESSIONS = 6
+MAX_SESSIONS_PER_IP = 3
 
-# Browser origins allowed to call the HTTP API (the dashboard's forecast card). The Firebase Hosting site plus
-# any extra origins in env AIRA_CORS_ORIGINS (comma-separated, e.g. a local Vite dev server).
-HOSTING_ORIGINS = ("https://aira-shop.web.app", "https://aira-shop.firebaseapp.com")
+# Browser origins allowed on /ws (the Origin header) and on the HTTP API (CORS, the dashboard's forecast card):
+# the Firebase Hosting site and the local Vite servers. Env AIRA_ALLOWED_ORIGINS (comma-separated) replaces it.
+DEFAULT_ALLOWED_ORIGINS = ("https://aira-shop.web.app", "https://aira-shop.firebaseapp.com",
+                           "http://localhost:5173", "http://localhost:4173")
 
 
-def cors_origins() -> list[str]:
-    extra = [o.strip().rstrip("/") for o in os.getenv("AIRA_CORS_ORIGINS", "").split(",") if o.strip()]
-    return [*HOSTING_ORIGINS, *extra]
+def allowed_origins() -> list[str]:
+    raw = os.getenv("AIRA_ALLOWED_ORIGINS") or ",".join(DEFAULT_ALLOWED_ORIGINS)
+    return [o.strip().rstrip("/") for o in raw.split(",") if o.strip()]
+
+
+def origin_allowed(origin: str | None) -> bool:
+    """A browser always sends Origin on a WebSocket upgrade; a request without one is not a web page, and
+    nothing in it can be checked, so it passes to the hello check like any other client."""
+    return origin is None or origin.rstrip("/") in allowed_origins()
+
+
+def client_ip(ws) -> str:
+    """The phone's address: the first X-Forwarded-For entry (Cloud Run's frontend sets it), else the peer."""
+    forwarded = ws.headers.get("x-forwarded-for", "")
+    first = forwarded.split(",")[0].strip()
+    if first:
+        return first
+    return ws.client.host if ws.client else "unknown"
 
 
 app = FastAPI(title="aira-live")
-app.add_middleware(CORSMiddleware, allow_origins=cors_origins(), allow_methods=["GET"], allow_headers=[])
+CORS_ORIGINS = allowed_origins()  # read once at startup, like the deployed env
+app.add_middleware(CORSMiddleware, allow_origins=CORS_ORIGINS, allow_methods=["GET"], allow_headers=[])
 # Session -> LiveBackend for each Live connection (tests swap in a fake).
 app.state.backend_factory = lambda session: AdkLiveBackend(session)
 
@@ -181,7 +204,13 @@ def parse(raw: str | None, max_frame_b64: int):
 
 @app.websocket("/ws")
 async def ws_endpoint(ws: WebSocket) -> None:
+    origin = ws.headers.get("origin")
+    if not origin_allowed(origin):  # a web page that is not the AIRA site: refused before the upgrade
+        log.warning("ws refused: origin %r is not in AIRA_ALLOWED_ORIGINS", origin)
+        await ws.close(code=4403)
+        return
     await ws.accept()
+    ip = client_ip(ws)
     settings = config.load()
 
     async def send(msg: BaseModel) -> None:
@@ -211,8 +240,9 @@ async def ws_endpoint(ws: WebSocket) -> None:
                 if session:  # a second hello replaces the session
                     await _end_session(session, bridge)
                     bridge = None
-                elif sessions.count() >= MAX_SESSIONS:  # bound Gemini spend on the public URL
-                    log.warning("hello refused: %d live sessions already", sessions.count())
+                elif sessions.count() >= MAX_SESSIONS or sessions.count(ip) >= MAX_SESSIONS_PER_IP:
+                    log.warning("hello refused: %d live sessions, %d from %s", sessions.count(),
+                                sessions.count(ip), ip)  # bounds Gemini spend on the public URL
                     await send(ErrorMsg(code="permission", say=t("auth.busy", msg.lang)))
                     await ws.close(code=4403)
                     return
@@ -221,7 +251,7 @@ async def ws_endpoint(ws: WebSocket) -> None:
                                   session_id=msg.resume if resumed else None)
                 lang = msg.lang
                 current_session.set(session)
-                sessions.register(session)
+                sessions.register(session, ip=ip)
                 if not settings.mock:
                     bridge = await _start_live(session, handle)
                 await send(ReadyMsg(session_id=session.session_id, resume=session.session_id, mock=settings.mock))

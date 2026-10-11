@@ -161,20 +161,23 @@ def test_fold_sales_counts_only_sale_rows():
             {**sale("a", 30, d1), "reason": "DELIVERY", "delta": 30.0},
             {**sale("b", 1, d1), "reason": "ADJUST"},
             {"reason": "SALE", "delta": -1.0, "at": at_ist(d1)}]                     # no sku → skipped
-    by_sku, active = fc.fold_sales(rows)
+    by_sku, active, demo = fc.fold_sales(rows)
     assert by_sku == {"a": {d1: 5.0}, "b": {d2: 1.5}}
     assert active == {d1, d2}
+    assert demo is False
 
 
-def test_fold_sales_skips_demo_backfill_rows_unless_opted_in(monkeypatch):
-    """scripts/backfill_demo_sales.py invents 30 days of SALE rows (refType demo_backfill). They never feed a
-    spoken number unless AIRA_INCLUDE_DEMO_HISTORY=1, and then the speech says the history is demo data."""
+def test_fold_sales_flags_demo_backfill_rows():
+    """scripts/backfill_demo_sales.py writes invented SALE rows labelled demo:true (refType demo_backfill). They
+    feed the number, and the window says so, so every suggestion built on them is spoken and shown as demo
+    history rather than real shop sales."""
     d1 = TODAY - timedelta(days=1)
-    rows = [sale("a", 2, d1), {**sale("a", 30, d1), "refType": fc.DEMO_REF_TYPE}]
-    monkeypatch.delenv("AIRA_INCLUDE_DEMO_HISTORY", raising=False)
-    assert fc.fold_sales(rows) == ({"a": {d1: 2.0}}, {d1}) and fc.demo_history_included() is False
-    monkeypatch.setenv("AIRA_INCLUDE_DEMO_HISTORY", "1")
-    assert fc.fold_sales(rows) == ({"a": {d1: 32.0}}, {d1}) and fc.demo_history_included() is True
+    rows = [sale("a", 2, d1), {**sale("a", 30, d1), "refType": fc.DEMO_REF_TYPE, "demo": True}]
+    assert fc.fold_sales(rows) == ({"a": {d1: 32.0}}, {d1}, True)
+    assert fc.fold_sales([sale("a", 2, d1), {**sale("a", 1, d1), "demo": True}])[2] is True   # label alone
+    assert fc.fold_sales([sale("a", 2, d1), {**sale("a", 1, d1), "refType": fc.DEMO_REF_TYPE}])[2] is True
+    assert fc.is_demo_row({"demo": True}) and fc.is_demo_row({"refType": "demo_backfill"})
+    assert not fc.is_demo_row({"demo": False, "refType": "sale"})
 
 
 # ---------- daily_demand against the Firestore ledger ----------
@@ -274,9 +277,10 @@ async def test_daily_demand_all_includes_sold_skus_missing_from_products(ledger)
 
 
 @pytest.mark.asyncio
-async def test_backfilled_demo_sales_give_a_plausible_forecast(ledger, monkeypatch):
-    monkeypatch.setenv("AIRA_INCLUDE_DEMO_HISTORY", "1")  # demo rows feed the forecast only when opted in
+async def test_backfilled_demo_sales_give_a_plausible_forecast_and_are_flagged(ledger):
     bf = _backfill_module()
+    assert await fc.demo_history(SHOP) is False  # nothing backfilled yet
+    fc.clear_cache()
     products = [{"sku": "sakthi_curd_1l", "unit": "L", "packSizeL": 1},
                 {"sku": "aavin_milk_500ml", "unit": "L", "packSizeL": 0.5},
                 {"sku": "aavin_butter_100g", "unit": "pack"}]
@@ -286,6 +290,8 @@ async def test_backfilled_demo_sales_give_a_plausible_forecast(ledger, monkeypat
     milk = await fc.daily_demand(SHOP, "aavin_milk_500ml")
     assert 26 * 0.75 <= curd <= 26 * 1.3 * 1.25
     assert 40 * 0.5 * 0.75 <= milk <= 40 * 0.5 * 1.3 * 1.25                       # litres of 500 ml pouches
+    fc.clear_cache()
+    assert await fc.demo_history(SHOP) is True                                   # never presented as real data
 
 
 def _backfill_module():
@@ -296,8 +302,7 @@ def _backfill_module():
 
 
 @pytest.mark.asyncio
-async def test_backfilled_catalog_gives_a_positive_forecast_for_every_product(ledger, monkeypatch):
-    monkeypatch.setenv("AIRA_INCLUDE_DEMO_HISTORY", "1")
+async def test_backfilled_catalog_gives_a_positive_forecast_for_every_product(ledger):
     bf = _backfill_module()
     catalog = json.loads(bf.DEFAULT_CATALOG.read_text(encoding="utf-8"))
     for p in catalog["products"]:

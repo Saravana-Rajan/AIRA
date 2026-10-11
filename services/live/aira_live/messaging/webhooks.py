@@ -3,7 +3,7 @@
 Routes (mounted by main.py through OPTIONAL_ROUTERS):
   GET  /webhooks/whatsapp   Meta verification handshake (hub.mode / hub.verify_token / hub.challenge)
   POST /webhooks/whatsapp   WhatsApp Cloud API message notifications
-  POST /webhooks/telegram   Telegram Bot API updates (vendor replies, and "/start <supplier_id>" onboarding)
+  POST /webhooks/telegram   Telegram Bot API updates (vendor replies, and "/start <supplier_id>[-<code>]" onboarding)
 
 Telegram updates are accepted only with the X-Telegram-Bot-Api-Secret-Token header matching env
 TELEGRAM_WEBHOOK_SECRET (constant-time compare); with the secret unset every update is refused.
@@ -117,24 +117,26 @@ async def whatsapp_in(request: Request):
 
 
 # ---------------------------------------------------------------- Telegram
-# Vendor onboarding by deep link: the vendor opens https://t.me/<bot>?start=<supplier_id>.<tag> and presses Start,
-# which sends "/start <supplier_id>.<tag>". The sender's chat id becomes supplier.telegramChatId
+# Vendor onboarding by deep link: the vendor opens https://t.me/<bot>?start=<supplier_id> and presses Start,
+# which sends "/start <supplier_id>". The sender's chat id becomes supplier.telegramChatId
 # (scripts/telegram_setup.py prints the links; docs/ops/telegram-setup.md has the steps).
-# The supplier ids are public (content/catalog), so the link carries ``start_tag``: the first 12 hex digits of
-# HMAC-SHA256(TELEGRAM_WEBHOOK_SECRET, supplier_id). Without the right tag a /start links nobody.
-START_RE = re.compile(r"^/start(?:@\w+)?\s+([a-z0-9_]{1,64})\.([0-9a-f]{12})\s*$", re.IGNORECASE)
-TAG_LEN = 12
+# The supplier ids are public (content/catalog), so linking is first-come-only: once a chat is linked, only that
+# same chat may press Start again. Moving a vendor to a new phone needs the one-time code in env
+# AIRA_TELEGRAM_LINK_CODE, sent as "/start <supplier_id>-<code>"; with the code unset, no re-link is possible.
+START_RE = re.compile(r"^/start(?:@\w+)?\s+([a-z0-9_]{1,64})(?:-([A-Za-z0-9_-]{1,64}))?\s*$", re.IGNORECASE)
+LINK_CODE_ENV = "AIRA_TELEGRAM_LINK_CODE"
 WELCOME = "AIRA: you will receive {shop} orders here."
 
 
-def start_tag(supplier_id: str, secret: str) -> str:
-    """The deep-link tag for a supplier (scripts/telegram_setup.py computes the same with stdlib hmac)."""
-    return hmac.new(secret.encode(), supplier_id.encode(), hashlib.sha256).hexdigest()[:TAG_LEN]
+def start_param(supplier_id: str, code: str | None = None) -> str:
+    """The ``?start=`` value of a vendor's deep link: ``<supplier_id>``, or ``<supplier_id>-<code>`` to re-link."""
+    return f"{supplier_id}-{code}" if code else supplier_id
 
 
-def start_param(supplier_id: str, secret: str) -> str:
-    """The ``?start=`` value of a vendor's deep link: ``<supplier_id>.<tag>``."""
-    return f"{supplier_id}.{start_tag(supplier_id, secret)}"
+def _relink_allowed(code: str | None) -> bool:
+    """A linked supplier may move to another chat only with the configured one-time code (constant-time)."""
+    expected = os.getenv(LINK_CODE_ENV) or ""
+    return bool(expected) and bool(code) and hmac.compare_digest(code.encode(), expected.encode())
 
 
 def _telegram_secret_ok(header: str | None) -> bool:
@@ -145,22 +147,26 @@ def _telegram_secret_ok(header: str | None) -> bool:
     return hmac.compare_digest((header or "").encode(), secret.encode())
 
 
-async def _link_supplier(chat_id: str, supplier_id: str, tag: str) -> str | None:
-    """`/start <supplier_id>.<tag>` from a known supplier of the demo shop: store the chat id and welcome the vendor.
+async def _link_supplier(chat_id: str, supplier_id: str, code: str | None) -> str | None:
+    """`/start <supplier_id>[-<code>]` from a known supplier of the demo shop: store the chat id and welcome the vendor.
 
-    Unknown ids and wrong tags are ignored (nothing is written, nothing is sent). A later /start with the same
-    supplier link overwrites the chat id, so a vendor can move to a new phone. The welcome is best effort: the
-    link is kept even when Telegram refuses the message.
+    Unknown ids are ignored (nothing is written, nothing is sent). The first chat to press Start owns the
+    supplier; it may press Start again, but another chat is ignored unless it brings the one-time re-link code
+    (``AIRA_TELEGRAM_LINK_CODE``). A re-link also unlinks the old chat, so it no longer speaks for the vendor.
+    The welcome is best effort: the link is kept even when Telegram refuses the message.
     """
-    secret = os.getenv("TELEGRAM_WEBHOOK_SECRET") or ""
-    if not secret or not hmac.compare_digest(tag.lower(), start_tag(supplier_id, secret)):
-        return None
     shop_id = config.load().demo_shop_id
     path = paths.supplier(shop_id, supplier_id)
     store = get_store()
     doc = await store.get(path)
     if doc is None:
         return None
+    linked = doc.get("telegramChatId")
+    if linked and linked != chat_id:
+        if not _relink_allowed(code):
+            log.warning("telegram /start for %s from another chat ignored (linked already)", supplier_id)
+            return None
+        await _repo.unlink_contact("telegram", str(linked))
     await store.set(path, {**doc, "telegramChatId": chat_id, "telegramLinkedAt": now_iso()})
     await _repo.index_contact("telegram", chat_id, shop_id, supplier_id)
     shop = await store.get(paths.shop(shop_id)) or {}
@@ -193,7 +199,7 @@ async def telegram_in(request: Request):
         if not m:
             return _ignored()
         try:
-            linked = await _link_supplier(chat_id, m.group(1).lower(), m.group(2))
+            linked = await _link_supplier(chat_id, m.group(1).lower(), m.group(2))  # group 2: re-link code
         except Exception:
             log.exception("telegram /start failed chat=%s", chat_id)
             linked = None
@@ -219,7 +225,7 @@ async def _apply_reply(channel: str, msg_key: str | None, contact: str, text: st
         order = await _repo.get_order(shop_id, ref["orderId"])
     if order is None:
         who = await _repo.lookup_contact(channel, contact) if contact else None
-        if not who:
+        if not who or not who.get("supplierId"):  # unknown, or a chat unlinked by a re-link
             return False
         shop_id = who["shopId"]
         order = await _repo.latest_order(shop_id, OPEN_STATES, supplier_id=who["supplierId"])
