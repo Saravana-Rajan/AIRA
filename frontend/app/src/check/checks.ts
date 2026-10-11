@@ -165,3 +165,107 @@ export function cameraLine(r: CameraResult, lang: Lang): string {
 export function cameraInstruction(device: DeviceKind, lang: Lang): string {
   return (device === "laptop" ? CHECK.camLookLaptop : CHECK.camLookPhone)[lang];
 }
+
+// ---------------------------------------------------------------- the check's lines in AIRA's own voice
+
+export interface VoiceDeps {
+  base: string;
+  key?: string;
+  fetch?: typeof fetch;
+  /** Plays the audio and resolves when it has finished. */
+  play(blob: Blob): Promise<void>;
+  /** The device's own voice, used when AIRA's voice is unavailable. Resolves when it has finished. */
+  fallback(text: string, lang: Lang, rate: number): Promise<void>;
+  timeoutMs?: number;
+}
+
+/**
+ * The check screen speaks in AIRA's own voice: aira-live reads each line with the same voice model as the
+ * conversation (POST /api/device-check/say). Each line is fetched once per page (prefetch() warms the next ones);
+ * when the server cannot (mock mode, an error, a slow answer) the device's own voice reads it instead.
+ * speak() resolves only when the line has finished, so nothing listens to the mic while AIRA is still talking.
+ */
+export function airaVoice(d: VoiceDeps) {
+  const f = d.fetch ?? fetch;
+  const lines = new Map<string, Promise<Blob | null>>();
+  const load = (text: string, lang: Lang): Promise<Blob | null> => {
+    const id = `${lang}|${text}`;
+    let p = lines.get(id);
+    if (!p) {
+      p = (async () => {
+        const ctrl = typeof AbortController === "undefined" ? null : new AbortController();
+        const timer = ctrl ? setTimeout(() => ctrl.abort(), d.timeoutMs ?? 12_000) : null;
+        try {
+          const r = await f(`${d.base}/api/device-check/say`, {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ text, lang, ...(d.key ? { key: d.key } : {}) }),
+            signal: ctrl?.signal,
+          });
+          if (r.status !== 200) return null;
+          const blob = await r.blob();
+          return blob.size ? blob : null;
+        } catch {
+          return null;
+        } finally {
+          if (timer) clearTimeout(timer);
+        }
+      })();
+      lines.set(id, p);
+    }
+    return p;
+  };
+  return {
+    prefetch(text: string, lang: Lang): void {
+      void load(text, lang);
+    },
+    async speak(text: string, lang: Lang, rate: number): Promise<void> {
+      const blob = await load(text, lang);
+      if (blob) {
+        try {
+          await d.play(blob);
+          return;
+        } catch {
+          /* autoplay refused or a broken clip: read it with the device's voice */
+        }
+      }
+      await d.fallback(text, lang, rate);
+    },
+  };
+}
+
+/** Plays a clip; resolves when it ends, rejects when the browser will not play it. */
+export function playBlob(blob: Blob): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(blob);
+    const audio = new Audio(url);
+    const finish = (ok: boolean, err?: unknown) => {
+      URL.revokeObjectURL(url);
+      if (ok) resolve();
+      else reject(err ?? new Error("audio failed"));
+    };
+    audio.onended = () => finish(true);
+    audio.onerror = () => finish(false);
+    audio.play().catch((e) => finish(false, e));
+  });
+}
+
+/** The device's own voice; resolves when the line ends (or after a generous cap, if the browser never says). */
+export function speakLocalAsync(text: string, lang: Lang, rate: number): Promise<void> {
+  return new Promise((resolve) => {
+    const cap = setTimeout(resolve, Math.min(15_000, 1500 + text.length * 90));
+    const done = () => { clearTimeout(cap); resolve(); };
+    try {
+      if (typeof speechSynthesis === "undefined") return done();
+      const u = new SpeechSynthesisUtterance(text);
+      u.lang = { ta: "ta-IN", hi: "hi-IN", en: "en-IN" }[lang];
+      u.rate = rate;
+      u.onend = done;
+      u.onerror = done;
+      speechSynthesis.cancel();
+      speechSynthesis.speak(u);
+    } catch {
+      done(); // blocked before a gesture: the role=status line is still read by TalkBack
+    }
+  });
+}

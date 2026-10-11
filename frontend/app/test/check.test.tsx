@@ -3,7 +3,7 @@ import { render } from "preact";
 import { act } from "preact/test-utils";
 import { DeviceCheck } from "../src/check/DeviceCheck";
 import {
-  SPEECH_RMS, SpeechDetector, askAiAboutCamera, cameraLine, deviceKind, httpBase, micLine, rmsOf, testMicrophone,
+  SPEECH_RMS, SpeechDetector, airaVoice, askAiAboutCamera, cameraLine, deviceKind, httpBase, micLine, rmsOf, testMicrophone,
   type CameraResult, type MicResult,
 } from "../src/check/checks";
 
@@ -163,12 +163,13 @@ describe("DeviceCheck", () => {
     const cameraTest = queue<CameraResult>({ ok: true, seen: "a person at a desk" });
     act(() => {
       render(<DeviceCheck lang="en" device="laptop" onPass={onPass} micTest={micTest} cameraTest={cameraTest}
-        speak={(t) => said.push(t)} />, root);
+        speak={(t) => { said.push(t); }} />, root);
     });
     await settle();
     expect(said[0]).toBe("Checking the microphone. Say: Hello AIRA.");
     expect(said).toContain("Checking the camera. Look at the laptop camera.");
-    expect(said.at(-1)).toBe("Camera works. I can see a person at a desk. Microphone and camera work. Tap anywhere to start talking.");
+    expect(said.slice(-2)).toEqual(["Camera works. I can see a person at a desk.",
+      "Microphone and camera work. Tap anywhere to start talking."]);
     expect(root.querySelector('[role="status"]')!.textContent).toBe(said.at(-1));
     expect(onPass).not.toHaveBeenCalled();
     act(() => { goBtn()!.click(); goBtn()!.click(); });
@@ -179,7 +180,7 @@ describe("DeviceCheck", () => {
     const said: string[] = [];
     act(() => {
       render(<DeviceCheck lang="en" device="phone" onPass={() => undefined} micTest={queue<MicResult>({ ok: true })}
-        cameraTest={queue<CameraResult>({ ok: true, seen: "milk packets" })} speak={(t) => said.push(t)} />, root);
+        cameraTest={queue<CameraResult>({ ok: true, seen: "milk packets" })} speak={(t) => { said.push(t); }} />, root);
     });
     await settle();
     expect(said).toContain("Checking the camera. Point the phone at what is in front of you.");
@@ -191,7 +192,7 @@ describe("DeviceCheck", () => {
     const cameraTest = queue<CameraResult>({ ok: true, seen: "a desk" });
     act(() => {
       render(<DeviceCheck lang="en" device="laptop" onPass={() => undefined} micTest={micTest} cameraTest={cameraTest}
-        speak={(t) => said.push(t)} />, root);
+        speak={(t) => { said.push(t); }} />, root);
     });
     await settle();
     expect(said.at(-1)).toContain("I heard nothing");
@@ -209,7 +210,7 @@ describe("DeviceCheck", () => {
     const cameraTest = queue<CameraResult>({ ok: false, problem: "dark" }, { ok: true, seen: "a desk" });
     act(() => {
       render(<DeviceCheck lang="en" device="laptop" onPass={() => undefined} micTest={queue<MicResult>({ ok: true })}
-        cameraTest={cameraTest} speak={(t) => said.push(t)} />, root);
+        cameraTest={cameraTest} speak={(t) => { said.push(t); }} />, root);
     });
     await settle();
     expect(said.at(-1)).toBe("The picture is too dark. Turn on a light, then try again.");
@@ -270,3 +271,63 @@ describe("DeviceCheck with the real camera path", () => {
     }
   });
 });
+
+
+// ---------------------------------------------------------------- AIRA's voice on the check screen
+
+describe("airaVoice", () => {
+  const wav = new Blob([new Uint8Array([82, 73, 70, 70, 1, 2, 3])], { type: "audio/wav" });
+  const ok = () => ({ ok: true, status: 200, blob: async () => wav }) as unknown as Response;
+
+  it("plays the line in AIRA's voice, fetched once even when prefetched first", async () => {
+    const f = vi.fn(async () => ok());
+    const play = vi.fn(async () => undefined);
+    const fallback = vi.fn(async () => undefined);
+    const v = airaVoice({ base: "https://live.example", key: "k1", fetch: f as unknown as typeof fetch, play, fallback });
+    v.prefetch("Camera works.", "en");
+    await v.speak("Camera works.", "en", 1);
+    expect(f).toHaveBeenCalledTimes(1);
+    const [url, init] = f.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe("https://live.example/api/device-check/say");
+    expect(JSON.parse(init.body as string)).toEqual({ text: "Camera works.", lang: "en", key: "k1" });
+    expect(play).toHaveBeenCalledWith(wav);
+    expect(fallback).not.toHaveBeenCalled();
+  });
+
+  it("falls back to the device's voice when the server has no voice, fails, or the clip will not play", async () => {
+    for (const make of [
+      () => ({ ok: true, status: 204, blob: async () => new Blob([]) }) as unknown as Response,
+      () => ({ ok: false, status: 503, blob: async () => new Blob([]) }) as unknown as Response,
+      () => { throw new TypeError("Failed to fetch"); },
+    ]) {
+      const fallback = vi.fn(async () => undefined);
+      const v = airaVoice({ base: "b", fetch: (async () => make()) as typeof fetch, play: async () => undefined, fallback });
+      await v.speak("Camera works.", "en", 1);
+      expect(fallback).toHaveBeenCalledWith("Camera works.", "en", 1);
+    }
+    const fallback = vi.fn(async () => undefined);
+    const v = airaVoice({ base: "b", fetch: (async () => ok()) as typeof fetch,
+      play: async () => { throw new Error("NotAllowedError"); }, fallback });
+    await v.speak("Camera works.", "en", 1);
+    expect(fallback).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("DeviceCheck waits for AIRA to finish speaking", () => {
+  it("opens the mic only after the instruction has been spoken, so AIRA's own voice cannot pass the test", async () => {
+    let finishSpeaking: () => void = () => undefined;
+    const speak = vi.fn((t: string) => (t.startsWith("Checking the microphone")
+      ? new Promise<void>((r) => { finishSpeaking = r; }) : undefined));
+    const micTest = queue<MicResult>({ ok: true });
+    act(() => {
+      render(<DeviceCheck lang="en" device="laptop" onPass={() => undefined} micTest={micTest}
+        cameraTest={queue<CameraResult>({ ok: true, seen: "a desk" })} speak={speak} />, root);
+    });
+    await settle();
+    expect(micTest).not.toHaveBeenCalled();                  // still speaking
+    await act(async () => { finishSpeaking(); });
+    await settle();
+    expect(micTest).toHaveBeenCalledTimes(1);
+  });
+});
+
