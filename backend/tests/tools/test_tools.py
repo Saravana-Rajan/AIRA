@@ -18,7 +18,7 @@ EXPECTED = {
     "supplier_pay": ["order_id", "method"], "sale_start": ["items"], "sale_pay": ["sale_id", "method"],
     "stock_query": ["product"], "expiry_check": [],
     "product_find": ["product", "count_needed"], "product_identify": [], "location_remember": ["product", "zone"],
-    "camera_ask": ["question"],
+    "camera_ask": ["question"], "describe_mode": ["on"],
     "day_summary": [], "reorder_suggest": ["product"], "confirm_action": ["confirm_id", "answer"],
     # catalog by voice (tools/catalog.py)
     "product_add": ["name", "brand", "unit", "pack_size", "price_rupees", "supplier_id"],

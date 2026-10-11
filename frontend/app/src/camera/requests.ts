@@ -6,6 +6,12 @@ import { CameraError, type FrameMsg } from "./capture";
 import type { HintKey } from "../i18n/camera";
 
 export const CONTINUOUS_FPS = 2;
+/** Describe mode: one frame every 3 s at most (the capture gate drops frames where nothing changed). */
+export const DESCRIBE_FPS = 1 / 3;
+
+export function continuousFps(purpose: FramePurpose): number {
+  return purpose === "describe" ? DESCRIBE_FPS : CONTINUOUS_FPS;
+}
 /** Upper bounds so a malformed server burst can't keep the camera busy for minutes. */
 export const MAX_BURST = 10;
 export const MAX_INTERVAL_MS = 5000;
@@ -43,7 +49,7 @@ export function createFrameRequestHandler(deps: RequestDeps): (m: FrameRequest) 
     }
     if (m.continuous) {
       running.get(m.purpose)?.();
-      running.set(m.purpose, deps.startContinuous(m.purpose, CONTINUOUS_FPS));
+      running.set(m.purpose, deps.startContinuous(m.purpose, continuousFps(m.purpose)));
       return;
     }
     const count = clamp(m.burst?.count, 1, MAX_BURST, 1);

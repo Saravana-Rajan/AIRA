@@ -147,7 +147,15 @@ export function stopCamera(): void {
   deps.source = null;
 }
 
+/** Decides whether a captured frame is sent (describe mode's scene-change gate). Gets the gray frame. */
+export type FrameKeep = (gray: Float32Array, w: number, h: number) => boolean;
+
 export async function captureFrame(purpose: FramePurpose): Promise<FrameMsg> {
+  return (await captureFrameIf(purpose)) as FrameMsg; // without a keep gate every frame is returned
+}
+
+/** Like captureFrame, but returns null (without encoding) when `keep` says the frame is not worth sending. */
+export async function captureFrameIf(purpose: FramePurpose, keep?: FrameKeep): Promise<FrameMsg | null> {
   // Demo mode (/try): draw the demo media and never open the camera. null = real camera.
   const demo = overrideSource();
   if (!demo && !deps.source) await startCamera();
@@ -160,12 +168,17 @@ export async function captureFrame(purpose: FramePurpose): Promise<FrameMsg> {
   const { canvas, ctx } = deps.makeCanvas(w, h);
   if (!ctx) throw new CameraError("no_canvas");
   src.draw(ctx, w, h);
-  // Quality check on every 3rd frame (cheap enough at 640 px).
-  if (qualityListener && ++qualityCounter % 3 === 0) {
+  // Quality check on every 3rd frame (cheap enough at 640 px); the keep gate reads the same gray copy.
+  const checkQuality = qualityListener !== null && ++qualityCounter % 3 === 0;
+  if (checkQuality || keep) {
     const img = ctx.getImageData(0, 0, w, h);
-    const hint = qualityHint(toGray(img.data, w, h), w, h);
-    noteFrameQuality(hint);
-    if (hint) qualityListener(hint);
+    const gray = toGray(img.data, w, h);
+    if (checkQuality && qualityListener) {
+      const hint = qualityHint(gray, w, h);
+      noteFrameQuality(hint);
+      if (hint) qualityListener(hint);
+    }
+    if (keep && !keep(gray, w, h)) return null;
   }
   let jpeg = await deps.encoder(canvas, JPEG_QUALITY);
   if (jpeg.length > MAX_B64) jpeg = await deps.encoder(canvas, JPEG_RETRY_QUALITY);
@@ -173,8 +186,9 @@ export async function captureFrame(purpose: FramePurpose): Promise<FrameMsg> {
   return { t: "frame", id: nextId(), jpeg, w, h, ts: Date.now(), purpose };
 }
 
-/** Sends frames via app.send at `fps` until the returned stop fn is called. Never overlaps captures. */
-export function startContinuous(purpose: FramePurpose, fps: number): () => void {
+/** Sends frames via app.send at `fps` until the returned stop fn is called. Never overlaps captures.
+ *  With `keep` (describe mode), a frame the gate refuses is dropped without being encoded or sent. */
+export function startContinuous(purpose: FramePurpose, fps: number, keep?: FrameKeep): () => void {
   const period = Math.max(100, Math.round(1000 / Math.max(0.1, fps)));
   let stopped = false;
   let busy = false;
@@ -182,8 +196,8 @@ export function startContinuous(purpose: FramePurpose, fps: number): () => void 
     if (stopped || busy) return;
     busy = true;
     try {
-      const f = await captureFrame(purpose);
-      if (!stopped) app.send(f);
+      const f = await captureFrameIf(purpose, keep);
+      if (f && !stopped) app.send(f);
     } catch {
       // Camera errors are surfaced by the request handler and the hint speaker.
     } finally {

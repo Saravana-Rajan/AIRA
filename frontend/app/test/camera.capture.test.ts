@@ -5,7 +5,7 @@ const { app } = vi.hoisted(() => ({
   app: { send: vi.fn((_m: unknown) => true), speak: vi.fn(), earcon: vi.fn(), haptic: vi.fn(), settings: { lang: "en" } },
 }));
 vi.mock("../src/core/app", () => ({ app }));
-import { captureFrame, startContinuous, fitWithin, CameraError, __setCaptureDeps, setQualityListener, MAX_B64 } from "../src/camera/capture";
+import { captureFrame, captureFrameIf, startContinuous, fitWithin, CameraError, __setCaptureDeps, setQualityListener, MAX_B64 } from "../src/camera/capture";
 
 const fakeCanvas = () => ({ canvas: {} as HTMLCanvasElement, ctx: { getImageData: () => ({ data: new Uint8ClampedArray(4 * 4 * 4).fill(200) }) } as unknown as CanvasRenderingContext2D });
 
@@ -86,6 +86,43 @@ describe("startContinuous", () => {
     await vi.advanceTimersByTimeAsync(600);
     stop();
     expect((app.send as any).mock.calls.length).toBeGreaterThanOrEqual(1);
+  });
+});
+
+describe("keep gate (describe mode)", () => {
+  const sized = (w: number, h: number) => ({
+    canvas: {} as HTMLCanvasElement,
+    ctx: { getImageData: () => ({ data: new Uint8ClampedArray(w * h * 4).fill(120) }) } as unknown as CanvasRenderingContext2D,
+  });
+
+  it("captureFrameIf hands the gray frame to keep and returns null without encoding when refused", async () => {
+    const enc = vi.fn(async () => "AAAA");
+    __setCaptureDeps({ makeCanvas: sized, encoder: enc });
+    const seen: Array<[number, number, number]> = [];
+    const refuse = (gray: Float32Array, w: number, h: number) => { seen.push([gray.length, w, h]); return false; };
+    expect(await captureFrameIf("describe", refuse)).toBeNull();
+    expect(seen).toEqual([[640 * 360, 640, 360]]);
+    expect(enc).not.toHaveBeenCalled();
+    const f = await captureFrameIf("describe", () => true);
+    expect(f).toMatchObject({ t: "frame", purpose: "describe", jpeg: "AAAA" });
+    expect(await captureFrameIf("ask")).toMatchObject({ purpose: "ask" });
+  });
+
+  it("startContinuous at 1/3 fps sends only the frames the gate keeps", async () => {
+    vi.useFakeTimers();
+    __setCaptureDeps({ makeCanvas: sized });
+    let allow = true;
+    const stop = startContinuous("describe", 1 / 3, () => allow);
+    await vi.advanceTimersByTimeAsync(50);
+    expect((app.send as any).mock.calls.length).toBe(1);
+    allow = false;
+    await vi.advanceTimersByTimeAsync(6100);                 // two more ticks, both refused
+    expect((app.send as any).mock.calls.length).toBe(1);
+    allow = true;
+    await vi.advanceTimersByTimeAsync(3000);
+    expect((app.send as any).mock.calls.length).toBe(2);
+    expect((app.send as any).mock.calls[1][0]).toMatchObject({ t: "frame", purpose: "describe" });
+    stop();
   });
 });
 

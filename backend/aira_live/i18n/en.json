@@ -181,5 +181,10 @@
   "k3.supplier.add_q": "Add vendor {supplier} on {channel}?",
   "k3.supplier.added": "Vendor {supplier} added.",
   "k3.supplier.telegram_link": "Send this Telegram link to {supplier}: {link}",
-  "k3.supplier.no_link": "The Telegram secret is not set, so I can't make the vendor link yet."
+  "k3.supplier.no_link": "The Telegram secret is not set, so I can't make the vendor link yet.",
+  "describe.on": "Describe mode on. I will tell you what comes into view as you move.",
+  "describe.off": "Describe mode off.",
+  "describe.item": "{label} {side}, {dist}.",
+  "describe.timeout": "Describe mode stopped after ten minutes. Say describe as I walk to start again.",
+  "describe.cap": "Describe mode paused to save the camera budget. Say describe as I walk to start again."
 }
