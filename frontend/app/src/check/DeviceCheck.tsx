@@ -70,10 +70,17 @@ function realCameraTest(lang: Lang, device: DeviceKind, wsUrl: string) {
     } catch {
       return { ok: false, problem: "blocked" };
     }
-    if (preview && video.parentElement !== preview) {
-      video.classList.add("check__video");
-      video.classList.toggle("check__video--mirror", device === "laptop");
-      preview.replaceChildren(video);
+    // The preview is a second <video> on the same stream. Never move AIRA's own camera element into this screen:
+    // a video taken out of the page again is paused by the browser, and every later picture would be this frozen
+    // frame (seen live: two questions 33 s apart got the identical picture).
+    if (preview && !preview.querySelector("video")) {
+      const pv = document.createElement("video");
+      pv.muted = true;
+      pv.setAttribute("playsinline", "true");
+      pv.className = device === "laptop" ? "check__video check__video--mirror" : "check__video";
+      pv.srcObject = video.srcObject;
+      preview.replaceChildren(pv);
+      void pv.play().catch(() => undefined);
     }
     if (!(await waitForPicture(video))) return { ok: false, problem: "blank" };
     await sleep(1200); // let the exposure settle before the picture the AI judges
@@ -153,7 +160,8 @@ export function DeviceCheck(props: DeviceCheckProps) {
     void runMic();
     return () => {
       alive.current = false;
-      preview.current?.querySelector("video")?.remove(); // the stream itself stays open for the voice app
+      const pv = preview.current?.querySelector("video");
+      if (pv) { pv.srcObject = null; pv.remove(); } // only the preview copy; the stream stays open for the voice app
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- once, on mount
   }, []);

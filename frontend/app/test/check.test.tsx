@@ -230,3 +230,43 @@ describe("DeviceCheck", () => {
     expect(goBtn()).toBeNull();
   });
 });
+
+// ---------------------------------------------------------------- the real camera path
+
+describe("DeviceCheck with the real camera path", () => {
+  it("previews a copy of the camera feed and never moves AIRA's own camera element (it would freeze)", async () => {
+    const stream = { id: "cam-stream" } as unknown as MediaStream;
+    const shared = document.createElement("video");
+    Object.defineProperty(shared, "videoWidth", { value: 640 });
+    Object.defineProperty(shared, "videoHeight", { value: 360 });
+    shared.srcObject = stream;
+    const capture = await import("../src/camera/capture");
+    const start = vi.spyOn(capture, "startCamera").mockResolvedValue(shared);
+    const grab = vi.spyOn(capture, "captureFrame").mockResolvedValue({ t: "frame", id: "f1", jpeg: "/9j/abc", w: 640, h: 360, ts: 1, purpose: "ask" });
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(response(200, { ok: true, seen: "a person in a room" }));
+    vi.spyOn(HTMLMediaElement.prototype, "play").mockResolvedValue(undefined);
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const onPass = vi.fn();
+      act(() => {
+        render(<DeviceCheck lang="en" device="laptop" onPass={onPass} wsUrl="ws://localhost:8080/ws"
+          micTest={queue<MicResult>({ ok: true })} speak={() => undefined} />, root);
+      });
+      for (let i = 0; i < 30; i++) { await act(async () => { await vi.advanceTimersByTimeAsync(100); }); }
+      expect(start).toHaveBeenCalled();
+      expect(grab).toHaveBeenCalledWith("ask");
+      expect(fetchSpy.mock.calls[0][0]).toBe("http://localhost:8080/api/device-check/camera");
+      const preview = root.querySelector(".check__preview video") as HTMLVideoElement;
+      expect(preview).not.toBeNull();
+      expect(preview).not.toBe(shared);
+      expect(preview.srcObject).toBe(stream);
+      expect(shared.parentElement).toBeNull();               // AIRA's element stays out of the page
+      expect(goBtn()).not.toBeNull();
+      act(() => render(null, root));
+      expect(shared.parentElement).toBeNull();
+    } finally {
+      vi.useRealTimers();
+      vi.restoreAllMocks();
+    }
+  });
+});
