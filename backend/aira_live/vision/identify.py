@@ -137,6 +137,49 @@ def next_hint(result: IdentifyResult, candidates: list[ProductRef]) -> str:
     return "vision.aim.hold_closer"
 
 
+# --- free text (spec §4): "is the thing under the fingertip a water bottle?" -------------------------------------
+
+MAX_SEEN = 60   # the model's own words for what it saw, kept short enough to speak
+
+FREE_TEXT_PROMPT = (
+    "A blind shopkeeper's fingertip is on, or hand is holding, ONE object in this picture. "
+    "Is that object \"{label}\"? Answer match true only if you clearly see that it is. "
+    "seen is a short name (two or three words) for what the object actually is. Never guess."
+)
+FREE_TEXT_SCHEMA = '{"match": true, "confidence": 0.0, "seen": "<what the object is>"}'
+
+
+class FreeTextResult(BaseModel):
+    match: bool
+    confidence: float
+    seen: str
+
+
+def decide_free_text(data: Any, label: str) -> FreeTextResult:
+    """Pure: a match only when the model says so at or above ACCEPT. Junk is never a match."""
+    if not isinstance(data, dict):
+        return FreeTextResult(match=False, confidence=0.0, seen="")
+    conf = _conf(data.get("confidence"))
+    raw_seen = data.get("seen")
+    seen = raw_seen.strip()[:MAX_SEEN] if isinstance(raw_seen, str) else ""
+    return FreeTextResult(match=_flag(data.get("match")) and conf >= ACCEPT, confidence=conf, seen=seen)
+
+
+async def identify_free_text(frame: Frame, label: str) -> FreeTextResult:
+    """Ask the `point` model (ER 2, Flash fallback) whether the touched object is ``label``. Raises VisionError."""
+    label = (label or "").strip()
+    if not label:
+        return FreeTextResult(match=False, confidence=0.0, seen="")
+    data = await generate_json(
+        "point",
+        [image_part(frame.jpeg_b64), FREE_TEXT_PROMPT.format(label=label)],
+        FREE_TEXT_SCHEMA,
+        thinking="low",
+        timeout_s=6.0,
+    )
+    return decide_free_text(data, label)
+
+
 async def identify_product(frame: Frame, candidates: list[ProductRef]) -> IdentifyResult:
     """Ask the `point` model (ER 2, Flash fallback) which candidate is held up. Raises VisionError if every attempt fails."""
     if not candidates:

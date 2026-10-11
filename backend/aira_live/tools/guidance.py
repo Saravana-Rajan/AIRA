@@ -18,7 +18,7 @@ from aira_live.i18n import t
 from aira_live.memory import episodic
 from aira_live.sessions import notify
 from aira_live.vision.gemini import VisionError
-from aira_live.vision.identify import ProductRef, identify_product, next_hint
+from aira_live.vision.identify import ProductRef, identify_free_text, identify_product, next_hint
 from aira_live.vision.point import point_to
 
 log = logging.getLogger(__name__)
@@ -27,9 +27,15 @@ MIN_POINT_CONF = 0.3   # send a `target` only at or above this
 MIN_ID_CONF = 0.6      # count a pick only at or above this
 LOST_AFTER = 3         # ticks without a target before "I can't see …" (spoken once per loss)
 MAX_GUIDE_S = 120.0    # an unattended loop stops itself: no endless ER 2 calls
+FREE_PREFIX = "free:"  # sku of a free-text item ("water bottle"): not a catalog product, verified by its words
 
 _ACTIVE: dict[str, "GuidanceLoop"] = {}
 _SIZE = re.compile(r"^\s*(\d+(?:\.\d+)?)\s*(ml|l|kg|g)\b", re.IGNORECASE)
+
+
+def is_free_text(ref: ProductRef | None) -> bool:
+    """True for a ref made by ``products.free_ref``: an item named by the owner, not a catalog SKU."""
+    return ref is not None and ref.sku.startswith(FREE_PREFIX)
 
 
 def _item(ref: ProductRef | None) -> str:
@@ -52,6 +58,7 @@ class GuidanceLoop:
         self.needed, self.picked = max(1, needed), 0
         self.interval_s, self.frame_timeout_s, self.max_s = interval_s, frame_timeout_s, max_s
         self.last_ts, self.misses, self.active = 0.0, 0, True
+        self.free_text = is_free_text(ref)
         self.task: asyncio.Task | None = None
         self._touch_busy = False
 
@@ -122,6 +129,8 @@ class GuidanceLoop:
         frames = s.frames.latest(1, purpose="guide")
         if not frames:
             return await self._say(t("camera.none", s.lang), "warn")
+        if self.free_text:
+            return await self._verify_free_text(frames[-1])
         try:
             res = await identify_product(frames[-1], self.candidates)
         except VisionError as exc:
@@ -142,6 +151,32 @@ class GuidanceLoop:
         await self._finish()
         await episodic.log(s.shop_id, "pick", f"Picked {self.needed} x {_item(self.ref)}", "product", self.ref.sku)
         return await self._say(t("pick.ok_done", s.lang, item=_item(self.ref), n=self.needed), "match")
+
+    async def _verify_free_text(self, frame) -> dict | None:
+        """Free-text item (spec §4): ask ER 2 whether the touched object is what the owner named.
+
+        "That's the water bottle" only on a confident match; otherwise what it looks like, or "not sure".
+        """
+        s = self.session
+        item = _item(self.ref)
+        try:
+            res = await identify_free_text(frame, item)
+        except VisionError as exc:
+            log.warning("guidance: free-text identify failed for %r: %s", item, exc)
+            return await self._say(t("live.unavailable", s.lang), "warn") if self.active else None
+        if not self.active:
+            return None
+        if not res.match:
+            if res.seen and res.confidence >= MIN_ID_CONF:
+                return await self._say(t("pick.free_wrong", s.lang, seen=res.seen, item=item), "mismatch")
+            return await self._say(t("pick.unsure", s.lang), "unsure")
+        self.picked += 1
+        remaining = self.needed - self.picked
+        if remaining > 0:
+            return await self._say(t("pick.ok_more", s.lang, item=item, n=remaining), "match")
+        await self._finish()
+        await episodic.log(s.shop_id, "pick", f"Picked {self.needed} x {item}", "free_text", item)
+        return await self._say(t("pick.free_ok", s.lang, item=item), "match")
 
     async def _say(self, text: str, cue: str) -> dict:
         await notify(self.session.shop_id, text, cue=cue)

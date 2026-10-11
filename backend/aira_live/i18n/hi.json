@@ -181,5 +181,19 @@
   "k3.supplier.add_q": "वेंडर {supplier} को {channel} पर जोड़ूँ?",
   "k3.supplier.added": "वेंडर {supplier} जोड़ दिया।",
   "k3.supplier.telegram_link": "यह टेलीग्राम लिंक {supplier} को भेजिए: {link}",
-  "k3.supplier.no_link": "टेलीग्राम सीक्रेट सेट नहीं है, इसलिए वेंडर लिंक अभी नहीं बन सकता।"
+  "k3.supplier.no_link": "टेलीग्राम सीक्रेट सेट नहीं है, इसलिए वेंडर लिंक अभी नहीं बन सकता।",
+  "find.free_start": "{item} {side} दिख रहा है।",
+  "find.free_none": "मुझे वह नहीं मिल रहा। मुझे शेल्फ दिखाइए।",
+  "pick.free_ok": "यह {item} ही है।",
+  "pick.free_wrong": "यह {seen} जैसा लग रहा है, {item} नहीं।",
+  "cam.list.none": "मुझे कोई सामान नहीं दिख रहा। मुझे शेल्फ दिखाइए।",
+  "cam.list.area": "{area}: {items}।",
+  "cam.list.item": "{label} {side}",
+  "cam.area.top": "ऊपर की शेल्फ",
+  "cam.area.middle": "बीच की शेल्फ",
+  "cam.area.bottom": "नीचे की शेल्फ",
+  "cam.area.door": "फ्रिज का दरवाज़ा",
+  "cam.area.floor": "ज़मीन पर",
+  "cam.area.counter": "काउंटर पर",
+  "cam.area.other": "और भी"
 }

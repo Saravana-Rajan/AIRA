@@ -181,5 +181,19 @@
   "k3.supplier.add_q": "Add vendor {supplier} on {channel}?",
   "k3.supplier.added": "Vendor {supplier} added.",
   "k3.supplier.telegram_link": "Send this Telegram link to {supplier}: {link}",
-  "k3.supplier.no_link": "The Telegram secret is not set, so I can't make the vendor link yet."
+  "k3.supplier.no_link": "The Telegram secret is not set, so I can't make the vendor link yet.",
+  "find.free_start": "I see the {item} {side}.",
+  "find.free_none": "I can't find it. Show me the shelf.",
+  "pick.free_ok": "That's the {item}.",
+  "pick.free_wrong": "That looks like {seen}, not the {item}.",
+  "cam.list.none": "I can't see any products. Show me the shelf.",
+  "cam.list.area": "{area}: {items}.",
+  "cam.list.item": "{label} {side}",
+  "cam.area.top": "Top shelf",
+  "cam.area.middle": "Middle shelf",
+  "cam.area.bottom": "Bottom shelf",
+  "cam.area.door": "Fridge door",
+  "cam.area.floor": "On the floor",
+  "cam.area.counter": "On the counter",
+  "cam.area.other": "Also"
 }

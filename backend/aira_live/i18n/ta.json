@@ -181,5 +181,19 @@
   "k3.supplier.add_q": "{supplier} வியாபாரியை {channel}-இல் சேர்க்கவா?",
   "k3.supplier.added": "{supplier} வியாபாரி சேர்க்கப்பட்டார்.",
   "k3.supplier.telegram_link": "இந்த டெலிகிராம் லிங்கை {supplier}-க்கு அனுப்புங்கள்: {link}",
-  "k3.supplier.no_link": "டெலிகிராம் ரகசியம் அமைக்கப்படவில்லை; வியாபாரி லிங்க் இப்போது உருவாக்க முடியாது."
+  "k3.supplier.no_link": "டெலிகிராம் ரகசியம் அமைக்கப்படவில்லை; வியாபாரி லிங்க் இப்போது உருவாக்க முடியாது.",
+  "find.free_start": "{item} {side} தெரிகிறது.",
+  "find.free_none": "அது கிடைக்கவில்லை. அலமாரியைக் காட்டுங்கள்.",
+  "pick.free_ok": "அது {item} தான்.",
+  "pick.free_wrong": "அது {seen} போல் இருக்கிறது, {item} இல்லை.",
+  "cam.list.none": "பொருள்கள் எதுவும் தெரியவில்லை. அலமாரியைக் காட்டுங்கள்.",
+  "cam.list.area": "{area}: {items}.",
+  "cam.list.item": "{label} {side}",
+  "cam.area.top": "மேல் அலமாரி",
+  "cam.area.middle": "நடு அலமாரி",
+  "cam.area.bottom": "கீழ் அலமாரி",
+  "cam.area.door": "ஃப்ரிட்ஜ் கதவு",
+  "cam.area.floor": "தரையில்",
+  "cam.area.counter": "கவுண்டரில்",
+  "cam.area.other": "மற்றவை"
 }
