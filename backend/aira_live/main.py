@@ -61,8 +61,9 @@ from aira_live.tools import NON_BLOCKING_TOOLS, TOOL_FUNCS
 log = logging.getLogger(__name__)
 
 # APIRouter modules of other lanes, mounted when present: jobs (saravana/02), WhatsApp/Telegram webhooks (kanish/02),
-# the dashboard's read-only HTTP API (api).
-OPTIONAL_ROUTERS: tuple[str, ...] = ("aira_live.jobs", "aira_live.messaging.webhooks", "aira_live.api")
+# the dashboard's read-only HTTP API (api), and the app's start-up camera check (device_check).
+OPTIONAL_ROUTERS: tuple[str, ...] = ("aira_live.jobs", "aira_live.messaging.webhooks", "aira_live.api",
+                                     "aira_live.device_check")
 
 # Guards (shared/docs/ops/security.md). The service is public (--allow-unauthenticated), there is no login, and it
 # runs on one instance. Three layers bound what a stranger with the URL can do:
@@ -128,7 +129,9 @@ async def _lifespan(_app: FastAPI):
 
 app = FastAPI(title="aira-live", lifespan=_lifespan)
 CORS_ORIGINS = allowed_origins()  # read once at startup, like the deployed env
-app.add_middleware(CORSMiddleware, allow_origins=CORS_ORIGINS, allow_methods=["GET"], allow_headers=[])
+# POST + Content-Type only for the app's start-up camera check (aira_live.device_check); everything else is GET.
+app.add_middleware(CORSMiddleware, allow_origins=CORS_ORIGINS, allow_methods=["GET", "POST"],
+                   allow_headers=["content-type"])
 # Session -> LiveBackend for each Live connection (tests swap in a fake).
 app.state.backend_factory = lambda session: AdkLiveBackend(session)
 

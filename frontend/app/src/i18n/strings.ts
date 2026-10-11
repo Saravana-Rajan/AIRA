@@ -85,3 +85,42 @@ export const ONBOARDING: Record<"howTo" | "anyLanguage" | "talkback" | "talkback
   tapToStart:   { en: "Tap to start", ta: "தொடங்க தட்டவும்", hi: "शुरू करने के लिए टैप करें" },
   startHint:    { en: "Turns on the microphone and camera.", ta: "மைக், கேமரா இயக்கப்படும்.", hi: "माइक और कैमरा चालू होंगे।" },
 };
+
+/** The start-up device check (check/DeviceCheck.tsx): spoken and shown before the conversation opens. */
+export const CHECK: Record<
+  | "title" | "intro" | "micStep" | "camStep" | "waiting" | "checking" | "passed" | "failed"
+  | "micSay" | "micOk" | "micBlocked" | "micMissing" | "micSilent" | "micTap"
+  | "camLookLaptop" | "camLookPhone" | "camOk" | "camDark" | "camBlurry" | "camCovered" | "camBlank" | "camUnclear"
+  | "camBlocked" | "camOffline" | "camBusy" | "camUnavailable" | "allGood" | "startTalking" | "tryAgain",
+  S
+> = {
+  title:          { en: "Checking your microphone and camera", ta: "மைக் மற்றும் கேமராவைச் சரிபார்க்கிறோம்", hi: "माइक और कैमरा जाँच रहे हैं" },
+  intro:          { en: "AIRA starts talking once both work.", ta: "இரண்டும் வேலை செய்த பிறகு AIRA பேசத் தொடங்கும்.", hi: "दोनों ठीक होने पर AIRA बात शुरू करेगा।" },
+  micStep:        { en: "Microphone", ta: "மைக்", hi: "माइक" },
+  camStep:        { en: "Camera", ta: "கேமரா", hi: "कैमरा" },
+  waiting:        { en: "Waiting", ta: "காத்திருக்கிறது", hi: "इंतज़ार" },
+  checking:       { en: "Checking", ta: "சரிபார்க்கிறது", hi: "जाँच हो रही है" },
+  passed:         { en: "Works", ta: "சரி", hi: "ठीक" },
+  failed:         { en: "Needs attention", ta: "சரிசெய்ய வேண்டும்", hi: "ध्यान दें" },
+  micSay:         { en: "Checking the microphone. Say: Hello AIRA.", ta: "மைக் சரிபார்க்கிறேன். ஹலோ AIRA என்று சொல்லுங்கள்.", hi: "माइक जाँच रहा हूँ। बोलिए: हैलो AIRA।" },
+  micOk:          { en: "Microphone works.", ta: "மைக் வேலை செய்கிறது.", hi: "माइक ठीक है।" },
+  micBlocked:     { en: "The microphone is blocked. Allow the microphone for this site, then try again.", ta: "மைக் தடுக்கப்பட்டுள்ளது. இந்த தளத்திற்கு மைக்கை அனுமதித்து, மீண்டும் முயலுங்கள்.", hi: "माइक बंद है। इस साइट के लिए माइक की अनुमति दें, फिर दोबारा कोशिश करें।" },
+  micMissing:     { en: "No microphone found. Connect one, then try again.", ta: "மைக் இல்லை. மைக்கை இணைத்து மீண்டும் முயலுங்கள்.", hi: "कोई माइक नहीं मिला। माइक जोड़ें, फिर दोबारा कोशिश करें।" },
+  micSilent:      { en: "I heard nothing. Check the microphone is not muted, then try again.", ta: "எதுவும் கேட்கவில்லை. மைக் அணைக்கப்படவில்லையா என்று பார்த்து மீண்டும் முயலுங்கள்.", hi: "कुछ सुनाई नहीं दिया। देखें कि माइक म्यूट न हो, फिर दोबारा कोशिश करें।" },
+  micTap:         { en: "Tap to test the microphone.", ta: "மைக்கைச் சோதிக்க தட்டவும்.", hi: "माइक जाँचने के लिए टैप करें।" },
+  camLookLaptop:  { en: "Checking the camera. Look at the laptop camera.", ta: "கேமரா சரிபார்க்கிறேன். லேப்டாப் கேமராவைப் பாருங்கள்.", hi: "कैमरा जाँच रहा हूँ। लैपटॉप कैमरे की ओर देखिए।" },
+  camLookPhone:   { en: "Checking the camera. Point the phone at what is in front of you.", ta: "கேமரா சரிபார்க்கிறேன். உங்கள் முன் உள்ளதை நோக்கி போனைப் பிடியுங்கள்.", hi: "कैमरा जाँच रहा हूँ। फ़ोन को अपने सामने की चीज़ की ओर रखें।" },
+  camOk:          { en: "Camera works. I can see {seen}.", ta: "கேமரா வேலை செய்கிறது. எனக்கு {seen} தெரிகிறது.", hi: "कैमरा ठीक है। मुझे {seen} दिख रहा है।" },
+  camDark:        { en: "The picture is too dark. Turn on a light, then try again.", ta: "படம் மிகவும் இருட்டாக உள்ளது. விளக்கைப் போட்டு மீண்டும் முயலுங்கள்.", hi: "तस्वीर बहुत अँधेरी है। रोशनी करें, फिर दोबारा कोशिश करें।" },
+  camBlurry:      { en: "The picture is blurred. Hold still and wipe the lens, then try again.", ta: "படம் மங்கலாக உள்ளது. அசையாமல் பிடித்து, லென்ஸைத் துடைத்து மீண்டும் முயலுங்கள்.", hi: "तस्वीर धुंधली है। स्थिर रखें और लेंस पोंछें, फिर दोबारा कोशिश करें।" },
+  camCovered:     { en: "Something is covering the camera. Uncover the lens, then try again.", ta: "கேமராவை ஏதோ மறைக்கிறது. லென்ஸைத் திறந்து மீண்டும் முயலுங்கள்.", hi: "कैमरे के आगे कुछ है। लेंस खोलें, फिर दोबारा कोशिश करें।" },
+  camBlank:       { en: "The camera shows nothing. Close other apps using the camera, then try again.", ta: "கேமராவில் எதுவும் தெரியவில்லை. கேமராவைப் பயன்படுத்தும் மற்ற செயலிகளை மூடி மீண்டும் முயலுங்கள்.", hi: "कैमरे में कुछ नहीं दिख रहा। कैमरा इस्तेमाल कर रहे दूसरे ऐप बंद करें, फिर दोबारा कोशिश करें।" },
+  camUnclear:     { en: "I could not make out anything. Point the camera at something, then try again.", ta: "எதையும் அடையாளம் காண முடியவில்லை. கேமராவை ஏதாவது ஒன்றை நோக்கி வைத்து மீண்டும் முயலுங்கள்.", hi: "कुछ पहचान नहीं पाया। कैमरा किसी चीज़ की ओर करें, फिर दोबारा कोशिश करें।" },
+  camBlocked:     { en: "The camera is blocked. Allow the camera for this site, then try again.", ta: "கேமரா தடுக்கப்பட்டுள்ளது. இந்த தளத்திற்கு கேமராவை அனுமதித்து மீண்டும் முயலுங்கள்.", hi: "कैमरा बंद है। इस साइट के लिए कैमरे की अनुमति दें, फिर दोबारा कोशिश करें।" },
+  camOffline:     { en: "I could not reach AIRA to check the camera. Check the internet, then try again.", ta: "கேமராவைச் சரிபார்க்க AIRA-வை அடைய முடியவில்லை. இணையத்தைப் பார்த்து மீண்டும் முயலுங்கள்.", hi: "कैमरा जाँचने के लिए AIRA तक नहीं पहुँच पाया। इंटरनेट देखें, फिर दोबारा कोशिश करें।" },
+  camBusy:        { en: "Too many checks. Wait a minute, then try again.", ta: "அதிக முறை சோதித்துவிட்டீர்கள். ஒரு நிமிடம் கழித்து முயலுங்கள்.", hi: "बहुत बार जाँच हो गई। एक मिनट रुककर दोबारा कोशिश करें।" },
+  camUnavailable: { en: "AIRA's camera check is not answering. Try again in a moment.", ta: "AIRA கேமரா சோதனை பதில் தரவில்லை. சிறிது நேரம் கழித்து முயலுங்கள்.", hi: "AIRA की कैमरा जाँच जवाब नहीं दे रही। थोड़ी देर में दोबारा कोशिश करें।" },
+  allGood:        { en: "Microphone and camera work. Tap anywhere to start talking.", ta: "மைக்கும் கேமராவும் வேலை செய்கின்றன. பேசத் தொடங்க எங்கும் தட்டவும்.", hi: "माइक और कैमरा ठीक हैं। बात शुरू करने के लिए कहीं भी टैप करें।" },
+  startTalking:   { en: "Start talking", ta: "பேசத் தொடங்கு", hi: "बात शुरू करें" },
+  tryAgain:       { en: "Try again", ta: "மீண்டும் முயல்", hi: "दोबारा कोशिश करें" },
+};

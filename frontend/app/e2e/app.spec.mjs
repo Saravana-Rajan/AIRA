@@ -36,10 +36,21 @@ async function expectOneSession(request) {
   await expect.poll(async () => (await (await request.get(`${http}/e2e/sessions`)).json()).sessions.length).toBe(1);
 }
 
-/** Opens the app and taps Start; resolves once the socket is connected (the chip says Ready). */
-async function start(page, request) {
+/**
+ * Opens the app, taps Start, passes the device check and taps Start talking; resolves once the socket is
+ * connected (the chip says Ready). Chromium's fake mic beeps and its fake camera shows a test pattern; the mock
+ * backend passes the camera picture without a model (aira_live.device_check, mock mode).
+ */
+async function start(page, request, checkA11y = false) {
   await page.goto("/");
   await page.getByRole("button", { name: "Start" }).click();
+  await expect(page.getByRole("heading", { level: 1, name: "Checking your microphone and camera" })).toBeVisible();
+  expect((await (await request.get(`${http}/e2e/sessions`)).json()).sessions.length).toBe(0); // no voice yet
+  const go = page.getByRole("button", { name: /Start talking/ });
+  await expect(go).toBeVisible({ timeout: 30_000 });
+  await expect(page.locator('.check [role="status"]')).toContainText("Camera works. I can see mock camera.");
+  if (checkA11y) await expectNoSeriousA11yIssues(page, "Device check");
+  await go.click();
   const chip = page.locator(".status-chip");
   await expect(chip).toHaveAttribute("data-kind", "ready");
   await expect(chip).toHaveText("Ready");
@@ -58,7 +69,7 @@ test("start, connect, confirm a sale with a double-tap, watch a delivery count, 
   await expect(page.getByText("Sunrise Dairy")).toBeVisible();
   await expectNoSeriousA11yIssues(page, "Onboarding");
 
-  const surface = await start(page, request);
+  const surface = await start(page, request, true);
   await expect(surface).toContainText("Double-tap anywhere to talk");
   await expectNoSeriousA11yIssues(page, "Ready screen");
 
