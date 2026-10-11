@@ -22,6 +22,7 @@ import inspect
 import json
 import logging
 import os
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
@@ -29,6 +30,7 @@ from pydantic import BaseModel, ValidationError
 
 from aira_live import config, confirm, sessions
 from aira_live.auth import AuthError, verify_hello
+from aira_live.cameras.sources import is_camera_session
 from aira_live.contracts import (
     AudioInMsg,
     ConfirmReplyMsg,
@@ -92,7 +94,25 @@ def client_ip(ws) -> str:
     return ws.client.host if ws.client else "unknown"
 
 
-app = FastAPI(title="aira-live")
+@asynccontextmanager
+async def _lifespan(_app: FastAPI):
+    """Shop cameras (docs/ops/cctv.md): watchers start only when config/runtime lists cameras (default: none).
+    A failure here is logged and never stops the service."""
+    from aira_live.cameras import watch as shop_cameras  # lazy: keeps the import graph of main small
+
+    tasks: list = []
+    try:
+        tasks = await shop_cameras.start_if_configured()
+    except Exception:
+        log.exception("shop cameras: start failed; running without them")
+    try:
+        yield
+    finally:
+        if tasks:
+            await shop_cameras.stop(tasks)
+
+
+app = FastAPI(title="aira-live", lifespan=_lifespan)
 CORS_ORIGINS = allowed_origins()  # read once at startup, like the deployed env
 app.add_middleware(CORSMiddleware, allow_origins=CORS_ORIGINS, allow_methods=["GET"], allow_headers=[])
 # Session -> LiveBackend for each Live connection (tests swap in a fake).
@@ -252,7 +272,7 @@ async def ws_endpoint(ws: WebSocket) -> None:
                 lang = msg.lang
                 current_session.set(session)
                 sessions.register(session, ip=ip)
-                if not settings.mock:
+                if not settings.mock and not is_camera_session(session):  # a shop camera only sends frames
                     bridge = await _start_live(session, handle)
                 await send(ReadyMsg(session_id=session.session_id, resume=session.session_id, mock=settings.mock))
             elif isinstance(msg, StopMsg):  # long-press: stop guidance and the answer being spoken

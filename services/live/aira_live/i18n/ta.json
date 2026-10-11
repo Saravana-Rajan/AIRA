@@ -135,5 +135,9 @@
   "k2.expiry.item": "{product} {qty} {when}",
   "k2.when.expired": "ஏற்கனவே காலாவதியானது",
   "k2.when.today": "இன்று காலாவதியாகிறது",
-  "k2.when.tomorrow": "நாளை காலாவதியாகிறது"
+  "k2.when.tomorrow": "நாளை காலாவதியாகிறது",
+  "camera.delivery": "கேமரா {camera}: டெலிவரி வந்தது போல. சுமார் {n} பாக்கெட் தெரிகிறது. எண்ணட்டுமா?",
+  "camera.low_stock": "கேமரா {camera}: ஷெல்ஃபில் {product} சுமார் {left} மட்டுமே உள்ளது.",
+  "camera.customer": "கேமரா {camera}: கவுண்டரில் யாரோ காத்திருக்கிறார்கள்.",
+  "camera.motion": "கேமரா {camera}: கடை மூடிய பிறகு அசைவு உள்ளது."
 }

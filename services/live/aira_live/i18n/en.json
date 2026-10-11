@@ -135,5 +135,9 @@
   "k2.expiry.item": "{product} {qty} {when}",
   "k2.when.expired": "already expired",
   "k2.when.today": "expires today",
-  "k2.when.tomorrow": "expires tomorrow"
+  "k2.when.tomorrow": "expires tomorrow",
+  "camera.delivery": "Camera {camera}: a delivery seems to have come. I see about {n} packs. Shall I count them?",
+  "camera.low_stock": "Camera {camera}: only about {left} {product} left on the shelf.",
+  "camera.customer": "Camera {camera}: someone is waiting at the counter.",
+  "camera.motion": "Camera {camera}: movement in the shop after hours."
 }

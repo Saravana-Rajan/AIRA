@@ -135,5 +135,9 @@
   "k2.expiry.item": "{product} {qty} {when}",
   "k2.when.expired": "पहले ही एक्सपायर",
   "k2.when.today": "आज एक्सपायर",
-  "k2.when.tomorrow": "कल एक्सपायर"
+  "k2.when.tomorrow": "कल एक्सपायर",
+  "camera.delivery": "कैमरा {camera}: लगता है डिलीवरी आई है। करीब {n} पैकेट दिख रहे हैं। गिनूँ?",
+  "camera.low_stock": "कैमरा {camera}: शेल्फ़ पर {product} सिर्फ़ करीब {left} बचे हैं।",
+  "camera.customer": "कैमरा {camera}: काउंटर पर कोई इंतज़ार कर रहा है।",
+  "camera.motion": "कैमरा {camera}: दुकान बंद होने के बाद हलचल है।"
 }

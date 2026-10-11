@@ -8,6 +8,7 @@ import { render } from "preact";
 import { AppShell } from "./ui/AppShell";
 import { TryAira } from "./demo/TryAira";
 import { BenchPage } from "./bench/BenchPage";
+import { CameraPage } from "./camera-mode/CameraPage";
 import { routeFor } from "./demo/router";
 import { wireCameraIntoApp } from "./camera/wire";
 import { installBenchIfEnabled } from "./bench/install";
@@ -20,6 +21,9 @@ const root = document.getElementById("root")!;
 
 if (route === "bench") {
   render(<BenchPage />, root);
+} else if (route === "camera") {
+  // Shop-camera mode: a second phone on a stand streams frames at a low rate; no mic, no Live session.
+  render(<CameraPage />, root);
 } else if (route === "try") {
   // No bump guard on the demo page: no object-detector download, nobody is walking.
   render(<TryAira onWired={(w) => { wireCameraIntoApp(w, { bumpGuard: false }); }} />, root);
