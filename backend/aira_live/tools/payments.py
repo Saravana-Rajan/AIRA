@@ -252,15 +252,18 @@ async def _commit_sale(payload: dict, value: str | None) -> dict:
     sale_tools.active_sale.pop(s.session_id, None)
     await s.send(StateMsg(entity="sale", id=payload["sale_id"], state="SALE_COMPLETED", summary=str(payload["amount"])))
     await s.send(CueMsg(cue="done"))
-    low = []
+    low, left_lines = [], []
     for line in sale["items"]:
         prod = await product_doc(s.shop_id, line["sku"])
         left = await ledger.on_hand(s.shop_id, line["sku"])
+        left_text = f"{fmt_qty(left)} {prod.get('unit', '')}".strip()
+        name = prod.get("name", line["sku"])
         if left <= float(prod.get("reorderThreshold") or 0):
-            low.append(t("k2.sale.low_stock", s.lang, left=f"{fmt_qty(left)} {prod.get('unit', '')}".strip(),
-                         product=prod.get("name", line["sku"])))
+            low.append(t("k2.sale.low_stock", s.lang, left=left_text, product=name))
+        else:                                                   # the video: "Sale complete. Stock: 24 litres."
+            left_lines.append(t("k2.sale.left", s.lang, left=left_text, product=name))
     return {"ok": True, "saleId": payload["sale_id"], "lowStock": low,
-            "say": " ".join([t("k2.sale.done", s.lang), *low])}
+            "say": " ".join([t("k2.sale.done", s.lang), *left_lines, *low])}
 
 
 confirm.register_committer("supplier_pay.cash", _commit_supplier_cash)

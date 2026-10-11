@@ -453,3 +453,33 @@ async def test_expiry_check_nothing_due(store, session, monkeypatch):
     monkeypatch.setattr(clock, "today_ist", lambda: date(2026, 10, 1))
     r = await stock.expiry_check()
     assert r == {"ok": True, "alerts": [], "say": t("k2.expiry.none", "en")}
+
+
+# ---------------------------------------------------------------------------------------------------- video script lines
+
+async def test_a_completed_sale_says_how_much_is_left(store, session, phone, proposals, notified, monkeypatch):
+    """The video: "Sale complete. Stock: 24 litres." """
+    s = await _curd_sale()                                      # 2 L of 10 L
+    monkeypatch.setattr(pay, "CASH_PREP_S", 0)
+    monkeypatch.setattr(vcash, "read_cash", cash_reads(s["total"]))
+    phone.queue("cash", "c1", "c2")
+    use_call("tc-2")
+    await pay.sale_pay(s["saleId"], "cash")
+    r = await pay._commit_sale(proposals[0]["payload"], None)
+    assert r["say"] == "Sale complete. Sakthi Curd 1 L: 8 L left."
+
+
+async def test_the_stock_summary_names_what_is_low(store, session, monkeypatch):
+    """The video: "Aavin milk 500 ml is low: 8 left." Empty products say "out of stock", never "0 pack left"."""
+    monkeypatch.setattr(stock, "LOW_LIMIT", 20)
+    r = await stock.stock_query()
+    assert r["say"].startswith("Stock: ")
+    assert "Aavin Milk 500 ml is low: 4 L left." in r["say"]
+    assert "Aavin Butter 100 g is out of stock." in r["say"] and "0 pack left" not in r["say"]
+
+
+async def test_expiry_counts_pouches_in_packs(store, session, monkeypatch):
+    """The video: "Six curd packs expire tomorrow." 4 L of 500 ml pouches is 8 packs."""
+    monkeypatch.setattr(clock, "today_ist", lambda: date(2026, 10, 13))
+    r = await stock.expiry_check()
+    assert "Aavin Milk 500 ml 8 packs" in r["say"] and "4 L" not in r["say"]

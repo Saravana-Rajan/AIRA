@@ -32,7 +32,7 @@ K2_KEYS = {
     "k2.cash.unclear",
     "k2.sale.price", "k2.sale.none", "k2.sale.change", "k2.sale.change_wrong", "k2.sale.cash_q", "k2.sale.upi_wait",
     "k2.sale.upi_heard_q", "k2.sale.upi_wrong", "k2.sale.upi_timeout_q", "k2.sale.done", "k2.sale.low_stock",
-    "k2.stock.one", "k2.stock.all",
+    "k2.stock.one", "k2.stock.all", "k2.sale.left", "k2.stock.low", "k2.stock.out", "k2.qty.packs",
     "k2.expiry.none", "k2.expiry.list", "k2.expiry.item",
     "k2.when.expired", "k2.when.today", "k2.when.tomorrow",
 }
