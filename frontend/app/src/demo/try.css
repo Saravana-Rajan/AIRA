@@ -1,7 +1,8 @@
 /* "Try AIRA" judge demo page. LIGHT THEME ONLY (overrides §6): every colour is a tokens.css variable.
-   Layout: a quiet hero (full logo + tagline), then Sam's day as a timeline on the left and the
-   live demo (stage, AIRA's log, confirm, talk/type) pinned on the right. The timeline is the one
-   bold device: the scenes really are a sequence, so they sit on a line in the order they happen.
+   Layout: ONE phone-width column (tokens.css --phone-width, 480 px) centred on the page, the same column
+   the phone app and the Start screen use: a quiet hero (logo + tagline), then Sam's day as a timeline,
+   then the live demo (stage, AIRA's log, confirm, talk/type). The timeline is the one bold device:
+   the scenes really are a sequence, so they sit on a line in the order they happen.
    Every selector is scoped under .try because Vite bundles this file with the phone app's CSS. */
 
 body:has(> #root > .try) {
@@ -16,15 +17,17 @@ body:has(> #root > .try) {
   --try-tint-danger: color-mix(in srgb, var(--danger) 8%, var(--bg));
   --try-num: 40px;
   box-sizing: border-box;
+  width: 100%;
   min-height: 100dvh;
-  max-width: 1200px;
+  max-width: var(--phone-width);
   margin: 0 auto;
-  padding: 40px var(--gutter) 64px;
+  padding: 24px var(--gutter) 48px;
   background: var(--bg);
   color: var(--text);
   font-family: var(--font-sans);
-  font-size: 17px;
+  font-size: var(--text-body);
   line-height: 1.5;
+  overflow-x: hidden;
   -webkit-font-smoothing: antialiased;
 }
 .try *,
@@ -69,20 +72,19 @@ body:has(> #root > .try) {
 /* ---------- hero ---------- */
 .try-hero {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
-  gap: 40px;
-  align-items: center;
-  padding-bottom: 40px;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 18px;
+  padding-bottom: 28px;
   border-bottom: 1px solid var(--border);
 }
 .try-logo {
   display: block;
-  width: 176px;
-  height: 176px;
+  width: 112px;
+  height: 112px;
 }
 .try-hero h1 {
   max-width: 15ch;
-  font-size: clamp(2.2rem, 5.2vw, 3.9rem);
+  font-size: clamp(2rem, 8vw, 2.6rem);
   font-weight: 800;
   line-height: 1.04;
   letter-spacing: -0.035em;
@@ -121,13 +123,13 @@ body:has(> #root > .try) {
   text-underline-offset: 5px;
 }
 
-/* ---------- two columns ---------- */
+/* ---------- the day, then the live demo, one under the other ---------- */
 .try-body {
   display: grid;
-  grid-template-columns: minmax(0, 5fr) minmax(0, 6fr);
-  gap: 48px;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 28px;
   align-items: start;
-  padding-top: 36px;
+  padding-top: 28px;
 }
 
 /* ---------- the day: a timeline of scenes ---------- */
@@ -240,11 +242,9 @@ body:has(> #root > .try) {
 
 /* ---------- the live column ---------- */
 .try-live {
-  position: sticky;
-  top: 16px;
   display: grid;
   gap: 14px;
-  padding: 20px;
+  padding: 16px;
   border: 1px solid var(--border);
   border-radius: var(--radius-card);
   background: var(--bg);
@@ -513,28 +513,17 @@ body:has(> #root > .try) {
   font-weight: 700;
 }
 
-/* ---------- phone width ---------- */
-@media (max-width: 899px) {
+/* ---------- wide screens: a framed phone in the middle ---------- */
+@media (min-width: 600px) {
+  body:has(> #root > .try) {
+    padding: 40px var(--gutter);
+  }
   .try {
-    padding-top: 24px;
-    font-size: var(--text-body);
-  }
-  .try-hero {
-    grid-template-columns: minmax(0, 1fr);
-    gap: 18px;
-    padding-bottom: 28px;
-  }
-  .try-logo {
-    width: 112px;
-    height: 112px;
-  }
-  .try-body {
-    grid-template-columns: minmax(0, 1fr);
-    gap: 28px;
-  }
-  .try-live {
-    position: static;
-    padding: 16px;
+    min-height: auto;
+    padding: 32px 28px 36px;
+    border: 1px solid var(--border);
+    border-radius: 36px;
+    box-shadow: 0 24px 60px -32px color-mix(in srgb, var(--text) 28%, transparent);
   }
 }
 

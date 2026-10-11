@@ -14,16 +14,17 @@ type Props = {
 };
 
 /**
- * Live captions in large high-contrast text (28 px user, 32 px AIRA); they double as captions in
- * the demo video. The speaker name ("You", "AIRA", localised) runs in before each line from
- * `data-who`, so the text node holds only the words. Long lines lose their OLDEST words and stay
- * anchored to the bottom, so the newest words always show. With nothing said yet, it shows how
- * to start. Phrasing content only.
+ * The last exchange as one card: a small "You" label over the shopkeeper's words (muted), then an
+ * "AIRA" label in brand blue over AIRA's words (navy, a step larger). Both lines share one clamp()
+ * type scale, wrap freely at line-height 1.5 (Tamil needs the room) and are capped at three lines;
+ * a longer line loses its OLDEST words and stays anchored to the bottom, so the newest words
+ * always show. The card doubles as captions in the demo video. With nothing said yet, it carries
+ * the gesture hint instead. Phrasing content only: it sits inside the GestureSurface button.
  */
 export function CaptionArea({ userText, airaText, lang, max = 140 }: Props) {
   if (!userText && !airaText) {
     return (
-      <span class="captions">
+      <span class="captions captions--empty">
         <span class="caption caption--hint">{LABELS.hintTalk[lang]}</span>
       </span>
     );
@@ -32,12 +33,14 @@ export function CaptionArea({ userText, airaText, lang, max = 140 }: Props) {
     <span class="captions">
       {userText ? (
         <span class="caption caption--user">
-          <span class="caption__text" data-who={LABELS.you[lang]}>{captionTail(userText, max)}</span>
+          <span class="caption__who">{LABELS.you[lang]}</span>
+          <span class="caption__text">{captionTail(userText, max)}</span>
         </span>
       ) : null}
       {airaText ? (
         <span class="caption caption--aira">
-          <span class="caption__text" data-who={LABELS.aira[lang]}>{captionTail(airaText, max)}</span>
+          <span class="caption__who">{LABELS.aira[lang]}</span>
+          <span class="caption__text">{captionTail(airaText, max)}</span>
         </span>
       ) : null}
     </span>

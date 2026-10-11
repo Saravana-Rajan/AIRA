@@ -87,7 +87,7 @@ if (plan.action === "attach") {
   const [bin, ...pre] = plan.firebase;
   const fbArgs = [
     ...pre, "emulators:exec", "--only", "firestore", "--project", E2E_PROJECT,
-    "--config", join(repoRoot, "firebase.json"),
+    "--config", join(repoRoot, "shared", "infra", "firebase.json"),
     playwrightCmd.map(q).join(" "),
   ];
   console.log(`dashboard e2e: starting the Firestore emulator (java: ${plan.java})`);

@@ -19,7 +19,7 @@
 
 **Spec:** `shared/docs/superpowers/specs/2026-10-10-aira-design.md` (§4 Architecture, Shop Dashboard; §5 Data model; §8 Demo). **Interfaces:** `shared/docs/superpowers/plans/2026-10-10-00-interfaces.md`.
 
-**Prereq:** `shared/docs/superpowers/plans/2026-10-10-00-foundation.md` is merged: `frontend/dashboard` skeleton, `@aira/contracts` with `src/firestore.ts` and `src/enums.ts`, `firebase.json`.
+**Prereq:** `shared/docs/superpowers/plans/2026-10-10-00-foundation.md` is merged: `frontend/dashboard` skeleton, `@aira/contracts` with `src/firestore.ts` and `src/enums.ts`, `shared/infra/firebase.json`.
 
 ## Schedule
 
@@ -261,7 +261,7 @@ describe("resolveAccess", () => {
 
 - [ ] **Step 4: Run the tests and confirm they fail**
 
-Run: `npm install && npm test -w frontend/dashboard`
+Run: `npm install && npm test -w dashboard`
 Expected: FAIL with `Failed to resolve import "../src/format"` and `"../src/access"`.
 
 - [ ] **Step 5: Implement `src/format.ts` and `src/access.ts`**
@@ -353,13 +353,13 @@ export function resolveAccess(input: {
 
 - [ ] **Step 6: Run the tests and confirm they pass**
 
-Run: `npm test -w frontend/dashboard`
+Run: `npm test -w dashboard`
 Expected: PASS. `format.test.ts` has 9 tests and `access.test.ts` has 5.
 
 - [ ] **Step 7: Commit**
 
 ```bash
-git add frontend/dashboard/package.json frontend/dashboard/vite.config.ts frontend/dashboard/src/format.ts frontend/dashboard/src/access.ts frontend/dashboard/test/format.test.ts frontend/dashboard/test/access.test.ts package-lock.json
+git add frontend/dashboard/package.json frontend/dashboard/vite.config.ts frontend/dashboard/src/format.ts frontend/dashboard/src/access.ts frontend/dashboard/test/format.test.ts frontend/dashboard/test/access.test.ts frontend/package-lock.json
 git commit -m "feat(dashboard): IST-safe formatting helpers and demo/family access resolution"
 ```
 
@@ -590,7 +590,7 @@ describe("fetchForecast", () => {
 
 - [ ] **Step 2: Run the tests and confirm they fail**
 
-Run: `npm test -w frontend/dashboard`
+Run: `npm test -w dashboard`
 Expected: FAIL with `Failed to resolve import "../src/data/normalize"` (and the selectors and forecast modules).
 
 - [ ] **Step 3: Implement `src/data/normalize.ts`**
@@ -819,7 +819,7 @@ export async function fetchForecast(
 
 - [ ] **Step 5: Run the tests and confirm they pass**
 
-Run: `npm test -w frontend/dashboard`
+Run: `npm test -w dashboard`
 Expected: PASS. Task 1's 14 tests, plus 1 normalize test, 13 selector tests and 6 forecast tests.
 
 - [ ] **Step 6: Commit**
@@ -944,7 +944,7 @@ describe("dashboard is read-only", () => {
 
 - [ ] **Step 2: Run the tests and confirm they fail**
 
-Run: `npm test -w frontend/dashboard`
+Run: `npm test -w dashboard`
 Expected: FAIL with `Failed to resolve import "../src/pages/StockPage"`. The readonly test passes already.
 
 - [ ] **Step 3: Implement `src/firebase.ts` and `src/data/live.ts`**
@@ -1393,7 +1393,7 @@ mkdir -p frontend/dashboard/public && cp shared/assets/logo/aira-logo-192.png fr
 
 - [ ] **Step 6: Run the tests, the type check and the build**
 
-Run: `npm test -w frontend/dashboard && npm run build -w frontend/dashboard`
+Run: `npm test -w dashboard && npm run build -w dashboard`
 Expected: all unit tests PASS (Task 1 + Task 2 + 5 page tests + 1 read-only test), `tsc` reports no errors, and `frontend/dashboard/dist/index.html` exists.
 
 - [ ] **Step 7: Commit**
@@ -1413,10 +1413,10 @@ git commit -m "feat(dashboard): realtime Firestore listeners, accessible pages, 
 **Interfaces:**
 - Consumes:
   - Task 3 app.
-  - `firebase.json` emulator config: `emulators.firestore.port = 8085` (cross-team note 3).
+  - `shared/infra/firebase.json` emulator config: `emulators.firestore.port = 8085` (cross-team note 3).
   - Firestore rules allowing public read of `shops/demo/**` (cross-team note 2).
 - Produces:
-  - `npm run e2e -w frontend/dashboard`, run inside `firebase emulators:exec`.
+  - `npm run e2e -w dashboard`, run inside `firebase emulators:exec`.
   - A seeded demo shop that matches the demo story: 28 L curd, 2 L short on the Sakthi order, and a UPI sale.
 
 - [ ] **Step 1: Create `playwright.config.ts`**
@@ -1540,7 +1540,7 @@ test("signed-out visitor cannot pick another shop via ?shop=", async ({ page }) 
 Run:
 ```bash
 npx playwright install --with-deps chromium
-npx firebase-tools emulators:exec --only firestore --project demo-aira "npm run e2e -w frontend/dashboard"
+npx firebase-tools emulators:exec --only firestore --project demo-aira "npm run e2e -w dashboard"
 ```
 Expected: `2 passed`.
 
@@ -1559,7 +1559,7 @@ git commit -m "test(dashboard): Playwright + axe smoke test against Firestore em
 
 **Files:**
 - Create: `frontend/dashboard/scripts/a11y-score.mjs`, `frontend/dashboard/test/a11y-score.test.ts`, `frontend/dashboard/.env.production.example`
-- Modify (small PR, coordinate with Saravana): `firebase.json`, `.firebaserc`
+- Modify (small PR, coordinate with Saravana): `shared/infra/firebase.json`, `shared/infra/.firebaserc`
 
 **Interfaces:**
 - Consumes:
@@ -1589,7 +1589,7 @@ describe("Lighthouse accessibility gate", () => {
 });
 ```
 
-Run: `npm test -w frontend/dashboard`
+Run: `npm test -w dashboard`
 Expected: FAIL with `Failed to resolve import "../scripts/a11y-score.mjs"`.
 
 - [ ] **Step 2: Implement `shared/scripts/a11y-score.mjs`**
@@ -1613,7 +1613,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
 }
 ```
 
-Run: `npm test -w frontend/dashboard`
+Run: `npm test -w dashboard`
 Expected: PASS, including the 2 new tests.
 
 - [ ] **Step 3: Run Lighthouse against the emulator-backed preview**
@@ -1623,7 +1623,7 @@ cat > /tmp/aira-dash-lh.sh <<'EOF'
 set -e
 VITE_USE_EMULATOR=1 VITE_FIRESTORE_EMULATOR_PORT=8085 VITE_FIREBASE_PROJECT_ID=demo-aira VITE_FIREBASE_API_KEY=demo-key \
 VITE_FIREBASE_AUTH_DOMAIN=demo-aira.firebaseapp.com VITE_FIREBASE_STORAGE_BUCKET=demo-aira.appspot.com \
-VITE_FIREBASE_APP_ID=1:0:web:demo VITE_AIRA_LIVE_HTTP=http://127.0.0.1:9 npm run build -w frontend/dashboard
+VITE_FIREBASE_APP_ID=1:0:web:demo VITE_AIRA_LIVE_HTTP=http://127.0.0.1:9 npm run build -w dashboard
 npx tsx frontend/dashboard/e2e/seed.ts
 (cd frontend/dashboard && npx vite preview --port 4173 --strictPort) & PREVIEW=$!
 sleep 3
@@ -1639,9 +1639,9 @@ npx firebase-tools emulators:exec --only firestore --project demo-aira "bash /tm
 
 Expected: `Lighthouse accessibility score: 0.9x (min 0.95) → PASS` (score ≥ 0.95). If it fails, fix the reported audits (usually contrast or a missing label) and re-run.
 
-- [ ] **Step 4: Add the hosting target (small PR to `firebase.json` / `.firebaserc`; Saravana reviews)**
+- [ ] **Step 4: Add the hosting target (small PR to `shared/infra/firebase.json` / `shared/infra/.firebaserc`; Saravana reviews)**
 
-Add this entry to the `"hosting"` array in `firebase.json`:
+Add this entry to the `"hosting"` array in `shared/infra/firebase.json`:
 
 ```json
 { "target": "dashboard", "public": "frontend/dashboard/dist", "ignore": ["**/.*"],
@@ -1669,7 +1669,7 @@ VITE_AIRA_LIVE_HTTP=https://<aira-live-url>
 ```
 
 ```bash
-npm run build -w frontend/dashboard
+npm run build -w dashboard
 npx firebase-tools deploy --only hosting:dashboard --project <project>
 curl -s -o /dev/null -w "%{http_code}\n" "https://<project>-dashboard.web.app/?demo=1"
 ```
@@ -1679,7 +1679,7 @@ Expected: the deploy prints `Hosting URL: https://<project>-dashboard.web.app`, 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add frontend/dashboard/scripts/a11y-score.mjs frontend/dashboard/test/a11y-score.test.ts frontend/dashboard/.env.production.example frontend/dashboard/e2e/seed.ts firebase.json .firebaserc
+git add frontend/dashboard/scripts/a11y-score.mjs frontend/dashboard/test/a11y-score.test.ts frontend/dashboard/.env.production.example frontend/dashboard/e2e/seed.ts shared/infra/firebase.json shared/infra/.firebaserc
 git commit -m "feat(dashboard): Lighthouse a11y gate and Firebase Hosting target 'dashboard'"
 ```
 
@@ -1696,7 +1696,7 @@ git commit -m "feat(dashboard): Lighthouse a11y gate and Firebase Hosting target
    - `match /shops/{shopId}/{document=**} { allow read: if request.auth != null && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.shopId == shopId && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role in ['owner','family']; }`
    - `match /users/{uid} { allow read: if request.auth.uid == uid; }`
    - Storage rules: allow the same owner/family read for evidence images.
-3. **Saravana (`firebase.json`):** hosting target `dashboard` + `emulators.firestore.port: 8085`. Port 8080 is used by aira-live locally.
+3. **Saravana (`shared/infra/firebase.json`):** hosting target `dashboard` + `emulators.firestore.port: 8085`. Port 8080 is used by aira-live locally.
 4. **Kanish/01 + contracts PR (Saravana reviews):**
    - `business.sales.create` / `complete` must write `createdAt` / `completedAt`.
    - `business.payments.record` / `confirm` must write `createdAt` / `confirmedAt` (Firestore server timestamps).

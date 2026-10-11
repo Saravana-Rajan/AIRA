@@ -15,7 +15,7 @@
 #
 # Deliberately NOT set up: Pub/Sub, BigQuery, Cloud Scheduler, Remote Config, Firebase Auth, FCM.
 #
-# Usage (from anywhere; GCP_PROJECT and GEMINI_API_KEY may also come from the repo's .env):
+# Usage (from anywhere; GCP_PROJECT and GEMINI_API_KEY may also come from .env at the repo root, else shared/.env):
 #   GCP_PROJECT=<project-id> GEMINI_API_KEY=<key> bash shared/infra/bootstrap.sh
 #   SEED=1 GCP_PROJECT=<project-id> bash shared/infra/bootstrap.sh
 #
@@ -32,15 +32,18 @@ DATABASE="aira"
 SECRET="aira-gemini-api-key"
 SITE="aira-shop"
 
-# Print KEY's value from the repo's .env (empty when the file or key is absent).
+# Print KEY's value from the local .env: the repo root first, then shared/.env (empty when absent).
 dotenv_get() {
-  local file="$ROOT/.env" line
-  [ -f "$file" ] || return 0
-  line="$(grep -E "^$1=" "$file" | tail -n 1 || true)"
-  line="${line#*=}"
-  line="${line%\"}"
-  line="${line#\"}"
-  printf '%s' "$line"
+  local file line
+  for file in "$ROOT/.env" "$ROOT/shared/.env"; do
+    [ -f "$file" ] || continue
+    line="$(grep -E "^$1=" "$file" | tail -n 1 || true)"
+    line="${line#*=}"
+    line="${line%\"}"
+    line="${line#\"}"
+    printf '%s' "$line"
+    return 0
+  done
 }
 
 GCP_PROJECT="${GCP_PROJECT:-$(dotenv_get GCP_PROJECT)}"
@@ -133,7 +136,8 @@ else
   npx --yes firebase-tools hosting:sites:create "$SITE" --project "$GCP_PROJECT"
 fi
 if [ -f "$ROOT/shared/infra/firestore.rules" ] && [ -f "$ROOT/shared/infra/firestore.indexes.json" ]; then
-  (cd "$ROOT" && npx --yes firebase-tools deploy --only firestore --project "$GCP_PROJECT" --non-interactive)
+  (cd "$ROOT" && npx --yes firebase-tools deploy --config shared/infra/firebase.json --only firestore \
+    --project "$GCP_PROJECT" --non-interactive)
 else
   echo "    shared/infra/firestore.rules or shared/infra/firestore.indexes.json missing: skipped the rules deploy"
 fi

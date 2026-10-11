@@ -282,10 +282,10 @@ flowchart LR
 
 Every push to `main` runs `.github/workflows/deploy.yml`:
 
-1. Test: `npm ci && npm test`, then `cd backend && uv sync --frozen && uv run pytest -q`.
+1. Test: `npm ci && npm test && npm run typecheck` in `shared/contracts/` and in `frontend/` (the npm workspace root for the app and the dashboard), then `cd backend && uv sync --frozen && uv run pytest -q`.
 2. Sign in to Google Cloud with Workload Identity Federation.
 3. Build the `aira-live` container image, push it to Artifact Registry (`asia-south1`) and deploy it to Cloud Run with the Gemini key mounted from Secret Manager.
 4. Read the new service URL and inject the WebSocket URL into the app build (`VITE_AIRA_LIVE_WS`).
-5. Build the app and the dashboard into one bundle (`shared/scripts/build_hosting.sh`) and deploy it to Firebase Hosting site `aira-shop`.
+5. Build the app and the dashboard into one bundle (`shared/scripts/build_hosting.sh`) and deploy it to Firebase Hosting site `aira-shop` with `firebase deploy --config shared/infra/firebase.json`.
 
 Pull requests run the same tests through `.github/workflows/ci.yml`, with no access to Google Cloud.

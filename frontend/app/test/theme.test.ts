@@ -1,5 +1,7 @@
 import { describe, it, expect } from "vitest";
 import tokensCss from "../src/ui/tokens.css?raw";
+import appCss from "../src/ui/app.css?raw";
+import partsCss from "../src/ui/screen-parts.css?raw";
 import indexHtml from "../index.html?raw";
 import manifestRaw from "../public/manifest.webmanifest?raw";
 
@@ -46,6 +48,28 @@ describe("design tokens (light theme only)", () => {
       expect(px).toBeGreaterThanOrEqual(28);
       expect(px).toBeLessThanOrEqual(32);
     }
+  });
+
+  it("centres the app in a phone-width column with 16px gutters and a clamped orb", () => {
+    expect(token("--phone-width")).toBe("480px");
+    expect(token("--gutter")).toBe("16px");
+    expect(token("--orb-size")).toMatch(/^clamp\(/);
+    const screen = appCss.match(/\.screen\s*\{([^}]*)\}/)![1];
+    expect(screen).toMatch(/max-width:\s*var\(--phone-width\)/);
+    expect(screen).toMatch(/margin:\s*0 auto/);
+    expect(screen).toMatch(/padding:[^;]*var\(--gutter\)/);
+    expect(appCss).toMatch(/\.orb\s*\{[^}]*width:\s*var\(--orb-size\)/);
+    expect(appCss).not.toMatch(/width:\s*100vw/); // 100vw adds a horizontal scrollbar next to a vertical one
+  });
+
+  it("the caption card uses one clamp() scale, line-height 1.5 and a three-line cap", () => {
+    expect(partsCss).toMatch(/\.captions\s*\{[^}]*background:\s*var\(--surface\)/);
+    expect(partsCss).toMatch(/\.captions\s*\{[^}]*border:\s*1px solid var\(--border\)/);
+    expect(partsCss).toMatch(/\.caption--aira \.caption__who\s*\{[^}]*color:\s*var\(--brand-blue\)/);
+    expect(partsCss).toMatch(/\.caption--user \.caption__text\s*\{[^}]*font-size:\s*clamp\([^)]*var\(--text-caption-user\)\)/);
+    expect(partsCss).toMatch(/\.caption--aira \.caption__text\s*\{[^}]*font-size:\s*clamp\([^)]*var\(--text-caption-aira\)\)/);
+    expect(partsCss).toMatch(/\.caption__text\s*\{[^}]*line-height:\s*1\.5/);
+    expect(partsCss).toMatch(/\.caption__text\s*\{[^}]*max-height:\s*calc\(3 \* 1\.5em\)/);
   });
 
   it("declares a light color scheme", () => {

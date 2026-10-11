@@ -13,7 +13,7 @@
     "lighthouse": "node test/lighthouse/run.mjs"
   },
   "dependencies": {
-    "@aira/contracts": "*",
+    "@aira/contracts": "file:../../shared/contracts",
     "firebase": "^11.0.0",
     "preact": "^10.24.0"
   },

@@ -1,4 +1,5 @@
 /* /bench page. LIGHT THEME ONLY (overrides §6): every colour is a ui/tokens.css variable.
+   Layout: ONE phone-width column (tokens.css --phone-width, 480 px) centred on the page, like the app.
    Every selector is scoped under .bench because Vite bundles this file with the phone app's CSS. */
 
 body:has(> #root > .bench) {
@@ -8,10 +9,12 @@ body:has(> #root > .bench) {
 
 .bench {
   box-sizing: border-box;
-  max-width: 760px;
+  width: 100%;
+  max-width: var(--phone-width);
   margin: 0 auto;
-  padding: 16px 16px 48px;
-  min-height: 100vh;
+  padding: 16px var(--gutter) 48px;
+  min-height: 100dvh;
+  overflow-x: hidden;
   background: var(--bg);
   color: var(--text);
   font-family: var(--font-sans);
@@ -133,6 +136,18 @@ body:has(> #root > .bench) {
 /* fewer than 20 runs: orange underline (orange text would fail AA contrast) */
 .bench-table td.low-n { font-weight: 600; box-shadow: inset 0 -3px 0 var(--brand-orange); }
 .bench code { font-family: ui-monospace, "SF Mono", Menlo, monospace; }
+
+/* wide screens: a framed phone in the middle */
+@media (min-width: 600px) {
+  body:has(> #root > .bench) { padding: 40px var(--gutter); }
+  .bench {
+    min-height: auto;
+    padding: 28px 24px 32px;
+    border: 1px solid var(--border);
+    border-radius: 36px;
+    box-shadow: 0 24px 60px -32px color-mix(in srgb, var(--text) 28%, transparent);
+  }
+}
 
 @media (prefers-reduced-motion: reduce) {
   .bench-chip.is-on::before { animation: none; }

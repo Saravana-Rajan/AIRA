@@ -106,6 +106,15 @@ def generate(products: list[dict], days: int, end: date, seed: int,
     return docs
 
 
+def default_env_file() -> Path:
+    """The local .env: the repo root first, then shared/.env (the first that exists; the root path when neither does)."""
+    candidates = (ROOT / ".env", ROOT / "shared" / ".env")
+    for path in candidates:
+        if path.is_file():
+            return path
+    return candidates[0]
+
+
 def load_env_file(path: Path) -> dict[str, str]:
     """Minimal .env reader: KEY=VALUE lines, optional `export `, optional matching quotes."""
     path = Path(path)
@@ -193,7 +202,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--days", type=_positive, default=30)
     ap.add_argument("--end", type=date.fromisoformat, help="last day, YYYY-MM-DD (default: yesterday in IST)")
     ap.add_argument("--seed", type=int, default=2026)
-    ap.add_argument("--env-file", type=Path, default=ROOT / ".env")
+    ap.add_argument("--env-file", type=Path, help="local .env (default: .env at the repo root, else shared/.env)")
     ap.add_argument("--dry-run", action="store_true", help="generate and count the rows; write nothing (default)")
     mode = ap.add_mutually_exclusive_group()
     mode.add_argument("--emulator", action="store_true",
@@ -211,7 +220,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"dry run: {len(docs)} SALE ledger rows for shops/{shop}, {first} to {end}; nothing written. "
               "To write, pass --emulator, or --project <id> --yes-write-cloud.")
         return 0
-    env = {**load_env_file(ns.env_file), **os.environ}
+    env = {**load_env_file(ns.env_file or default_env_file()), **os.environ}
     try:
         project, database, emulator_host = target(ns.project, ns.database, env, emulator=ns.emulator,
                                                   yes_write_cloud=ns.yes_write_cloud)

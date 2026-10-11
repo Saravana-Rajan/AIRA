@@ -1,4 +1,4 @@
-# AIRA — instructions for Claude Code
+# AIRA team rules
 
 **What we're building:** AIRA is a voice-first assistant that lets a **blind shopkeeper run a small shop alone**. The setup is a chest-mounted phone, one earphone, Gemini Live, Gemini Robotics-ER 2, Firebase/Firestore and Cloud Run. The demo shop is *Sunrise Dairy*, selling Aavin milk, Sakthi curd and Arun ice cream.
 
@@ -33,8 +33,9 @@
 - **Contracts are frozen.** Change them only through one PR that updates `shared/contracts/src/*.ts`, `aira_live/contracts.py` and `shared/contracts/fixtures/*.json` together. Saravana reviews.
 - **No secrets in git.** Load `GEMINI_API_KEY`, `WHATSAPP_*` and `TELEGRAM_TOKEN` from env or Secret Manager.
 - **TDD:** write the failing test first.
-  - TypeScript: `npm test -w <workspace>`
+  - TypeScript: `cd frontend && npm test -w <workspace>` (`app`, `dashboard` or `../shared/contracts`)
   - Python: `cd backend && uv run pytest -q`
+- **Local settings:** copy `shared/.env.example` to `.env` at the repo root (or to `shared/.env`). Scripts read the root `.env` first, then `shared/.env`.
 - **Branches:** use `<name>/<topic>` and open small PRs to `main` at least twice a day. `main` must always be deployable.
 - **User-facing strings** come in `ta`, `hi` and `en` via `aira_live.i18n.t`. Keep sentences short.
 - **Product name:** AIRA. Payments are cash or UPI only.

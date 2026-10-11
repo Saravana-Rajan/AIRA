@@ -62,6 +62,15 @@ def build_docs(catalog: dict, env: Mapping[str, str]) -> list[tuple[str, dict]]:
     return docs
 
 
+def default_env_file() -> Path:
+    """The local .env: the repo root first, then shared/.env (the first that exists; the root path when neither does)."""
+    candidates = (ROOT / ".env", ROOT / "shared" / ".env")
+    for path in candidates:
+        if path.is_file():
+            return path
+    return candidates[0]
+
+
 def load_env_file(path: Path) -> dict[str, str]:
     """Minimal .env reader: KEY=VALUE lines, optional `export `, optional matching quotes."""
     path = Path(path)
@@ -119,9 +128,9 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--project", help="GCP project id (default: env GCP_PROJECT)")
     ap.add_argument("--database", help='Firestore database id (default: env FIRESTORE_DATABASE, else "aira")')
     ap.add_argument("--catalog", type=Path, default=DEFAULT_CATALOG)
-    ap.add_argument("--env-file", type=Path, default=ROOT / ".env")
+    ap.add_argument("--env-file", type=Path, help="local .env (default: .env at the repo root, else shared/.env)")
     ns = ap.parse_args(argv)
-    env = {**load_env_file(ns.env_file), **os.environ}
+    env = {**load_env_file(ns.env_file or default_env_file()), **os.environ}
     try:
         project, database = target(ns.project, ns.database, env)
         count = seed(ns.catalog, project, database, env=env)

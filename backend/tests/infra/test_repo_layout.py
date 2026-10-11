@@ -15,7 +15,7 @@ import pytest
 
 def _repo_root() -> Path:
     for p in Path(__file__).resolve().parents:
-        if (p / "package.json").exists() and (p / "firebase.json").exists():
+        if (p / ".github").is_dir() and (p / "frontend").is_dir() and (p / "shared").is_dir():
             return p
     return Path(__file__).resolve().parents[3]
 
@@ -61,10 +61,19 @@ EXPECTED_FILES = [
     "shared/scripts/build_hosting.sh",
     "shared/scripts/seed_firestore.py",
     "shared/docs/ideas/02-sam-day.md",
+    # moved out of the repo root (owner request 2026-10-11: the root holds folders only, plus README and .gitignore)
+    "frontend/package.json",
+    "frontend/package-lock.json",
+    "shared/contracts/package-lock.json",
+    "shared/infra/firebase.json",
+    "shared/infra/.firebaserc",
+    "shared/.env.example",
+    "shared/docs/team-rules.md",
 ]
-ROOT_ALLOWED = {
-    ".github", "README.md", "CLAUDE.md", "package.json", "package-lock.json", "firebase.json", ".firebaserc",
-    ".env.example", ".gitignore", "frontend", "backend", "shared",
+# The exact repo root. Git-ignored local entries (node_modules/, dist/, .venv, .env, caches) are allowed too.
+ROOT_ALLOWED = {".github", "README.md", ".gitignore", "frontend", "backend", "shared"}
+ROOT_MOVED = {
+    "CLAUDE.md", "package.json", "package-lock.json", "firebase.json", ".firebaserc", ".env.example",
 }
 
 
@@ -109,24 +118,56 @@ def test_old_top_level_folder_is_gone(rel):
     assert not (ROOT / rel).exists(), f"{rel}/ must not exist at the repo root any more"
 
 
+def _git_ignored(names: list[str]) -> set[str]:
+    if not names:
+        return set()
+    proc = subprocess.run(["git", "check-ignore", "--no-index", "--", *names], cwd=ROOT, capture_output=True, text=True)
+    return set(proc.stdout.split())
+
+
 def test_root_has_only_the_allowed_entries():
-    stray = sorted(
-        e.name for e in ROOT.iterdir()
-        if e.name not in ROOT_ALLOWED and not e.name.startswith(".") and e.name not in {"node_modules", "dist"}
-    )
+    """ls -A at the root shows frontend/, backend/, shared/, .github/, README.md and .gitignore, plus git-ignored
+    local entries only (node_modules/, dist/, .venv, .env, caches)."""
+    names = sorted(e.name for e in ROOT.iterdir() if e.name != ".git")
+    ignored = _git_ignored([n for n in names if n not in ROOT_ALLOWED])
+    stray = [n for n in names if n not in ROOT_ALLOWED and n not in ignored]
     assert stray == [], f"stray entries at the repo root: {stray}"
+    assert ROOT_ALLOWED <= set(names)
 
 
-def test_workspaces_point_at_the_new_folders():
-    pkg = json.loads((ROOT / "package.json").read_text(encoding="utf-8"))
-    assert pkg["workspaces"] == ["frontend/*", "shared/contracts"]
+def test_tracked_root_entries_are_exactly_the_allowed_ones():
+    out = subprocess.run(["git", "ls-files", "-z", "--cached", "--others", "--exclude-standard"],
+                         cwd=ROOT, capture_output=True, check=True).stdout.decode()
+    top = {rel.split("/", 1)[0] for rel in out.split("\0") if rel}
+    assert top == ROOT_ALLOWED, top
 
 
-def test_firebase_json_points_at_shared_infra():
-    fb = json.loads((ROOT / "firebase.json").read_text(encoding="utf-8"))
-    assert fb["firestore"] == [
-        {"database": "aira", "rules": "shared/infra/firestore.rules", "indexes": "shared/infra/firestore.indexes.json"}
-    ]
+@pytest.mark.parametrize("name", sorted(ROOT_MOVED))
+def test_moved_root_file_is_gone(name):
+    assert not (ROOT / name).exists(), f"{name} moved out of the repo root"
+
+
+def test_frontend_is_the_npm_workspace_root():
+    pkg = json.loads((ROOT / "frontend" / "package.json").read_text(encoding="utf-8"))
+    assert pkg["workspaces"] == ["app", "dashboard"]
+    for app in ("app", "dashboard"):
+        deps = json.loads((ROOT / "frontend" / app / "package.json").read_text(encoding="utf-8"))["dependencies"]
+        assert deps["@aira/contracts"] == "file:../../shared/contracts", app
+
+
+def test_firebase_json_lives_in_shared_infra_and_uses_relative_paths():
+    fb = json.loads((ROOT / "shared" / "infra" / "firebase.json").read_text(encoding="utf-8"))
+    assert fb["firestore"] == [{"database": "aira", "rules": "firestore.rules", "indexes": "firestore.indexes.json"}]
+    assert fb["hosting"]["public"] == "../../dist/hosting"
+    rc = json.loads((ROOT / "shared" / "infra" / ".firebaserc").read_text(encoding="utf-8"))
+    assert rc["projects"]["default"] == "demo-aira"
+
+
+def test_team_rules_doc_replaces_the_root_instructions_file():
+    text = (ROOT / "shared" / "docs" / "team-rules.md").read_text(encoding="utf-8")
+    assert text.startswith("# AIRA team rules\n")
+    assert "claude" not in text.lower()
+    assert "The model proposes, the backend commits." in text
 
 
 def test_catalog_is_sunrise_dairy():

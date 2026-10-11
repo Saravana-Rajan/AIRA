@@ -173,7 +173,7 @@ gcloud run services update aira-live --region asia-south1 --project "$PROJECT_ID
   --update-env-vars AIRA_SECRET_ROLL="$(date +%s)"
 ```
 
-**How AIRA finds the vendor numbers.** Orders go to the `phone` field of each supplier doc in Firestore (database `aira`, `shops/sunrise_dairy/suppliers/<id>`). `shared/scripts/seed_firestore.py` fills that field from the env var named by the catalog's `phoneEnv`: `SUPPLIER_AAVIN_PHONE`, `SUPPLIER_SAKTHI_PHONE` and `SUPPLIER_ARUN_PHONE`, the same names as above and in `.env.example`. If the shop is already seeded, type each number into the supplier doc's `phone` field in the Firestore console instead of re-seeding, because re-seeding resets the stock.
+**How AIRA finds the vendor numbers.** Orders go to the `phone` field of each supplier doc in Firestore (database `aira`, `shops/sunrise_dairy/suppliers/<id>`). `shared/scripts/seed_firestore.py` fills that field from the env var named by the catalog's `phoneEnv`: `SUPPLIER_AAVIN_PHONE`, `SUPPLIER_SAKTHI_PHONE` and `SUPPLIER_ARUN_PHONE`, the same names as above and in `shared/.env.example`. If the shop is already seeded, type each number into the supplier doc's `phone` field in the Firestore console instead of re-seeding, because re-seeding resets the stock.
 
 ## 7. Connect the webhook (vendor replies)
 

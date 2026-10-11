@@ -52,10 +52,34 @@ describe("Screen", () => {
     expect(q(".caption--user")).toBeNull();
   });
 
-  it("shows the last thing the user said and the last thing AIRA said", () => {
+  it("shows the last thing the user said and the last thing AIRA said, each under its speaker label", () => {
     mount({ ...initialScreen, userText: "2 litres curd", airaText: "Sakthi curd 1 L, take one more." });
-    expect(q(".caption--user")!.textContent).toBe("2 litres curd");
-    expect(q(".caption--aira")!.textContent).toBe("Sakthi curd 1 L, take one more.");
+    expect(q(".caption--user .caption__who")!.textContent).toBe("You");
+    expect(q(".caption--user .caption__text")!.textContent).toBe("2 litres curd");
+    expect(q(".caption--aira .caption__who")!.textContent).toBe("AIRA");
+    expect(q(".caption--aira .caption__text")!.textContent).toBe("Sakthi curd 1 L, take one more.");
+  });
+
+  it("the gesture hint shows exactly once: in the empty caption card first, at the bottom once talking starts", () => {
+    mount(initialScreen);
+    expect(q(".captions")!.classList.contains("captions--empty")).toBe(true);
+    expect(q(".hint")).toBeNull();
+    mount({ ...initialScreen, userText: "hello", airaText: "Hi." });
+    expect(q(".captions")!.classList.contains("captions--empty")).toBe(false);
+    expect(q(".caption--hint")).toBeNull();
+    expect(q(".hint")!.textContent).toBe("Double-tap anywhere to talk. Long-press to stop.");
+    expect(root.querySelectorAll(".hint, .caption--hint")).toHaveLength(1);
+  });
+
+  it("lays the screen out as one phone column: top bar, orb stage, caption card, task card, hint", () => {
+    mount({ ...initialScreen, userText: "2 litres curd", airaText: "120 rupees.", task: { title: "Sale", detail: "2 × Sakthi curd 1 L — ₹120", tone: "ok" } });
+    const screen = q("button.surface > .screen")!;
+    expect(screen).not.toBeNull();
+    const order = [...screen.children].map((el) => el.className.split(" ")[0]);
+    expect(order).toEqual(["topbar", "stage", "captions", "task-card", "hint"]);
+    expect(screen.querySelector(".topbar .brand__logo")).not.toBeNull();
+    expect(screen.querySelector(".topbar .status-chip")).not.toBeNull();
+    expect(screen.querySelector(".stage .orb")).not.toBeNull();
   });
 
   it("task card appears only when there is a task, with its tone", () => {

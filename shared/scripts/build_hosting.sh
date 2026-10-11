@@ -2,8 +2,10 @@
 # Build the single Firebase Hosting bundle for the site aira-shop:
 #   frontend/app        -> dist/hosting/            served at /
 #   frontend/dashboard  -> dist/hosting/dashboard/  served at /dashboard/ (Vite base /dashboard/)
-# firebase.json serves dist/hosting with rewrites /dashboard/** -> /dashboard/index.html
-# and ** -> /index.html.
+# shared/infra/firebase.json serves ../../dist/hosting (relative to the config file) with rewrites
+# /dashboard/** -> /dashboard/index.html and ** -> /index.html.
+#
+# npm runs inside frontend/, the workspace root for app and dashboard (frontend/package.json).
 #
 # Build-time env read by Vite:
 #   VITE_AIRA_LIVE_WS   wss://<cloud-run-host>/ws   (the app falls back to ws://localhost:8080/ws)
@@ -15,7 +17,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 OUT="$ROOT/dist/hosting"
-cd "$ROOT"
+cd "$ROOT/frontend"
 
 if [ ! -d node_modules ]; then
   npm ci
@@ -25,8 +27,8 @@ if [ -z "${VITE_AIRA_LIVE_WS:-}" ]; then
 fi
 
 rm -rf "$OUT"
-npm run build -w frontend/app -- --outDir "$OUT" --emptyOutDir
-npm run build -w frontend/dashboard -- --base /dashboard/ --outDir "$OUT/dashboard" --emptyOutDir
+npm run build -w app -- --outDir "$OUT" --emptyOutDir
+npm run build -w dashboard -- --base /dashboard/ --outDir "$OUT/dashboard" --emptyOutDir
 
 for page in "$OUT/index.html" "$OUT/dashboard/index.html"; do
   if [ ! -f "$page" ]; then

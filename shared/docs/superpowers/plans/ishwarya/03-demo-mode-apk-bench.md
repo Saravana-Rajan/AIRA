@@ -41,7 +41,7 @@
 - **Demo media:** fictional invoices only (no real GSTIN or phone numbers), no faces, no real customer data. Each file is at most 8 MB.
 - **Service worker:** must **bypass** `ws:`/`wss:`, every `*.googleapis.com` host except `storage.googleapis.com/mediapipe-models/`, and `/api/` and `/webhooks/`. Only GET requests are ever cached.
 - **Benchmarks:** `latency_metrics` rows are exactly `{metric: STRING, value: FLOAT, unit: STRING, device: STRING, build: STRING, ts: TIMESTAMP (ISO-8601)}`.
-- **Commands:** TS tests run with `npm test -w frontend/app`; Python bench tests with `cd bench && uv run pytest -q`.
+- **Commands:** TS tests run with `npm test -w app`; Python bench tests with `cd bench && uv run pytest -q`.
 - **Git:** work on branch `ishwarya/demo-pwa-bench`, with a small PR to `main` after each task.
 
 ## Review Focus
@@ -203,7 +203,7 @@ describe("injectAudioFile", () => {
 
 - [ ] **Step 2: Run the tests to verify they fail**
 
-Run: `npm test -w frontend/app -- source audioInject`
+Run: `npm test -w app -- source audioInject`
 Expected: FAIL with "Failed to resolve import ../src/camera/source" and "…/src/demo/audioInject".
 
 - [ ] **Step 3: Implement `src/camera/source.ts`**
@@ -330,7 +330,7 @@ export async function injectAudioFile(
 
 - [ ] **Step 6: Run the tests to verify they pass**
 
-Run: `npm test -w frontend/app -- source audioInject`
+Run: `npm test -w app -- source audioInject`
 Expected: PASS, 10 tests.
 
 - [ ] **Step 7: Commit**
@@ -433,7 +433,7 @@ describe("routeFor", () => {
 
 - [ ] **Step 2: Run the tests to verify they fail**
 
-Run: `npm test -w frontend/app -- scenarios describe router`
+Run: `npm test -w app -- scenarios describe router`
 Expected: FAIL with unresolved imports for `scenarios`, `describe` and `router`.
 
 - [ ] **Step 3: Implement `scenarios.ts`, `describe.ts`, `router.ts`**
@@ -690,7 +690,7 @@ Expected: `{"miss":[],"big":[]}`
 
 - [ ] **Step 7: Run the tests and build**
 
-Run: `npm test -w frontend/app -- scenarios describe router && npm run build -w frontend/app`
+Run: `npm test -w app -- scenarios describe router && npm run build -w app`
 Expected: PASS, 8 tests; the build succeeds.
 
 Then run a manual check with `aira-live` running in mock or real mode: open `http://localhost:5173/try` and click card 3. The panel shows `AIRA: …` lines, and once the server sends `request_frame`, frames come from the crate photo.
@@ -790,7 +790,7 @@ describe("registerServiceWorker", () => {
 
 - [ ] **Step 3: Run the tests to verify they fail**
 
-Run: `npm test -w frontend/app -- pwa`
+Run: `npm test -w app -- pwa`
 Expected: FAIL with "Cannot find module '../public/sw-strategy.js'".
 
 - [ ] **Step 4: Implement the manifest, strategy, service worker and registration**
@@ -888,12 +888,12 @@ Then uncomment the `registerServiceWorker();` line in `main.tsx` (from Task 2).
 
 - [ ] **Step 5: Run the tests to verify they pass**
 
-Run: `npm test -w frontend/app -- pwa`
+Run: `npm test -w app -- pwa`
 Expected: PASS, 10 tests.
 
 - [ ] **Step 6: Run the installability check on a phone**
 
-Run: `npm run build -w frontend/app && npx firebase-tools deploy --only hosting:app`
+Run: `npm run build -w app && npx firebase-tools deploy --only hosting:app`
 
 Open the Hosting URL in Chrome on the Android test phone. "Add to Home screen" or "Install app" should appear. Then Chrome DevTools → Application → Service Workers should show `sw.js` "activated and is running", and Cache Storage `aira-v1` should list the 5 precached URLs.
 
@@ -916,7 +916,7 @@ git commit -m "feat(pwa): installable AIRA — manifest, logo icons, service wor
 **Interfaces:**
 - Consumes:
   - the deployed Hosting URL from Task 3
-  - the `firebase.json` header for `/.well-known/assetlinks.json` (foundation)
+  - the `shared/infra/firebase.json` header for `/.well-known/assetlinks.json` (foundation)
 - Produces:
   - `frontend/app/twa/app-release-signed.apk` (not committed)
   - TWA package `in.techjays.aira`
@@ -986,7 +986,7 @@ describe("TWA config", () => {
 
 - [ ] **Step 4: Run the test to verify it fails**
 
-Run: `npm test -w frontend/app -- assetlinks`
+Run: `npm test -w app -- assetlinks`
 Expected: FAIL with "ENOENT … public/.well-known/assetlinks.json".
 
 - [ ] **Step 5: Create `write-assetlinks.mjs`, read the real fingerprint, and write the file**
@@ -1026,9 +1026,9 @@ frontend/app/twa/app/build/
 - [ ] **Step 7: Run the tests, build the APK, deploy asset links, install**
 
 ```bash
-npm test -w frontend/app -- assetlinks          # Expected: PASS (2 tests)
+npm test -w app -- assetlinks          # Expected: PASS (2 tests)
 cd frontend/app/twa && bubblewrap build && cd ../../..
-npm run build -w frontend/app && npx firebase-tools deploy --only hosting:app
+npm run build -w app && npx firebase-tools deploy --only hosting:app
 curl -s https://<the host from Step 1>/.well-known/assetlinks.json   # Expected: the JSON with in.techjays.aira
 adb install -r frontend/app/twa/app-release-signed.apk
 ```
@@ -1152,7 +1152,7 @@ describe("export", () => {
 
 - [ ] **Step 2: Run the tests to verify they fail**
 
-Run: `npm test -w frontend/app -- bench`
+Run: `npm test -w app -- bench`
 Expected: FAIL with unresolved imports for `collector`, `battery` and `export`.
 
 - [ ] **Step 3: Implement `collector.ts`, `battery.ts`, `export.ts`**
@@ -1370,7 +1370,7 @@ To measure:
 
 - [ ] **Step 5: Run the tests to verify they pass**
 
-Run: `npm test -w frontend/app -- bench`
+Run: `npm test -w app -- bench`
 Expected: PASS, 10 tests.
 
 - [ ] **Step 6: Commit**

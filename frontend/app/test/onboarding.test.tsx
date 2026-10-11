@@ -76,6 +76,17 @@ describe("Onboarding", () => {
     expect(document.activeElement).toBe(startBtn());
   });
 
+  it("keeps the whole screen inside one phone-width column with Start as the last thing in it", () => {
+    mount({ onDone: () => {}, languages: ["en"] });
+    const col = root.querySelector(".onboard > .onboard__col")!;
+    expect(col).not.toBeNull();
+    expect(col.querySelector("h1")).not.toBeNull();
+    expect(col.querySelector("input[type=checkbox]")).not.toBeNull();
+    expect(col.lastElementChild).toBe(startBtn());
+    expect(startBtn().getAttribute("aria-labelledby")).toBe("aira-start-label");
+    expect(startBtn().getAttribute("aria-describedby")).toBe("aira-start-hint");
+  });
+
   it("names the shop and labels every control for screen readers", () => {
     mount({ onDone: () => {}, languages: ["en"] });
     expect(root.textContent).toContain("Sunrise Dairy");

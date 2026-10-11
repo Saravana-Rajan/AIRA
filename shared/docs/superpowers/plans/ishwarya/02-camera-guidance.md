@@ -214,7 +214,7 @@ describe("i18n", () => {
 
 - [ ] **Step 2: Run the test to verify it fails**
 
-Run: `npm test -w frontend/app -- camera.quality`
+Run: `npm test -w app -- camera.quality`
 Expected: FAIL with `Failed to resolve import "../src/camera/quality"`.
 
 - [ ] **Step 3: Implement the four modules**
@@ -350,7 +350,7 @@ export function createHintSpeaker(
 
 - [ ] **Step 4: Run the test to verify it passes**
 
-Run: `npm test -w frontend/app -- camera.quality`
+Run: `npm test -w app -- camera.quality`
 Expected: PASS (8 tests).
 
 - [ ] **Step 5: Commit**
@@ -446,7 +446,7 @@ describe("startContinuous", () => {
 
 - [ ] **Step 2: Run the test to verify it fails**
 
-Run: `npm test -w frontend/app -- camera.capture`
+Run: `npm test -w app -- camera.capture`
 Expected: FAIL with `Failed to resolve import "../src/camera/capture"`.
 
 - [ ] **Step 3: Implement `camera/capture.ts`**
@@ -580,7 +580,7 @@ export function startContinuous(purpose: FramePurpose, fps: number): () => void 
 
 - [ ] **Step 4: Run the test to verify it passes**
 
-Run: `npm test -w frontend/app -- camera.capture`
+Run: `npm test -w app -- camera.capture`
 Expected: PASS (6 tests).
 
 - [ ] **Step 5: Commit**
@@ -678,7 +678,7 @@ describe("request_frame handler", () => {
 
 - [ ] **Step 2: Run the test to verify it fails**
 
-Run: `npm test -w frontend/app -- camera.requests`
+Run: `npm test -w app -- camera.requests`
 Expected: FAIL with `Failed to resolve import "../src/camera/requests"`.
 
 - [ ] **Step 3: Implement `camera/requests.ts`**
@@ -731,7 +731,7 @@ export function createFrameRequestHandler(deps: RequestDeps) {
 
 - [ ] **Step 4: Run the test to verify it passes**
 
-Run: `npm test -w frontend/app -- camera.requests`
+Run: `npm test -w app -- camera.requests`
 Expected: PASS (6 tests).
 
 - [ ] **Step 5: Commit**
@@ -842,7 +842,7 @@ describe("DwellTimer", () => {
 
 - [ ] **Step 2: Run the test to verify it fails**
 
-Run: `npm test -w frontend/app -- guidance.geometry`
+Run: `npm test -w app -- guidance.geometry`
 Expected: FAIL with `Failed to resolve import "../src/guidance/geometry"`.
 
 - [ ] **Step 3: Implement `guidance/geometry.ts`**
@@ -933,7 +933,7 @@ export class DwellTimer {
 
 - [ ] **Step 4: Run the test to verify it passes**
 
-Run: `npm test -w frontend/app -- guidance.geometry`
+Run: `npm test -w app -- guidance.geometry`
 Expected: PASS (10 tests).
 
 - [ ] **Step 5: Commit**
@@ -1037,12 +1037,12 @@ describe("guidance session", () => {
 
 - [ ] **Step 2: Run the test to verify it fails**
 
-Run: `npm test -w frontend/app -- guidance.session`
+Run: `npm test -w app -- guidance.session`
 Expected: FAIL with `Failed to resolve import "../src/guidance/session"`.
 
 - [ ] **Step 3: Install MediaPipe and implement `hands.ts` (verify the options against https://ai.google.dev/edge/mediapipe/solutions/vision/hand_landmarker/web_js)**
 
-Run: `npm install -w frontend/app @mediapipe/tasks-vision@1.1.0`
+Run: `npm install -w app @mediapipe/tasks-vision@1.1.0`
 Expected: `added 1 package` (the version may print as `1.1.0`).
 
 ```ts
@@ -1233,13 +1233,13 @@ export function createGuidanceSession(deps: GuidanceDeps) {
 
 - [ ] **Step 5: Run the tests to verify they pass**
 
-Run: `npm test -w frontend/app -- guidance`
+Run: `npm test -w app -- guidance`
 Expected: PASS (`guidance.geometry` 10 tests + `guidance.session` 4 tests).
 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add frontend/app/src/guidance/tones.ts frontend/app/src/guidance/hands.ts frontend/app/src/guidance/session.ts frontend/app/test/guidance.session.test.ts frontend/app/package.json package-lock.json
+git add frontend/app/src/guidance/tones.ts frontend/app/src/guidance/hands.ts frontend/app/src/guidance/session.ts frontend/app/test/guidance.session.test.ts frontend/app/package.json frontend/package-lock.json
 git commit -m "feat(app): fingertip tracking (MediaPipe), guidance tones and target-driven session"
 ```
 
@@ -1302,7 +1302,7 @@ describe("count UX", () => {
 
 - [ ] **Step 2: Run the test to verify it fails**
 
-Run: `npm test -w frontend/app -- count.ux`
+Run: `npm test -w app -- count.ux`
 Expected: FAIL with `Failed to resolve import "../src/count/countUx"`.
 
 - [ ] **Step 3: Implement `countUx.ts`, `wire.ts` and `dev/fake.ts`**
@@ -1409,12 +1409,12 @@ cam.guidance.end();
 
 - [ ] **Step 4: Run all app tests and typecheck**
 
-Run: `npm test -w frontend/app && npm run typecheck -w frontend/app`
+Run: `npm test -w app && npm run typecheck -w app`
 Expected: all test files PASS (`camera.quality`, `camera.capture`, `camera.requests`, `guidance.geometry`, `guidance.session`, `count.ux`, plus the foundation's socket test), and no type errors.
 
 - [ ] **Step 5: Phone check on a real Android device (HTTPS is required for the camera)**
 
-Run: `npm run build -w frontend/app && npx firebase-tools hosting:channel:deploy cam-test --only app --expires 2d`
+Run: `npm run build -w app && npx firebase-tools hosting:channel:deploy cam-test --only app --expires 2d`
 Expected: a preview URL `https://<project>--cam-test-<hash>.web.app`.
 
 On the Android phone, mounted on the chest:

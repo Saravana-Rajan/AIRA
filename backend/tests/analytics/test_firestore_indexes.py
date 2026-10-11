@@ -7,7 +7,7 @@ How Firestore picks an index (https://firebase.google.com/docs/firestore/query-d
   fields first, then the range field in the query's sort direction. With no order_by, an inequality sorts
   its field ASCENDING, and a DESCENDING index does not serve it (one index per direction).
 
-firebase.json deploys ONE indexes file for database "aira": shared/infra/firestore.indexes.json. There is no separate
+shared/infra/firebase.json deploys ONE indexes file for database "aira": shared/infra/firestore.indexes.json. There is no separate
 analytics file. The analytics code issues single-field queries only (SINGLE_FIELD), so it needs no composite
 index. The three ASCENDING time-window indexes (WINDOW) already exist in the deployed database; they are kept
 in the one file so it matches what is deployed, and so a filter later pushed down to the server is served.
@@ -131,7 +131,7 @@ def test_index_must_match_collection_and_fields_exactly():
 
 def test_one_indexes_file_and_no_stray_analytics_file():
     assert INDEXES.exists()
-    assert not STRAY.exists(), "merge it into shared/infra/firestore.indexes.json: firebase.json deploys only that file"
+    assert not STRAY.exists(), "merge it into shared/infra/firestore.indexes.json: shared/infra/firebase.json deploys only that file"
 
 
 def test_file_uses_firebase_cli_format():

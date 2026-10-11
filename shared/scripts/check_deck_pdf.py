@@ -114,9 +114,9 @@ def check_pages(pages: list[str], project_id: str = "") -> tuple[list[str], list
 
 
 def project_id_from_env() -> str:
-    """GCP_PROJECT from the environment or a local .env; never written in the repo."""
+    """GCP_PROJECT from the environment or a local .env (repo root, then shared/.env); never written in the repo."""
     project = os.environ.get("GCP_PROJECT", "").strip()
-    for env_file in (ROOT / ".env", ROOT / "backend" / ".env"):
+    for env_file in (ROOT / ".env", ROOT / "shared" / ".env", ROOT / "backend" / ".env"):
         if project or not env_file.exists():
             continue
         for line in env_file.read_text(encoding="utf-8").splitlines():

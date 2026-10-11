@@ -31,9 +31,17 @@ jobs:
         with:
           node-version: 22
           cache: npm
+          cache-dependency-path: |
+            frontend/package-lock.json
+            shared/contracts/package-lock.json
 
-      - name: TypeScript workspaces
-        run: npm ci && npm test
+      - name: Shared contracts
+        working-directory: shared/contracts
+        run: npm ci && npm test && npm run typecheck
+
+      - name: Frontend workspaces
+        working-directory: frontend
+        run: npm ci && npm test && npm run typecheck
 
       - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
         with:
@@ -74,8 +82,10 @@ jobs:
         with:
           node-version: 22
           cache: npm
+          cache-dependency-path: frontend/package-lock.json
 
       - name: Install npm workspaces
+        working-directory: frontend
         run: npm ci
 
       - id: auth
@@ -137,5 +147,7 @@ jobs:
           VITE_FIREBASE_APP_ID: ${{ secrets.VITE_FIREBASE_APP_ID }}
         run: bash shared/scripts/build_hosting.sh
 
+      # --config: firebase.json lives in shared/infra; its hosting.public is ../../dist/hosting (paths in the
+      # config resolve relative to the config file).
       - name: Deploy hosting (aira-shop)
-        run: npx firebase-tools@15.33.0 deploy --only hosting:aira-shop --project ${{ secrets.GCP_PROJECT }} --non-interactive
+        run: npx firebase-tools@15.33.0 deploy --config shared/infra/firebase.json --only hosting:aira-shop --project ${{ secrets.GCP_PROJECT }} --non-interactive

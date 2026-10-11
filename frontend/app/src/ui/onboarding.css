@@ -1,19 +1,45 @@
 /* Onboarding: the one Start tap. LIGHT THEME ONLY; every colour comes from tokens.css.
-   The page is quiet and left-aligned. Start is the one bold thing: a navy slab that fills the
-   bottom of the screen, so a blind owner finds it by touching the lower half of the phone. */
+   Layout: ONE phone-width column (tokens.css --phone-width, 480 px) centred on the page. On a phone it
+   is full width with the 16 px gutter; on anything wider it sits in the middle with a faint surface
+   frame, so a laptop sees a phone, not a page stretched edge to edge. Start is the one bold thing: a
+   big rounded navy card at the bottom of the column, at least half the screen tall on a phone, so a
+   blind owner finds it by touching the lower half. */
 @import "./tokens.css";
 
 .onboard {
+  --onboard-title: clamp(32px, 9vw, 40px);
+  --onboard-start: clamp(40px, 11vw, 48px);
+  --onboard-shop: clamp(18px, 5vw, 20px);
+  --onboard-radius: 28px;
+  box-sizing: border-box;
   display: flex;
   flex-direction: column;
+  align-items: center;
   min-height: 100dvh;
   margin: 0;
-  padding: max(20px, env(safe-area-inset-top)) var(--gutter) 0;
+  padding: 0;
   background: var(--bg);
   color: var(--text);
   font-family: var(--font-sans);
   font-size: var(--text-body);
   line-height: 1.4;
+  overflow-x: hidden;
+}
+.onboard *,
+.onboard *::before,
+.onboard *::after {
+  box-sizing: inherit;
+}
+
+/* ---------- the phone column ---------- */
+.onboard__col {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  width: 100%;
+  max-width: var(--phone-width);
+  min-height: 100dvh;
+  padding: max(20px, env(safe-area-inset-top)) var(--gutter) max(var(--gutter), env(safe-area-inset-bottom));
 }
 
 /* ---------- logo, name, shop ---------- */
@@ -33,20 +59,20 @@
 }
 .onboard__title {
   margin: 0;
-  font-size: 40px;
+  font-size: var(--onboard-title);
   font-weight: 800;
   line-height: 1;
   letter-spacing: -0.02em;
 }
 .onboard__shop {
   margin-top: 4px;
-  font-size: 20px;
+  font-size: var(--onboard-shop);
   font-weight: 600;
   color: var(--text-muted);
 }
 .onboard__how {
   margin: 20px 0 0;
-  max-width: 32ch;
+  max-width: 34ch;
   font-size: var(--text-body);
   color: var(--text-muted);
 }
@@ -54,7 +80,7 @@
 /* No language picker: AIRA follows whoever speaks. One line says so, under the how-to. */
 .onboard__any {
   margin: 10px 0 0;
-  max-width: 32ch;
+  max-width: 34ch;
   font-size: var(--text-body);
   font-weight: 600;
   color: var(--text);
@@ -109,7 +135,7 @@
   flex-direction: column;
 }
 .tb-switch__label {
-  font-size: 20px;
+  font-size: var(--onboard-shop);
   font-weight: 600;
 }
 .tb-switch__hint {
@@ -117,20 +143,21 @@
   color: var(--text-muted);
 }
 
-/* ---------- Start: the navy slab ---------- */
+/* ---------- Start: the navy card ---------- */
 .onboard__start {
   display: flex;
   flex-direction: column;
   align-items: flex-start;
-  justify-content: center;
+  justify-content: flex-end;
   gap: 6px;
-  /* fills whatever height is left down to the bottom edge; full bleed past the page gutter */
+  /* takes whatever height is left in the column; at least half the phone screen */
   flex: 1 0 auto;
-  margin: auto calc(-1 * var(--gutter)) 0;
-  min-height: max(28dvh, 200px);
-  padding: 28px calc(var(--gutter) + 8px) max(28px, env(safe-area-inset-bottom));
+  width: 100%;
+  margin: auto 0 0;
+  min-height: max(50dvh, 240px);
+  padding: 28px 28px 30px;
   border: 0;
-  border-radius: 32px 32px 0 0;
+  border-radius: var(--onboard-radius);
   background: var(--text);
   color: var(--bg);
   font: inherit;
@@ -145,19 +172,19 @@
 }
 .onboard__start:focus-visible {
   outline: var(--focus-ring);
-  outline-offset: -8px;
+  outline-offset: 4px;
 }
 .onboard__spark {
   width: 56px;
   height: 56px;
-  margin-bottom: 6px;
+  margin-bottom: auto;
 }
 .onboard__stop--1 { stop-color: var(--brand-cyan); }
 .onboard__stop--2 { stop-color: var(--brand-blue); }
 .onboard__stop--3 { stop-color: var(--brand-purple); }
 .onboard__stop--4 { stop-color: var(--brand-orange); }
 .onboard__start-label {
-  font-size: 48px;
+  font-size: var(--onboard-start);
   font-weight: 800;
   line-height: 1.05;
   letter-spacing: -0.01em;
@@ -165,6 +192,26 @@
 .onboard__start-hint {
   font-size: var(--text-body);
   color: color-mix(in srgb, var(--bg) 82%, var(--text));
+}
+
+/* ---------- wide screens: a framed phone in the middle ---------- */
+@media (min-width: 600px) {
+  .onboard {
+    justify-content: center;
+    padding: 40px var(--gutter);
+  }
+  .onboard__col {
+    flex: 0 1 auto;
+    min-height: min(820px, calc(100dvh - 80px));
+    padding: 32px 28px 28px;
+    border: 1px solid var(--border);
+    border-radius: 36px;
+    background: var(--surface);
+    box-shadow: 0 24px 60px -32px color-mix(in srgb, var(--text) 28%, transparent);
+  }
+  .onboard__start {
+    min-height: 320px;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {

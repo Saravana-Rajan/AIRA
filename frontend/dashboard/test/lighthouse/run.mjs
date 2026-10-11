@@ -323,7 +323,7 @@ async function main(argv) {
   const workDir = mkdtempSync(join(tmpdir(), "aira-lighthouse-emu-"));
   const [bin, ...pre] = plan.firebase;
   const inner = [process.execPath, fileURLToPath(import.meta.url), ...forwardArgs(opts, process.cwd())].map(q).join(" ");
-  const fbArgs = [...pre, "emulators:exec", "--only", "firestore", "--project", E2E_PROJECT, "--config", join(repoRoot, "firebase.json"), inner];
+  const fbArgs = [...pre, "emulators:exec", "--only", "firestore", "--project", E2E_PROJECT, "--config", join(repoRoot, "shared", "infra", "firebase.json"), inner];
   console.log(`dashboard lighthouse: starting the Firestore emulator (java: ${plan.java})`);
   return new Promise((done) => {
     const child = spawn(bin, fbArgs, { cwd: workDir, stdio: "inherit", env: javaEnv(plan.java, process.env) });

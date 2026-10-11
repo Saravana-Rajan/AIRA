@@ -16,8 +16,8 @@ It takes about 15 minutes. Nothing here needs Meta approval.
 
 **Rules**
 
-- Never commit the token, a chat id, a phone number or the project id. Use `.env` locally (git-ignored) and
-  Secret Manager in the cloud.
+- Never commit the token, a chat id, a phone number or the project id. Use `.env` locally (git-ignored; at the
+  repo root, else `shared/.env`; template `shared/.env.example`) and Secret Manager in the cloud.
 - Never paste a secret into a command line, a chat or a doc. The commands below read secrets from stdin.
 - A vendor link is a credential (its tag is derived from the webhook secret). Send each link to its vendor
   privately; never post one in a group, a doc or a screenshot.

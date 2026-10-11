@@ -4,6 +4,7 @@ import { VoiceOrb } from "./VoiceOrb";
 import { StatusChip } from "./StatusChip";
 import { CaptionArea } from "./CaptionArea";
 import { TaskCard } from "./TaskCard";
+import { LABELS } from "../i18n/strings";
 import type { CountProgress } from "./view";
 import type { ScreenState } from "./screenState";
 
@@ -25,12 +26,15 @@ type Props = {
 };
 
 /**
- * The phone screen: top bar (logo + status chip), voice orb, live captions and the current task.
+ * The phone screen, top to bottom: top bar (logo, shop name, status chip), voice orb, the caption
+ * card, the current task card and the gesture hint. It is laid out as one phone-width column
+ * (`.screen`, 480 px max, centred), so on a laptop it still reads as a phone app.
  * Everything sits inside ONE full-screen gesture surface; nothing inside is separately tappable.
  * Only phrasing elements (span, img, svg) are used so the markup stays valid inside a <button>.
  */
 export function Screen({ state, level = 0, shopName, lang = "en", progress = null, confirmPending = false, onTalk, onStop }: Props) {
   const { status, userText, airaText, task } = state;
+  const started = Boolean(userText || airaText);
   return (
     <GestureSurface label={SURFACE_LABEL} onTalk={onTalk} onStop={onStop}>
       <span class="screen" data-status={status.kind}>
@@ -49,6 +53,9 @@ export function Screen({ state, level = 0, shopName, lang = "en", progress = nul
         <CaptionArea userText={userText} airaText={airaText} lang={lang} />
 
         <TaskCard key={task?.title} task={task} lang={lang} progress={progress} confirmPending={confirmPending} />
+
+        {/* The gesture reminder shows exactly once: in the empty caption card before the first word, down here after. */}
+        {started ? <span class="hint">{LABELS.hintTalk[lang]}</span> : null}
       </span>
     </GestureSurface>
   );

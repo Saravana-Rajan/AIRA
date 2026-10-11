@@ -2,17 +2,22 @@
   "firestore": [
     {
       "database": "aira",
-      "rules": "shared/infra/firestore.rules",
-      "indexes": "shared/infra/firestore.indexes.json"
+      "rules": "firestore.rules",
+      "indexes": "firestore.indexes.json"
     }
   ],
   "hosting": {
     "site": "aira-shop",
-    "public": "dist/hosting",
+    "public": "../../dist/hosting",
     "ignore": [
       "firebase.json",
       "**/node_modules/**",
       "**/.DS_Store"
+    ],
+    "redirects": [
+      { "source": "/dashboard", "destination": "/dashboard/", "type": 301 },
+      { "source": "/DASHBOARD{,/**}", "destination": "/dashboard/", "type": 301 },
+      { "source": "/Dashboard{,/**}", "destination": "/dashboard/", "type": 301 }
     ],
     "rewrites": [
       {

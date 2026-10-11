@@ -43,7 +43,8 @@ test -n "$GCP_PROJECT" && echo "project set"
 - [ ] Every test suite passes on a clean, up-to-date `main`:
   ```bash
   git fetch origin && git switch main && git pull --ff-only
-  npm ci && npm test
+  (cd shared/contracts && npm ci && npm test && npm run typecheck)
+  (cd frontend && npm ci && npm test && npm run typecheck)
   (cd backend && uv sync --frozen && uv run pytest -q)
   uv run --no-project --python 3.12 --with pytest python -m pytest shared/scripts/tests -q
   ```

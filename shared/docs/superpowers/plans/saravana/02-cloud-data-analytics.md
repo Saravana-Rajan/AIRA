@@ -42,7 +42,7 @@
 
 **Spec:** `shared/docs/superpowers/specs/2026-10-10-aira-design.md` (§4 Architecture, §5 Data model, §6 Safety, §7 Benchmarks). **Interfaces:** `shared/docs/superpowers/plans/2026-10-10-00-interfaces.md`.
 
-**Prerequisite:** `2026-10-10-00-foundation.md` is merged. It provides `aira_live.config`, `db()`, `session`, `sessions.notify`, `i18n.t`, `main.py`, `models.py`, `firebase.json`, and the GCP bootstrap.
+**Prerequisite:** `2026-10-10-00-foundation.md` is merged. It provides `aira_live.config`, `db()`, `session`, `sessions.notify`, `i18n.t`, `main.py`, `models.py`, `shared/infra/firebase.json`, and the GCP bootstrap.
 
 ## Schedule
 
@@ -99,7 +99,7 @@ shared/infra/
   remote-config/template.json            Remote Config params (Task 6)
   secrets.sh  monitoring.sh  monitoring/uptime-alert.json  budget.sh   (Task 6)
 cloudbuild.yaml                          CI/CD (Task 6)
-firebase.json                            + firestore, emulators, remoteconfig keys (Tasks 1, 6)
+shared/infra/firebase.json                            + firestore, emulators, remoteconfig keys (Tasks 1, 6)
 backend/
   aira_live/analytics/__init__.py
   aira_live/analytics/events.py          publish() + EventError (Task 2)
@@ -125,7 +125,7 @@ backend/
 
 **Files:**
 - Create: `shared/infra/firestore/firestore.rules`, `shared/infra/firestore/firestore.indexes.json`, `shared/infra/firestore/package.json`, `shared/infra/firestore/vitest.config.ts`, `shared/infra/firestore/tests/rules.test.ts`
-- Modify: `firebase.json` (add `firestore` + `emulators` keys)
+- Modify: `shared/infra/firebase.json` (add `firestore` + `emulators` keys)
 
 **Interfaces:**
 - Consumes: spec §5 collection layout; `users/{uid}` has `shopId`, `role` ∈ {owner, family, demo}.
@@ -165,7 +165,7 @@ import { defineConfig } from "vitest/config";
 export default defineConfig({ test: { include: ["tests/**/*.test.ts"], testTimeout: 20000, fileParallelism: false } });
 ```
 
-Add these keys to the root `firebase.json`. Keep the existing `hosting` key from the foundation; don't overwrite it:
+Add these keys to the root `shared/infra/firebase.json`. Keep the existing `hosting` key from the foundation; don't overwrite it:
 
 ```json
 "firestore": { "rules": "shared/infra/firestore/firestore.rules", "indexes": "shared/infra/firestore/firestore.indexes.json" },
@@ -329,7 +329,7 @@ Expected: `✔ firestore: released rules … ✔ firestore: deployed indexes`. I
 - [ ] **Step 8: Commit**
 
 ```bash
-git add shared/infra/firestore firebase.json
+git add shared/infra/firestore shared/infra/firebase.json
 git commit -m "feat(infra): Firestore read-only client rules, composite indexes, emulator rules tests"
 ```
 
@@ -1731,7 +1731,7 @@ git commit -m "feat(ops): OIDC-protected expiry/day-summary/forecast jobs, FCM f
 - Modify:
   - `backend/aira_live/models.py`: the order becomes env > Remote Config > default, with a model allowlist
   - `backend/aira_live/main.py`: start the refresher on startup
-  - `firebase.json`: add the `remoteconfig` key
+  - `shared/infra/firebase.json`: add the `remoteconfig` key
   - `backend/tests/test_infra_files.py`: add the template and Cloud Build checks
 - Test: `backend/tests/test_remote_config.py`
 
@@ -1937,7 +1937,7 @@ async def _start_remote_config() -> None:
     asyncio.get_running_loop().create_task(remote_config.run_refresher())
 ```
 
-- [ ] **Step 5: Write `shared/infra/remote-config/template.json`** and add the `remoteconfig` key to `firebase.json`
+- [ ] **Step 5: Write `shared/infra/remote-config/template.json`** and add the `remoteconfig` key to `shared/infra/firebase.json`
 
 ```json
 {
@@ -1953,7 +1953,7 @@ async def _start_remote_config() -> None:
 }
 ```
 
-Add to `firebase.json`: `"remoteconfig": { "template": "shared/infra/remote-config/template.json" }`.
+Add to `shared/infra/firebase.json`: `"remoteconfig": { "template": "shared/infra/remote-config/template.json" }`.
 
 - [ ] **Step 6: Write `cloudbuild.yaml`** (repo root)
 
@@ -1979,7 +1979,7 @@ steps:
     name: node:20
     entrypoint: bash
     env: ["VITE_AIRA_LIVE_WS=${_LIVE_WS}"]
-    args: ["-c", "npm ci && npm run build -w frontend/app && npm run build -w frontend/dashboard"]
+    args: ["-c", "npm ci && npm run build -w app && npm run build -w dashboard"]
   - id: deploy-hosting
     name: node:20
     entrypoint: bash
@@ -2087,6 +2087,6 @@ Expected: each script prints its `OK:` line, the uptime checks show green in Clo
 - [ ] **Step 10: Commit**
 
 ```bash
-git add backend/aira_live/remote_config.py backend/aira_live/models.py backend/aira_live/main.py backend/tests/test_remote_config.py backend/tests/test_infra_files.py backend/pyproject.toml backend/uv.lock shared/infra/remote-config shared/infra/secrets.sh shared/infra/monitoring.sh shared/infra/monitoring shared/infra/budget.sh cloudbuild.yaml firebase.json
+git add backend/aira_live/remote_config.py backend/aira_live/models.py backend/aira_live/main.py backend/tests/test_remote_config.py backend/tests/test_infra_files.py backend/pyproject.toml backend/uv.lock shared/infra/remote-config shared/infra/secrets.sh shared/infra/monitoring.sh shared/infra/monitoring shared/infra/budget.sh cloudbuild.yaml shared/infra/firebase.json
 git commit -m "feat(ops): Remote Config model switch, secrets wiring, Cloud Build CI/CD, uptime + budget alerts"
 ```

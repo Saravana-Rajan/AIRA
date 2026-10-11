@@ -258,6 +258,16 @@ def test_target_requires_a_project_and_never_the_default_database():
         seed_firestore.target(None, None, {"GCP_PROJECT": "p1", "FIRESTORE_DATABASE": "(default)"})
 
 
+def test_default_env_file_is_the_root_dotenv_then_shared_dotenv(tmp_path, monkeypatch):
+    monkeypatch.setattr(seed_firestore, "ROOT", tmp_path)
+    assert seed_firestore.default_env_file() == tmp_path / ".env"  # neither exists: the root path
+    (tmp_path / "shared").mkdir()
+    (tmp_path / "shared" / ".env").write_text("GCP_PROJECT=shared\n", encoding="utf-8")
+    assert seed_firestore.default_env_file() == tmp_path / "shared" / ".env"
+    (tmp_path / ".env").write_text("GCP_PROJECT=root\n", encoding="utf-8")
+    assert seed_firestore.default_env_file() == tmp_path / ".env"
+
+
 def test_load_env_file(tmp_path):
     env_file = tmp_path / ".env"
     env_file.write_text(

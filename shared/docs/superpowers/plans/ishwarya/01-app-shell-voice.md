@@ -182,7 +182,7 @@ describe("app singleton", () => {
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `npm test -w frontend/app -- settings`
+Run: `npm test -w app -- settings`
 Expected: FAIL with `Failed to resolve import "../src/core/settings"`.
 
 - [ ] **Step 3: Write the implementation**
@@ -301,7 +301,7 @@ export function initApp(deps: AppDeps): AppApi {
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `npm test -w frontend/app -- settings`
+Run: `npm test -w app -- settings`
 Expected: PASS, 7 tests.
 
 - [ ] **Step 5: Commit**
@@ -402,7 +402,7 @@ describe("pickBuiltInMic", () => {
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `npm test -w frontend/app -- pcm mic`
+Run: `npm test -w app -- pcm mic`
 Expected: FAIL with `Failed to resolve import "../src/audio/pcm"`.
 
 - [ ] **Step 3: Write the implementation**
@@ -551,7 +551,7 @@ Resampling each 128-sample quantum on its own causes boundary error of at most o
 
 - [ ] **Step 4: Run tests to verify they pass**
 
-Run: `npm test -w frontend/app -- pcm mic`
+Run: `npm test -w app -- pcm mic`
 Expected: PASS, 9 tests.
 
 - [ ] **Step 5: Commit**
@@ -632,7 +632,7 @@ describe("PlaybackQueue", () => {
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `npm test -w frontend/app -- playback`
+Run: `npm test -w app -- playback`
 Expected: FAIL with `Failed to resolve import "../src/audio/playback"`.
 
 - [ ] **Step 3: Write the implementation**
@@ -686,7 +686,7 @@ The dispatcher (Task 5) calls `flush({holdUntilResume:true})` on cue `interrupte
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `npm test -w frontend/app -- playback`
+Run: `npm test -w app -- playback`
 Expected: PASS, 3 tests.
 
 - [ ] **Step 5: Commit**
@@ -771,7 +771,7 @@ describe("ThinkingTimer", () => {
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `npm test -w frontend/app -- earcons-thinking`
+Run: `npm test -w app -- earcons-thinking`
 Expected: FAIL with `Failed to resolve import "../src/audio/earcons"`.
 
 - [ ] **Step 3: Write the implementation**
@@ -839,7 +839,7 @@ In `main.tsx` (Task 6), `onStart` plays the `thinking` earcon on a 1.2 s loop an
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `npm test -w frontend/app -- earcons-thinking`
+Run: `npm test -w app -- earcons-thinking`
 Expected: PASS, 5 tests.
 
 - [ ] **Step 5: Commit**
@@ -959,7 +959,7 @@ describe("dispatcher", () => {
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `npm test -w frontend/app -- announce-confirm`
+Run: `npm test -w app -- announce-confirm`
 Expected: FAIL with `Failed to resolve import "../src/core/announce"`.
 
 - [ ] **Step 3: Write the implementation**
@@ -1082,7 +1082,7 @@ export function ScreenReaderRegion() {
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `npm test -w frontend/app -- announce-confirm`
+Run: `npm test -w app -- announce-confirm`
 Expected: PASS, 12 tests.
 
 - [ ] **Step 5: Commit**
@@ -1151,7 +1151,7 @@ describe("OfflineQueue", () => {
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `npm test -w frontend/app -- offline-queue`
+Run: `npm test -w app -- offline-queue`
 Expected: FAIL with `Failed to resolve import "../src/core/offline-queue"`.
 
 - [ ] **Step 3: Write the offline queue and auth**
@@ -1239,11 +1239,11 @@ export async function getIdToken(): Promise<string | undefined> {
 }
 ```
 
-Add the dependency: `npm install -w frontend/app firebase@^10`. Add `VITE_FIREBASE_API_KEY`, `VITE_FIREBASE_AUTH_DOMAIN`, `VITE_FIREBASE_PROJECT_ID` and `VITE_FIREBASE_APP_ID` to `.env.example` (values come from Saravana).
+Add the dependency: `npm install -w app firebase@^10`. Add `VITE_FIREBASE_API_KEY`, `VITE_FIREBASE_AUTH_DOMAIN`, `VITE_FIREBASE_PROJECT_ID` and `VITE_FIREBASE_APP_ID` to `shared/.env.example` (values come from Saravana).
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `npm test -w frontend/app -- offline-queue`
+Run: `npm test -w app -- offline-queue`
 Expected: PASS, 3 tests.
 
 - [ ] **Step 5: Write Onboarding and wire everything in `main.tsx`**
@@ -1398,10 +1398,10 @@ render(<Root />, document.getElementById("root")!);
 
 - [ ] **Step 6: Run the full suite and the type check**
 
-Run: `npm test -w frontend/app && npm run typecheck -w frontend/app`
+Run: `npm test -w app && npm run typecheck -w app`
 Expected: all Task 1–6 tests PASS (39 tests), plus the foundation's socket tests. No type errors.
 
-- [ ] **Step 7: Manual check on an Android phone** (Chrome, `npm run dev -w frontend/app -- --host`, open the LAN URL over HTTPS or via `chrome://inspect` port-forwarding)
+- [ ] **Step 7: Manual check on an Android phone** (Chrome, `npm run dev -w app -- --host`, open the LAN URL over HTTPS or via `chrome://inspect` port-forwarding)
 
 1. Tap **Start** → the language and shop are saved, and there's no permission prompt loop.
 2. Connect Bluetooth earphones, then double-tap. You hear the `ack` earcon within about 150 ms, and the mic indicator shows the **built-in** mic. In Chrome remote devtools, `navigator.mediaDevices.enumerateDevices()` lists both, and `getSettings().deviceId` equals the built-in one.
@@ -1412,6 +1412,6 @@ Expected: all Task 1–6 tests PASS (39 tests), plus the foundation's socket tes
 - [ ] **Step 8: Commit**
 
 ```bash
-git add frontend/app/src/core/offline-queue.ts frontend/app/src/core/auth.ts frontend/app/src/ui/Onboarding.tsx frontend/app/src/main.tsx frontend/app/test/offline-queue.test.ts frontend/app/package.json package-lock.json .env.example
+git add frontend/app/src/core/offline-queue.ts frontend/app/src/core/auth.ts frontend/app/src/ui/Onboarding.tsx frontend/app/src/main.tsx frontend/app/test/offline-queue.test.ts frontend/app/package.json frontend/package-lock.json shared/.env.example
 git commit -m "feat(app): one-tap onboarding, anonymous auth, offline queue, voice wiring"
 ```

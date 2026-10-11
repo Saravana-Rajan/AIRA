@@ -20,3 +20,11 @@
 # Contracts always need Saravana's review
 /shared/contracts/                             @Saravana-Rajan
 /backend/aira_live/contracts.py                @Saravana-Rajan
+
+# Build, deploy and team configuration
+/.github/                                      @Saravana-Rajan
+/frontend/package.json                         @Saravana-Rajan
+/frontend/package-lock.json                    @Saravana-Rajan
+/shared/infra/                                 @Saravana-Rajan
+/shared/.env.example                           @Saravana-Rajan
+/shared/docs/team-rules.md                     @Saravana-Rajan

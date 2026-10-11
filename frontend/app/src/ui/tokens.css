@@ -21,14 +21,19 @@
   /* type */
   --font-sans: "Inter", "Noto Sans Tamil", "Noto Sans Devanagari", system-ui, sans-serif;
   --text-body: 18px;
+  --text-label: 15px;
   --text-status: 22px;
+  /* Caption lines scale with clamp() up to these caps (28 / 30 px on a phone, never larger). */
   --text-caption-user: 28px;
-  --text-caption-aira: 32px;
+  --text-caption-aira: 30px;
   --text-task: 26px;
 
   /* shape and space */
   --radius-card: 22px;
   --radius-pill: 999px;
   --gutter: 16px;
+  /* The phone column: full width on a phone, centred at this width on anything wider. */
+  --phone-width: 480px;
+  --orb-size: clamp(150px, 44vw, 210px);
   --focus-ring: 4px solid var(--brand-blue);
 }

@@ -14,7 +14,7 @@ The project ID is never written in the repo. Every command reads it from `$GCP_P
 - `backend` set up with `uv sync`.
 - For real mode:
   - `GEMINI_API_KEY` in your shell. It's stored in Secret Manager as `aira-gemini-api-key`. Never commit it.
-  - `GCP_PROJECT` in your shell or in the repo's `.env`.
+  - `GCP_PROJECT` in your shell or in the local `.env` (repo root, else `shared/.env`; template: `shared/.env.example`).
   - Firestore access through gcloud ADC (`gcloud auth application-default login`). AIRA uses database `aira` only.
   - The demo shop seeded: `uv run --project backend python shared/scripts/seed_firestore.py`.
 - `ffmpeg`, to convert the recording.

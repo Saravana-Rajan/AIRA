@@ -13,7 +13,7 @@
 # (sessions.notify) is in-process; the smoke check fails if maxScale is not 1. If the real app
 # OOMs at 512Mi after a deploy, raise --memory to 1Gi only.
 #
-# Usage: GCP_PROJECT=<project-id> bash shared/infra/deploy_live.sh   (GCP_PROJECT may come from .env)
+# Usage: GCP_PROJECT=<project-id> bash shared/infra/deploy_live.sh   (GCP_PROJECT may come from .env or shared/.env)
 # Needs: gcloud, curl, python3, and shared/infra/bootstrap.sh already run (service account aira-live,
 #        secret aira-gemini-api-key with at least one version).
 set -euo pipefail
@@ -22,15 +22,18 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 REGION="asia-south1"
 SERVICE="aira-live"
 
-# Print KEY's value from the repo's .env (empty when the file or key is absent).
+# Print KEY's value from the local .env: the repo root first, then shared/.env (empty when absent).
 dotenv_get() {
-  local file="$ROOT/.env" line
-  [ -f "$file" ] || return 0
-  line="$(grep -E "^$1=" "$file" | tail -n 1 || true)"
-  line="${line#*=}"
-  line="${line%\"}"
-  line="${line#\"}"
-  printf '%s' "$line"
+  local file line
+  for file in "$ROOT/.env" "$ROOT/shared/.env"; do
+    [ -f "$file" ] || continue
+    line="$(grep -E "^$1=" "$file" | tail -n 1 || true)"
+    line="${line#*=}"
+    line="${line%\"}"
+    line="${line#\"}"
+    printf '%s' "$line"
+    return 0
+  done
 }
 
 GCP_PROJECT="${GCP_PROJECT:-$(dotenv_get GCP_PROJECT)}"

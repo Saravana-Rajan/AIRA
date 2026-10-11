@@ -1,4 +1,8 @@
-/* AIRA phone screen. Light theme only; every colour comes from tokens.css. */
+/* AIRA phone screen. Light theme only; every colour comes from tokens.css.
+   Layout: ONE full-window gesture button (.surface) holding ONE phone-width column (.screen, 480 px max,
+   centred). On a phone the column is the screen; on a laptop it sits in the middle of a surface-tinted
+   page with a hairline on each side, so the app still reads as a phone app and the orb, captions and
+   task card stay together instead of drifting to the window edges. */
 @import "./tokens.css";
 
 *,
@@ -11,7 +15,7 @@ html,
 body,
 #root {
   margin: 0;
-  height: 100%;
+  min-height: 100%;
   background: var(--bg);
   color: var(--text);
   font-family: var(--font-sans);
@@ -24,8 +28,8 @@ body,
 /* ---------- the one gesture surface ---------- */
 .surface {
   display: block;
-  width: 100vw;
-  height: 100dvh;
+  width: 100%;
+  min-height: 100dvh;
   margin: 0;
   padding: 0;
   border: 0;
@@ -44,14 +48,18 @@ body,
   outline-offset: -6px;
 }
 
-/* ---------- state colour ---------- */
+/* ---------- the phone column and its state colour ---------- */
 .screen {
   --state: var(--brand-blue);
   display: flex;
   flex-direction: column;
-  height: 100%;
+  gap: 14px;
+  width: 100%;
+  max-width: var(--phone-width);
+  min-height: 100dvh;
+  margin: 0 auto;
   padding: max(var(--gutter), env(safe-area-inset-top)) var(--gutter) max(var(--gutter), env(safe-area-inset-bottom));
-  gap: 12px;
+  background: var(--bg);
 }
 .screen[data-status="connecting"] { --state: var(--text-muted); }
 .screen[data-status="ready"] { --state: var(--brand-blue); }
@@ -60,6 +68,17 @@ body,
 .screen[data-status="counting"] { --state: var(--brand-blue); }
 .screen[data-status="warning"] { --state: var(--brand-orange); }
 .screen[data-status="stop"] { --state: var(--danger); }
+
+/* Wider than a phone: the page outside the column goes surface-tinted and the column gets a hairline
+   on each side. The whole window still takes the tap. */
+@media (min-width: 600px) {
+  .surface {
+    background: var(--surface);
+  }
+  .screen {
+    border-inline: 1px solid var(--border);
+  }
+}
 
 /* ---------- top bar ---------- */
 /* The shop name has priority: it is never shrunk or cut to "Mu...". On a narrow phone (360 px) a wide chip
@@ -80,13 +99,15 @@ body,
   min-width: 0;
 }
 .brand__logo {
-  width: 48px;
-  height: 48px;
-  border-radius: 14px;
+  width: 44px;
+  height: 44px;
+  border-radius: 13px;
   flex: none;
 }
 .brand__shop {
-  font-weight: 600;
+  font-size: 20px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
   white-space: normal;
   overflow-wrap: anywhere;
 }
@@ -98,7 +119,7 @@ body,
   display: inline-flex;
   align-items: center;
   gap: 10px;
-  padding: 8px 16px;
+  padding: 7px 16px;
   border-radius: var(--radius-pill);
   border: 2px solid var(--state);
   background: var(--bg);
@@ -129,18 +150,21 @@ body,
 }
 
 /* ---------- voice orb ---------- */
+/* The stage takes the slack between the top bar and the caption card, so the orb floats in the upper
+   middle of the phone and never balloons on a laptop: its width is clamped, not viewport-led. */
 .stage {
   flex: 1 1 auto;
   display: flex;
   align-items: center;
   justify-content: center;
-  min-height: 160px;
+  min-height: var(--orb-size);
+  padding: 12px 0;
 }
 .orb {
   --level: 0;
   position: relative;
   display: block;
-  width: min(62vw, 34vh, 300px);
+  width: var(--orb-size);
   aspect-ratio: 1;
 }
 .orb__waves {
@@ -204,39 +228,8 @@ body,
 }
 
 /* ---------- live captions ---------- */
-.captions {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-.caption {
-  display: block;
-  font-weight: 600;
-  line-height: 1.25;
-  overflow-wrap: anywhere;
-}
-.caption--hint {
-  color: var(--text-muted);
-  font-size: var(--text-status);
-  font-weight: 500;
-  text-align: center;
-}
-.caption--user {
-  color: var(--text-muted);
-  font-size: var(--text-caption-user);
-}
-.caption--aira {
-  color: var(--text);
-  font-size: var(--text-caption-aira);
-  font-weight: 700;
-}
-.caption--user .caption__text,
-.caption--aira .caption__text {
-  display: -webkit-box;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 3;
-  overflow: hidden;
-}
+/* The caption card itself (surface, border, speaker labels, type scale) is styled in screen-parts.css
+   next to the CaptionArea component. */
 
 /* ---------- current task ---------- */
 .task-card {
@@ -267,17 +260,28 @@ body,
 }
 .task-card__title {
   color: var(--text-muted);
-  font-size: var(--text-body);
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
+  font-size: var(--text-label);
+  font-weight: 700;
 }
 .task-card__detail {
   color: var(--text);
-  font-size: var(--text-task);
+  font-size: clamp(20px, 5vw, var(--text-task));
   font-weight: 700;
-  line-height: 1.2;
+  line-height: 1.3;
   overflow-wrap: anywhere;
+}
+
+/* ---------- bottom hint ---------- */
+/* How to talk, in one quiet centred line at the foot of the column once the conversation has started. */
+.hint {
+  display: block;
+  padding: 2px var(--gutter) 0;
+  color: var(--text-muted);
+  font-size: var(--text-label);
+  font-weight: 500;
+  line-height: 1.5;
+  text-align: center;
+  text-wrap: balance;
 }
 
 /* ---------- motion ---------- */

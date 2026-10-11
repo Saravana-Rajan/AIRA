@@ -29,7 +29,8 @@ const SPARK = "M50 4 C54 34 66 46 96 50 C66 54 54 66 50 96 C46 66 34 54 4 50 C34
  * There is nothing to pick: AIRA answers in whatever language the speaker uses, turn by turn. The labels on
  * this screen are written in the phone's language (English for one the app has no labels for), which is
  * also the hint for AIRA's very first line. Start takes focus, so a TalkBack user hears "Start" first and
- * can begin with one double-tap.
+ * can begin with one double-tap. The whole screen sits in one phone-width column (tokens.css
+ * `--phone-width`), so a laptop shows a centred phone rather than a page stretched edge to edge.
  */
 export function Onboarding({ onDone, initial, languages }: Props) {
   const base: Settings = { ...DEFAULT_SETTINGS, ...initial };
@@ -51,6 +52,7 @@ export function Onboarding({ onDone, initial, languages }: Props) {
 
   return (
     <main class="onboard" lang={lang}>
+      <div class="onboard__col">
       <header class="onboard__head">
         <img class="onboard__logo" src="/icons/aira-logo-192.png" alt="" width={64} height={64} />
         <span class="onboard__titles">
@@ -92,6 +94,7 @@ export function Onboarding({ onDone, initial, languages }: Props) {
         <span id="aira-start-label" class="onboard__start-label">{t("start")}</span>
         <span id="aira-start-hint" class="onboard__start-hint">{t("startHint")}</span>
       </button>
+      </div>
     </main>
   );
 }

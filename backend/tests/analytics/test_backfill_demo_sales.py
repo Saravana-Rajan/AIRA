@@ -195,6 +195,16 @@ def _spy(monkeypatch):
     return seen, client
 
 
+def test_default_env_file_is_the_root_dotenv_then_shared_dotenv(tmp_path, monkeypatch):
+    monkeypatch.setattr(bf, "ROOT", tmp_path)
+    assert bf.default_env_file() == tmp_path / ".env"
+    (tmp_path / "shared").mkdir()
+    (tmp_path / "shared" / ".env").write_text("GCP_PROJECT=shared\n", encoding="utf-8")
+    assert bf.default_env_file() == tmp_path / "shared" / ".env"
+    (tmp_path / ".env").write_text("GCP_PROJECT=root\n", encoding="utf-8")
+    assert bf.default_env_file() == tmp_path / ".env"
+
+
 def test_main_default_is_a_dry_run_even_with_gcp_project_set(catalog, monkeypatch, clean_env, tmp_path, capsys):
     env_file = tmp_path / ".env"
     env_file.write_text("GCP_PROJECT=real-project\n", encoding="utf-8")

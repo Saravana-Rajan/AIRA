@@ -77,7 +77,7 @@ Write it into `frontend/app/public/.well-known/assetlinks.json`:
 
 Firebase Hosting must serve the file:
 
-- `firebase.json` has `"ignore": ["**/.*", ...]`. That pattern skips `.well-known/`. Remove `**/.*` from the list, or the file is never uploaded.
+- `shared/infra/firebase.json` has `"ignore": ["**/.*", ...]`. That pattern skips `.well-known/`. Remove `**/.*` from the list, or the file is never uploaded.
 - Vite copies `public/.well-known/` into `dist/hosting/.well-known/`. The `**` → `/index.html` rewrite only applies when no file matches, so the real file wins.
 
 Then build and deploy Hosting the normal way (`bash shared/scripts/build_hosting.sh`, then the CI deploy). Check:

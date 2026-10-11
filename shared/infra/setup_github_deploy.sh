@@ -15,7 +15,7 @@
 #   - roles/iam.workloadIdentityUser on aira-deployer for the GitHub repository principal set.
 # No JSON key is ever created.
 #
-# Usage: GCP_PROJECT=<project-id> bash shared/infra/setup_github_deploy.sh   (GCP_PROJECT may come from .env)
+# Usage: GCP_PROJECT=<project-id> bash shared/infra/setup_github_deploy.sh   (GCP_PROJECT may come from .env or shared/.env)
 #        GITHUB_REPO=<owner>/<repo> overrides the repository (default Saravana-Rajan/AIRA).
 # Needs: gcloud logged in as a project owner, shared/infra/bootstrap.sh already run (the aira-live service
 #        account exists) and the first deploy done by shared/infra/deploy_live.sh (the aira-live service exists).
@@ -35,15 +35,18 @@ AR_REPO="aira"
 MAPPING="google.subject=assertion.sub,attribute.repository=assertion.repository,attribute.ref=assertion.ref"
 CONDITION="assertion.repository=='${REPO}' && assertion.ref=='refs/heads/main'"
 
-# Print KEY's value from the repo's .env (empty when the file or key is absent).
+# Print KEY's value from the local .env: the repo root first, then shared/.env (empty when absent).
 dotenv_get() {
-  local file="$ROOT/.env" line
-  [ -f "$file" ] || return 0
-  line="$(grep -E "^$1=" "$file" | tail -n 1 || true)"
-  line="${line#*=}"
-  line="${line%\"}"
-  line="${line#\"}"
-  printf '%s' "$line"
+  local file line
+  for file in "$ROOT/.env" "$ROOT/shared/.env"; do
+    [ -f "$file" ] || continue
+    line="$(grep -E "^$1=" "$file" | tail -n 1 || true)"
+    line="${line#*=}"
+    line="${line%\"}"
+    line="${line#\"}"
+    printf '%s' "$line"
+    return 0
+  done
 }
 
 GCP_PROJECT="${GCP_PROJECT:-$(dotenv_get GCP_PROJECT)}"

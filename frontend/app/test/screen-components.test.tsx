@@ -75,21 +75,30 @@ describe("CaptionArea", () => {
     expect(root.querySelector(".caption--hint")!.textContent).toContain("दो बार");
     expect(root.querySelector(".caption--user")).toBeNull();
   });
-  it("shows the last user line and AIRA line; speaker names are drawn from data-who, not in the text", () => {
+  it("is one card with a You row and an AIRA row: a localised speaker label over each text line", () => {
     render(<CaptionArea userText="Two Sakthi curd" airaText="That is 120 rupees." lang="ta" />, root);
-    const user = root.querySelector(".caption--user")!;
-    const aira = root.querySelector(".caption--aira")!;
-    expect(user.textContent).toBe("Two Sakthi curd");
-    expect(aira.textContent).toBe("That is 120 rupees.");
-    expect(user.querySelector(".caption__text")!.getAttribute("data-who")).toBe("நீங்கள்");
-    expect(aira.querySelector(".caption__text")!.getAttribute("data-who")).toBe("AIRA");
+    const card = root.querySelector(".captions")!;
+    expect(card.classList.contains("captions--empty")).toBe(false);
+    const rows = card.querySelectorAll(":scope > .caption");
+    expect([...rows].map((r) => r.className)).toEqual(["caption caption--user", "caption caption--aira"]);
+    const user = rows[0];
+    const aira = rows[1];
+    expect(user.querySelector(".caption__who")!.textContent).toBe("நீங்கள்");
+    expect(user.querySelector(".caption__text")!.textContent).toBe("Two Sakthi curd");
+    expect(aira.querySelector(".caption__who")!.textContent).toBe("AIRA");
+    expect(aira.querySelector(".caption__text")!.textContent).toBe("That is 120 rupees.");
     expect(root.querySelector(".caption--hint")).toBeNull();
     expect(PHRASING_ONLY(root)).toBe(true);
+  });
+  it("shows only the row that has words", () => {
+    render(<CaptionArea userText="" airaText="Ready." lang="en" />, root);
+    expect(root.querySelector(".caption--user")).toBeNull();
+    expect(root.querySelector(".caption--aira .caption__who")!.textContent).toBe("AIRA");
   });
   it("keeps the newest words of a long caption", () => {
     const long = "Sakthi curd one litre, ".repeat(10) + "and one Aavin milk.";
     render(<CaptionArea userText="" airaText={long} lang="en" max={60} />, root);
-    const text = root.querySelector(".caption--aira")!.textContent!;
+    const text = root.querySelector(".caption--aira .caption__text")!.textContent!;
     expect(text.startsWith("…")).toBe(true);
     expect(text.endsWith("and one Aavin milk.")).toBe(true);
   });

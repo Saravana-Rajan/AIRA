@@ -15,7 +15,7 @@ The plans were written before the team made its final setup decisions. When a pl
 | App Check | Skip |
 | Cloud Build `cloudbuild.yaml` | **GitHub Actions** auto-deploy instead (§3) |
 | Budget alerts | Skip (shared billing account) |
-| Two Hosting targets (app, dashboard, portal) | **ONE Hosting site: `aira-shop`.** App at `/`; dashboard built with Vite `base: "/dashboard/"` into `dist/dashboard/`. `firebase.json` has a single hosting entry, `"site": "aira-shop"`, `"public": "dist/hosting"`, with rewrites `/dashboard/**` → `/dashboard/index.html` and `**` → `/index.html`. A script `shared/scripts/build_hosting.sh` builds both apps into `dist/hosting/` |
+| Two Hosting targets (app, dashboard, portal) | **ONE Hosting site: `aira-shop`.** App at `/`; dashboard built with Vite `base: "/dashboard/"` into `dist/dashboard/`. `shared/infra/firebase.json` has a single hosting entry, `"site": "aira-shop"`, `"public": "dist/hosting"`, with rewrites `/dashboard/**` → `/dashboard/index.html` and `**` → `/index.html`. A script `shared/scripts/build_hosting.sh` builds both apps into `dist/hosting/` |
 | Secrets `GEMINI_API_KEY` etc. | Secret Manager name **`aira-gemini-api-key`**, mounted as env `GEMINI_API_KEY`. WhatsApp secrets are optional; when they're absent, the click-to-chat fallback is used |
 | Region | `asia-south1` |
 | Cloud Run | Service `aira-live`, `--min-instances 0 --max-instances 1 --cpu 1 --memory 512Mi --no-cpu-boost --cpu-throttling --timeout 3600 --session-affinity`, service account `aira-live@<project>.iam.gserviceaccount.com` |
@@ -27,30 +27,31 @@ The plans were written before the team made its final setup decisions. When a pl
 
 ```
 .github/workflows/      ci.yml (tests on PRs) · deploy.yml (push to main → test + deploy)
-frontend/               everything that runs in a browser (npm workspaces frontend/*)
+frontend/               everything that runs in a browser; package.json here is the npm workspace root (app, dashboard)
   app/                  phone app (Vite + TS + Preact): src/{core,voice,camera,guidance,ui,demo,i18n,net,skills}/, test/, public/, twa/
   dashboard/            Shop Dashboard (Vite + TS + Preact): src/{pages,components,lib}/, test/
 backend/                aira-live (Cloud Run): pyproject.toml, uv.lock, Dockerfile, .python-version (3.12)
   aira_live/            core modules + tools/ vision/ memory/ business/ messaging/ analytics/ devtools/ i18n/ steps/
   tests/                mirrors the package: tests/{core,tools,vision,memory,business,messaging,analytics}/
 shared/                 everything both sides (and the team) use
-shared/contracts/       src/, fixtures/, test/ (npm workspace shared/contracts)
+shared/contracts/       src/, fixtures/, test/ (standalone npm package; the apps depend on it as file:../../shared/contracts)
 shared/catalog/         sunrise_dairy.json (demo shop seed), schemas/catalog.schema.json
 shared/bench/           data/<set>/labels.json (no fabricated data), score_*.py, spike_er2.py, publish.py
-shared/infra/           bootstrap.sh, deploy_live.sh, firestore.rules, firestore.indexes.json, setup_github_deploy.sh
+shared/infra/           bootstrap.sh, deploy_live.sh, firebase.json, .firebaserc, firestore.rules, firestore.indexes.json, setup_github_deploy.sh
 shared/scripts/         seed_firestore.py, build_hosting.sh, check_submission.py
-shared/docs/            unchanged layout
+shared/docs/            unchanged layout, plus team-rules.md
 shared/assets/          logo/
+shared/.env.example     template for the local .env (copy to the repo root, or to shared/.env)
 ```
 
 - Three top-level folders: `frontend/`, `backend/`, `shared/` (owner request 2026-10-11; `backend/tests/infra/test_repo_layout.py` enforces it).
-- No files at the repo root except: README.md, CLAUDE.md, package.json, package-lock.json, firebase.json, .firebaserc (use a placeholder project alias resolved from env in CI), .gitignore, .env.example.
+- The repo root holds only `frontend/`, `backend/`, `shared/`, `.github/`, `README.md` and `.gitignore`. Everything else moved: `package.json` + lockfile to `frontend/`, the Firebase config to `shared/infra/` (deployed with `firebase deploy --config shared/infra/firebase.json`; `shared/infra/.firebaserc` keeps the placeholder alias, CI passes `--project`), the env template to `shared/.env.example`, the team rules to `shared/docs/team-rules.md`.
 - Tests sit next to their workspace: `frontend/*/test`, `shared/contracts/test`, `backend/tests`.
 
 ## 3. Auto-deploy on push to `main` (GitHub Actions + Workload Identity Federation)
 
 **`.github/workflows/ci.yml`** runs on pull requests and on pushes to non-main branches:
-- `npm ci && npm test` (all workspaces)
+- `npm ci && npm test && npm run typecheck` in `shared/contracts/` and in `frontend/` (`working-directory`; the npm cache keys on both lockfiles)
 - `cd backend && uv sync --frozen && uv run pytest -q`
 
 **`.github/workflows/deploy.yml`**, on push to `main`:
@@ -95,7 +96,7 @@ All resources are named `aira-*`.
 Use `${{ secrets.X }}` everywhere. **Never** use `vars.`.
 
 **`.github/workflows/deploy.yml`**, on push to `main`; permissions `contents: read`, `id-token: write`:
-1. **test job:** `npm ci && npm test`; `cd backend && uv sync --frozen && uv run pytest -q`.
+1. **test job:** `npm ci && npm test && npm run typecheck` in `shared/contracts/` and `frontend/`; `cd backend && uv sync --frozen && uv run pytest -q`.
 2. **deploy job** (`needs: test`):
    - `google-github-actions/auth@v2` with `workload_identity_provider: ${{ secrets.GCP_WIF_PROVIDER }}`, `service_account: ${{ secrets.GCP_DEPLOY_SA }}`, `create_credentials_file: true`.
    - `google-github-actions/setup-gcloud@v2`, then `gcloud auth configure-docker asia-south1-docker.pkg.dev --quiet`.

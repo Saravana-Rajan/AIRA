@@ -71,7 +71,7 @@
 
 ```
 shared/catalog/sunrise_dairy.json                 seed: shop, products (aliases ta/hi/en), suppliers (aliases, phoneEnv)
-.env.example                                       + SUPPLIER_PHONE_AAVIN_VENDOR / _SAKTHI_VENDOR / _ARUN_DISTRIBUTOR
+shared/.env.example                                       + SUPPLIER_PHONE_AAVIN_VENDOR / _SAKTHI_VENDOR / _ARUN_DISTRIBUTOR
 backend/aira_live/business/
   __init__.py
   clock.py        today_ist(), now_iso()
@@ -829,7 +829,7 @@ git commit -m "feat(business): rupee change maths, ta/hi/en number words, soundb
 
 **Files:**
 - Create or overwrite: `shared/catalog/sunrise_dairy.json`
-- Modify: `.env.example` (append three supplier-phone lines)
+- Modify: `shared/.env.example` (append three supplier-phone lines)
 - Create: `backend/aira_live/business/catalog.py`, `backend/aira_live/business/seed.py`
 - Create **only if absent**: `backend/aira_live/vision/__init__.py`, `backend/aira_live/vision/identify.py` (models only; Sarmitha's plan adds the functions)
 - Test: `backend/tests/business/conftest.py`, `backend/tests/business/test_catalog.py`
@@ -893,7 +893,7 @@ Prices are demo values: verify them against the local MRP before filming. Phones
 }
 ```
 
-- [ ] **Step 2: Append the supplier phone variables to `.env.example`**
+- [ ] **Step 2: Append the supplier phone variables to `shared/.env.example`**
 
 These are the WhatsApp test-recipient numbers in E.164 format; keep the real values in `.env` only.
 
@@ -1182,7 +1182,7 @@ Expected: `17 passed`.
 - [ ] **Step 8: Commit**
 
 ```bash
-git add shared/catalog/sunrise_dairy.json .env.example backend/aira_live/business/catalog.py \
+git add shared/catalog/sunrise_dairy.json shared/.env.example backend/aira_live/business/catalog.py \
         backend/aira_live/business/seed.py backend/tests/business/conftest.py \
         backend/tests/business/test_catalog.py backend/aira_live/vision
 git commit -m "feat(business): Sunrise Dairy seed catalog, ta/hi/en product + supplier resolution, env-based seeder"

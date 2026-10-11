@@ -26,7 +26,7 @@ VIDEO_CHECKLIST = SUBMISSION / "video-checklist.md"
 DASHBOARD_RULES = ROOT / "shared" / "docs" / "hackathon" / "official" / "participation" / "dashboard-submission.md"
 DEPLOY_WORKFLOW = ROOT / ".github" / "workflows" / "deploy.yml"
 MAIN_PY = ROOT / "backend" / "aira_live" / "main.py"
-FIREBASE_JSON = ROOT / "firebase.json"
+FIREBASE_JSON = ROOT / "shared" / "infra" / "firebase.json"
 README = ROOT / "README.md"
 GITIGNORE = ROOT / ".gitignore"
 

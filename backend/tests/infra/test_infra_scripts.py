@@ -1,4 +1,4 @@
-"""Checks for the deploy scripts, firebase.json/.firebaserc and the GitHub workflows.
+"""Checks for the deploy scripts, shared/infra/firebase.json + .firebaserc and the GitHub workflows.
 
 Nothing here talks to Google Cloud. Every script runs as a dry run against stub
 `gcloud`, `npx`, `curl`, `npm` and `uv` binaries placed first on PATH, from a copy of
@@ -22,7 +22,9 @@ REPO = Path(__file__).resolve().parents[3]
 INFRA_SCRIPTS = ["shared/infra/bootstrap.sh", "shared/infra/deploy_live.sh", "shared/infra/setup_github_deploy.sh"]
 SCRIPTS = INFRA_SCRIPTS + ["shared/scripts/build_hosting.sh"]
 WORKFLOWS = [".github/workflows/ci.yml", ".github/workflows/deploy.yml"]
-CONFIGS = ["firebase.json", ".firebaserc"]
+CONFIGS = ["shared/infra/firebase.json", "shared/infra/.firebaserc"]
+FIREBASE_CONFIG = "--config shared/infra/firebase.json"
+NPM_TEST_RUN = "npm ci && npm test && npm run typecheck"
 
 PROJECT = "aira-test-proj"
 PROJECT_NUMBER = "123456789012"
@@ -165,23 +167,28 @@ def _stub_bin(tmp_path: Path) -> Path:
     return bindir
 
 
-def _fake_repo(tmp_path: Path, script: str) -> Path:
+def _fake_repo(tmp_path: Path, script: str, node_modules: bool = True) -> Path:
     root = tmp_path / "repo"
     (root / script).parent.mkdir(parents=True, exist_ok=True)
     shutil.copy(REPO / script, root / script)
-    (root / "shared" / "infra").mkdir(exist_ok=True)
+    (root / "shared" / "infra").mkdir(parents=True, exist_ok=True)
     (root / "shared" / "infra" / "firestore.rules").write_text("rules_version = '2';\n")
     (root / "shared" / "infra" / "firestore.indexes.json").write_text('{"indexes": [], "fieldOverrides": []}\n')
     (root / "backend").mkdir(parents=True, exist_ok=True)
-    (root / "node_modules").mkdir(exist_ok=True)
-    shutil.copy(REPO / "firebase.json", root / "firebase.json")
+    # frontend/ is the npm workspace root; an existing node_modules there means "no npm ci"
+    (root / "frontend").mkdir(exist_ok=True)
+    if node_modules:
+        (root / "frontend" / "node_modules").mkdir(exist_ok=True)
+    shutil.copy(REPO / "shared/infra/firebase.json", root / "shared" / "infra" / "firebase.json")
     return root
 
 
-def run_script(tmp_path: Path, script: str, env: dict[str, str] | None = None, dotenv: str | None = None):
-    root = _fake_repo(tmp_path, script)
+def run_script(tmp_path: Path, script: str, env: dict[str, str] | None = None, dotenv: str | None = None,
+               dotenv_at: str = ".env", node_modules: bool = True):
+    root = _fake_repo(tmp_path, script, node_modules=node_modules)
     if dotenv is not None:
-        (root / ".env").write_text(dotenv)
+        (root / dotenv_at).parent.mkdir(parents=True, exist_ok=True)
+        (root / dotenv_at).write_text(dotenv)
     log = tmp_path / "calls.log"
     log.write_text("")
     full_env = {
@@ -262,27 +269,31 @@ def test_project_id_is_never_committed():
 
 
 def test_firebase_json_single_hosting_site_and_aira_database():
-    cfg = json.loads((REPO / "firebase.json").read_text())
+    """shared/infra/firebase.json: firebase-tools resolves every path in it relative to the config file
+    (detectProjectRoot returns dirname(--config)), so public climbs to the repo's dist/hosting and the
+    rules/indexes sit next to it."""
+    cfg = json.loads((REPO / "shared/infra/firebase.json").read_text())
     hosting = cfg["hosting"]
     assert isinstance(hosting, dict), "exactly one hosting entry"
     assert hosting["site"] == "aira-shop"
-    assert hosting["public"] == "dist/hosting"
+    assert hosting["public"] == "../../dist/hosting"
     assert hosting["rewrites"] == [
         {"source": "/dashboard/**", "destination": "/dashboard/index.html"},
         {"source": "**", "destination": "/index.html"},
     ]
     firestore = cfg["firestore"]
     dbs = firestore if isinstance(firestore, list) else [firestore]
-    assert dbs == [
-        {"database": "aira", "rules": "shared/infra/firestore.rules", "indexes": "shared/infra/firestore.indexes.json"}
-    ]
-    assert "(default)" not in (REPO / "firebase.json").read_text()
+    assert dbs == [{"database": "aira", "rules": "firestore.rules", "indexes": "firestore.indexes.json"}]
+    for rel in ("firestore.rules", "firestore.indexes.json"):
+        assert (REPO / "shared/infra" / rel).is_file(), rel
+    assert "(default)" not in (REPO / "shared/infra/firebase.json").read_text()
     assert cfg["emulators"]["firestore"]["port"] == 8085
 
 
 def test_firebaserc_is_a_placeholder():
-    rc = json.loads((REPO / ".firebaserc").read_text())
+    rc = json.loads((REPO / "shared/infra/.firebaserc").read_text())
     assert rc["projects"]["default"] == "demo-aira"  # emulator-only demo project; CI passes --project
+    assert not (REPO / "firebase.json").exists() and not (REPO / ".firebaserc").exists()
 
 
 # --- workflows -----------------------------------------------------------------------
@@ -300,10 +311,22 @@ def _runs(job: dict) -> list[str]:
     return [" ".join(s["run"].replace("\\\n", " ").split()) for s in job["steps"] if "run" in s]
 
 
+def _npm_steps(job: dict) -> dict[str, str]:
+    """working-directory -> run command, for every step that runs npm."""
+    return {s.get("working-directory", "."): " ".join(s["run"].split()) for s in job["steps"]
+            if "run" in s and s["run"].lstrip().startswith("npm ")}
+
+
 def _test_job_ok(job: dict) -> None:
     runs = _runs(job)
-    assert "npm ci && npm test" in runs
+    npm = _npm_steps(job)
+    assert npm.get("frontend") == NPM_TEST_RUN, npm
+    assert npm.get("shared/contracts") == NPM_TEST_RUN, npm
+    assert "." not in npm, "npm never runs at the repo root: there is no package.json there"
     assert "cd backend && uv sync --frozen && uv run pytest -q" in runs
+    [node] = [s for s in job["steps"] if s.get("uses", "").startswith("actions/setup-node@")]
+    assert node["with"]["cache"] == "npm"
+    assert node["with"]["cache-dependency-path"].split() == ["frontend/package-lock.json", "shared/contracts/package-lock.json"]
 
 
 @pytest.mark.parametrize("rel", WORKFLOWS)
@@ -405,9 +428,15 @@ def test_deploy_workflow_tests_then_deploys_with_wif():
     assert build["env"]["VITE_AIRA_APP_KEY"] == "${{ secrets.VITE_AIRA_APP_KEY }}"
     assert any("gcloud run services describe aira-live" in r and "wss://" in r for r in runs)
     assert (
-        "npx firebase-tools@15.33.0 deploy --only hosting:aira-shop --project ${{ secrets.GCP_PROJECT }} --non-interactive"
+        f"npx firebase-tools@15.33.0 deploy {FIREBASE_CONFIG} --only hosting:aira-shop "
+        "--project ${{ secrets.GCP_PROJECT }} --non-interactive"
         in runs
     )
+    # npm ci for the hosting build runs in frontend/ (the workspace root), with the lockfile cached from there
+    install = _npm_steps(deploy)
+    assert install == {"frontend": "npm ci"}, install
+    [node] = [s for s in deploy["steps"] if s.get("uses", "").startswith("actions/setup-node@")]
+    assert node["with"]["cache-dependency-path"] == "frontend/package-lock.json"
     order = [
         i for i, r in enumerate(runs)
         if r.startswith("docker build") or "gcloud run deploy" in r or "build_hosting" in r or "hosting:aira-shop" in r
@@ -467,7 +496,7 @@ def test_bootstrap_fresh_project(tmp_path):
     assert _calls(calls, "secrets versions add aira-gemini-api-key", "--data-file=-")
     assert _calls(calls, "secrets add-iam-policy-binding aira-gemini-api-key", "roles/secretmanager.secretAccessor")
     assert _calls(calls, "npx", "hosting:sites:create aira-shop")
-    assert _calls(calls, "npx", "deploy --only firestore", f"--project {PROJECT}")
+    assert _calls(calls, "npx", f"deploy {FIREBASE_CONFIG} --only firestore", f"--project {PROJECT}")
     assert not _calls(calls, "run deploy"), "bootstrap creates infra only; deploy_live.sh deploys"
     assert not _calls(calls, "seed_firestore"), "seeding is opt-in (SEED=1)"
     assert secret not in joined and secret not in proc.stdout + proc.stderr
@@ -517,6 +546,25 @@ def test_deploy_live_reads_project_from_dotenv(tmp_path):
     proc, calls, _ = run_script(tmp_path, "shared/infra/deploy_live.sh", dotenv=f"# local\nGCP_PROJECT={PROJECT}\n")
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert _calls(calls, "gcloud run deploy aira-live", f"--project {PROJECT}")
+
+
+@pytest.mark.parametrize("script", INFRA_SCRIPTS)
+def test_infra_script_falls_back_to_shared_dotenv(tmp_path, script):
+    """No .env at the repo root: the scripts read shared/.env (next to shared/.env.example)."""
+    proc, calls, _ = run_script(tmp_path, script, {"STUB_EXISTS": "ALL"},
+                                dotenv=f"GCP_PROJECT={PROJECT}\n", dotenv_at="shared/.env")
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert calls and all(f"--project {PROJECT}" in c for c in calls if "--project" in c)
+    assert any(f"--project {PROJECT}" in c for c in calls)
+
+
+def test_deploy_live_prefers_the_root_dotenv(tmp_path):
+    root = _fake_repo(tmp_path, "shared/infra/deploy_live.sh")
+    (root / "shared" / ".env").write_text("GCP_PROJECT=wrong-project\n")
+    proc, calls, _ = run_script(tmp_path, "shared/infra/deploy_live.sh", dotenv=f"GCP_PROJECT={PROJECT}\n")
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert _calls(calls, "gcloud run deploy aira-live", f"--project {PROJECT}")
+    assert not _calls(calls, "wrong-project")
 
 
 def test_deploy_live_fails_when_more_than_one_instance(tmp_path):
@@ -608,11 +656,22 @@ def test_build_hosting_puts_app_at_root_and_dashboard_under_dashboard(tmp_path):
     out = root / "dist" / "hosting"
     assert (out / "index.html").is_file()
     assert (out / "dashboard" / "index.html").is_file()
-    [app] = _calls(calls, "npm run build -w frontend/app")
-    [dash] = _calls(calls, "npm run build -w frontend/dashboard")
+    # npm runs inside frontend/ (the workspace root), so the workspaces are `app` and `dashboard`
+    [app] = _calls(calls, "npm run build -w app")
+    [dash] = _calls(calls, "npm run build -w dashboard")
     assert f"--outDir {out}" in app
     assert "--base /dashboard/" in dash and f"--outDir {out / 'dashboard'}" in dash
     assert calls.index(app) < calls.index(dash)
+    assert not _calls(calls, "npm ci"), "frontend/node_modules exists: no install"
+
+
+def test_build_hosting_installs_in_frontend_when_node_modules_is_missing(tmp_path):
+    proc, calls, _ = run_script(tmp_path, "shared/scripts/build_hosting.sh", {"VITE_AIRA_LIVE_WS": "wss://x/ws"},
+                                node_modules=False)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert calls[0] == "npm ci"
+    text = (REPO / "shared/scripts/build_hosting.sh").read_text()
+    assert 'cd "$ROOT/frontend"' in text and 'cd "$ROOT"\n' not in text
 
 
 def test_build_hosting_clears_stale_output(tmp_path):

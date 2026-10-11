@@ -52,20 +52,24 @@ Model IDs live in one file: `backend/aira_live/models.py`.
 ## Repository layout
 
 ```
-frontend/app/        AIRA phone app (Vite + TypeScript + Preact, installable PWA)
-frontend/dashboard/  Shop Dashboard (Vite + TypeScript + Preact, Firestore realtime)
+frontend/            npm workspace root (package.json, package-lock.json)
+  app/               AIRA phone app (Vite + TypeScript + Preact, installable PWA)
+  dashboard/         Shop Dashboard (Vite + TypeScript + Preact, Firestore realtime)
 backend/             aira-live on Cloud Run (Python 3.12, FastAPI, Gemini Live)
   aira_live/         voice session, tools, vision, memory, business engine, messaging
   tests/             pytest suite (runs offline with fakes)
-shared/contracts/    shared WebSocket protocol + Firestore types + JSON fixtures
+shared/contracts/    shared WebSocket protocol + Firestore types + JSON fixtures (npm package, file: dependency of both apps)
 shared/catalog/      demo shop products and suppliers (sunrise_dairy.json) + schemas/
-shared/infra/        GCP bootstrap, Firestore rules and indexes, keyless deploy setup
+shared/infra/        firebase.json + .firebaserc, Firestore rules and indexes, GCP bootstrap, keyless deploy setup
 shared/scripts/      seed_firestore.py, build_hosting.sh
 shared/bench/        benchmark data formats and scorers
-shared/docs/         design spec, plans, architecture, research
+shared/docs/         team-rules.md, design spec, plans, architecture, research
 shared/assets/logo/  AIRA logo
+shared/.env.example  template for the local .env
 .github/workflows/   ci.yml (pull requests) · deploy.yml (push to main)
 ```
+
+The repo root holds only these folders plus this README and `.gitignore`.
 
 ## Run it locally
 
@@ -73,30 +77,34 @@ You need Node 20+, Python 3.12 and [uv](https://docs.astral.sh/uv/).
 
 ```bash
 # 1. Settings. Leave GEMINI_API_KEY empty and AIRA_MOCK=1 to run in mock mode.
-cp .env.example .env
+#    Scripts read .env at the repo root first, then shared/.env.
+cp shared/.env.example .env
 
 # 2. Backend on http://localhost:8080 (WebSocket at ws://localhost:8080/ws)
 cd backend
 uv sync
 uv run uvicorn aira_live.main:app --reload --port 8080 --env-file ../.env
 
-# 3. Phone app (new terminal, repo root). It connects to ws://localhost:8080/ws by default.
+# 3. Phone app (new terminal). npm runs inside frontend/, the workspace root.
+#    The app connects to ws://localhost:8080/ws by default.
+cd frontend
 npm ci
-npm run dev -w frontend/app
+npm run dev -w app
 
 # 4. Optional: Shop Dashboard. Set the VITE_FIREBASE_* values,
 #    or VITE_USE_EMULATOR=1 with the Firestore emulator on port 8085.
-npm run dev -w frontend/dashboard
+npm run dev -w dashboard
 
-# 5. Optional: seed the demo shop into Firestore database "aira"
+# 5. Optional: seed the demo shop into Firestore database "aira" (from the repo root)
 uv run --project backend python shared/scripts/seed_firestore.py
 ```
 
 ## Tests
 
 ```bash
-cd backend && uv run pytest -q   # backend: business engine, tools, protocol, rules
-npm test                               # all TypeScript workspaces (vitest)
+cd backend && uv run pytest -q                        # backend: business engine, tools, protocol, rules
+cd frontend && npm test && npm run typecheck          # app + dashboard (vitest, tsc)
+cd shared/contracts && npm ci && npm test             # the shared contracts package
 ```
 
 The default suites run offline. Real Gemini calls only run in opt-in tests (`AIRA_LIVE_TESTS=1`).
@@ -111,7 +119,7 @@ Every push to `main` deploys through [`.github/workflows/deploy.yml`](.github/wo
 2. Sign in to Google Cloud with Workload Identity Federation. Only `main` of this repository can deploy.
 3. Build the `aira-live` image, push it to Artifact Registry and deploy it to Cloud Run (`asia-south1`).
 4. Build the app and the dashboard. The backend URL is injected at build time.
-5. Deploy both to Firebase Hosting.
+5. Deploy both to Firebase Hosting (`firebase deploy --config shared/infra/firebase.json`).
 
 No project ID, key or service URL is stored in this repository. `shared/infra/setup_github_deploy.sh` documents the one-time GCP setup.
 

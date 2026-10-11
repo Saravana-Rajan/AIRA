@@ -22,3 +22,4 @@ shared/bench/results/*
 shared/docs/submission/*.pdf
 # demo video cuts (uploaded to YouTube, never committed)
 shared/docs/submission/*.mp4
+.ruff_cache/
