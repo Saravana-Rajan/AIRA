@@ -1,6 +1,7 @@
-"""Bounding boxes everywhere (monitor v2 §4): every ER 2 prompt asks for box_2d [ymin, xmin, ymax, xmax] 0-1000
-per object, every parser validates it, and every result reaches the monitor (source "er2") and the phone's
-"Show boxes" overlay as a ``boxes`` server message."""
+"""Bounding boxes: the ER 2 ask paths no longer request box_2d (dropped to cut reply length and latency; a
+persistent box will come from on-device MediaPipe instead). The parsers still accept a box if one ever
+arrives, and when present it still reaches the monitor (source "er2") and the phone's "Show boxes" overlay
+as a ``boxes`` server message."""
 import json
 
 import pytest
@@ -54,11 +55,11 @@ def _boxes_sent(rec) -> list[dict]:
     (camera.ASK_PROMPT, camera.ASK_SCHEMA),
     (describe.DESCRIBE_PROMPT, describe.DESCRIBE_SCHEMA),
 ], ids=["point", "identify", "free_text", "listing", "camera_ask", "describe"])
-def test_every_er2_prompt_asks_for_box_2d_in_0_1000(prompt, schema):
-    # Counting is the exception: the official ER pointing form asks for points only (one per item).
-    assert "box_2d" in prompt and "box_2d" in schema
-    assert "[ymin, xmin, ymax, xmax]" in prompt and "0-1000" in prompt
-    assert '"box_2d": [ymin, xmin, ymax, xmax]' in schema
+def test_no_er2_prompt_requests_box_2d(prompt, schema):
+    # box_2d was dropped from the ER 2 ask paths to cut reply length and latency; a persistent box will come
+    # from on-device MediaPipe instead. The parsers below still accept a box if one ever arrives.
+    assert "box_2d" not in prompt and "box_2d" not in schema
+    assert "bounding box" not in prompt
 
 
 # ---------- the shared box parser ----------

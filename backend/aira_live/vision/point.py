@@ -18,11 +18,10 @@ MIN_CONF = 0.3
 DEFAULT_CONF = 0.5  # ER 2's list replies usually carry no confidence
 
 POINT_PROMPT = (
-    "Point to the {label} in this image and give its bounding box. If it is not visible, return {{\"point\": null}}. "
-    "Points are [y, x] and box_2d is [ymin, xmin, ymax, xmax], all normalized to 0-1000."
+    "Point to the {label} in this image. If it is not visible, return {{\"point\": null}}. "
+    "Points are [y, x], normalized to 0-1000."
 )
-POINT_SCHEMA = ('{"point": [y, x] or null, "box_2d": [ymin, xmin, ymax, xmax] or null, "label": "<label>", '
-                '"confidence": 0.0}')
+POINT_SCHEMA = '{"point": [y, x] or null, "label": "<label>", "confidence": 0.0}'
 
 
 class TargetResult(BaseModel):

@@ -46,13 +46,11 @@ IDENTIFY_PROMPT = (
     "Use the brand logo, colours and the printed product name and pack size (for example 500 ml vs 1 L, "
     "milk vs buttermilk, paneer vs butter). "
     "If the printed name or pack-size text is not readable, set label_visible to false. "
-    "If none of the candidates match, set sku to null. Only use skus from the candidate list. "
-    "box_2d is the bounding box of the held product, [ymin, xmin, ymax, xmax] normalized to 0-1000."
+    "If none of the candidates match, set sku to null. Only use skus from the candidate list."
 )
 IDENTIFY_SCHEMA = (
     '{"sku": "<one candidate sku or null>", "confidence": 0.0, '
-    '"alternatives": ["<other candidate sku>"], "label_visible": true, '
-    '"box_2d": [ymin, xmin, ymax, xmax] or null}'
+    '"alternatives": ["<other candidate sku>"], "label_visible": true}'
 )
 
 
@@ -150,11 +148,9 @@ MAX_SEEN = 60   # the model's own words for what it saw, kept short enough to sp
 FREE_TEXT_PROMPT = (
     "A blind shopkeeper's fingertip is on, or hand is holding, ONE object in this picture. "
     "Is that object \"{label}\"? Answer match true only if you clearly see that it is. "
-    "seen is a short name (two or three words) for what the object actually is. Never guess. "
-    "box_2d is the bounding box of that object, [ymin, xmin, ymax, xmax] normalized to 0-1000."
+    "seen is a short name (two or three words) for what the object actually is. Never guess."
 )
-FREE_TEXT_SCHEMA = ('{"match": true, "confidence": 0.0, "seen": "<what the object is>", '
-                    '"box_2d": [ymin, xmin, ymax, xmax] or null}')
+FREE_TEXT_SCHEMA = '{"match": true, "confidence": 0.0, "seen": "<what the object is>"}'
 
 
 class FreeTextResult(BaseModel):
