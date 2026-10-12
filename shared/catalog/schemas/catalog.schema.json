@@ -56,6 +56,7 @@
         "name": {"type": "string", "minLength": 1},
         "brand": {"type": "string", "minLength": 1},
         "pack": {"type": "string", "description": "Spoken pack description, e.g. \"500 ml pouch\""},
+        "look": {"type": "string", "description": "What the pack looks like (colour, shape, material), e.g. \"small blue packet\"; embedded for vector search"},
         "unit": {"enum": ["L", "pack", "jar", "box"]},
         "packSizeL": {"type": ["number", "null"], "exclusiveMinimum": 0},
         "packSizeG": {"type": ["number", "null"], "exclusiveMinimum": 0},

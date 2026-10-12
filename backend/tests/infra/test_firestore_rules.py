@@ -85,6 +85,8 @@ def test_indexes_file_is_well_formed():
     assert data["indexes"]
     for ix in data["indexes"]:
         assert ix["collectionGroup"] and ix["queryScope"] == "COLLECTION"
+        if any("vectorConfig" in f for f in ix["fields"]):      # vector index: tests/infra/test_vector_search.py
+            continue
         assert len(ix["fields"]) >= 2
         for f in ix["fields"]:
             assert f["fieldPath"] and f["order"] in {"ASCENDING", "DESCENDING"}

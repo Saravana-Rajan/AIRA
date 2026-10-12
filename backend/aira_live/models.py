@@ -5,7 +5,7 @@ Priority (build overrides §7): env ``AIRA_MODEL_<ROLE>`` > the Firestore ``conf
 import os
 from typing import Literal
 
-Role = Literal["live", "point", "count", "read", "verify"]
+Role = Literal["live", "point", "count", "read", "verify", "embed"]
 
 DEFAULTS: dict[str, str] = {
     "live": "gemini-3.8-live",
@@ -14,6 +14,12 @@ DEFAULTS: dict[str, str] = {
     "read": "gemini-3.8-flash",
     # A different model generation than read A, so the two reads are not correlated (build overrides §7).
     "verify": "gemini-3.6-flash",
+    # Text embeddings for Firestore vector search (aira_live.embeddings). Verified against the Gemini API
+    # embeddings docs on 2026-10-12 (ai.google.dev/gemini-api/docs/embeddings): the API offers
+    # "gemini-embedding-2" (multimodal, no task_type: the task goes in the text) and the older text-only
+    # "gemini-embedding-001"; both accept output_dimensionality 128-3072. AIRA asks for 768 (embeddings.DIM),
+    # which is also the dimension of the vector indexes in shared/infra/firestore.indexes.json.
+    "embed": "gemini-embedding-2",
 }
 FALLBACKS: dict[str, str] = {"point": "gemini-3.8-flash", "count": "gemini-3.8-flash"}
 

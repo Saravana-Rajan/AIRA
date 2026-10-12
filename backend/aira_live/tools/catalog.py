@@ -20,7 +20,7 @@ import os
 import re
 from typing import Literal
 
-from aira_live import confirm, ids
+from aira_live import confirm, embeddings, ids
 from aira_live.business import audit, catalog, hints, ledger, paths
 from aira_live.business.clock import now_iso
 from aira_live.business.store import Txn, get_store
@@ -164,6 +164,9 @@ async def _commit_product_add(payload: dict, value: str | None) -> dict:
     s = get_session()
     sku, doc, sup_id, idem = payload["sku"], payload["doc"], payload.get("supplier_id"), payload["idem"]
     label = doc.get("name", sku)
+    vector = await embeddings.product_vector(doc)      # before the transaction: never a network call inside one
+    if vector is not None:
+        doc = {**doc, embeddings.FIELD: vector}
 
     async def fn(txn: Txn) -> dict:
         seen = await txn.get(paths.idem(idem))
@@ -193,7 +196,7 @@ async def product_update(product: str, price_rupees: float | None = None, name: 
     s = get_session()
     ref = await catalog.resolve(s.shop_id, product, s.lang)
     if ref is None:
-        return {"ok": False, "say": hints.say("PRODUCT_UNKNOWN", s.lang, product=product)}
+        return {"ok": False, "say": await catalog.did_you_mean(s.shop_id, product, s.lang)}
     changes: dict = {}
     words: list[str] = []
     price = _price(price_rupees)
@@ -224,6 +227,10 @@ async def product_update(product: str, price_rupees: float | None = None, name: 
 async def _commit_product_update(payload: dict, value: str | None) -> dict:
     s = get_session()
     sku, changes, sup_id, idem = payload["sku"], payload.get("changes") or {}, payload.get("supplier_id"), payload["idem"]
+    vector = None
+    if "name" in changes:                               # the words changed: re-embed outside the transaction
+        current = await get_store().get(paths.product(s.shop_id, sku)) or {}
+        vector = await embeddings.product_vector({**current, **changes})
 
     async def fn(txn: Txn) -> dict:
         seen = await txn.get(paths.idem(idem))
@@ -235,6 +242,8 @@ async def _commit_product_update(payload: dict, value: str | None) -> dict:
         sup = await txn.get(paths.supplier(s.shop_id, sup_id)) if sup_id else None
         now = now_iso()
         new_doc = {**doc, **changes, "updatedAt": now}
+        if vector is not None:
+            new_doc[embeddings.FIELD] = vector
         old_price = doc.get("price")
         if "price" in changes and changes["price"] != old_price:
             # The price board's history: server-only, one entry per committed change (same idem → same doc).
@@ -265,7 +274,7 @@ async def product_disable(product: str) -> dict:
     s = get_session()
     ref = await catalog.resolve(s.shop_id, product, s.lang)
     if ref is None:
-        return {"ok": False, "say": hints.say("PRODUCT_UNKNOWN", s.lang, product=product)}
+        return {"ok": False, "say": await catalog.did_you_mean(s.shop_id, product, s.lang)}
     return await confirm.propose("generic", t("k3.product.disable_q", s.lang, product=ref.name),
                                  {"sku": ref.sku, "idem": ids.current_idem_key()}, "catalog.product_disable")
 

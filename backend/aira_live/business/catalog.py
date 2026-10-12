@@ -7,23 +7,38 @@ hints.say("PRODUCT_AMBIGUOUS" | "PRODUCT_UNKNOWN" | "SUPPLIER_UNKNOWN", lang).
 
 Every language's aliases count, whatever `lang` is, because owners mix Tamil, Hindi and English.
 Sizes ("half litre", "ஒரு லிட்டர்", "500 ml", "दो सौ एमएल") only choose between size variants of one product.
+
+Vector fallback: when the exact / alias match finds nothing, "the blue packet curd" or "the round tub" is
+embedded (aira_live.embeddings) and matched with Firestore ``find_nearest`` (COSINE, limit 3) over the shop's
+products. A clear nearest neighbour resolves; a close call is a suggestion, which ``did_you_mean`` turns into
+"Did you mean Sakthi Curd 500 ml?". No key, no index or any error: the result is exactly the old one (None).
 """
 from __future__ import annotations
 
+import logging
 import math
 import re
 from difflib import SequenceMatcher
 from fractions import Fraction
 from functools import lru_cache
 
-from aira_live.business import paths
+from aira_live import embeddings
+from aira_live.business import hints, paths
 from aira_live.business.numwords import word_amounts
 from aira_live.business.store import get_store
 from aira_live.business.text import tokens
+from aira_live.i18n import t
 from aira_live.vision.identify import ProductRef
+
+log = logging.getLogger(__name__)
 
 FUZZY_RATIO = 0.8           # ASR spellings: "shakti" ≈ "sakthi", "gee" ≈ "ghee"
 _FUZZY_MIN_LEN = 4          # shorter alias words must match exactly ("nei", "का")
+VECTOR_LIMIT = 3
+VECTOR_THRESHOLD = 0.55     # cosine distance; farther than this is "I don't know that product"
+VECTOR_SURE = 0.35          # nearer than this, and clearly ahead of the runner-up, resolves without asking
+VECTOR_GAP = 0.08           # the runner-up must be at least this much farther, else ask
+_SUGGEST_CACHE = 64
 
 # Unit words in en / ta / hi, keyed by the canonical unit to_selling_units understands.
 _UNITS: dict[str, frozenset[str]] = {
@@ -185,9 +200,72 @@ async def active_products(shop_id: str) -> list[tuple[str, dict]]:
     return [(sku, p) for sku, p in await get_store().list(paths.products(shop_id)) if is_active(p)]
 
 
+_suggestions: dict[tuple[str, str], list[ProductRef]] = {}
+
+
+def _remember_suggestions(shop_id: str, spoken: str, refs: list[ProductRef]) -> None:
+    key = (shop_id, spoken.strip().casefold())
+    _suggestions.pop(key, None)
+    _suggestions[key] = refs
+    while len(_suggestions) > _SUGGEST_CACHE:
+        _suggestions.pop(next(iter(_suggestions)))
+
+
+async def nearest_products(shop_id: str, spoken: str, limit: int = VECTOR_LIMIT) -> list[tuple[ProductRef, float]]:
+    """Active products nearest to ``spoken`` by vector search: (ref, cosine distance), nearest first.
+    Empty when embeddings or the vector query are unavailable (no key, no index, any error)."""
+    query = await embeddings.embed(spoken, query=True)
+    if not query:
+        return []
+    try:
+        rows = await get_store().find_nearest(paths.products(shop_id), embeddings.FIELD, query, limit=limit,
+                                              threshold=VECTOR_THRESHOLD)
+    except Exception as exc:  # noqa: BLE001 - a missing index or a transport error: behave as before
+        log.warning("vector search failed for %r in %s: %s", spoken, shop_id, exc)
+        return []
+    return [(_ref(sku, doc), dist) for sku, doc, dist in rows if is_active(doc)]
+
+
+async def resolve_vector(shop_id: str, spoken: str) -> tuple[ProductRef | None, list[ProductRef]]:
+    """(sure match, suggestions) from vector search. The suggestions are remembered for ``did_you_mean``."""
+    near = await nearest_products(shop_id, spoken)
+    if not near:
+        return None, []
+    refs = [r for r, _ in near]
+    (best, d0) = near[0]
+    runner_up = near[1][1] if len(near) > 1 else None
+    if d0 <= VECTOR_SURE and (runner_up is None or runner_up - d0 >= VECTOR_GAP):
+        _remember_suggestions(shop_id, spoken, [])
+        return best, refs
+    _remember_suggestions(shop_id, spoken, refs)
+    return None, refs
+
+
 async def resolve(shop_id: str, spoken: str, lang: str) -> ProductRef | None:
-    """Spoken product name (any of ta/hi/en) → ProductRef, or None when unknown, ambiguous or disabled."""
-    return _pick(await active_products(shop_id), spoken or "")
+    """Spoken product name (any of ta/hi/en) → ProductRef, or None when unknown, ambiguous or disabled.
+
+    Exact / alias / size matching first; only when that finds nothing does the vector search run."""
+    spoken = spoken or ""
+    products = await active_products(shop_id)
+    ref = _pick(products, spoken)
+    if ref is not None or not _content(spoken):
+        return ref
+    if any(_score(p, _content(spoken)) for _, p in products):
+        return None                                       # alias match was ambiguous: ask, do not guess
+    sure, _ = await resolve_vector(shop_id, spoken)
+    return sure
+
+
+async def did_you_mean(shop_id: str, spoken: str, lang: str) -> str:
+    """What to say for an unresolved product: "Did you mean Sakthi Curd 500 ml?" when the vector search found a
+    close product, else the plain PRODUCT_UNKNOWN hint. Uses the suggestions ``resolve`` just found."""
+    key = (shop_id, (spoken or "").strip().casefold())
+    refs = _suggestions.get(key)
+    if refs is None:
+        _, refs = await resolve_vector(shop_id, spoken or "")
+    if not refs:
+        return hints.say("PRODUCT_UNKNOWN", lang, product=spoken)
+    return t("biz.product.did_you_mean", lang, name=refs[0].name)
 
 
 # ---------- suppliers ----------

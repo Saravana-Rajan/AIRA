@@ -56,10 +56,19 @@ def _docs(catalog: dict, env: Mapping[str, str]) -> list[tuple[str, dict]]:
     return docs
 
 
-async def seed_into(store: Store, catalog: dict, *, env: Mapping[str, str] | None = None) -> None:
+async def seed_into(store: Store, catalog: dict, *, env: Mapping[str, str] | None = None,
+                    embed: bool = False) -> None:
     """Write the shop, products and suppliers. Idempotent: a re-run writes the same docs.
-    `env` (default os.environ) supplies the supplier phone numbers."""
+    `env` (default os.environ) supplies the supplier phone numbers. With `embed`, each product also gets its
+    `embedding` vector (aira_live.embeddings) when one can be made; a product stays without one otherwise."""
+    from aira_live import embeddings
+
+    shop_id = catalog["shop"]["id"]
     for path, doc in _docs(catalog, os.environ if env is None else env):
+        if embed and path.startswith(paths.products(shop_id) + "/"):
+            vector = await embeddings.product_vector(doc)
+            if vector is not None:
+                doc = {**doc, embeddings.FIELD: vector}
         await store.set(path, doc)
 
 
@@ -108,7 +117,7 @@ def main(argv: list[str] | None = None) -> int:
     store = _firestore_store()
 
     async def run() -> None:
-        await seed_into(store, catalog)
+        await seed_into(store, catalog, embed=True)
         await seed_inventory(store, catalog)
 
     asyncio.run(run())

@@ -43,8 +43,27 @@ class FakeQuery:
             yield d
 
 
+class FakeVectorQuery:
+    """``collection.find_nearest(...)`` computed locally with the cosine measure; ``raises`` fakes a missing index."""
+
+    def __init__(self, coll, field, vector, limit, threshold, raises):
+        self._coll, self._field, self._vector = coll, field, vector
+        self._limit, self._threshold, self._raises = limit, threshold, raises
+
+    async def stream(self):
+        from aira_live.embeddings import nearest_local, values_of
+
+        if self._raises:
+            raise self._raises
+        rows = [(s.id, s.to_dict()) for s in self._coll._docs()]
+        for doc_id, doc, _ in nearest_local(rows, values_of(self._vector), field=self._field, limit=self._limit,
+                                            threshold=self._threshold):
+            yield FakeSnapshot(doc_id, doc)
+
+
 class FakeCollection(FakeQuery):
     _ids = itertools.count(1)
+    find_nearest_raises: Exception | None = None     # set by a test to fake "no vector index yet"
 
     def __init__(self, store, path):
         self._store, self._path = store, path
@@ -52,6 +71,11 @@ class FakeCollection(FakeQuery):
 
     def document(self, doc_id=None):
         return FakeDoc(self._store, self._path + (doc_id or f"auto{next(FakeCollection._ids)}",))
+
+    def find_nearest(self, vector_field, query_vector, limit, distance_measure, *, distance_result_field=None,
+                     distance_threshold=None):
+        return FakeVectorQuery(self, vector_field, query_vector, limit, distance_threshold,
+                               FakeCollection.find_nearest_raises)
 
     def _docs(self):
         n = len(self._path) + 1
