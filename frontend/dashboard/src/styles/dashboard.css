@@ -552,3 +552,27 @@ a {
   background: var(--tint-blue);
   color: var(--ink-blue);
 }
+
+/* ---------- price board (owner's reference; read-only, large type) ---------- */
+.card__lead {
+  margin: 0 0 12px;
+  color: var(--text-muted);
+}
+.table--prices tbody th[scope="row"] .cell__main,
+.table--prices td {
+  font-size: 18px;
+}
+.table--prices .price {
+  font-size: 22px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+.table--prices .price-group {
+  padding-top: 18px;
+  font-size: var(--text-small);
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  text-align: left;
+}

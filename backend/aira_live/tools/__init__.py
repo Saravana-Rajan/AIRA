@@ -10,6 +10,7 @@ from aira_live.tools.insights import day_summary, reorder_suggest
 from aira_live.tools.memory import memory_forget, memory_remembering, memory_where
 from aira_live.tools.orders import order_create, order_status
 from aira_live.tools.payments import sale_pay, supplier_pay
+from aira_live.tools.prices import price_query
 from aira_live.tools.products import location_remember, product_find, product_identify
 from aira_live.tools.sales import sale_start
 from aira_live.tools.search import web_search
@@ -25,6 +26,7 @@ TOOL_FUNCS: list[Callable[..., Awaitable[dict]]] = [
     web_search,  # Google Search grounding for current facts (open assistant; read-only, external data)
     # catalog by voice (confirm-gated: each proposes, then commits after the owner's yes)
     product_add, product_update, product_disable, stock_add, supplier_add,
+    price_query,  # the owner's price board, spoken (read-only: prices come from the products in Firestore)
 ]
 TOOLS_BY_NAME: dict[str, Callable[..., Awaitable[dict]]] = {f.__name__: f for f in TOOL_FUNCS}
 # Live tools that run in the background (Live NON_BLOCKING behaviour): the conversation goes on while

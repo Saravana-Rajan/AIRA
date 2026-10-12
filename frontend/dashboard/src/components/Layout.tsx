@@ -7,6 +7,7 @@ export const ROUTES = [
   { hash: "#/", label: "Overview" },
   { hash: "#/today", label: "Today" },
   { hash: "#/stock", label: "Stock" },
+  { hash: "#/prices", label: "Prices" },
   { hash: "#/orders", label: "Orders & deliveries" },
   { hash: "#/audit", label: "Audit trail" },
   { hash: "#/forecast", label: "Forecast" },

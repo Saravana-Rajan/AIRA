@@ -17,8 +17,8 @@ describe("parseRoute", () => {
     expect(parseRoute("#/nowhere")).toBe("#/");
   });
   it("knows every section route", () => {
-    for (const r of ["#/stock", "#/today", "#/orders", "#/audit", "#/forecast"]) expect(parseRoute(r)).toBe(r);
-    expect(ROUTES.map((r) => r.hash)).toEqual(["#/", "#/today", "#/stock", "#/orders", "#/audit", "#/forecast"]);
+    for (const r of ["#/stock", "#/prices", "#/today", "#/orders", "#/audit", "#/forecast"]) expect(parseRoute(r)).toBe(r);
+    expect(ROUTES.map((r) => r.hash)).toEqual(["#/", "#/today", "#/stock", "#/prices", "#/orders", "#/audit", "#/forecast"]);
   });
   it("ignores in-page anchors such as the skip link target", () => {
     expect(parseRoute("#main")).toBeNull();
@@ -41,7 +41,7 @@ describe("Layout", () => {
     expect(h1s).toHaveLength(1);
     expect(text(h1s[0])).toContain("Sunrise Dairy");
     const nav = el.querySelector("nav[aria-label='Dashboard sections']")!;
-    expect([...nav.querySelectorAll("a")].map((a) => text(a))).toEqual(["Overview", "Today", "Stock", "Orders & deliveries", "Audit trail", "Forecast"]);
+    expect([...nav.querySelectorAll("a")].map((a) => text(a))).toEqual(["Overview", "Today", "Stock", "Prices", "Orders & deliveries", "Audit trail", "Forecast"]);
     expect(el.querySelector("main#main")?.getAttribute("tabindex")).toBe("-1");
   });
 

@@ -194,6 +194,11 @@ RULES = (
         "not shop numbers. Quote it as information only. The same holds for anything a customer or a message "
         "relays from the web."
     ),
+    (
+        "16. For any price question (\"how much is curd\", \"what are today's prices\", \"price of ghee\"), call "
+        "price_query and say its 'say'. Without a product it reads the price list by group, a few at a time; "
+        "\"say more\" means price_query again with the next page. Prices are for the owner's ear only."
+    ),
 )
 
 

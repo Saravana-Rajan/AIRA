@@ -202,6 +202,34 @@ async def test_product_update_changes_price_after_yes(store, session, proposals)
     assert len(await _audits(store, "product_updated")) == 1
 
 
+async def test_product_update_price_change_records_history_and_price_updated_at(store, session, proposals):
+    before = await store.get(paths.product(SHOP, "sakthi_curd_1l"))
+    assert "priceUpdatedAt" not in before
+    done = await _yes(await cat.product_update("curd", price_rupees=65))
+    assert done["ok"] is True
+    doc = await store.get(paths.product(SHOP, "sakthi_curd_1l"))
+    assert doc["price"] == 65 and doc["priceUpdatedAt"] == doc["updatedAt"]
+    history = [d for _, d in await store.list(f"shops/{SHOP}/priceHistory")]
+    assert len(history) == 1
+    assert history[0] == {"sku": "sakthi_curd_1l", "old": 60, "new": 65, "at": doc["updatedAt"], "actor": "owner"}
+    # A repeated "yes" (same idempotency doc) adds nothing.
+    use_call("tc-1")
+    await _yes(await cat.product_update("curd", price_rupees=65))
+    assert len(await store.list(f"shops/{SHOP}/priceHistory")) == 1
+
+
+async def test_product_update_without_a_price_change_writes_no_history(store, session, proposals):
+    done = await _yes(await cat.product_update("curd", name="Sakthi Thick Curd 1 L"))
+    assert done["ok"] is True
+    doc = await store.get(paths.product(SHOP, "sakthi_curd_1l"))
+    assert doc["name"] == "Sakthi Thick Curd 1 L" and "priceUpdatedAt" not in doc
+    assert await store.list(f"shops/{SHOP}/priceHistory") == []
+    use_call("tc-2")
+    done = await _yes(await cat.product_update("sakthi_curd_1l", price_rupees=60))   # the same price again
+    assert done["ok"] is True
+    assert await store.list(f"shops/{SHOP}/priceHistory") == []
+
+
 async def test_product_update_unknown_or_nothing(store, session, proposals):
     r = await cat.product_update("rocket fuel", price_rupees=5)
     assert r["ok"] is False and proposals == []

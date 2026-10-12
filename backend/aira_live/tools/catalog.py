@@ -235,6 +235,12 @@ async def _commit_product_update(payload: dict, value: str | None) -> dict:
         sup = await txn.get(paths.supplier(s.shop_id, sup_id)) if sup_id else None
         now = now_iso()
         new_doc = {**doc, **changes, "updatedAt": now}
+        old_price = doc.get("price")
+        if "price" in changes and changes["price"] != old_price:
+            # The price board's history: server-only, one entry per committed change (same idem → same doc).
+            new_doc["priceUpdatedAt"] = now
+            txn.set(paths.price_history(s.shop_id, f"{sku}-{hashlib.sha1(idem.encode('utf-8')).hexdigest()[:12]}"),
+                    {"sku": sku, "old": old_price, "new": changes["price"], "at": now, "actor": "owner"})
         if "name" in changes:
             en = [a for a in (doc.get("aliases") or {}).get("en", [])]
             if changes["name"].lower() not in en:

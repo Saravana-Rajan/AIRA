@@ -9,6 +9,7 @@ import { Layout, parseRoute, type Route } from "./Layout";
 import { HomePage } from "../pages/HomePage";
 import { TodayPage } from "../pages/TodayPage";
 import { StockPage } from "../pages/StockPage";
+import { PricesPage } from "../pages/PricesPage";
 import { OrdersPage } from "../pages/OrdersPage";
 import { AuditPage, type ResolveEvidence } from "../pages/AuditPage";
 import { ForecastPage } from "../pages/ForecastPage";
@@ -113,6 +114,7 @@ export function App({ listen, loadForecast, resolveEvidence = publicEvidenceUrl,
       );
   } else if (route === "#/today") body = <TodayPage summary={views.today} />;
   else if (route === "#/stock") body = <StockPage rows={views.stock} />;
+  else if (route === "#/prices") body = <PricesPage rows={views.prices} />;
   else if (route === "#/orders") body = <OrdersPage rows={views.orders} />;
   else if (route === "#/audit") body = <AuditPage rows={views.audit} resolveEvidence={resolveEvidence} />;
   else {

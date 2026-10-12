@@ -341,7 +341,7 @@ describe("overview cards stay short", () => {
 
   it("the overview puts orders with a discrepancy first, so a short list never hides one", () => {
     const rows = [order(1), order(2), order(3), { ...order(4), state: "DISCREPANCY", stateLabel: "Discrepancy", isDiscrepancy: true, stepIndex: 2 }];
-    const views = { stock: [], audit: [], orders: rows, today: { salesCount: 0, revenue: 0, revenueText: "₹0", topProduct: null, byMethod: { cash: 0, upi: 0 }, byMethodText: { cash: "₹0", upi: "₹0" } } };
+    const views = { stock: [], prices: [], audit: [], orders: rows, today: { salesCount: 0, revenue: 0, revenueText: "₹0", topProduct: null, byMethod: { cash: 0, upi: 0 }, byMethodText: { cash: "₹0", upi: "₹0" } } };
     const el = mount(<HomePage views={views} forecast={null} forecastLoading={false} resolveEvidence={async () => null} />);
     const titles = [...el.querySelectorAll("article h3")].map((h) => text(h));
     expect(titles).toEqual(["Vendor 4", "Vendor 1", "Vendor 2"]);
@@ -349,7 +349,7 @@ describe("overview cards stay short", () => {
 
   it("the overview also puts a short count first while the delivery is still being checked", () => {
     const short = { ...order(4), state: "DELIVERY_PENDING", stateLabel: "Delivery pending", stepIndex: 1, discrepancyTexts: ["Sakthi curd 1 L: counted 28 L of 30 L ordered"] };
-    const views = { stock: [], audit: [], orders: [order(1), order(2), order(3), short], today: { salesCount: 0, revenue: 0, revenueText: "₹0", topProduct: null, byMethod: { cash: 0, upi: 0 }, byMethodText: { cash: "₹0", upi: "₹0" } } };
+    const views = { stock: [], prices: [], audit: [], orders: [order(1), order(2), order(3), short], today: { salesCount: 0, revenue: 0, revenueText: "₹0", topProduct: null, byMethod: { cash: 0, upi: 0 }, byMethodText: { cash: "₹0", upi: "₹0" } } };
     const el = mount(<HomePage views={views} forecast={null} forecastLoading={false} resolveEvidence={async () => null} />);
     const titles = [...el.querySelectorAll("article h3")].map((h) => text(h));
     expect(titles).toEqual(["Vendor 4", "Vendor 1", "Vendor 2"]);
@@ -359,7 +359,7 @@ describe("overview cards stay short", () => {
   it("the overview's top orders are real orders: newer drafts the owner said no to never push them out", () => {
     const draft = (i: number): OrderRow => ({ ...order(i), supplierName: `Draft ${i}`, state: "DRAFT", stateLabel: "Draft", stepIndex: -1 });
     const rows = [draft(1), draft(2), draft(3), draft(4), order(5), order(6)];
-    const views = { stock: [], audit: [], orders: rows, today: { salesCount: 0, revenue: 0, revenueText: "₹0", topProduct: null, byMethod: { cash: 0, upi: 0 }, byMethodText: { cash: "₹0", upi: "₹0" } } };
+    const views = { stock: [], prices: [], audit: [], orders: rows, today: { salesCount: 0, revenue: 0, revenueText: "₹0", topProduct: null, byMethod: { cash: 0, upi: 0 }, byMethodText: { cash: "₹0", upi: "₹0" } } };
     const el = mount(<HomePage views={views} forecast={null} forecastLoading={false} resolveEvidence={async () => null} />);
     expect([...el.querySelectorAll("article h3")].map((h) => text(h))).toEqual(["Vendor 5", "Vendor 6"]);
     expect(el.querySelector(".drafts")).toBeNull();
