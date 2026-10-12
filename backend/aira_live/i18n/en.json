@@ -45,6 +45,8 @@
   "auth.denied": "This phone is not linked to this shop.",
   "auth.busy": "AIRA is busy with other phones. Please try again in a minute.",
   "live.unavailable": "I can't reach the AI right now. Please try again in a minute.",
+  "search.unavailable": "I couldn't search the web just now. Please ask again in a moment.",
+  "search.empty": "What should I search for?",
   "error.unsupported": "Sorry, I didn't understand that.",
   "error.too_large": "That image is too large.",
   "error.internal": "Something went wrong. Please try again.",

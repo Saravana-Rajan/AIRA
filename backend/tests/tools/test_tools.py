@@ -21,6 +21,7 @@ EXPECTED = {
     "camera_ask": ["question"], "describe_mode": ["on"],
     "memory_where": ["item"], "memory_forget": ["item"], "memory_remembering": ["on", "item"],
     "day_summary": [], "reorder_suggest": ["product"], "confirm_action": ["confirm_id", "answer"],
+    "web_search": ["query"],  # Google Search grounding for current facts (tools/search.py)
     # catalog by voice (tools/catalog.py)
     "product_add": ["name", "brand", "unit", "pack_size", "price_rupees", "supplier_id"],
     "product_update": ["product", "price_rupees", "name", "supplier_id"], "product_disable": ["product"],
