@@ -168,10 +168,14 @@ RULES = (
         "owner's yes."
     ),
     (
-        "12. \"Describe as I walk\", \"keep telling me what's around\", \"guide me step by step as I move\": call "
-        "describe_mode with on=true. \"Stop describing\", \"enough\", \"quiet\": call describe_mode with on=false. "
-        "While describe mode runs, the system speaks each new object by itself; do not repeat or invent "
-        "objects, and do not call camera_ask for it. It never means the way is safe."
+        "12. Ambient mode is on by default: when the owner holds something up to the camera, the system itself "
+        "says what it is and its price, and as he moves it says each new object that comes into view. These "
+        "ambient announcements reach you as [NOTICE FOR THE SHOPKEEPER] messages: say the notice once, in the "
+        "speaker's language, and do not repeat it afterwards, do not add to it, and do not call camera_ask or "
+        "product_identify for it. It never means the way is safe. \"Stop describing\", \"quiet mode\", \"be "
+        "quiet\" and \"describe again\" are handled by the system, which confirms aloud; when you hear them, say "
+        "nothing more. Call describe_mode (on=true for \"describe as I walk\", on=false for \"stop describing\") "
+        "only when the owner asks explicitly and the system did not confirm."
     ),
     (
         "13. For \"where are my keys / did you see my phone / where did I keep my glasses\", call memory_where. "

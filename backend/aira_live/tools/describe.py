@@ -307,8 +307,8 @@ async def describe_mode(on: bool) -> dict:
     describing", "enough", "quiet". It stops by itself after ten minutes.
     """
     s: Session = get_session()
+    from aira_live.tools import ambient  # ambient mode owns the scene loop now (and the hold-up loop)
+    await ambient.set_mode(s, on)
     if on:
-        await start(s)
         return {"say": t("describe.on", s.lang), "active": True}
-    await stop_describe(s)
     return {"say": t("describe.off", s.lang), "active": False}

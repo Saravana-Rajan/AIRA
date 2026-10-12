@@ -1,9 +1,10 @@
 // frontend/app/src/guidance/hands.ts
-// MediaPipe Hand Landmarker: streams the index fingertip (landmark 8) in 0–1000 image coords.
-// MediaPipe is loaded lazily (./mediapipe), so it stays out of the start-up bundle.
+// MediaPipe Hand Landmarker: streams the index fingertip (landmark 8) and the whole hand's box in 0–1000
+// image coords. MediaPipe is loaded lazily (./mediapipe), so it stays out of the start-up bundle.
 import type { HandLandmarker } from "@mediapipe/tasks-vision";
 import { startCamera } from "../camera/capture";
 import { getFrameSource, type FrameSourceEl } from "../camera/source";
+import type { Box } from "./geometry";
 
 export const MP_VERSION = "1.1.0";
 export const MP_WASM = `https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@${MP_VERSION}/wasm`;
@@ -54,13 +55,30 @@ function load(): Promise<HandLandmarker> {
   return landmarker;
 }
 
+const clamp1000 = (v: number) => Math.min(1000, Math.max(0, Math.round(v * 1000)));
+
 /** Index fingertip of the first hand in 0–1000 image coords, or null when no hand is visible. */
 export function fingertipFrom(res: Landmarks): Tip | null {
   const lm = res?.landmarks?.[0]?.[INDEX_TIP];
   if (!lm) return null;
-  const clamp = (v: number) => Math.min(1000, Math.max(0, Math.round(v * 1000)));
-  return { x1000: clamp(lm.x), y1000: clamp(lm.y) };
+  return { x1000: clamp1000(lm.x), y1000: clamp1000(lm.y) };
 }
+
+/** Bounding box [ymin, xmin, ymax, xmax] (0–1000) of all landmarks of the first hand, or null without a hand. */
+export function handBoxFrom(res: Landmarks): Box | null {
+  const lms = res?.landmarks?.[0];
+  if (!lms || lms.length === 0) return null;
+  let xmin = Infinity, ymin = Infinity, xmax = -Infinity, ymax = -Infinity;
+  for (const lm of lms) {
+    if (lm.x < xmin) xmin = lm.x;
+    if (lm.x > xmax) xmax = lm.x;
+    if (lm.y < ymin) ymin = lm.y;
+    if (lm.y > ymax) ymax = lm.y;
+  }
+  return [clamp1000(ymin), clamp1000(xmin), clamp1000(ymax), clamp1000(xmax)];
+}
+
+export type Hand = { tip: Tip; box: Box };
 
 type VideoWithRvfc = HTMLVideoElement & {
   requestVideoFrameCallback?: (cb: () => void) => number;
@@ -77,7 +95,15 @@ function hasPixels(el: FrameSourceEl): boolean {
  * Streams the index fingertip on every new frame; null when no hand. Resolves to a stop function.
  * Demo mode (/try): tracks the demo media instead and never opens the camera.
  */
-export async function trackFingertip(onTip: (tip: Tip | null) => void): Promise<() => void> {
+export function trackFingertip(onTip: (tip: Tip | null) => void): Promise<() => void> {
+  return trackHand((hand) => onTip(hand ? hand.tip : null));
+}
+
+/**
+ * Streams the first hand (fingertip and box) on every new frame; null when no hand. Resolves to a stop
+ * function. Each caller gets its own loop; MediaPipe itself is loaded once.
+ */
+export async function trackHand(onHand: (hand: Hand | null) => void): Promise<() => void> {
   const source: FrameSourceEl = getFrameSource() ?? (await startCamera());
   const hl = await load();
   let running = true;
@@ -96,13 +122,16 @@ export async function trackFingertip(onTip: (tip: Tip | null) => void): Promise<
       let ts = performance.now();
       if (ts <= lastTs) ts = lastTs + 1;   // MediaPipe needs strictly increasing timestamps
       lastTs = ts;
-      let tip: Tip | null;
+      let hand: Hand | null;
       try {
-        tip = fingertipFrom(hl.detectForVideo(source, ts));
+        const res = hl.detectForVideo(source, ts);
+        const tip = fingertipFrom(res);
+        const box = handBoxFrom(res);
+        hand = tip && box ? { tip, box } : null;
       } catch {
-        tip = null;   // a lost GL context or a bad frame reads as "no hand"; the loop goes on
+        hand = null;   // a lost GL context or a bad frame reads as "no hand"; the loop goes on
       }
-      onTip(tip);
+      onHand(hand);
     }
     next();
   };

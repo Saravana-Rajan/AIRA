@@ -21,6 +21,7 @@ import { walkingModeText } from "../walk/strings";
 import { createCountUx, type CountProgress } from "./countUx";
 import { createOpenUrlHandler, defaultDial, defaultOpen } from "./openUrl";
 import { createCameraWiring } from "./wiring";
+import { noteBumpWarning, startHoldUpWatch } from "../ambient/watch";
 
 export interface WireOptions {
   /** Live count updates ("Counting 12 / 30"). The core wiring already drives the chip; this is optional. */
@@ -35,10 +36,12 @@ export interface WireOptions {
 
 /**
  * Continuous streams: guide/identify frames go as they come; `describe` frames (describe mode, 1 per 3 s) pass
- * a scene-change gate so an unchanged view costs no upload and no ER 2 call.
+ * a scene-change gate so an unchanged view costs no upload and no ER 2 call; `identify_held` (ambient mode) is
+ * not a timer at all but the hold-up watcher, which sends one frame per object the owner holds up.
  */
 export function continuousStarter(isWalking?: () => boolean): typeof startContinuous {
   return (purpose, fps, keep?: FrameKeep) => {
+    if (purpose === "identify_held") return startHoldUpWatch();
     if (purpose !== "describe" || keep) return startContinuous(purpose, fps, keep);
     return startContinuous(purpose, fps, createSceneGate({ isWalking }).keep);
   };
@@ -219,6 +222,7 @@ export function wireCameraIntoApp(w: WiredHooks, opts: PhoneWireOptions = {}): P
   const offMode = walkingMode.subscribe((on) => app.speak(walkingModeText(on, app.lang())));
 
   const onWarn = () => {
+    noteBumpWarning(performance.now());   // danger beats a product name: hold-up frames pause
     w.local("bump");
     if (chipTimer) clearTimeout(chipTimer);
     chipTimer = setTimeout(() => {

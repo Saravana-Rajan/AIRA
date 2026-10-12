@@ -289,5 +289,11 @@
   "k3.cat.paneer": "பன்னீர்",
   "k3.cat.butter": "வெண்ணெய்",
   "k3.cat.ice_cream": "ஐஸ்கிரீம்",
-  "k3.cat.other": "மற்றவை"
+  "k3.cat.other": "மற்றவை",
+  "ambient.on": "சரி. நீங்கள் காட்டுவதையும் புதிதாக தெரிவதையும் சொல்கிறேன்.",
+  "ambient.off": "அமைதி முறை. நீங்கள் கேட்டால் மட்டும் பேசுவேன்.",
+  "ambient.held": "இது {name}, {pack}.",
+  "ambient.held_price": "{price} ரூபாய்.",
+  "ambient.held_free": "இது {label}.",
+  "ambient.closer": "கொஞ்சம் அருகில் பிடியுங்கள்."
 }

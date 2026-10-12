@@ -289,5 +289,11 @@
   "k3.cat.paneer": "पनीर",
   "k3.cat.butter": "मक्खन",
   "k3.cat.ice_cream": "आइसक्रीम",
-  "k3.cat.other": "अन्य"
+  "k3.cat.other": "अन्य",
+  "ambient.on": "ठीक है। आप जो दिखाएँगे और जो नया दिखेगा, मैं बताऊँगी।",
+  "ambient.off": "शांत मोड। आप पूछेंगे तभी बोलूँगी।",
+  "ambient.held": "यह {name}, {pack} है।",
+  "ambient.held_price": "{price} रुपये।",
+  "ambient.held_free": "यह {label} है।",
+  "ambient.closer": "इसे थोड़ा पास लाइए।"
 }

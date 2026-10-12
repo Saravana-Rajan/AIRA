@@ -8,6 +8,7 @@ const h = vi.hoisted(() => ({
   onTip: null as null | ((tip: { x1000: number; y1000: number } | null) => void),
   stopTrack: vi.fn(),
   stopTilt: vi.fn(),
+  stopHoldUp: vi.fn(),
 }));
 
 vi.mock("../src/camera/capture", async (importOriginal) => ({
@@ -26,8 +27,13 @@ vi.mock("../src/guidance/hands", () => ({
 }));
 vi.mock("../src/guidance/tones", () => ({ guideTo: vi.fn(), stopTone: vi.fn() }));
 vi.mock("../src/walk/start", () => ({ startBumpGuard: vi.fn() }));
+vi.mock("../src/ambient/watch", () => ({
+  startHoldUpWatch: vi.fn(() => h.stopHoldUp),
+  noteBumpWarning: vi.fn(),
+}));
 
 import { initApp } from "../src/core/app";
+import { noteBumpWarning, startHoldUpWatch } from "../src/ambient/watch";
 import type { Settings } from "../src/core/types";
 import { captureFrame, setQualityListener, startContinuous, stopCamera } from "../src/camera/capture";
 import { trackFingertip } from "../src/guidance/hands";
@@ -126,6 +132,18 @@ describe("wireCameraAndGuidance", () => {
     const gray = new Float32Array(64 * 48).fill(90);
     expect(keep(gray, 64, 48)).toBe(true);        // the first frame goes
     expect(keep(gray, 64, 48)).toBe(false);       // the same scene again does not
+  });
+
+  it("an identify_held stream (ambient mode) runs the hold-up watcher instead of a timer; stop ends it", async () => {
+    vi.mocked(startContinuous).mockClear();
+    wire();
+    socket.emit({ t: "request_frame", purpose: "identify_held", continuous: true });
+    await flush();
+    expect(startHoldUpWatch).toHaveBeenCalledTimes(1);
+    expect(startContinuous).not.toHaveBeenCalled();
+    socket.emit({ t: "request_frame", purpose: "identify_held", stop: true });
+    await flush();
+    expect(h.stopHoldUp).toHaveBeenCalledTimes(1);
   });
 
   it("a camera failure speaks one hint and sends nothing", async () => {
@@ -320,6 +338,7 @@ describe("wireCameraIntoApp", () => {
     expect(calls).toEqual(["local:bump", "local:bump"]);
     vi.advanceTimersByTime(200);
     expect(calls).toEqual(["local:bump", "local:bump", "local:bump_clear"]);
+    expect(noteBumpWarning).toHaveBeenCalledTimes(2);   // danger beats a product name: hold-up frames pause
     p.dispose();
   });
 
