@@ -45,12 +45,12 @@ DESCRIBE_PROMPT = (
     "You are the eyes of a blind shopkeeper wearing this chest camera while he walks. List the main objects "
     "in view (at most 4, nearest and most useful first): furniture, doors, steps, crates, shelves, fridges, "
     "bags, keys, phones, tools. For each give a short plain label, its point [y, x] normalized 0-1000 (x: 0 is "
-    "his left, 1000 his right), its bounding box box_2d [ymin, xmin, ymax, xmax] on the same scale, and its "
+    "his left, 1000 his right), and its "
     "distance: near (within reach), arm (an arm's length), far (a step or more away). Walls, floor, ceiling and "
     "sky are not objects. Never "
     "describe or identify people. If the image is dark or blurred, return no objects and confidence below 0.5."
 )
-DESCRIBE_SCHEMA = ('{"objects": [{"label": "<name>", "point": [y, x], "box_2d": [ymin, xmin, ymax, xmax] or null, '
+DESCRIBE_SCHEMA = ('{"objects": [{"label": "<name>", "point": [y, x], '
                    '"distance": "near|arm|far"}], "confidence": 0.0}')
 
 _ON = re.compile(r"(describ|narrat|tell me what.?s around|keep telling|what.?s around me as i|"

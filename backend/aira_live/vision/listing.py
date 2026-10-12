@@ -44,13 +44,13 @@ LIST_PROMPT = (
     "List every product or item you can see, grouped by where it is: each shelf of a fridge or rack from top to "
     "bottom, the fridge door, the floor or the counter. area is one of {areas}; area_name is a short name for "
     "it in {lang}. Name each item in {lang} with its point [y, x] normalized 0-1000 (x: 0 is the owner's left, "
-    "1000 the right), its bounding box box_2d [ymin, xmin, ymax, xmax] (same 0-1000 scale) and distance: near "
+    "1000 the right) and distance: near "
     "(within reach), arm (an arm's length), far (a step or more). Only items "
     "you actually see; never guess brands you cannot read. Never describe or identify people. If the image is "
     "dark, blurred or shows no shelf, set confidence below 0.5 and aim_hint to one of {hints}."
 )
 LIST_SCHEMA = ('{"areas": [{"area": "top|middle|bottom|door|floor|counter|other", "area_name": "<short name>", '
-               '"items": [{"label": "<name>", "point": [y, x], "box_2d": [ymin, xmin, ymax, xmax] or null, '
+               '"items": [{"label": "<name>", "point": [y, x], '
                '"distance": "near|arm|far"}]}], '
                '"confidence": 0.0, "aim_hint": "<optional key>"}')
 

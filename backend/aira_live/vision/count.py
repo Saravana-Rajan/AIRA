@@ -38,12 +38,11 @@ class CountResult(BaseModel):
 COUNT_PROMPT = (
     "You are counting stock for a blind shopkeeper. Point to EVERY individual {label} visible in this image, "
     "exactly one point per item, at the centre of each item. Do not point to anything else. "
-    'For each item give its point and its bounding box box_2d, and set "edge": true if part of it is cut off by '
+    'For each item set "edge": true if part of it is cut off by '
     'the image edge, and "hidden": true if part of it is hidden behind another item. '
-    f"Points are [y, x] and box_2d is [ymin, xmin, ymax, xmax], normalized to 0-1000. Return no more than {MAX_ITEMS} items."
+    f"Points are [y, x], normalized to 0-1000. Return no more than {MAX_ITEMS} items."
 )
-COUNT_SCHEMA = ('[{"point": [y, x], "box_2d": [ymin, xmin, ymax, xmax], "label": "<label>", "edge": false, '
-                '"hidden": false}]')
+COUNT_SCHEMA = '[{"point": [y, x], "label": "<label>", "edge": false, "hidden": false}]'
 
 
 def _is_point(p: Any) -> bool:
