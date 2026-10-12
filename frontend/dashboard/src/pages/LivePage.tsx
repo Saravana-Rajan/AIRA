@@ -16,6 +16,8 @@ export interface LivePageProps {
   /** True when no monitor key is known yet: the page asks for one instead of connecting. */
   keyNeeded: boolean;
   onKey: (key: string) => void;
+  /** Picks another of the shop's live sessions (`state.sessions`) to follow. */
+  onFollow?: (sessionId: string) => void;
   /** Record mode: a clean 16:9 view without the dashboard chrome. */
   record?: boolean;
   onRecord?: (on: boolean) => void;
@@ -45,7 +47,7 @@ function useNow(now: () => number): number {
   return t;
 }
 
-export function LivePage({ state, conn, keyNeeded, onKey, record = false, onRecord, now = Date.now }: LivePageProps) {
+export function LivePage({ state, conn, keyNeeded, onKey, onFollow, record = false, onRecord, now = Date.now }: LivePageProps) {
   const t = useNow(now);
   const [paused, setPaused] = useState(false);
   const frozen = useRef<Frame | null>(null);
@@ -82,6 +84,7 @@ export function LivePage({ state, conn, keyNeeded, onKey, record = false, onReco
           <span class={`mc__dot mc__dot--${state.session ? "on" : conn}`} aria-hidden="true" />
           <span class="mc__phone-name">Sam's phone</span>
           <span class="mc__conn" role="status">{state.session ? "Session open" : CONN_TEXT[conn]}</span>
+          <SessionPicker sessions={state.sessions} current={state.session} onFollow={onFollow} />
         </div>
         <span class="mc__demo">Demo</span>
       </header>
@@ -183,6 +186,19 @@ function Waiting({ conn }: { conn: Connection }) {
               : "Connecting to AIRA Live."}
       </p>
     </div>
+  );
+}
+
+/** Shown only when the shop has more than one live phone session: the page follows one at a time. */
+function SessionPicker({ sessions, current, onFollow }: { sessions: LiveState["sessions"]; current: string | null; onFollow?: (id: string) => void }) {
+  const ids = Object.keys(sessions);
+  if (ids.length < 2) return null;
+  return (
+    <select class="mc__session" aria-label="Session to follow" value={current ?? ""} onChange={(e) => onFollow?.((e.target as HTMLSelectElement).value)}>
+      {ids.map((id) => (
+        <option key={id} value={id}>{sessions[id].uid ? `${sessions[id].uid} · ${id.slice(0, 8)}` : id.slice(0, 8)}</option>
+      ))}
+    </select>
   );
 }
 

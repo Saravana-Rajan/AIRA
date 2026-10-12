@@ -49,8 +49,14 @@ export interface SessionInfo { id: string; uid: string | null; lang: string; sta
 export interface Stats { turns: number; er2Calls: number; flashCalls: number; visionMs: number | null; fps: number; ts: number }
 export interface VisionLayer { objects: VisionObject[]; ts: number }
 export interface LiveState {
-  /** Sam's (the owner's) session; room cameras are kept apart in `rooms`. */
+  /**
+   * The session the page follows (Sam's phone); room cameras are kept apart in `rooms`. Every other field
+   * below `session` belongs to this one session: messages from any other session are ignored until the user
+   * picks it (`follow`), and everything is cleared when it ends.
+   */
   session: string | null;
+  /** The shop's live phone sessions, by id, as announced by `session` start/end; the user may pick one. */
+  sessions: Record<string, SessionInfo>;
   sessionStartedAt: number | null;
   lang: string | null;
   status: MonitorState;
@@ -83,10 +89,22 @@ const noLayer = (): VisionLayer => ({ objects: [], ts: 0 });
 
 export function initialState(): LiveState {
   return {
-    session: null, sessionStartedAt: null, lang: null, status: "idle", frame: null, er2: noLayer(), mediapipe: noLayer(),
+    session: null, sessions: {}, sessionStartedAt: null, lang: null, status: "idle", frame: null, er2: noLayer(), mediapipe: noLayer(),
     context: null, target: null, found: false, hand: null, transcript: [], activity: [], stats: null, task: null, rooms: {},
     lastMsgAt: null,
   };
+}
+
+/** Everything the followed session owned, gone (frame, boxes, transcript, activity, stats, task); the shop's session list and room cameras stay. */
+function clearedSession(s: LiveState, sessions: Record<string, SessionInfo> = s.sessions): LiveState {
+  return { ...initialState(), sessions, rooms: s.rooms, lastMsgAt: s.lastMsgAt };
+}
+
+/** Follows session `id` (one the shop announced) with a clean slate; the same id, or an unknown one, changes nothing. */
+export function follow(s: LiveState, id: string): LiveState {
+  const info = s.sessions[id];
+  if (!info || s.session === id) return s;
+  return { ...clearedSession(s), session: id, sessionStartedAt: info.startedAt, lang: info.lang, status: "listening" };
 }
 
 let nextId = 1;
@@ -132,6 +150,10 @@ function logActivity(s: LiveState, name: string, detail: string, ts: number, tag
  * Applies one monitor message. Partial transcript lines are kept one per speaker and replaced in place
  * by the next partial or final line from that speaker; final lines stay in arrival order. Messages from a
  * room camera's session only touch `rooms`.
+ *
+ * Session scope: the page follows one phone session. The first session heard is followed; a later one is
+ * only listed in `sessions` until the user picks it (`follow`), and its messages are dropped. When the
+ * followed session ends everything it produced is cleared (nothing of a session outlives it in memory).
  */
 export function reduce(s: LiveState, m: MonitorMsg): LiveState {
   const base = { ...s, lastMsgAt: m.ts };
@@ -145,29 +167,44 @@ export function reduce(s: LiveState, m: MonitorMsg): LiveState {
     }
     return base;
   }
-  switch (m.kind) {
-    case "session": {
-      const started = m.state === "start";
-      if (isCamera(m.uid)) {
-        const rooms = { ...s.rooms };
-        if (started) rooms[m.session] = { name: roomName(m.uid!), frame: null, mediapipe: noLayer(), startedAt: m.ts };
-        else delete rooms[m.session];
-        return { ...base, rooms, activity: logActivity(s, started ? "room_start" : "room_end", roomName(m.uid!), m.ts, "vision") };
-      }
-      if (!started && s.session !== null && s.session !== m.session) return base; // an older session of the shop ended
-      const fresh = started ? { ...initialState(), transcript: s.transcript, activity: s.activity, rooms: s.rooms } : base;
+  if (m.kind === "session") {
+    const started = m.state === "start";
+    if (isCamera(m.uid)) {
+      const rooms = { ...s.rooms };
+      if (started) rooms[m.session] = { name: roomName(m.uid!), frame: null, mediapipe: noLayer(), startedAt: m.ts };
+      else delete rooms[m.session];
+      return { ...base, rooms, activity: logActivity(s, started ? "room_start" : "room_end", roomName(m.uid!), m.ts, "vision") };
+    }
+    if (started) {
+      const sessions = { ...s.sessions, [m.session]: { id: m.session, uid: m.uid ?? null, lang: m.lang, startedAt: m.ts } };
+      if (s.session !== null && s.session !== m.session) return { ...base, sessions }; // another phone: listed, not followed
+      // The first session, or the followed one announced again (the monitor reconnected): a fresh camera, the same conversation.
+      const same = s.session === m.session;
+      const kept = same ? s : clearedSession(s);
       return {
-        ...fresh,
-        lastMsgAt: m.ts,
-        session: started ? m.session : null,
-        sessionStartedAt: started ? m.ts : s.sessionStartedAt,
+        ...clearedSession(s, sessions),
+        session: m.session,
+        sessionStartedAt: same && s.sessionStartedAt !== null ? s.sessionStartedAt : m.ts,
         lang: m.lang,
-        status: started ? "listening" : "idle",
-        stats: started ? null : s.stats,
-        task: started ? null : s.task,
-        activity: logActivity(s, started ? "session_start" : "session_end", started ? `Language ${m.lang}` : "", m.ts, "sam"),
+        status: "listening",
+        transcript: kept.transcript,
+        activity: logActivity(kept, "session_start", `Language ${m.lang}`, m.ts, "sam"),
+        lastMsgAt: m.ts,
       };
     }
+    const sessions = { ...s.sessions };
+    delete sessions[m.session];
+    if (s.session !== m.session) return { ...base, sessions }; // a session the page was not following ended
+    return { ...clearedSession(s, sessions), lastMsgAt: m.ts };
+  }
+  if (s.session === null) s = { ...s, session: m.session }; // nothing followed yet: this session is the one
+  else if (s.session !== m.session) return s; // another session's line: not the one on screen
+  return reduceOwn(s, m);
+}
+
+function reduceOwn(s: LiveState, m: Exclude<MonitorMsg, { kind: "session" }>): LiveState {
+  const base = { ...s, lastMsgAt: m.ts };
+  switch (m.kind) {
     case "transcript": {
       const i = s.transcript.findIndex((l) => !l.final && l.role === m.role);
       const line: TranscriptLine = { id: i >= 0 ? s.transcript[i].id : id(), role: m.role, text: m.text, lang: m.lang, final: m.final, ts: m.ts };

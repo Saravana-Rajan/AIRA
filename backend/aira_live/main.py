@@ -391,11 +391,13 @@ async def ws_endpoint(ws: WebSocket) -> None:
 async def monitor_endpoint(ws: WebSocket) -> None:
     """``GET /monitor?shop=<id>``, then ``{t:"auth", key}``: the dashboard's read-only live feed of one shop.
 
-    Guards, in order: the browser Origin allowlist (like ``/ws``), a ``shop`` and ``monitor.MAX_MONITORS_PER_SHOP``
-    (each refusal closes with 4403 before the handshake), then the first message: ``{t:"auth", key}`` within
-    ``monitor.AUTH_TIMEOUT_S``, compared in constant time to ``AIRA_MONITOR_KEY`` (with the env unset nobody gets
-    in). A wrong, malformed or late key closes with 4403; nothing is published before it. The key is never read
-    from the URL. A connected monitor first hears ``session start`` for every live session of the shop.
+    Guards, in order: the browser Origin allowlist (like ``/ws``), a ``shop`` that may be watched (in tokenless /
+    demo mode only ``AIRA_DEMO_SHOP``: ``monitor.shop_allowed``) and ``monitor.MAX_MONITORS_PER_SHOP`` (each
+    refusal closes with 4403 before the handshake), then the first message: ``{t:"auth", key}`` within
+    ``monitor.AUTH_TIMEOUT_S``, compared in constant time to that shop's key, ``monitor.shop_key`` =
+    HMAC(``AIRA_MONITOR_KEY``, shop) (with the env unset nobody gets in; a key for another shop is refused). A
+    wrong, malformed or late key closes with 4403; nothing is published before it. The key is never read from the
+    URL. A connected monitor first hears ``session start`` for every live session of the shop.
     """
     origin = ws.headers.get("origin")
     if not origin_allowed(origin):
@@ -407,12 +409,16 @@ async def monitor_endpoint(ws: WebSocket) -> None:
         log.warning("monitor refused: no shop")
         await ws.close(code=4403)
         return
+    if not monitor.shop_allowed(shop):
+        log.warning("monitor refused: shop %r is not the demo shop", shop)
+        await ws.close(code=4403)
+        return
     if monitor.monitors(shop) >= monitor.MAX_MONITORS_PER_SHOP:
         log.warning("monitor refused: %d monitors already watch %s", monitor.monitors(shop), shop)
         await ws.close(code=4403)
         return
     await ws.accept()
-    if not await monitor.authenticate(ws):
+    if not await monitor.authenticate(ws, shop):
         log.warning("monitor refused: bad, missing or late auth for %s", shop)
         diag("monitor", event="refused", shop=shop, origin=origin)
         await ws.close(code=4403)

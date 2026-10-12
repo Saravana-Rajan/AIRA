@@ -5,6 +5,8 @@ the event hooks and the WebSocket route (TestClient). Nothing is stored and no n
 """
 import asyncio
 import base64
+import hashlib
+import hmac
 import io
 import json
 import time
@@ -28,6 +30,9 @@ ORIGIN = {"Origin": "https://aira-shop.web.app"}
 HELLO = {"t": "hello", "uid": "u1", "shopId": "sunrise_dairy", "lang": "en", "verbosity": "short",
          "appVersion": "0.1.0"}
 SHOP = "sunrise_dairy"
+# The per-shop key: hex(HMAC-SHA256(AIRA_MONITOR_KEY, shop_id))[:32]; AIRA_MONITOR_KEY is "m-secret" in these tests.
+KEY = hmac.new(b"m-secret", SHOP.encode(), hashlib.sha256).hexdigest()[:32]
+OTHER_KEY = hmac.new(b"m-secret", b"other_shop", hashlib.sha256).hexdigest()[:32]
 
 
 def jpeg_b64(w: int, h: int, quality: int = 90) -> str:
@@ -524,12 +529,45 @@ async def test_notify_publishes_an_event(mk_session):
 
 
 # ---------- key check ----------
-def test_key_ok_needs_the_env_and_an_exact_match(monkeypatch):
-    assert not monitor.key_ok("anything")  # env unset: nobody gets in
+def test_shop_key_is_the_hmac_of_the_shop_id(monkeypatch):
+    assert monitor.shop_key(SHOP) is None  # env unset: there is no key for any shop
     monkeypatch.setenv("AIRA_MONITOR_KEY", "m-secret")
-    assert monitor.key_ok("m-secret")
-    assert not monitor.key_ok("m-secre") and not monitor.key_ok("m-secret ") and not monitor.key_ok(None)
-    assert not monitor.key_ok("")
+    assert monitor.shop_key(SHOP) == KEY and len(KEY) == 32
+    assert monitor.shop_key("other_shop") == OTHER_KEY != KEY
+    assert monitor.shop_key("") is None
+
+
+def test_key_ok_needs_the_env_and_an_exact_match_for_that_shop(monkeypatch):
+    assert not monitor.key_ok(KEY, SHOP)  # env unset: nobody gets in
+    assert not monitor.key_ok("m-secret", SHOP)
+    monkeypatch.setenv("AIRA_MONITOR_KEY", "m-secret")
+    assert monitor.key_ok(KEY, SHOP)
+    assert not monitor.key_ok("m-secret", SHOP)  # the master secret itself is not a shop key
+    assert not monitor.key_ok(KEY[:-1], SHOP) and not monitor.key_ok(KEY + " ", SHOP) and not monitor.key_ok(None, SHOP)
+    assert not monitor.key_ok("", SHOP)
+    assert not monitor.key_ok(KEY, "other_shop")  # a key for shop A is refused on shop B
+    assert not monitor.key_ok(OTHER_KEY, SHOP)
+
+
+def test_only_the_demo_shop_may_be_watched_in_tokenless_mode(monkeypatch):
+    monkeypatch.setenv("AIRA_MONITOR_KEY", "m-secret")
+    assert monitor.shop_allowed(SHOP)
+    assert not monitor.shop_allowed("other_shop")
+    monkeypatch.setenv("AIRA_DEMO_SHOP", "other_shop")
+    assert monitor.shop_allowed("other_shop") and not monitor.shop_allowed(SHOP)
+
+
+def test_cli_prints_the_shop_key(monkeypatch, capsys):
+    monkeypatch.setenv("AIRA_MONITOR_KEY", "m-secret")
+    assert monitor.main(["key", SHOP]) == 0
+    assert capsys.readouterr().out == KEY + "\n"
+    assert monitor.main(["key", "other_shop"]) == 0
+    assert capsys.readouterr().out == OTHER_KEY + "\n"
+    assert monitor.main(["key"]) == 2 and monitor.main(["nope", SHOP]) == 2
+    monkeypatch.delenv("AIRA_MONITOR_KEY")
+    assert monitor.main(["key", SHOP]) == 2
+    out = capsys.readouterr()
+    assert out.out == "" and "AIRA_MONITOR_KEY" in out.err
 
 
 class _AuthSocket:
@@ -544,19 +582,31 @@ class _AuthSocket:
 
 
 async def test_authenticate_takes_the_key_from_the_first_message_only(monkeypatch):
+    auth = json.dumps({"t": "auth", "key": KEY})
+    assert await monitor.authenticate(_AuthSocket(auth), SHOP) is False  # env unset: nobody gets in
     monkeypatch.setenv("AIRA_MONITOR_KEY", "m-secret")
-    assert await monitor.authenticate(_AuthSocket('{"t": "auth", "key": "m-secret"}')) is True
-    assert await monitor.authenticate(_AuthSocket('{"t": "auth", "key": "wrong"}')) is False
-    assert await monitor.authenticate(_AuthSocket('{"t": "hello", "key": "m-secret"}')) is False
-    assert await monitor.authenticate(_AuthSocket('{"t": "auth"}')) is False
-    assert await monitor.authenticate(_AuthSocket("not json")) is False
-    assert await monitor.authenticate(_AuthSocket(fail=RuntimeError("gone"))) is False
+    assert await monitor.authenticate(_AuthSocket(auth), SHOP) is True
+    assert await monitor.authenticate(_AuthSocket(auth), "other_shop") is False  # shop A's key, shop B
+    assert await monitor.authenticate(_AuthSocket('{"t": "auth", "key": "m-secret"}'), SHOP) is False
+    assert await monitor.authenticate(_AuthSocket('{"t": "auth", "key": "wrong"}'), SHOP) is False
+    assert await monitor.authenticate(_AuthSocket(json.dumps({"t": "hello", "key": KEY})), SHOP) is False
+    assert await monitor.authenticate(_AuthSocket('{"t": "auth"}'), SHOP) is False
+    assert await monitor.authenticate(_AuthSocket("not json"), SHOP) is False
+    assert await monitor.authenticate(_AuthSocket(fail=RuntimeError("gone")), SHOP) is False
+
+
+async def test_authenticate_refuses_a_non_demo_shop_even_with_its_own_key(monkeypatch):
+    monkeypatch.setenv("AIRA_MONITOR_KEY", "m-secret")
+    auth = json.dumps({"t": "auth", "key": OTHER_KEY})
+    assert await monitor.authenticate(_AuthSocket(auth), "other_shop") is False
+    monkeypatch.setenv("AIRA_DEMO_SHOP", "other_shop")
+    assert await monitor.authenticate(_AuthSocket(auth), "other_shop") is True
 
 
 async def test_authenticate_gives_up_after_the_timeout(monkeypatch):
     monkeypatch.setenv("AIRA_MONITOR_KEY", "m-secret")
     monkeypatch.setattr(monitor, "AUTH_TIMEOUT_S", 0.02)
-    assert await monitor.authenticate(_AuthSocket('{"t": "auth", "key": "m-secret"}', delay=0.2)) is False
+    assert await monitor.authenticate(_AuthSocket(json.dumps({"t": "auth", "key": KEY}), delay=0.2), SHOP) is False
     assert monitor.AUTH_TIMEOUT_S == 0.02
 
 
@@ -565,7 +615,7 @@ def test_auth_timeout_is_five_seconds():
 
 
 # ---------- the /monitor route ----------
-AUTH = {"t": "auth", "key": "m-secret"}
+AUTH = {"t": "auth", "key": KEY}
 
 
 def _open(client, shop=SHOP, auth=AUTH):
@@ -586,8 +636,9 @@ def test_monitor_refused_without_env_key():
     assert not monitor.monitored(SHOP)
 
 
-@pytest.mark.parametrize("auth", [{"t": "auth", "key": "wrong"}, {"t": "auth"}, {"t": "hello", "key": "m-secret"},
-                                  {"t": "auth", "key": ""}])
+@pytest.mark.parametrize("auth", [{"t": "auth", "key": "wrong"}, {"t": "auth"}, {"t": "hello", "key": KEY},
+                                  {"t": "auth", "key": ""}, {"t": "auth", "key": "m-secret"},
+                                  {"t": "auth", "key": OTHER_KEY}])
 def test_monitor_refused_with_a_wrong_or_malformed_auth(monkeypatch, auth):
     monkeypatch.setenv("AIRA_MONITOR_KEY", "m-secret")
     with TestClient(main_mod.app).websocket_connect(f"/monitor?shop={SHOP}", headers=ORIGIN) as mon:
@@ -600,7 +651,7 @@ def test_monitor_refused_with_a_wrong_or_malformed_auth(monkeypatch, auth):
 
 def test_monitor_ignores_a_key_in_the_url(monkeypatch):
     monkeypatch.setenv("AIRA_MONITOR_KEY", "m-secret")
-    with TestClient(main_mod.app).websocket_connect(f"/monitor?shop={SHOP}&key=m-secret", headers=ORIGIN) as mon:
+    with TestClient(main_mod.app).websocket_connect(f"/monitor?shop={SHOP}&key={KEY}", headers=ORIGIN) as mon:
         mon.send_json({"t": "auth", "key": "wrong"})
         with pytest.raises(WebSocketDisconnect) as closed:
             mon.receive_json()
@@ -617,13 +668,25 @@ def test_monitor_refused_when_auth_is_late(monkeypatch):
     assert not monitor.monitored(SHOP)
 
 
-@pytest.mark.parametrize("query", ["", "key=m-secret"])
+@pytest.mark.parametrize("query", ["", f"key={KEY}"])
 def test_monitor_refused_without_a_shop(monkeypatch, query):
     monkeypatch.setenv("AIRA_MONITOR_KEY", "m-secret")
     with pytest.raises(WebSocketDisconnect) as closed:
         with TestClient(main_mod.app).websocket_connect(f"/monitor?{query}", headers=ORIGIN):
             pass
     assert closed.value.code == 4403
+
+
+def test_monitor_refused_for_a_shop_that_is_not_the_demo_shop(monkeypatch):
+    """Tokenless mode: every phone lands in the demo shop, so only that shop may be watched (closed before the
+    handshake, even with that shop's own key)."""
+    monkeypatch.setenv("AIRA_MONITOR_KEY", "m-secret")
+    with pytest.raises(WebSocketDisconnect) as closed:
+        with TestClient(main_mod.app).websocket_connect("/monitor?shop=other_shop", headers=ORIGIN) as mon:
+            mon.send_json({"t": "auth", "key": OTHER_KEY})
+            mon.receive_json()
+    assert closed.value.code == 4403
+    assert not monitor.monitored("other_shop")
 
 
 def test_monitor_refused_from_a_foreign_origin(monkeypatch):
@@ -694,11 +757,11 @@ def test_late_monitor_gets_the_live_sessions_of_its_shop(monkeypatch):
             mon.send_json(AUTH)
             start = _recv_until(mon, "session")
             assert start["state"] == "start" and start["session"] == sid and start["uid"] == "u1"
-        with client.websocket_connect("/monitor?shop=other_shop", headers=ORIGIN) as mon:
+        with client.websocket_connect(f"/monitor?shop={SHOP}", headers=ORIGIN) as mon:
             mon.send_json(AUTH)
             mon.send_text("ignored")  # after auth the monitor is read-only: inbound text is dropped
-            _wait(lambda: monitor.monitored("other_shop"))
-            assert monitor.publish("other_shop", "status", "x", state="idle") == 1
+            _wait(lambda: monitor.monitors(SHOP) == 1)
+            assert monitor.publish(SHOP, "status", "x", state="idle") == 1
             assert _recv_until(mon, "status")["state"] == "idle"
 
 

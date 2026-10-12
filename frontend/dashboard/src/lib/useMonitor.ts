@@ -1,12 +1,27 @@
 // Wires the Live page to /monitor: the key from the URL fragment or the tab, the socket URL from the app's
 // VITE_AIRA_LIVE_WS, one reconnecting client that authenticates with its first message, and the reducer's
 // state.
+//
+// What the page hears is sensitive (the shop's conversations and the owner's camera), so it lives in memory
+// only and never outlives the connection: the reducer keeps the last frame and at most MAX_LINES transcript
+// lines, and the state is dropped whenever the socket is not open (every close, the Live page being left, the
+// tab hidden or unloaded, access denied). Nothing of it is written to any storage, the URL or the console.
+// The monitor key is kept in sessionStorage for this tab only, read off the fragment once and removed from
+// the address bar, forgotten when the server refuses it, and never logged.
 import { useEffect, useMemo, useState } from "preact/hooks";
 import {
-  initialState, monitorUrl, openMonitor, readKey, reduce, storeKey, stripKey, type Connection, type LiveState, type SocketLike,
+  follow as followSession, initialState, monitorUrl, openMonitor, readKey, reduce, storeKey, stripKey,
+  type ClientDeps, type Connection, type LiveState, type SocketLike,
 } from "./monitor";
 
-export interface Monitor { state: LiveState; conn: Connection; keyNeeded: boolean; setKey: (k: string) => void }
+export interface Monitor {
+  state: LiveState;
+  conn: Connection;
+  keyNeeded: boolean;
+  setKey: (k: string) => void;
+  /** Follow another of the shop's live sessions (one of `state.sessions`); the current one's state is dropped. */
+  follow: (sessionId: string) => void;
+}
 
 function sessionStore(): Storage | null {
   try {
@@ -32,10 +47,53 @@ export function captureMonitorKey(): void {
   }
 }
 
-export function useMonitor(enabled: boolean, shopId: string | null, env: Record<string, unknown> = import.meta.env): Monitor {
+/** Forgets the key kept for this tab (a refused key, or leaving). */
+export function forgetMonitorKey(): void {
+  storeKey(null, sessionStore());
+}
+
+function pageVisible(): boolean {
+  try {
+    return typeof document === "undefined" || document.visibilityState !== "hidden";
+  } catch {
+    return true;
+  }
+}
+
+/** True while the tab is shown; false once it is hidden or unloading (pagehide), true again on pageshow. */
+function usePageVisible(): boolean {
+  const [visible, setVisible] = useState(pageVisible);
+  useEffect(() => {
+    if (typeof document === "undefined" || typeof window === "undefined") return;
+    const sync = () => setVisible(pageVisible());
+    const hide = () => setVisible(false);
+    document.addEventListener("visibilitychange", sync);
+    window.addEventListener("pagehide", hide);
+    window.addEventListener("pageshow", sync);
+    return () => {
+      document.removeEventListener("visibilitychange", sync);
+      window.removeEventListener("pagehide", hide);
+      window.removeEventListener("pageshow", sync);
+    };
+  }, []);
+  return visible;
+}
+
+const browserDeps: ClientDeps = {
+  // A WebSocket has every member of SocketLike; its handler types are just narrower (MessageEvent, CloseEvent).
+  connect: (u) => new WebSocket(u) as unknown as SocketLike,
+};
+
+export function useMonitor(
+  enabled: boolean,
+  shopId: string | null,
+  env: Record<string, unknown> = import.meta.env,
+  deps?: ClientDeps,
+): Monitor {
   const [key, setKeyState] = useState<string | null>(() => readKey(typeof location === "undefined" ? "" : location.hash, sessionStore()));
   const [state, setState] = useState<LiveState>(initialState);
   const [conn, setConn] = useState<Connection>("waiting");
+  const visible = usePageVisible();
   const url = useMemo(() => (shopId ? monitorUrl(env, shopId) : null), [shopId]);
 
   useEffect(() => {
@@ -43,23 +101,36 @@ export function useMonitor(enabled: boolean, shopId: string | null, env: Record<
   }, [key]);
 
   useEffect(() => {
-    if (!enabled || !url || !key || typeof WebSocket === "undefined") {
-      setConn("waiting");
+    const canConnect = enabled && visible && url && key && (deps || typeof WebSocket !== "undefined");
+    if (!canConnect) {
+      setConn((c) => (c === "rejected" && !key ? c : "waiting"));
+      setState(initialState());
       return;
     }
-    return openMonitor(
+    const stop = openMonitor(
       url,
       key,
       (m) => setState((s) => reduce(s, m)),
-      (c) => setConn(c),
-      // A WebSocket has every member of SocketLike; its handler types are just narrower (MessageEvent, CloseEvent).
-      { connect: (u) => new WebSocket(u) as unknown as SocketLike },
+      (c) => {
+        setConn(c);
+        if (c !== "live") setState(initialState()); // nothing of a session is kept while the socket is not open
+        if (c === "rejected") {
+          forgetMonitorKey(); // a refused key is not kept for a retry
+          setKeyState(null);
+        }
+      },
+      deps ?? browserDeps,
     );
-  }, [enabled, url, key]);
+    return () => {
+      stop();
+      setState(initialState());
+    };
+  }, [enabled, visible, url, key, deps]);
 
   const setKey = (k: string) => {
     storeKey(k, sessionStore());
     setKeyState(k);
   };
-  return { state, conn, keyNeeded: !key, setKey };
+  const follow = (sessionId: string) => setState((s) => followSession(s, sessionId));
+  return { state, conn, keyNeeded: !key, setKey, follow };
 }

@@ -24,19 +24,23 @@ Who is talking: a user transcript is the owner's, unless a sale is open for that
 active_sale``) and the line does not address AIRA by name; a sale tool may also say ``speaker="customer"``
 (``set_speaker``) and that word wins while the sale is open.
 
-Keys: ``key_ok`` compares the auth message's key with ``AIRA_MONITOR_KEY`` in constant time; with the env unset
-nobody gets in.
+Keys: the credential is bound to the shop. ``shop_key(shop)`` = ``hex(HMAC-SHA256(AIRA_MONITOR_KEY, shop_id))[:32]``
+and ``key_ok`` compares the auth message's key with it in constant time, so a key for shop A opens nothing on shop
+B; with the env unset nobody gets in. In tokenless / demo mode (no Firebase Auth) only the configured demo shop may
+be watched at all. ``python -m aira_live.monitor key <shop>`` prints a shop's key for the dashboard's ``#key=``.
 """
 from __future__ import annotations
 
 import asyncio
 import base64
 import binascii
+import hashlib
 import hmac
 import io
 import json
 import logging
 import re
+import sys
 import time
 from collections import deque
 from typing import Any
@@ -181,17 +185,42 @@ def publish(shop_id: str, kind: str, session_id: str, **fields: Any) -> int:
 
 
 # ---------- auth ----------
-def key_ok(key: str | None) -> bool:
-    """Constant-time check of a key against env ``AIRA_MONITOR_KEY``; False when either is missing."""
-    expected = config.load().monitor_key
+SHOP_KEY_LEN = 32
+
+
+def shop_key(shop_id: str) -> str | None:
+    """The monitor key of one shop: ``hex(HMAC-SHA256(AIRA_MONITOR_KEY, shop_id))[:32]``. The master secret
+    never leaves the server; a shop's key opens that shop only. None with the env unset or no shop."""
+    secret = config.load().monitor_key
+    if not secret or not shop_id:
+        return None
+    return hmac.new(secret.encode(), shop_id.encode(), hashlib.sha256).hexdigest()[:SHOP_KEY_LEN]
+
+
+def key_ok(key: str | None, shop_id: str) -> bool:
+    """Constant-time check of ``key`` against ``shop_key(shop_id)``; False when either is missing."""
+    expected = shop_key(shop_id)
     if not expected or not key:
         return False
     return hmac.compare_digest(key.encode(), expected.encode())
 
 
-async def authenticate(ws) -> bool:
-    """Wait at most ``AUTH_TIMEOUT_S`` for the monitor's first text frame, ``{t:"auth", key}``, and check the key.
-    False on a wrong or malformed message, a timeout, or a socket that went away. Nothing is published before."""
+def shop_allowed(shop_id: str) -> bool:
+    """In tokenless / demo mode (mock, or ``AIRA_ALLOW_NO_TOKEN=1``: there is no Firebase Auth and every phone
+    lands in the demo shop) only the configured demo shop may be watched."""
+    settings = config.load()
+    if settings.mock or settings.allow_no_token:
+        return shop_id == settings.demo_shop_id
+    return bool(shop_id)
+
+
+async def authenticate(ws, shop_id: str) -> bool:
+    """Wait at most ``AUTH_TIMEOUT_S`` for the monitor's first text frame, ``{t:"auth", key}``, and check the key
+    against ``shop_id``'s. False for a shop that may not be watched, a wrong or malformed message, a timeout, or a
+    socket that went away. Nothing is published before."""
+    if not shop_allowed(shop_id):
+        log.warning("monitor refused: shop %r is not the demo shop", shop_id)
+        return False
     try:
         raw = await asyncio.wait_for(ws.receive_text(), timeout=AUTH_TIMEOUT_S)
     except asyncio.TimeoutError:
@@ -200,7 +229,21 @@ async def authenticate(ws) -> bool:
     except Exception:  # noqa: BLE001 - disconnected, or a binary frame
         return False
     msg = parse_monitor_client_msg(raw)
-    return msg is not None and key_ok(msg.key)
+    return msg is not None and key_ok(msg.key, shop_id)
+
+
+def main(argv: list[str] | None = None) -> int:
+    """``python -m aira_live.monitor key <shop>`` prints that shop's monitor key (from env ``AIRA_MONITOR_KEY``)."""
+    args = list(sys.argv[1:] if argv is None else argv)
+    if len(args) != 2 or args[0] != "key" or not args[1].strip():
+        print("usage: python -m aira_live.monitor key <shop_id>", file=sys.stderr)
+        return 2
+    key = shop_key(args[1].strip())
+    if key is None:
+        print("AIRA_MONITOR_KEY is not set: there is no monitor key for any shop", file=sys.stderr)
+        return 2
+    print(key)
+    return 0
 
 
 # ---------- the socket ----------
@@ -633,3 +676,6 @@ def _install() -> None:
 
 
 _install()
+
+if __name__ == "__main__":  # pragma: no cover - the CLI entry; ``main`` is tested directly
+    sys.exit(main())

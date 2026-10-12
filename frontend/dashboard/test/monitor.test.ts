@@ -1,8 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import type { MonitorMsg } from "@aira/contracts";
 import {
-  backoffMs, detailText, eventLabel, frameAge, initialState, keyFromHash, monitorUrl, openMonitor, overlayShapes, readKey, reduce,
-  sessionClock, storeKey, stripKey, targetInfo, toRect, toXY, type LiveState, type SocketLike,
+  MAX_LINES, backoffMs, detailText, eventLabel, follow, frameAge, initialState, keyFromHash, monitorUrl, openMonitor, overlayShapes,
+  readKey, reduce, sessionClock, storeKey, stripKey, targetInfo, toRect, toXY, type LiveState, type SocketLike,
 } from "../src/lib/monitor";
 
 type MonInput = MonitorMsg extends infer M ? (M extends MonitorMsg ? Omit<M, "t" | "session" | "ts"> & { ts?: number; session?: string } : never) : never;
@@ -183,7 +183,9 @@ describe("reduce: camera, vision, hand, status, stats, events and sessions", () 
     expect(s1).toMatchObject({ session: "s1", sessionStartedAt: 5, lang: "ta", status: "listening", lastMsgAt: 5 });
     expect(s1.activity.at(-1)?.name).toBe("session_start");
     const s2 = reduce(s1, mon({ kind: "session", state: "end", lang: "ta" }));
-    expect(s2).toMatchObject({ session: null, status: "idle" });
+    expect(s2).toMatchObject({ session: null, status: "idle", sessions: {} });
+    expect(s2.transcript).toEqual([]); // nothing of a session outlives it
+    expect(s2.activity).toEqual([]);
   });
   it("a room camera session lives in rooms: its frames and MediaPipe boxes go there, not to Sam's view", () => {
     const s = apply([
@@ -202,6 +204,65 @@ describe("reduce: camera, vision, hand, status, stats, events and sessions", () 
     const gone = reduce(s, mon({ kind: "session", state: "end", lang: "en", uid: "camera:front", session: "cam1", ts: 6 }));
     expect(gone.rooms).toEqual({});
     expect(gone.session).toBe("s1");
+  });
+  it("follows one session: a second phone is listed but its lines are dropped until picked, and picking starts clean", () => {
+    const s = apply([
+      mon({ kind: "session", state: "start", lang: "en", uid: "u1", ts: 1 }),
+      mon({ kind: "transcript", role: "owner", text: "hi from s1", lang: "en", final: true, ts: 2 }),
+      mon({ kind: "session", state: "start", lang: "ta", uid: "u2", session: "s2", ts: 3 }),
+      mon({ kind: "transcript", role: "owner", text: "hi from s2", lang: "ta", final: true, session: "s2", ts: 4 }),
+      mon({ kind: "frame", jpeg_b64: "S2", w: 1, h: 1, purpose: "ask", session: "s2", ts: 5 }),
+      mon({ kind: "status", state: "thinking", session: "s2", ts: 6 }),
+      mon({ kind: "stats", turns: 9, er2Calls: 0, flashCalls: 0, visionMs: null, fps: 0, session: "s2", ts: 7 }),
+    ]);
+    expect(s.session).toBe("s1");
+    expect(Object.keys(s.sessions)).toEqual(["s1", "s2"]);
+    expect(s.sessions.s2).toEqual({ id: "s2", uid: "u2", lang: "ta", startedAt: 3 });
+    expect(s.transcript.map((l) => l.text)).toEqual(["hi from s1"]);
+    expect(s.frame).toBeNull();
+    expect(s.status).toBe("listening");
+    expect(s.stats).toBeNull();
+    expect(s.lastMsgAt).toBe(3); // the dropped lines did not touch the page
+    const picked = follow(s, "s2");
+    expect(picked).toMatchObject({ session: "s2", sessionStartedAt: 3, lang: "ta", status: "listening", transcript: [], frame: null, activity: [] });
+    expect(picked.sessions).toEqual(s.sessions);
+    expect(follow(s, "s1")).toBe(s);
+    expect(follow(s, "nope")).toBe(s);
+    const after = reduce(picked, mon({ kind: "transcript", role: "owner", text: "now s2", lang: "ta", final: true, session: "s2", ts: 8 }));
+    expect(after.transcript.map((l) => l.text)).toEqual(["now s2"]);
+    expect(reduce(after, mon({ kind: "transcript", role: "owner", text: "s1 again", lang: "en", final: true, ts: 9 })).transcript).toHaveLength(1);
+  });
+  it("adopts the first session it hears from, and after that session ends the next one is followed from scratch", () => {
+    const s = apply([mon({ kind: "frame", jpeg_b64: "A", w: 1, h: 1, purpose: "ask", session: "s1", ts: 1 })]);
+    expect(s.session).toBe("s1");
+    const other = reduce(s, mon({ kind: "frame", jpeg_b64: "B", w: 1, h: 1, purpose: "ask", session: "s2", ts: 2 }));
+    expect(other).toBe(s);
+    const ended = reduce(s, mon({ kind: "session", state: "end", lang: "en", session: "s1", ts: 3 }));
+    expect(ended).toMatchObject({ session: null, frame: null, sessions: {} });
+    const next = reduce(ended, mon({ kind: "session", state: "start", lang: "hi", uid: "u2", session: "s2", ts: 4 }));
+    expect(next).toMatchObject({ session: "s2", sessionStartedAt: 4, lang: "hi", transcript: [] });
+    expect(next.activity.map((a) => a.name)).toEqual(["session_start"]);
+  });
+  it("the end of a session it is not following only drops it from the list; a repeated start of the followed one keeps its clock and talk", () => {
+    const s = apply([
+      mon({ kind: "session", state: "start", lang: "en", uid: "u1", ts: 1 }),
+      mon({ kind: "transcript", role: "owner", text: "hi", lang: "en", final: true, ts: 2 }),
+      mon({ kind: "session", state: "start", lang: "en", uid: "u2", session: "s2", ts: 3 }),
+      mon({ kind: "session", state: "end", lang: "en", uid: "u2", session: "s2", ts: 4 }),
+      mon({ kind: "session", state: "start", lang: "en", uid: "u1", ts: 5 }), // the monitor reconnected: s1 announced again
+    ]);
+    expect(Object.keys(s.sessions)).toEqual(["s1"]);
+    expect(s).toMatchObject({ session: "s1", sessionStartedAt: 1 });
+    expect(s.transcript.map((l) => l.text)).toEqual(["hi"]);
+  });
+  it("keeps at most MAX_LINES transcript lines and only the last frame", () => {
+    const lines = Array.from({ length: MAX_LINES + 25 }, (_, i) =>
+      mon({ kind: "transcript", role: "owner", text: `line ${i}`, lang: "en", final: true, ts: i + 1 }));
+    const s = apply([...lines, mon({ kind: "frame", jpeg_b64: "ONE", w: 1, h: 1, purpose: "ask" }), mon({ kind: "frame", jpeg_b64: "TWO", w: 1, h: 1, purpose: "ask" })]);
+    expect(s.transcript).toHaveLength(MAX_LINES);
+    expect(s.transcript[0].text).toBe("line 25");
+    expect(s.frame?.src).toBe("data:image/jpeg;base64,TWO");
+    expect(JSON.stringify(s)).not.toContain("ONE");
   });
   it("labels known events for the timeline", () => {
     expect(eventLabel("order_sent")).toBe("Order sent");

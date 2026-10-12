@@ -92,7 +92,7 @@ export function App({ listen, loadForecast, resolveEvidence = publicEvidenceUrl,
 
   const views = useMemo(() => (data ? buildViews(data, clock) : null), [data, clock]);
   // The Live page listens to aira-live's /monitor channel only while it is open.
-  const monitor = useMonitor(route === "#/live", shopId);
+  const monitor = useMonitor(route === "#/live" && access.mode !== "denied", shopId);
   const [record, setRecord] = useState(false);
 
   if (access.mode === "denied") {
@@ -109,7 +109,7 @@ export function App({ listen, loadForecast, resolveEvidence = publicEvidenceUrl,
   let body;
   if (route === "#/forecast") body = forecastPage;
   else if (route === "#/live") {
-    body = <LivePage state={monitor.state} conn={monitor.conn} keyNeeded={monitor.keyNeeded} onKey={monitor.setKey} record={record} onRecord={setRecord} />;
+    body = <LivePage state={monitor.state} conn={monitor.conn} keyNeeded={monitor.keyNeeded} onKey={monitor.setKey} onFollow={monitor.follow} record={record} onRecord={setRecord} />;
   }
   else if (!views) {
     body =

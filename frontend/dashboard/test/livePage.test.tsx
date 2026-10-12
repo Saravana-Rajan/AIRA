@@ -47,6 +47,20 @@ describe("LivePage: mission control chrome", () => {
     expect(findAllByText(el, ".mc__conn", "Session open")).toHaveLength(1);
     expect(el.querySelector(".mc__dot")!.className).toContain("mc__dot--on");
   });
+  it("offers a session picker only when the shop has more than one live phone, and hands the pick back", () => {
+    const onFollow = vi.fn();
+    const one = mount(<LivePage state={stateOf([started])} conn="live" keyNeeded={false} onKey={vi.fn()} onFollow={onFollow} now={() => T0 + 84_500} />);
+    expect(one.querySelector("select.mc__session")).toBeNull();
+    const two = mount(<LivePage state={stateOf([started, mon({ kind: "session", state: "start", lang: "en", uid: "u2", session: "s2", ts: T0 + 1 })])} conn="live" keyNeeded={false} onKey={vi.fn()} onFollow={onFollow} now={() => T0 + 84_500} />);
+    const select = two.querySelector<HTMLSelectElement>("select.mc__session")!;
+    expect(select.value).toBe("s1");
+    expect([...select.options].map((o) => o.value)).toEqual(["s1", "s2"]);
+    act(() => {
+      select.value = "s2";
+      select.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    expect(onFollow).toHaveBeenCalledWith("s2");
+  });
   it("explains a refused key", () => {
     const el = page(initialState(), "rejected");
     expect(text(el)).toContain("The monitor key was refused");
