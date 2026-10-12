@@ -11,13 +11,13 @@ from aira_live.tools.memory import memory_forget, memory_remembering, memory_whe
 from aira_live.tools.orders import order_create, order_status
 from aira_live.tools.payments import sale_pay, supplier_pay
 from aira_live.tools.products import location_remember, product_find, product_identify
-from aira_live.tools.sales import sale_start
+from aira_live.tools.sales import sale_add, sale_start
 from aira_live.tools.search import web_search
 from aira_live.tools.stock import expiry_check, stock_query
 
 TOOL_FUNCS: list[Callable[..., Awaitable[dict]]] = [
     order_create, order_status, delivery_start, delivery_count, invoice_check,
-    supplier_pay, sale_start, sale_pay, stock_query, expiry_check,
+    supplier_pay, sale_start, sale_add, sale_pay, stock_query, expiry_check,
     product_find, product_identify, location_remember, camera_ask, describe_mode,
     day_summary, reorder_suggest, confirm_action,
     # last-seen memory of personal items (read-only: no confirmation)

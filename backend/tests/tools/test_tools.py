@@ -15,7 +15,8 @@ from aira_live.tools import TOOL_FUNCS, TOOLS_BY_NAME
 EXPECTED = {
     "order_create": ["supplier", "items", "delivery_by", "note"], "order_status": ["order_id"],
     "delivery_start": ["order_id"], "delivery_count": ["sku", "mode"], "invoice_check": ["order_id"],
-    "supplier_pay": ["order_id", "method"], "sale_start": ["items"], "sale_pay": ["sale_id", "method"],
+    "supplier_pay": ["order_id", "method"], "sale_start": ["items"], "sale_add": ["items"],
+    "sale_pay": ["sale_id", "method"],
     "stock_query": ["product"], "expiry_check": [],
     "product_find": ["product", "count_needed"], "product_identify": [], "location_remember": ["product", "zone"],
     "camera_ask": ["question"], "describe_mode": ["on"],

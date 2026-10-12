@@ -246,9 +246,9 @@ async def test_sunrise_full_loop(store, session, phone, proposals, notified, pub
     task = asyncio.create_task(pay.sale_pay(sale["saleId"], "upi"))
     while not listeners:
         await asyncio.sleep(0)
-    await listeners[0](f"Received rupees {sale['total'] * 10} on PhonePe")   # wrong amount: warn, keep listening
+    await listeners[0](f"Received rupees {sale['total'] - 10} on PhonePe")   # 10 short: say so, keep listening
     assert not task.done() and notified[-1][2] == "mismatch"
-    await listeners[0](f"Received rupees {sale['total']} on PhonePe")
+    await listeners[0]("Received rupees 10 on PhonePe")                       # the rest: the bill is covered
     r = await task
     assert r["needs_confirm"] is True and proposals[-1]["committer"] == "sale.complete"
     assert proposals[-1]["payload"]["evidence"]["type"] == "soundbox"
