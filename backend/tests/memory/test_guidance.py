@@ -569,10 +569,13 @@ async def test_product_find_without_location_is_stale(find):
     assert guidance.active(find).needed == 1
 
 
-async def test_product_find_unknown_product_starts_nothing(find, fake_db):
+async def test_product_find_unknown_product_without_a_frame_starts_nothing(find, fake_db):
+    """Not a catalog product: the camera looks for it by its words (tests/memory/test_find_free_text.py);
+    with no frame nothing starts and nothing is logged."""
     out = await products.product_find("paneer")
-    assert out == {"say": "I don't know the product \"paneer\".", "found": False}
-    assert find.sent == [] and guidance.active(find) is None
+    assert out["found"] is False and out["free_text"] is True
+    assert out["say"] == "I can't see a camera picture. Please check the camera."
+    assert find.requested == ["ask"] and guidance.active(find) is None
     assert not any(k[2] == "memoryEvents" for k in fake_db.store)
 
 

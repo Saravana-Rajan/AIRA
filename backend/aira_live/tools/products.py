@@ -12,12 +12,24 @@ from aira_live.memory import episodic, spatial
 from aira_live.memory.zones import normalize_zone, speak_zone
 from aira_live.session import get_session
 from aira_live.tools import guidance
+from aira_live.tools.camera import side_key
 from aira_live.vision.gemini import VisionError
 from aira_live.vision.identify import ProductRef, identify_product, next_hint
+from aira_live.vision.listing import observe
+from aira_live.vision.point import point_to
 
 log = logging.getLogger(__name__)
 
 MIN_ID_CONF = 0.6
+FREE_PREFIX = guidance.FREE_PREFIX
+FREE_MIN_CONF = 0.5     # a free-text point below this is "I can't find it", never a guided guess
+FREE_FRAME_TIMEOUT_S = 4.0
+
+
+def free_ref(label: str) -> ProductRef:
+    """A ProductRef for an item named by the owner that is not in the catalog ("water bottle")."""
+    label = (label or "").strip()
+    return ProductRef(sku=FREE_PREFIX + label, name=label, brand="", pack="")
 
 
 # --- this shop's products -------------------------------------------------------------------------------------
@@ -94,15 +106,47 @@ def _count(value) -> int:
         return 1
 
 
-async def product_find(product: str, count_needed: int = 1) -> dict:
-    """Guide the owner's hand to a product: saved location first, then the camera.
+async def _find_free_text(s, label: str, needed: int) -> dict:
+    """Spec §4 fallback: point at an item by its words ("water bottle", "red jam jar") and guide the hand.
 
+    One fresh frame; ER 2 must give a confident point before any guidance starts. No point means
+    "I can't find it, show me the shelf": never a tone toward a guess.
+    """
+    base = {"found": False, "sku": None, "free_text": True, "label": label}
+    frames = await s.request_frames("ask", count=1, timeout_s=FREE_FRAME_TIMEOUT_S)
+    if not frames:
+        return {"say": t("camera.none", s.lang), **base, "confidence": 0.0}
+    try:
+        res = await point_to(frames[-1], label)
+    except VisionError as exc:
+        log.warning("product_find: free-text point failed for %r: %s", label, exc)
+        return {"say": t("live.unavailable", s.lang), **base, "confidence": 0.0}
+    if res is None or res.confidence < FREE_MIN_CONF:
+        return {"say": t("find.free_none", s.lang), **base, "confidence": res.confidence if res else 0.0}
+    await observe(s, [{"label": label, "point": list(res.point), "box": list(res.box) if res.box else None,
+                       "confidence": res.confidence}], "product_find")
+    ref = free_ref(label)
+    await guidance.start(s, ref, needed, [])
+    await episodic.log(s.shop_id, "find", f"Finding {label}", "free_text", label)
+    side = t(side_key(res.point[1]), s.lang)
+    say = f"{t('find.free_start', s.lang, item=label, side=side)} {t('guide.start', s.lang)}"
+    return {"say": say, **base, "found": True, "point": list(res.point), "confidence": res.confidence}
+
+
+async def product_find(product: str, count_needed: int = 1) -> dict:
+    """Guide the owner's hand to a product or any named item: saved location first, then the camera.
+
+    A catalog product uses its saved place. Anything else the owner names ("water bottle", "red jam jar",
+    "my keys") is found by the camera from the words alone, with the same beeps.
     count_needed is how many packs to pick (set it for a customer sale). Sends target messages for hand guidance.
     """
     s = get_session()
-    ref = await catalog_resolve(s.shop_id, product, s.lang)
-    if ref is None:  # never start the camera for a product the shop doesn't have
-        return {"say": t("products.unknown", s.lang, spoken=product), "found": False}
+    spoken = (product or "").strip()
+    if not spoken:
+        return {"say": t("products.unknown", s.lang, spoken=spoken), "found": False}
+    ref = await catalog_resolve(s.shop_id, spoken, s.lang)
+    if ref is None:  # not a catalog product: find it by its words (spec §4)
+        return await _find_free_text(s, spoken, _count(count_needed))
     now = spatial._utcnow()
     loc = await spatial.where(s.shop_id, ref.sku)
     stale = loc is None or spatial.is_stale(loc, now)

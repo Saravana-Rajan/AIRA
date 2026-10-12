@@ -24,7 +24,7 @@ from aira_live.diag import diag, summarize, trunc
 from aira_live.i18n import t
 from aira_live.prompt import LANG_NAME
 from aira_live.session import Session, get_session
-from aira_live.vision import observers
+from aira_live.vision import listing, observers
 from aira_live.vision.gemini import VisionError, generate_json, image_part
 from aira_live.vision.hints import HINT_KEYS
 
@@ -70,6 +70,8 @@ def classify(question: str) -> str:
     q = question.lower()
     if any(w in q for w in READ_WORDS):
         return "read"
+    if listing.is_listing(q):           # "what's in my fridge?": list the items by shelf (spec §4)
+        return "list"
     if any(w in q for w in PATH_WORDS):
         return "path"
     return "look"
@@ -233,6 +235,11 @@ async def camera_ask(question: str) -> dict:
             out = await _read_twice(frames[-1].jpeg_b64, s.lang)
             diag("camera_ask", stage="done", session=s.session_id, kind=kind, confidence=out["confidence"],
                  agreed=out.get("agreed"), aim_hint=out.get("aim_hint"), say=trunc(out["say"]))
+            return out
+        if kind == "list":
+            out = await listing.list_shelf(s, frames[-1].jpeg_b64, question)
+            diag("camera_ask", stage="done", session=s.session_id, kind=kind, verdict="list",
+                 confidence=out.get("confidence"), say=trunc(out.get("say", "")))
             return out
         parts = [image_part(f.jpeg_b64) for f in frames]
         parts.append(ASK_PROMPT.format(question=question, lang=LANG_NAME.get(s.lang, "English"),

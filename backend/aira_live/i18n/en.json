@@ -221,5 +221,19 @@
   "describe.off": "Describe mode off.",
   "describe.item": "{label} {side}, {dist}.",
   "describe.timeout": "Describe mode stopped after ten minutes. Say describe as I walk to start again.",
-  "describe.cap": "Describe mode paused to save the camera budget. Say describe as I walk to start again."
+  "describe.cap": "Describe mode paused to save the camera budget. Say describe as I walk to start again.",
+  "find.free_start": "I see the {item} {side}.",
+  "find.free_none": "I can't find it. Show me the shelf.",
+  "pick.free_ok": "That's the {item}.",
+  "pick.free_wrong": "That looks like {seen}, not the {item}.",
+  "cam.list.none": "I can't see any products. Show me the shelf.",
+  "cam.list.area": "{area}: {items}.",
+  "cam.list.item": "{label} {side}",
+  "cam.area.top": "Top shelf",
+  "cam.area.middle": "Middle shelf",
+  "cam.area.bottom": "Bottom shelf",
+  "cam.area.door": "Fridge door",
+  "cam.area.floor": "On the floor",
+  "cam.area.counter": "On the counter",
+  "cam.area.other": "Also"
 }
