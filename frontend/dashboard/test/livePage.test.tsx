@@ -5,8 +5,12 @@ import { cleanup, findAllByText, mount, text } from "./helpers/render";
 import { LivePage } from "../src/pages/LivePage";
 import type { DrawDeps, Drawable } from "../src/lib/frameDraw";
 import { initialState, reduce, type Frame, type LiveState } from "../src/lib/monitor";
+import type { VideoState } from "../src/lib/rtcViewer";
 
 afterEach(cleanup);
+// jsdom has no media playback: the WebRTC <video>'s play() would only log "not implemented".
+HTMLMediaElement.prototype.play = vi.fn(async () => {});
+HTMLMediaElement.prototype.pause = vi.fn();
 
 type MonInput = MonitorMsg extends infer M ? (M extends MonitorMsg ? Omit<M, "t" | "session" | "ts"> & { ts?: number; session?: string } : never) : never;
 const T0 = 1760000000000;
@@ -27,7 +31,7 @@ function fakeDraw() {
   return { deps, rafs, decoded, tick: () => rafs.splice(0).forEach((cb) => cb()) };
 }
 
-const page = (state: LiveState, conn: Conn = "live", keyNeeded = false, onKey = vi.fn(), extra: { record?: boolean; onRecord?: (on: boolean) => void; drawDeps?: DrawDeps } = {}) =>
+const page = (state: LiveState, conn: Conn = "live", keyNeeded = false, onKey = vi.fn(), extra: { record?: boolean; onRecord?: (on: boolean) => void; drawDeps?: DrawDeps; video?: VideoState } = {}) =>
   mount(<LivePage state={state} conn={conn} keyNeeded={keyNeeded} onKey={onKey} now={() => T0 + 84_500} {...extra} />);
 
 const milk = { label: "Aavin milk 500 ml", box: [400, 500, 440, 560] as [number, number, number, number], point: null, score: 0.92, distance: "arm" as const };
@@ -227,6 +231,51 @@ describe("LivePage: camera", () => {
     expect([hand.getAttribute("cx"), hand.getAttribute("cy")]).toEqual(["48", "512"]);
     const line = el.querySelector("svg line.ov--line")!;
     expect([line.getAttribute("x1"), line.getAttribute("y1"), line.getAttribute("x2"), line.getAttribute("y2")]).toEqual(["48", "512", "254.4", "268.8"]);
+  });
+
+  it("plays the WebRTC video under the same overlay (mapped to the video's size) with a WebRTC badge, and no frame age", () => {
+    const stream = { id: "remote" } as unknown as MediaStream;
+    const d = fakeDraw();
+    const el = page(stateOf([
+      mon({ kind: "status", state: "guiding" }),
+      mon({ kind: "vision", source: "er2", objects: [milk], target: "Aavin milk 500 ml", found: false, context: "guidance" }),
+    ]), "live", false, vi.fn(), { video: { mode: "webrtc", stream, session: "s1" }, drawDeps: d.deps });
+    expect(el.querySelector("canvas.camera__canvas")).toBeNull();
+    expect(el.querySelector("img.camera__img")).toBeNull();
+    expect(d.rafs).toHaveLength(0);
+    const video = el.querySelector<HTMLVideoElement>("video.camera__video")!;
+    expect(video.muted).toBe(true);
+    expect(video.hasAttribute("autoplay")).toBe(true);
+    expect(video.hasAttribute("playsinline")).toBe(true);
+    expect(el.querySelector("svg.camera__overlay")!.getAttribute("viewBox")).toBe("0 0 640 480"); // the stream's size until its metadata says otherwise
+    const rect = el.querySelector("svg [data-tone=target] rect")!;
+    expect([rect.getAttribute("x"), rect.getAttribute("y")]).toEqual(["320", "192"]);
+    expect(text(el.querySelector("[data-testid=video-badge]"))).toBe("WebRTC");
+    expect(el.querySelector(".camera__age, .cam__age")).toBeNull(); // no frame age for a live picture
+    expect(el.querySelector(".cam__live")!.className).toContain("cam__live--on");
+    expect(el.querySelector(".cam__empty")).toBeNull();
+    expect(el.querySelector(".stage, .hud")).toBeNull();
+  });
+
+  it("shows the JPEG frame on the canvas with a Preview badge while WebRTC is not connected", () => {
+    const d = fakeDraw();
+    const el = page(stateOf([frame]), "live", false, vi.fn(), { video: { mode: "connecting", stream: null, session: "s1" }, drawDeps: d.deps });
+    expect(el.querySelector("canvas.camera__canvas")).not.toBeNull();
+    expect(el.querySelector("video")).toBeNull();
+    expect(d.rafs).toHaveLength(1);
+    expect(text(el.querySelector("[data-testid=video-badge]"))).toBe("Preview");
+    expect(text(el.querySelector(".cam__age"))).toBe("0.5s ago");
+    cleanup();
+    const none = page(stateOf([frame]));
+    expect(none.querySelector("[data-testid=video-badge]")).toBeNull();
+  });
+
+  it("record mode plays the WebRTC video too, without a frame age", () => {
+    const stream = { id: "remote" } as unknown as MediaStream;
+    const el = page(stateOf([started]), "live", false, vi.fn(), { record: true, video: { mode: "webrtc", stream, session: "s1" } });
+    expect(el.querySelector(".record__sam video.camera__video")).not.toBeNull();
+    expect(el.querySelector(".record__sam .camera__age")).toBeNull();
+    expect(el.querySelector(".cam__empty")).toBeNull();
   });
 
   it("pauses the camera on the last frame and says so in the camera card", () => {

@@ -3,10 +3,11 @@
 // first message. Nothing here touches the DOM except the client's WebSocket/timer hooks, which are
 // injected so tests drive them.
 import {
-  NORM_MAX, parseMonitorMsg,
+  NORM_MAX, parseMonitorFeedMsg,
   type Box, type MonitorMsg, type MonitorRole, type MonitorState, type Point, type VisionObject, type VisionSource,
 } from "@aira/contracts";
 import { advanceTask, type Task } from "./liveTask";
+import type { SignalPort } from "./rtcViewer";
 
 export type { MonitorMsg, MonitorRole, MonitorState, VisionObject, VisionSource };
 
@@ -430,6 +431,8 @@ export interface ClientDeps {
   connect: (url: string) => SocketLike;
   setTimer?: (fn: () => void, ms: number) => unknown;
   clearTimer?: (t: unknown) => void;
+  /** WebRTC signalling (rtcViewer): attached once a socket is open, told every {t:"rtc"} line, detached on close. */
+  signal?: SignalPort;
 }
 
 /** WebSocket close codes the server uses to refuse the key: policy violation or auth-style. */
@@ -474,16 +477,28 @@ export function openMonitor(
       }
       attempt = 0;
       onConn("live", 0);
+      deps.signal?.attach((m) => {
+        if (sock !== s) return false;
+        try {
+          s.send(JSON.stringify(m));
+          return true;
+        } catch {
+          return false;
+        }
+      });
     };
     s.onmessage = (ev) => {
       if (stopped || typeof ev.data !== "string") return;
-      const m = parseMonitorMsg(ev.data);
-      if (m) onMsg(m);
+      const m = parseMonitorFeedMsg(ev.data);
+      if (!m) return;
+      if (m.t === "rtc") deps.signal?.receive(m);
+      else onMsg(m);
     };
     s.onerror = () => {};
     s.onclose = (ev) => {
       if (stopped || sock !== s) return;
       sock = null;
+      deps.signal?.detach();
       if (REJECT_CODES.has(ev?.code ?? 0)) {
         onConn("rejected", attempt);
         return;
@@ -510,6 +525,7 @@ export function openMonitor(
     timer = null;
     const s = sock;
     sock = null;
+    deps.signal?.detach();
     try {
       s?.close();
     } catch {

@@ -110,7 +110,7 @@ export function App({ listen, loadForecast, resolveEvidence = publicEvidenceUrl,
   let body;
   if (route === "#/forecast") body = forecastPage;
   else if (route === "#/live") {
-    body = <LivePage state={monitor.state} conn={monitor.conn} keyNeeded={monitor.keyNeeded} configured={monitor.configured} onKey={monitor.setKey} onFollow={monitor.follow} record={record} onRecord={setRecord} shopName={shopName(shopId)} />;
+    body = <LivePage state={monitor.state} conn={monitor.conn} video={monitor.video} keyNeeded={monitor.keyNeeded} configured={monitor.configured} onKey={monitor.setKey} onFollow={monitor.follow} record={record} onRecord={setRecord} shopName={shopName(shopId)} />;
   }
   else if (!views) {
     body =

@@ -11,10 +11,14 @@ import {
   eventLabel, frameAge, overlayShapes, type ActivityItem, type ActivityTag, type Connection,
   type Frame, type LiveState, type MonitorRole, type MonitorState, type Shape, type TranscriptLine,
 } from "../lib/monitor";
+import type { VideoState } from "../lib/rtcViewer";
+import { RtcVideo } from "../components/RtcVideo";
 
 export interface LivePageProps {
   state: LiveState;
   conn: Connection;
+  /** The WebRTC picture (lib/rtcViewer): shown under the overlay while mode is "webrtc", else the JPEG frames. */
+  video?: VideoState;
   /** True when no monitor key is known yet: the page asks for one instead of connecting. */
   keyNeeded: boolean;
   onKey: (key: string) => void;
@@ -54,13 +58,15 @@ function useNow(now: () => number): number {
 }
 
 export function LivePage({
-  state, conn, keyNeeded, onKey, configured = true, onFollow, record = false, onRecord, shopName = "Sunrise Dairy", now = Date.now, drawDeps = browserDeps,
+  state, conn, video, keyNeeded, onKey, configured = true, onFollow, record = false, onRecord, shopName = "Sunrise Dairy", now = Date.now, drawDeps = browserDeps,
 }: LivePageProps) {
   const t = useNow(now);
   const [paused, setPaused] = useState(false);
   const frozen = useRef<Frame | null>(null);
   if (!paused) frozen.current = state.frame;
   const frame = paused ? frozen.current : state.frame;
+  const liveVideo = video?.mode === "webrtc" && video.stream !== null;
+  const hasPicture = frame !== null || liveVideo;
   const rooms = Object.entries(state.rooms);
   const [roomId, setRoomId] = useState<string | null>(null);
   const room = rooms.find(([sid]) => sid === roomId) ?? rooms[0] ?? null;
@@ -71,7 +77,7 @@ export function LivePage({
         <div class="record__cams">
           {room && <RoomCamera name={room[1].name} frame={room[1].frame} state={room[1]} now={t} drawDeps={drawDeps} />}
           <div class="record__sam">
-            {frame ? <Camera state={{ ...state, frame }} now={t} drawDeps={drawDeps} showAge /> : <Waiting conn={conn} configured={configured} />}
+            {hasPicture ? <Camera state={{ ...state, frame }} now={t} drawDeps={drawDeps} video={video} paused={paused} showAge /> : <Waiting conn={conn} configured={configured} />}
           </div>
         </div>
         <Captions lines={state.transcript} />
@@ -102,14 +108,14 @@ export function LivePage({
           {paused ? (
             <span class="cam__paused" role="status">Paused</span>
           ) : (
-            <span class={`cam__live${frame ? " cam__live--on" : ""}`}>
+            <span class={`cam__live${hasPicture ? " cam__live--on" : ""}`}>
               <span class="cam__live-dot" aria-hidden="true" />live
-              <span class="cam__age">{frameAge(frame?.ts ?? null, t)}</span>
+              {!liveVideo && <span class="cam__age">{frameAge(frame?.ts ?? null, t)}</span>}
             </span>
           )}
         </div>
         <div class="cam__view">
-          {keyNeeded ? <KeyPrompt onKey={onKey} /> : frame ? <Camera state={{ ...state, frame }} now={t} drawDeps={drawDeps} /> : <Waiting conn={conn} configured={configured} />}
+          {keyNeeded ? <KeyPrompt onKey={onKey} /> : hasPicture ? <Camera state={{ ...state, frame }} now={t} drawDeps={drawDeps} video={video} paused={paused} /> : <Waiting conn={conn} configured={configured} />}
         </div>
         <Legend />
       </section>
@@ -248,19 +254,38 @@ function FrameCanvas({ frame, deps, class: cls }: { frame: Frame; deps: DrawDeps
   return <canvas ref={ref} class={cls} width={frame.w} height={frame.h} data-frame-ts={frame.ts} aria-hidden="true" />;
 }
 
-/** The latest frame with the vision overlay drawn in the frame's own pixel space, so it scales with the picture. */
-function Camera({ state, now, drawDeps, showAge = false }: { state: LiveState; now: number; drawDeps: DrawDeps; showAge?: boolean }) {
+/** The size of the WebRTC picture before its metadata says otherwise (the phone sends ~640x480). */
+const RTC_DEFAULT_SIZE = { w: 640, h: 480 };
+
+/**
+ * The picture with the vision overlay drawn in its own pixel space, so it scales with it: the WebRTC video
+ * when the viewer is connected (overlay in videoWidth x videoHeight), else the latest JPEG frame on a canvas.
+ */
+function Camera({ state, now, drawDeps, video, paused = false, showAge = false }: {
+  state: LiveState; now: number; drawDeps: DrawDeps; video?: VideoState; paused?: boolean; showAge?: boolean;
+}) {
   const { frame } = state;
-  if (!frame) return null;
-  const shapes = overlayShapes(state, frame.w, frame.h, now);
-  const labelSize = Math.max(14, Math.round(frame.w / 30));
+  const live = video?.mode === "webrtc" ? video.stream : null;
+  const [videoSize, setVideoSize] = useState(RTC_DEFAULT_SIZE);
+  if (!frame && !live) return null;
+  const w = live ? videoSize.w : frame!.w;
+  const h = live ? videoSize.h : frame!.h;
+  const shapes = overlayShapes(state, w, h, now);
+  const labelSize = Math.max(14, Math.round(w / 30));
   const danger = shapes.some((s) => s.kind === "box" && s.tone === "danger");
   return (
-    <div class={`camera${danger ? " camera--danger" : ""}`} style={{ aspectRatio: `${frame.w} / ${frame.h}` }}>
-      <FrameCanvas frame={frame} deps={drawDeps} class="camera__canvas" />
-      <svg class="camera__overlay" viewBox={`0 0 ${frame.w} ${frame.h}`} preserveAspectRatio="xMidYMid meet" aria-hidden="true" data-testid="overlay">
+    <div class={`camera${danger ? " camera--danger" : ""}`} style={{ aspectRatio: `${w} / ${h}` }}>
+      {live
+        ? <RtcVideo stream={live} paused={paused} onSize={setVideoSize} />
+        : <FrameCanvas frame={frame!} deps={drawDeps} class="camera__canvas" />}
+      <svg class="camera__overlay" viewBox={`0 0 ${w} ${h}`} preserveAspectRatio="xMidYMid meet" aria-hidden="true" data-testid="overlay">
         {shapes.map((s, i) => <OverlayShape key={i} shape={s} labelSize={labelSize} />)}
       </svg>
+      {video && (
+        <span class={`camera__badge camera__badge--${video.mode}`} role="status" data-testid="video-badge">
+          {video.mode === "webrtc" ? "WebRTC" : "Preview"}
+        </span>
+      )}
       {state.found && state.target && (
         <p class="camera__found" role="status">
           <span class="camera__check" aria-hidden="true">✓</span> Found: {state.target}
@@ -269,7 +294,7 @@ function Camera({ state, now, drawDeps, showAge = false }: { state: LiveState; n
       {state.target && !state.found && (
         <p class="camera__seek" role="status">Looking for {state.target}</p>
       )}
-      {showAge && <span class="camera__age">{frameAge(frame.ts, now)}</span>}
+      {showAge && !live && <span class="camera__age">{frameAge(frame!.ts, now)}</span>}
     </div>
   );
 }
