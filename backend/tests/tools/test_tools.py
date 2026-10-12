@@ -19,6 +19,7 @@ EXPECTED = {
     "stock_query": ["product"], "expiry_check": [],
     "product_find": ["product", "count_needed"], "product_identify": [], "location_remember": ["product", "zone"],
     "camera_ask": ["question"], "describe_mode": ["on"],
+    "memory_where": ["item"], "memory_forget": ["item"], "memory_remembering": ["on", "item"],
     "day_summary": [], "reorder_suggest": ["product"], "confirm_action": ["confirm_id", "answer"],
     # catalog by voice (tools/catalog.py)
     "product_add": ["name", "brand", "unit", "pack_size", "price_rupees", "supplier_id"],
@@ -35,6 +36,7 @@ OPTIONAL_DEFAULTS = {
     ("product_add", "price_rupees"): None, ("product_add", "supplier_id"): None,
     ("product_update", "price_rupees"): None, ("product_update", "name"): None,
     ("product_update", "supplier_id"): None, ("stock_add", "unit"): None,
+    ("memory_forget", "item"): None, ("memory_remembering", "item"): None,
 }
 
 LITERALS = {

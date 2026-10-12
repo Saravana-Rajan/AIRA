@@ -261,7 +261,10 @@ async def camera_ask(question: str) -> dict:
          objects=len(objects), raw_objects=len(raw_objects) if isinstance(raw_objects, list) else None,
          aim_hint=summarize(data.get("aim_hint")), answer=trunc(answer), steps=len(steps))
     # Every ER 2 result is offered to the observers (the "last seen" memory), whatever gets spoken.
-    await observers.on_vision_objects(s, objects, {"source": "camera_ask", "kind": kind, "question": question,
+    # The last-seen memory and other subscribers get the objects (text only); a failing observer never breaks
+    # the answer.
+    await observers.on_vision_objects(s, objects, {"source": "camera_ask", "purpose": "ask", "kind": kind,
+                                                   "question": question, "answer": answer,
                                                    "frame_id": frames[-1].id, "frame_ts": frames[-1].ts,
                                                    "confidence": conf, "model": data.get("_model")})
     # A tip alone is not doubt: the model often adds one ("show me the items") while it is sure of what it sees

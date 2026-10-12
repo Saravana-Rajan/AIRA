@@ -7,7 +7,7 @@ rules_version = '2';
 //   sales, payments, orders, deliveries, auditLogs.
 // - Everything else under the shop is server-only and stays closed: suppliers (vendor phone numbers, Telegram
 //   chat ids), msgIndex / contactIndex, proposals (pending payloads + session ids), ledger, prefs,
-//   memoryEvents, events, locations.
+//   memoryEvents, events, locations, memory (last-seen personal items: text only, server-only, 7-day expiry).
 // - Every client write is denied. aira-live writes with its service account (server SDK, rules don't apply):
 //   the model proposes, the backend commits.
 service cloud.firestore {

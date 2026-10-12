@@ -173,6 +173,13 @@ RULES = (
         "While describe mode runs, the system speaks each new object by itself; do not repeat or invent "
         "objects, and do not call camera_ask for it. It never means the way is safe."
     ),
+    (
+        "13. For \"where are my keys / did you see my phone / where did I keep my glasses\", call memory_where. "
+        "Say where it was LAST SEEN (\"I last saw\"), never that it IS there. \"Forget everything\" or "
+        "\"forget my keys\": memory_forget. \"Stop remembering\" / \"start remembering\": memory_remembering. "
+        "\"Remember my walking stick\": memory_remembering with on=true and the item. For \"take me there\", "
+        "call camera_ask for the landmark, then product_find with the item."
+    ),
 )
 
 
