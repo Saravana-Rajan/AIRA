@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { pickBuiltInMic, startMic, MIC_WORKLET_NAME, type MicDeps } from "../src/voice/mic";
+import { pickBuiltInMic, startMic, MIC_WORKLET_NAME, MIC_CHUNK_SAMPLES, MIC_RATE, type MicDeps } from "../src/voice/mic";
 import { base64ToInt16 } from "../src/voice/pcm";
 
 const dev = (deviceId: string, label: string, kind: MediaDeviceKind = "audioinput"): MediaDeviceInfo =>
@@ -33,6 +33,18 @@ describe("pickBuiltInMic", () => {
   it("prefers a clearly built-in mic over a generic 'microphone'", () => {
     expect(pickBuiltInMic([dev("usb", "USB microphone"), dev("int", "Internal microphone")])).toBe("int");
     expect(pickBuiltInMic([dev("usb", "USB microphone")])).toBe("usb");
+  });
+});
+
+describe("mic chunk sizing (latency)", () => {
+  it("one chunk is 20-40 ms of 16 kHz PCM16: 640-1280 bytes, never a large batch", () => {
+    expect(MIC_RATE).toBe(16000);
+    const ms = (MIC_CHUNK_SAMPLES / MIC_RATE) * 1000;
+    const bytes = MIC_CHUNK_SAMPLES * 2;
+    expect(ms).toBeGreaterThanOrEqual(20);
+    expect(ms).toBeLessThanOrEqual(40);
+    expect(bytes).toBeGreaterThanOrEqual(640);
+    expect(bytes).toBeLessThanOrEqual(1280);
   });
 });
 
@@ -144,9 +156,10 @@ describe("startMic", () => {
     expect(env.contexts[0].resume).toHaveBeenCalled();
     expect(env.src.connect).toHaveBeenCalledWith(env.node);
     env.post(new Float32Array(512).fill(0.5), 16000);
-    expect(chunks).toHaveLength(1);
+    expect(chunks).toHaveLength(1); // synchronously: nothing awaits or batches between the worklet and onChunk
     const pcm = base64ToInt16(chunks[0]);
     expect(pcm.length).toBe(512);
+    expect(pcm.length * 2).toBe(1024); // bytes on the wire per chunk
     expect(pcm[10]).toBe(16384);
     mic.stop();
   });

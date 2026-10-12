@@ -208,6 +208,14 @@ describe("wireCameraAndGuidance", () => {
     expect(open).toHaveBeenCalledWith("https://wa.me/919876543210?text=hi", "_blank");
   });
 
+  it("WebRTC signalling from the dashboard reaches the sender on the same subscription (no RTCPeerConnection here: it declines with bye)", async () => {
+    wire();
+    socket.emit({ t: "rtc", kind: "want", from: "m1", to: "s1" });
+    await flush();
+    await flush();
+    expect(socket.sent).toEqual([{ t: "rtc", kind: "bye", to: "m1" }]);
+  });
+
   it("extra handlers get every message; one failing handler does not block the rest", () => {
     const err = vi.spyOn(console, "error").mockImplementation(() => {});
     const extra = vi.fn();

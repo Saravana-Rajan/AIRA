@@ -52,10 +52,11 @@ describe("Layout", () => {
     expect(text(current[0])).toBe("Stock");
   });
 
-  it("shows the read-only demo shop banner", () => {
+  it("has no demo shop banner", () => {
     const el = view();
-    expect(text(el)).toMatch(/Demo shop/);
-    expect(text(el)).toMatch(/read-only/i);
+    expect(text(el)).not.toMatch(/Demo shop/);
+    expect(text(el)).not.toMatch(/read-only/i);
+    expect(el.querySelector(".banner")).toBeNull();
   });
 
   it("uses a grid on the overview and a single column on a section", () => {

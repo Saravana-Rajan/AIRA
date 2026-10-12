@@ -1,5 +1,6 @@
 import { useEffect, useState } from "preact/hooks";
 import type { AuditRow } from "../lib/selectors/audit";
+import { DataTable } from "../components/DataTable";
 
 export type ResolveEvidence = (uri: string) => Promise<string | null>;
 
@@ -44,38 +45,28 @@ export function AuditPage(props: { rows: AuditRow[]; resolveEvidence: ResolveEvi
       {props.rows.length === 0 ? (
         <p class="empty">No actions recorded yet.</p>
       ) : (
-        <div class="table-wrap">
-          <table class="table table--audit">
-            <caption>Recent actions by the owner, AIRA and the system, newest first</caption>
-            <thead>
-              <tr>
-                <th scope="col">Time</th>
-                <th scope="col" class="wide-only">Who</th>
-                <th scope="col">Action</th>
-                <th scope="col" class="wide-only">Outcome</th>
-                <th scope="col">Evidence</th>
-              </tr>
-            </thead>
-            <tbody>
-              {shown.map((r) => (
-                <tr key={r.id}>
-                  <td class="time">{r.timeText}</td>
-                  <td class="wide-only">
-                    <span class={`who who--${r.actorLabel.toLowerCase()}`}>{r.actorLabel}</span>
-                  </td>
-                  <td>
-                    <span class="cell__main">{r.actionText}</span>
-                    <span class="narrow-only muted">
-                      By {r.actorLabel}. Outcome: {r.outcomeText}
-                    </span>
-                  </td>
-                  <td class="wide-only">{r.outcomeText}</td>
-                  <td>{r.evidenceUri ? <Evidence uri={r.evidenceUri} resolve={props.resolveEvidence} /> : <span class="muted">None</span>}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+        <DataTable
+          caption="Recent actions by the owner, AIRA and the system, newest first"
+          class="table--audit"
+          columns={[{ label: "Time" }, { label: "Who", wideOnly: true }, { label: "Action" }, { label: "Outcome", wideOnly: true }, { label: "Evidence" }]}
+        >
+          {shown.map((r) => (
+            <tr key={r.id}>
+              <td class="time">{r.timeText}</td>
+              <td class="wide-only">
+                <span class={`who who--${r.actorLabel.toLowerCase()}`}>{r.actorLabel}</span>
+              </td>
+              <td>
+                <span class="cell__main">{r.actionText}</span>
+                <span class="narrow-only muted">
+                  By {r.actorLabel}. Outcome: {r.outcomeText}
+                </span>
+              </td>
+              <td class="wide-only">{r.outcomeText}</td>
+              <td>{r.evidenceUri ? <Evidence uri={r.evidenceUri} resolve={props.resolveEvidence} /> : <span class="muted">None</span>}</td>
+            </tr>
+          ))}
+        </DataTable>
       )}
       {shown.length < props.rows.length && (
         <a class="more" href="#/audit">See all {props.rows.length} actions</a>

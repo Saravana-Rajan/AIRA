@@ -124,7 +124,10 @@ class DescribeLoop:
         self.announced[(obj["label"].casefold(), coarse_side(obj["point"][1]))] = (now, obj["distance"])
 
     def busy(self) -> bool:
-        """True while the owner is talking (or just finished) or AIRA is speaking: nothing is said then."""
+        """True while the owner is talking (or just finished), AIRA is speaking, or the owner's own camera
+        question is being answered: nothing is said and no ER 2 call is made then."""
+        if getattr(self.session, "owner_busy", False):
+            return True
         if self._clock() - self.last_heard_at < PAUSE_AFTER_TALK_S:
             return True
         if self._busy is not None:
@@ -167,8 +170,8 @@ class DescribeLoop:
                                                        "frame_ts": frame.ts, "confidence": conf,
                                                        "model": data.get("_model")})
         await listing.publish_boxes(s, objects, "describe", frame_id=frame.id)
-        if conf < MIN_CONF or not objects:
-            return self.active
+        if conf < MIN_CONF or not objects or getattr(self, "quiet", False):
+            return self.active  # quiet: Live video narrates the scene (aira_live.live_video); boxes still go out
         now = self._clock()
         if now - self.last_spoken_at < self.min_gap_s or self.busy():
             return self.active
@@ -241,8 +244,9 @@ class DescribeLoop:
             self.task.cancel()
         try:
             await self.session.send(RequestFrameMsg(purpose=PURPOSE, stop=True))
-        except Exception:
-            log.warning("describe: could not send stop to session %s", self.session.session_id, exc_info=True)
+        except Exception as exc:  # noqa: BLE001 - WebSocketDisconnect, RuntimeError (the phone socket is already
+            # closed) or any other send error: there is nothing left to stop, and nothing worth a traceback.
+            log.debug("describe: stop not sent to session %s: %s", self.session.session_id, exc)
 
 
 def _conf(v: Any) -> float:
@@ -267,7 +271,10 @@ def _registered(session: Session) -> bool:
 
 
 def _bridge_busy(session: Session) -> bool:
-    """AIRA is mid-answer or the owner is mid-sentence, as far as the Live bridge knows."""
+    """AIRA is mid-answer or the owner is mid-sentence, as far as the Live bridge knows, or a walk-with-me
+    guidance owns the voice (ambient and scene lines stay silent then)."""
+    if getattr(session, "walking", False):
+        return True
     bridge = _bridge_of(session)
     if bridge is None:
         return False

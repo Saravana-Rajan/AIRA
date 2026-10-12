@@ -72,6 +72,19 @@ describe("AiraSocket", () => {
     expect(s.hello).toMatchObject({ resume: "s2" });
   });
 
+  it("reports the bytes still queued on the open socket, and 0 while disconnected", () => {
+    const s = new AiraSocket("ws://x", { WebSocketImpl: FakeWS as any });
+    expect(s.bufferedAmount()).toBe(0);
+    s.connect(HELLO);
+    const ws = FakeWS.instances.at(-1)! as FakeWS & { bufferedAmount?: number };
+    ws.open();
+    expect(s.bufferedAmount()).toBe(0);
+    ws.bufferedAmount = 48_000;
+    expect(s.bufferedAmount()).toBe(48_000);
+    ws.close();
+    expect(s.bufferedAmount()).toBe(0);
+  });
+
   it("send returns false while disconnected", () => {
     expect(new AiraSocket("ws://x", { WebSocketImpl: FakeWS as any }).send({ t: "stop" })).toBe(false);
   });

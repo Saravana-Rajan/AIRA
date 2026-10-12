@@ -1,31 +1,41 @@
-// The Live page: mission control for one AIRA session, built for a projector. The camera is the point of the
-// page; the stepper in the header says what job AIRA is on; four cards on the right say what it is looking
-// for, how hard it is working, what was said and what it did. Record mode strips everything but the camera
-// and the captions into a clean 16:9 for screen recording.
-import { useEffect, useRef, useState } from "preact/hooks";
+// The Live page: what AIRA sees, hears and does for one shop, on a projector or a laptop. AIRA's own look:
+// light, Inter, the blue -> purple brand gradient for AIRA itself, soft 20 px cards. Sam's camera is the
+// point of the page; the conversation runs beside it as chat bubbles; under the camera the task stepper and
+// a slim activity timeline say what AIRA is doing. Record mode strips everything but the cameras and the
+// captions into a clean 16:9 for screen recording.
+import { useEffect, useMemo, useRef, useState } from "preact/hooks";
 import { formatTimeIST } from "../lib/format";
+import { browserDeps, createFrameDrawer, type DrawDeps } from "../lib/frameDraw";
 import { doneIndex, stepDurations, type Task } from "../lib/liveTask";
 import {
-  eventLabel, frameAge, overlayShapes, sessionClock, targetInfo, type ActivityItem, type ActivityTag, type Connection,
+  eventLabel, frameAge, overlayShapes, type ActivityItem, type ActivityTag, type Connection,
   type Frame, type LiveState, type MonitorRole, type MonitorState, type Shape, type TranscriptLine,
 } from "../lib/monitor";
+import type { VideoState } from "../lib/rtcViewer";
+import { RtcVideo } from "../components/RtcVideo";
 
 export interface LivePageProps {
   state: LiveState;
   conn: Connection;
+  /** The WebRTC picture (lib/rtcViewer): shown under the overlay while mode is "webrtc", else the JPEG frames. */
+  video?: VideoState;
   /** True when no monitor key is known yet: the page asks for one instead of connecting. */
   keyNeeded: boolean;
   onKey: (key: string) => void;
+  /** False when the dashboard has no AIRA Live address (VITE_AIRA_LIVE_WS): nothing to connect to. */
+  configured?: boolean;
   /** Picks another of the shop's live sessions (`state.sessions`) to follow. */
   onFollow?: (sessionId: string) => void;
   /** Record mode: a clean 16:9 view without the dashboard chrome. */
   record?: boolean;
   onRecord?: (on: boolean) => void;
+  shopName?: string;
   now?: () => number;
+  /** The camera drawer's DOM hooks (tests inject fakes). */
+  drawDeps?: DrawDeps;
 }
 
 const SPEAKER: Record<MonitorRole, string> = { owner: "Sam", customer: "Customer", aira: "AIRA" };
-const TAG: Record<ActivityTag, string> = { sam: "Sam", aira: "AIRA", customer: "Customer", tool: "Tool", vision: "Vision", order: "Order" };
 
 const STATUS_TEXT: Record<MonitorState, string> = {
   listening: "Listening", thinking: "Thinking", guiding: "Guiding", found: "Found", idle: "Idle",
@@ -37,7 +47,7 @@ const CONN_TEXT: Record<Connection, string> = {
 
 const LANG_NAME: Record<string, string> = { ta: "Tamil", hi: "Hindi", en: "English" };
 
-/** A clock that ticks four times a second while the page is open, for the T+ timer and the frame age. */
+/** A clock that ticks four times a second while the page is open, for the step timer and the frame age. */
 function useNow(now: () => number): number {
   const [t, setT] = useState(now);
   useEffect(() => {
@@ -47,12 +57,16 @@ function useNow(now: () => number): number {
   return t;
 }
 
-export function LivePage({ state, conn, keyNeeded, onKey, onFollow, record = false, onRecord, now = Date.now }: LivePageProps) {
+export function LivePage({
+  state, conn, video, keyNeeded, onKey, configured = true, onFollow, record = false, onRecord, shopName = "Sunrise Dairy", now = Date.now, drawDeps = browserDeps,
+}: LivePageProps) {
   const t = useNow(now);
   const [paused, setPaused] = useState(false);
   const frozen = useRef<Frame | null>(null);
   if (!paused) frozen.current = state.frame;
   const frame = paused ? frozen.current : state.frame;
+  const liveVideo = video?.mode === "webrtc" && video.stream !== null;
+  const hasPicture = frame !== null || liveVideo;
   const rooms = Object.entries(state.rooms);
   const [roomId, setRoomId] = useState<string | null>(null);
   const room = rooms.find(([sid]) => sid === roomId) ?? rooms[0] ?? null;
@@ -61,9 +75,9 @@ export function LivePage({ state, conn, keyNeeded, onKey, onFollow, record = fal
     return (
       <div class="livepage livepage--record" data-testid="record">
         <div class="record__cams">
-          {room && <RoomCamera name={room[1].name} frame={room[1].frame} state={room[1]} now={t} />}
+          {room && <RoomCamera name={room[1].name} frame={room[1].frame} state={room[1]} now={t} drawDeps={drawDeps} />}
           <div class="record__sam">
-            {frame ? <Camera state={{ ...state, frame }} now={t} /> : <Waiting conn={conn} />}
+            {hasPicture ? <Camera state={{ ...state, frame }} now={t} drawDeps={drawDeps} video={video} paused={paused} showAge /> : <Waiting conn={conn} configured={configured} />}
           </div>
         </div>
         <Captions lines={state.transcript} />
@@ -74,45 +88,46 @@ export function LivePage({ state, conn, keyNeeded, onKey, onFollow, record = fal
 
   return (
     <div class="livepage">
-      <header class="mc">
-        <div class="mc__id">
-          <h2 class="mc__title">AIRA Live</h2>
-          <p class="mc__sub">Live agent for a blind shopkeeper</p>
-        </div>
-        <Stepper task={state.task} now={t} />
-        <div class="mc__phone">
-          <span class={`mc__dot mc__dot--${state.session ? "on" : conn}`} aria-hidden="true" />
-          <span class="mc__phone-name">Sam's phone</span>
-          <span class="mc__conn" role="status">{state.session ? "Session open" : CONN_TEXT[conn]}</span>
+      <header class="lv-head">
+        <img class="lv-logo" src={`${import.meta.env.BASE_URL}aira-logo-192.png`} alt="" width={40} height={40} />
+        <h2 class="lv-title">{shopName} - Live</h2>
+        <span class={`lv-pill lv-pill--${state.status}`} role="status" aria-label={`AIRA is ${STATUS_TEXT[state.status].toLowerCase()}`}>
+          <span class="lv-pill__dot" aria-hidden="true" />{STATUS_TEXT[state.status]}
+        </span>
+        <div class="lv-conn">
+          <span class={`lv-conn__dot lv-conn__dot--${state.session ? "on" : conn}`} aria-hidden="true" />
+          <span class="lv-conn__text" role="status">{state.session ? "Session open" : CONN_TEXT[conn]}</span>
+          {state.lang && <span class="lv-conn__lang">{LANG_NAME[state.lang] ?? state.lang}</span>}
           <SessionPicker sessions={state.sessions} current={state.session} onFollow={onFollow} />
         </div>
-        <span class="mc__demo">Demo</span>
       </header>
 
-      <section class="stage" aria-label="Sam's camera">
-        <div class="stage__view">
-          {keyNeeded ? <KeyPrompt onKey={onKey} /> : frame ? <Camera state={{ ...state, frame }} now={t} /> : <Waiting conn={conn} />}
-          <Hud state={state} now={t} paused={paused} />
+      <section class="cam" aria-labelledby="cam-title">
+        <div class="cam__head">
+          <h3 id="cam-title" class="cam__title">Sam's view</h3>
+          {paused ? (
+            <span class="cam__paused" role="status">Paused</span>
+          ) : (
+            <span class={`cam__live${hasPicture ? " cam__live--on" : ""}`}>
+              <span class="cam__live-dot" aria-hidden="true" />live
+              {!liveVideo && <span class="cam__age">{frameAge(frame?.ts ?? null, t)}</span>}
+            </span>
+          )}
+        </div>
+        <div class="cam__view">
+          {keyNeeded ? <KeyPrompt onKey={onKey} /> : hasPicture ? <Camera state={{ ...state, frame }} now={t} drawDeps={drawDeps} video={video} paused={paused} /> : <Waiting conn={conn} configured={configured} />}
         </div>
         <Legend />
       </section>
 
-      <aside class="cards">
-        <TargetCard state={state} />
-        <StatsCard state={state} now={t} />
-        <section class="card card--talk" aria-labelledby="talk-title">
-          <h3 id="talk-title" class="card__title">Conversation</h3>
-          <Transcript lines={state.transcript} />
-        </section>
-        <section class="card card--log" aria-labelledby="activity-title">
-          <h3 id="activity-title" class="card__title">Activity log</h3>
-          <Activity items={state.activity} />
-        </section>
+      <aside class="chat" aria-labelledby="chat-title">
+        <h3 id="chat-title" class="chat__title">Conversation</h3>
+        <Chat lines={state.transcript} />
       </aside>
 
       {room && (
         <section class="room" aria-label="Room camera">
-          <RoomCamera name={room[1].name} frame={room[1].frame} state={room[1]} now={t} />
+          <RoomCamera name={room[1].name} frame={room[1].frame} state={room[1]} now={t} drawDeps={drawDeps} />
           {rooms.length > 1 && (
             <div class="room__pick" role="group" aria-label="Choose a room camera">
               {rooms.map(([sid, r]) => (
@@ -125,18 +140,20 @@ export function LivePage({ state, conn, keyNeeded, onKey, onFollow, record = fal
         </section>
       )}
 
+      <Stepper task={state.task} now={t} />
+      <Timeline items={state.activity} />
+
       <footer class="bar">
         <button class="bar__btn" type="button" onClick={() => onRecord?.(true)}>Record mode</button>
         <button class="bar__btn" type="button" aria-pressed={paused} onClick={() => setPaused((p) => !p)}>
           {paused ? "Resume camera" : "Pause camera"}
         </button>
-        <span class="bar__hint">Record mode shows the cameras and captions only, in 16:9.</span>
       </footer>
     </div>
   );
 }
 
-// ---------- header ----------
+// ---------- the task stepper: a soft bar of chips ----------
 function Stepper({ task, now }: { task: Task | null; now: number }) {
   if (!task) {
     return (
@@ -171,19 +188,21 @@ function elapsed(task: Task, now: number): string {
 }
 
 // ---------- the camera ----------
-function Waiting({ conn }: { conn: Connection }) {
+function waitingText(conn: Connection, configured: boolean): string {
+  if (conn === "rejected") return "The monitor key was refused. Open this page with the right #key= link.";
+  if (!configured) return "AIRA Live is not configured for this dashboard.";
+  if (conn === "live") return "Connected. Waiting for the phone to start a session.";
+  if (conn === "offline") return "Lost the connection to AIRA Live. Reconnecting…";
+  return "Connecting to AIRA Live…";
+}
+
+function Waiting({ conn, configured }: { conn: Connection; configured: boolean }) {
   return (
-    <div class="stage__empty" role="status">
-      <span class="stage__pulse" aria-hidden="true" />
-      <p class="stage__empty-title">Waiting for Sam's phone…</p>
-      <p class="stage__empty-sub">
-        {conn === "rejected"
-          ? "The monitor key was refused. Open this page with the right #key= link."
-          : conn === "live"
-            ? "Connected. The picture appears when Sam starts AIRA."
-            : conn === "waiting"
-              ? "AIRA Live is not configured for this dashboard."
-              : "Connecting to AIRA Live."}
+    <div class="cam__empty" role="status">
+      <span class="cam__pulse" aria-hidden="true" />
+      <p class="cam__empty-title">Waiting for Sam's phone…</p>
+      <p class="cam__empty-sub">
+        {waitingText(conn, configured)}
       </p>
     </div>
   );
@@ -194,7 +213,7 @@ function SessionPicker({ sessions, current, onFollow }: { sessions: LiveState["s
   const ids = Object.keys(sessions);
   if (ids.length < 2) return null;
   return (
-    <select class="mc__session" aria-label="Session to follow" value={current ?? ""} onChange={(e) => onFollow?.((e.target as HTMLSelectElement).value)}>
+    <select class="lv-session" aria-label="Session to follow" value={current ?? ""} onChange={(e) => onFollow?.((e.target as HTMLSelectElement).value)}>
       {ids.map((id) => (
         <option key={id} value={id}>{sessions[id].uid ? `${sessions[id].uid} · ${id.slice(0, 8)}` : id.slice(0, 8)}</option>
       ))}
@@ -222,34 +241,51 @@ function KeyPrompt({ onKey }: { onKey: (key: string) => void }) {
   );
 }
 
-function Hud({ state, now, paused }: { state: LiveState; now: number; paused: boolean }) {
-  return (
-    <div class="hud" aria-label="Session">
-      <span class={`hud__item hud__mode hud__mode--${state.status}`} role="status" aria-label={`AIRA is ${STATUS_TEXT[state.status].toLowerCase()}`}>
-        <span class="hud__dot" aria-hidden="true" />{STATUS_TEXT[state.status]}
-      </span>
-      <span class="hud__item">{state.lang ? LANG_NAME[state.lang] ?? state.lang : "Language —"}</span>
-      <span class="hud__item hud__clock">{sessionClock(state.sessionStartedAt, now)}</span>
-      {paused && <span class="hud__item hud__paused">Paused</span>}
-    </div>
-  );
-}
-
 const TONE_CLASS = { object: "ov--object", fast: "ov--fast", danger: "ov--danger", target: "ov--target", found: "ov--found", hand: "ov--hand" } as const;
 
-/** The latest frame with the vision overlay drawn in the frame's own pixel space, so it scales with the picture. */
-function Camera({ state, now }: { state: LiveState; now: number }) {
+/** A canvas that always shows the newest frame it was given (decoded off the main thread when the browser can). */
+function FrameCanvas({ frame, deps, class: cls }: { frame: Frame; deps: DrawDeps; class: string }) {
+  const ref = useRef<HTMLCanvasElement>(null);
+  const drawer = useMemo(() => createFrameDrawer(() => ref.current, deps), [deps]);
+  useEffect(() => () => drawer.stop(), [drawer]);
+  useEffect(() => {
+    drawer.push(frame);
+  }, [drawer, frame]);
+  return <canvas ref={ref} class={cls} width={frame.w} height={frame.h} data-frame-ts={frame.ts} aria-hidden="true" />;
+}
+
+/** The size of the WebRTC picture before its metadata says otherwise (the phone sends ~640x480). */
+const RTC_DEFAULT_SIZE = { w: 640, h: 480 };
+
+/**
+ * The picture with the vision overlay drawn in its own pixel space, so it scales with it: the WebRTC video
+ * when the viewer is connected (overlay in videoWidth x videoHeight), else the latest JPEG frame on a canvas.
+ */
+function Camera({ state, now, drawDeps, video, paused = false, showAge = false }: {
+  state: LiveState; now: number; drawDeps: DrawDeps; video?: VideoState; paused?: boolean; showAge?: boolean;
+}) {
   const { frame } = state;
-  if (!frame) return null;
-  const shapes = overlayShapes(state, frame.w, frame.h, now);
-  const labelSize = Math.max(14, Math.round(frame.w / 30));
+  const live = video?.mode === "webrtc" ? video.stream : null;
+  const [videoSize, setVideoSize] = useState(RTC_DEFAULT_SIZE);
+  if (!frame && !live) return null;
+  const w = live ? videoSize.w : frame!.w;
+  const h = live ? videoSize.h : frame!.h;
+  const shapes = overlayShapes(state, w, h, now);
+  const labelSize = Math.max(14, Math.round(w / 30));
   const danger = shapes.some((s) => s.kind === "box" && s.tone === "danger");
   return (
-    <div class={`camera${danger ? " camera--danger" : ""}`} style={{ aspectRatio: `${frame.w} / ${frame.h}` }}>
-      <img class="camera__img" src={frame.src} width={frame.w} height={frame.h} alt="" />
-      <svg class="camera__overlay" viewBox={`0 0 ${frame.w} ${frame.h}`} preserveAspectRatio="xMidYMid meet" aria-hidden="true" data-testid="overlay">
+    <div class={`camera${danger ? " camera--danger" : ""}`} style={{ aspectRatio: `${w} / ${h}` }}>
+      {live
+        ? <RtcVideo stream={live} paused={paused} onSize={setVideoSize} />
+        : <FrameCanvas frame={frame!} deps={drawDeps} class="camera__canvas" />}
+      <svg class="camera__overlay" viewBox={`0 0 ${w} ${h}`} preserveAspectRatio="xMidYMid meet" aria-hidden="true" data-testid="overlay">
         {shapes.map((s, i) => <OverlayShape key={i} shape={s} labelSize={labelSize} />)}
       </svg>
+      {video && (
+        <span class={`camera__badge camera__badge--${video.mode}`} role="status" data-testid="video-badge">
+          {video.mode === "webrtc" ? "WebRTC" : "Preview"}
+        </span>
+      )}
       {state.found && state.target && (
         <p class="camera__found" role="status">
           <span class="camera__check" aria-hidden="true">✓</span> Found: {state.target}
@@ -258,7 +294,7 @@ function Camera({ state, now }: { state: LiveState; now: number }) {
       {state.target && !state.found && (
         <p class="camera__seek" role="status">Looking for {state.target}</p>
       )}
-      <span class="camera__age">{frameAge(frame.ts, now)}</span>
+      {showAge && !live && <span class="camera__age">{frameAge(frame!.ts, now)}</span>}
     </div>
   );
 }
@@ -304,14 +340,14 @@ function Legend() {
   );
 }
 
-function RoomCamera({ name, frame, state, now }: { name: string; frame: Frame | null; state: { mediapipe: LiveState["mediapipe"] }; now: number }) {
+function RoomCamera({ name, frame, state, now, drawDeps }: { name: string; frame: Frame | null; state: { mediapipe: LiveState["mediapipe"] }; now: number; drawDeps: DrawDeps }) {
   const shapes = frame ? overlayShapes({ er2: { objects: [], ts: 0 }, mediapipe: state.mediapipe, target: null, found: false, hand: null, status: "idle" }, frame.w, frame.h, now) : [];
   return (
     <div class="roomcam">
       <h3 class="roomcam__title">Room camera: {name}</h3>
       {frame ? (
         <div class="camera camera--room" style={{ aspectRatio: `${frame.w} / ${frame.h}` }}>
-          <img class="camera__img" src={frame.src} width={frame.w} height={frame.h} alt="" />
+          <FrameCanvas frame={frame} deps={drawDeps} class="camera__canvas" />
           <svg class="camera__overlay" viewBox={`0 0 ${frame.w} ${frame.h}`} preserveAspectRatio="xMidYMid meet" aria-hidden="true">
             {shapes.map((s, i) => <OverlayShape key={i} shape={s} labelSize={Math.max(12, Math.round(frame.w / 36))} />)}
           </svg>
@@ -324,74 +360,8 @@ function RoomCamera({ name, frame, state, now }: { name: string; frame: Frame | 
   );
 }
 
-// ---------- cards ----------
-function TargetCard({ state }: { state: LiveState }) {
-  const info = targetInfo(state);
-  return (
-    <section class="card card--target" aria-labelledby="target-title">
-      <div class="card__head">
-        <h3 id="target-title" class="card__title">Target</h3>
-        <span class="engine">Gemini Robotics-ER 2</span>
-      </div>
-      {!info ? (
-        <p class="card__empty">Nothing being looked for. The target appears when Sam asks for an item.</p>
-      ) : (
-        <dl class="target">
-          <div class="target__focus">
-            <dt>Focus</dt>
-            <dd class="target__label">
-              <span class={`target__seen target__seen--${info.found ? "found" : info.visible ? "on" : "off"}`} aria-hidden="true" />
-              {info.label}{" "}
-              <span class="target__vis">{info.found ? "in hand" : info.visible ? "in view" : "not in view"}</span>
-            </dd>
-          </div>
-          <div>
-            <dt>Confidence</dt>
-            <dd>
-              <span class="meter" role="meter" aria-valuemin={0} aria-valuemax={100} aria-valuenow={info.confidence === null ? undefined : Math.round(info.confidence * 100)} aria-label="Confidence">
-                <span class="meter__fill" style={{ width: `${info.confidence === null ? 0 : Math.round(info.confidence * 100)}%` }} />
-              </span>
-              <span class="target__num">{info.confidence === null ? "—" : `${Math.round(info.confidence * 100)}%`}</span>
-            </dd>
-          </div>
-          <div>
-            <dt>Distance</dt>
-            <dd>{info.distance === null ? "—" : info.distance === "arm" ? "Arm's length" : info.distance === "near" ? "Within reach" : "A step away"}</dd>
-          </div>
-          <div>
-            <dt>Direction</dt>
-            <dd>{info.side === null ? "—" : `${cap(info.side)}, ${info.shelf} shelf`}</dd>
-          </div>
-        </dl>
-      )}
-    </section>
-  );
-}
-
-const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
-
-function StatsCard({ state, now }: { state: LiveState; now: number }) {
-  const st = state.stats;
-  const busy = state.status === "thinking" || state.status === "guiding";
-  return (
-    <section class="card card--stats" aria-labelledby="stats-title">
-      <div class="card__head">
-        <h3 id="stats-title" class="card__title">Session stats</h3>
-        <span class={`pill pill--${busy ? "busy" : "idle"}`} role="status">{busy ? "Executing" : "Idle"}</span>
-      </div>
-      <dl class="stats">
-        <div><dt>Session time</dt><dd>{sessionClock(state.sessionStartedAt, now).slice(2)}</dd></div>
-        <div><dt>Live API turns</dt><dd>{st ? st.turns : "—"}</dd></div>
-        <div><dt>ER 2 calls</dt><dd>{st ? st.er2Calls : "—"}</dd></div>
-        <div><dt>Flash calls</dt><dd>{st ? st.flashCalls : "—"}</dd></div>
-        <div><dt>Vision latency</dt><dd>{st && st.visionMs !== null ? `${(st.visionMs / 1000).toFixed(1)}s` : "—"}</dd></div>
-        <div><dt>Frames/s</dt><dd>{st ? st.fps.toFixed(1) : "—"}</dd></div>
-      </dl>
-    </section>
-  );
-}
-
-function Transcript({ lines }: { lines: TranscriptLine[] }) {
+// ---------- the conversation: chat bubbles ----------
+function Chat({ lines }: { lines: TranscriptLine[] }) {
   const ref = useRef<HTMLOListElement>(null);
   const last = lines.at(-1);
   useEffect(() => {
@@ -403,17 +373,20 @@ function Transcript({ lines }: { lines: TranscriptLine[] }) {
     }
   }, [last?.id, last?.text]);
   if (lines.length === 0) {
-    return <p class="card__empty talk__empty">Nothing said yet. Sam's words, the customer's words and AIRA's replies appear here.</p>;
+    return <p class="chat__empty">Nothing said yet. Sam's words, the customer's words and AIRA's replies appear here.</p>;
   }
   return (
-    <ol class="talk__list" ref={ref} aria-live="polite" aria-relevant="additions text">
+    <ol class="chat__list" ref={ref} aria-live="polite" aria-relevant="additions text">
       {lines.map((l) => (
-        <li key={l.id} class={`line line--${l.role}${l.final ? "" : " line--partial"}`}>
-          <span class="line__meta">
-            <span class="chip">{SPEAKER[l.role]}</span>
-            {l.lang && <span class="lang">{l.lang}</span>}
-          </span>
-          <p class="line__text">{l.text}</p>
+        <li key={l.id} class={`msg msg--${l.role}${l.final ? "" : " msg--partial"}`}>
+          {l.role === "aira" && <span class="msg__avatar" aria-hidden="true">A</span>}
+          <div class="msg__bubble">
+            <span class="msg__meta">
+              <span class="msg__who">{SPEAKER[l.role]}</span>
+              {l.lang && <span class="msg__lang">{l.lang}</span>}
+            </span>
+            <p class="msg__text">{l.text}</p>
+          </div>
         </li>
       ))}
     </ol>
@@ -435,28 +408,47 @@ function Captions({ lines }: { lines: TranscriptLine[] }) {
   );
 }
 
-function Activity({ items }: { items: ActivityItem[] }) {
+// ---------- the activity timeline: a slim strip of icon chips ----------
+const ICON: Record<ActivityTag, string> = {
+  // 16x16 stroke icons: what each kind of activity is, not who is talking.
+  sam: "M8 1.5a2.5 2.5 0 0 0-2.5 2.5v4a2.5 2.5 0 0 0 5 0V4A2.5 2.5 0 0 0 8 1.5zM3.5 7.5A4.5 4.5 0 0 0 8 12a4.5 4.5 0 0 0 4.5-4.5M8 12v2.5M5.5 14.5h5",
+  aira: "M8 1.5l1.6 4.4L14 7.5l-4.4 1.6L8 13.5 6.4 9.1 2 7.5l4.4-1.6zM13 1.5v2M14 2.5h-2",
+  customer: "M8 8a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM2.5 14.5a5.5 5.5 0 0 1 11 0",
+  tool: "M10.5 2.5a3 3 0 0 0-3.9 3.6L2 10.7V14h3.3l4.6-4.6a3 3 0 0 0 3.6-3.9l-2 2-1.8-.4-.4-1.8z",
+  vision: "M1.5 8s2.5-4.5 6.5-4.5S14.5 8 14.5 8 12 12.5 8 12.5 1.5 8 1.5 8zM8 10a2 2 0 1 0 0-4 2 2 0 0 0 0 4z",
+  order: "M2 3.5h2l1.6 7h6.9l1.5-5H5M6.5 14a1 1 0 1 0 0-2 1 1 0 0 0 0 2zM12 14a1 1 0 1 0 0-2 1 1 0 0 0 0 2z",
+};
+const TAG_NAME: Record<ActivityTag, string> = { sam: "Sam", aira: "AIRA", customer: "Customer", tool: "Tool", vision: "Vision", order: "Order" };
+
+function Timeline({ items }: { items: ActivityItem[] }) {
   const ref = useRef<HTMLOListElement>(null);
   const last = items.at(-1);
   useEffect(() => {
     try {
       const el = ref.current;
-      if (el) el.scrollTop = el.scrollHeight;
+      if (el) el.scrollLeft = el.scrollWidth;
     } catch {
       /* jsdom */
     }
   }, [last?.id]);
-  if (items.length === 0) return <p class="card__empty activity__empty">What AIRA does shows up here: searching, pointing, counting, confirming.</p>;
   return (
-    <ol class="activity__list" ref={ref}>
-      {items.slice(-40).map((a) => (
-        <li key={a.id} class={`act act--${a.tag}`}>
-          <span class="act__time">{formatTimeIST(a.ts)}</span>
-          <span class="act__tag">{TAG[a.tag]}</span>
-          <span class="act__label">{eventLabel(a.name)}</span>
-          {a.detail && <span class="act__detail">{a.detail}</span>}
-        </li>
-      ))}
-    </ol>
+    <section class="tl" aria-label="Activity">
+      {items.length === 0 ? (
+        <p class="tl__empty">What AIRA does shows up here: searching, pointing, counting, confirming.</p>
+      ) : (
+        <ol class="tl__list" ref={ref}>
+          {items.slice(-40).map((a) => (
+            <li key={a.id} class={`tl__item tl__item--${a.tag}`} title={a.detail || undefined}>
+              <svg class="tl__icon" viewBox="0 0 16 16" aria-hidden="true"><path d={ICON[a.tag]} /></svg>
+              <span class="tl__body">
+                <span class="tl__label">{eventLabel(a.name)}</span>
+                {a.detail && <span class="tl__detail">{a.detail}</span>}
+              </span>
+              <span class="tl__time"><span class="sr-only">{TAG_NAME[a.tag]}, </span>{formatTimeIST(a.ts)}</span>
+            </li>
+          ))}
+        </ol>
+      )}
+    </section>
   );
 }

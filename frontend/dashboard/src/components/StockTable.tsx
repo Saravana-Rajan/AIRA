@@ -3,6 +3,7 @@ import { collection, onSnapshot } from "firebase/firestore";
 import type { InventoryDoc, Product } from "@aira/contracts";
 import { db } from "../lib/firebase";
 import { toRows } from "../lib/stock";
+import { DataTable } from "./DataTable";
 
 /** Realtime stock table for one shop: products joined with inventory. Read-only. */
 export function StockTable({ shopId }: { shopId: string }) {
@@ -32,36 +33,24 @@ export function StockTable({ shopId }: { shopId: string }) {
   const rows = toRows(products, inventory);
 
   return (
-    <div class="table-wrap">
-      <table class="table">
-        <caption>Live stock, updated in real time</caption>
-        <thead>
-          <tr>
-            <th scope="col">Product</th>
-            <th scope="col">On hand</th>
-            <th scope="col">Status</th>
+    <DataTable caption="Live stock, updated in real time" columns={[{ label: "Product" }, { label: "On hand", num: true }, { label: "Status" }]}>
+      {rows.length === 0 ? (
+        <tr>
+          <td colSpan={3} class="empty-cell">No products yet.</td>
+        </tr>
+      ) : (
+        rows.map((r) => (
+          <tr key={r.sku}>
+            <th scope="row">{r.name}</th>
+            <td class="num">
+              {r.onHand} {r.unit}
+            </td>
+            <td>
+              <span class={r.low ? "badge badge--low" : "badge badge--ok"}>{r.low ? "Low stock" : "OK"}</span>
+            </td>
           </tr>
-        </thead>
-        <tbody>
-          {rows.length === 0 ? (
-            <tr>
-              <td colSpan={3} class="muted">No products yet.</td>
-            </tr>
-          ) : (
-            rows.map((r) => (
-              <tr key={r.sku}>
-                <th scope="row">{r.name}</th>
-                <td class="num">
-                  {r.onHand} {r.unit}
-                </td>
-                <td>
-                  <span class={r.low ? "badge badge--low" : "badge badge--ok"}>{r.low ? "Low stock" : "OK"}</span>
-                </td>
-              </tr>
-            ))
-          )}
-        </tbody>
-      </table>
-    </div>
+        ))
+      )}
+    </DataTable>
   );
 }

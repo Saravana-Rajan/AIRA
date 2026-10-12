@@ -2,10 +2,10 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 // The real core/app.ts singleton is replaced so frames go to a spy instead of a socket.
 const { app } = vi.hoisted(() => ({
-  app: { send: vi.fn((_m: unknown) => true), speak: vi.fn(), earcon: vi.fn(), haptic: vi.fn(), settings: { lang: "en" } },
+  app: { send: vi.fn((_m: unknown) => true), speak: vi.fn(), earcon: vi.fn(), haptic: vi.fn(), settings: { lang: "en" }, socket: { bufferedAmount: vi.fn(() => 0) } },
 }));
 vi.mock("../src/core/app", () => ({ app }));
-import { captureFrame, captureFrameIf, startContinuous, fitWithin, frameSpec, CameraError, __setCaptureDeps, setQualityListener, MAX_B64, PREVIEW_MAX_SIDE, PREVIEW_QUALITY } from "../src/camera/capture";
+import { captureFrame, captureFrameIf, startContinuous, fitWithin, frameSpec, CameraError, __setCaptureDeps, setQualityListener, MAX_B64, PREVIEW_MAX_SIDE, PREVIEW_QUALITY, PREVIEW_MAX_BUFFERED, socketBusy, PRIORITY_MAX_SIDE, PRIORITY_QUALITY, isPriorityPurpose, holdBackground, backgroundHeld } from "../src/camera/capture";
 
 const fakeCanvas = () => ({ canvas: {} as HTMLCanvasElement, ctx: { getImageData: () => ({ data: new Uint8ClampedArray(4 * 4 * 4).fill(200) }) } as unknown as CanvasRenderingContext2D });
 
@@ -29,22 +29,23 @@ describe("fitWithin", () => {
 
 describe("captureFrame", () => {
   it("builds an exact frame message", async () => {
-    const f = await captureFrame("count");
-    expect(f).toMatchObject({ t: "frame", jpeg: "AAAA", w: 640, h: 360, purpose: "count" });
+    const f = await captureFrame("guide");
+    expect(f).toMatchObject({ t: "frame", jpeg: "AAAA", w: 640, h: 360, purpose: "guide" });
     expect(Object.keys(f).sort()).toEqual(["h", "id", "jpeg", "purpose", "t", "ts", "w"]);
     expect(typeof f.id).toBe("string");
     expect(typeof f.ts).toBe("number");
   });
-  it("a monitor preview frame is small (480 px) and light (quality 0.5); other purposes keep 640 px / 0.8", async () => {
-    expect(PREVIEW_MAX_SIDE).toBe(480);
-    expect(PREVIEW_QUALITY).toBe(0.5);
-    expect(frameSpec("preview")).toEqual({ maxSide: 480, quality: 0.5 });
+  it("a monitor preview frame is small (360 px) and light (quality 0.45); other purposes keep 640 px / 0.8", async () => {
+    expect(PREVIEW_MAX_SIDE).toBe(360);
+    expect(PREVIEW_QUALITY).toBe(0.45);
+    expect(frameSpec("preview")).toEqual({ maxSide: 360, quality: 0.45 });
     expect(frameSpec("guide")).toEqual({ maxSide: 640, quality: 0.8 });
+    expect(frameSpec("walk")).toEqual({ maxSide: 1024, quality: 0.75 });
     const enc = vi.fn(async (_c: HTMLCanvasElement, _q: number) => "AAAA");
     __setCaptureDeps({ encoder: enc });
     const p = await captureFrame("preview");
-    expect(p).toMatchObject({ t: "frame", w: 480, h: 270, purpose: "preview" });
-    expect(enc).toHaveBeenLastCalledWith(expect.anything(), 0.5);
+    expect(p).toMatchObject({ t: "frame", w: 360, h: 203, purpose: "preview" });
+    expect(enc).toHaveBeenLastCalledWith(expect.anything(), 0.45);
     const g = await captureFrame("guide");
     expect(g).toMatchObject({ w: 640, h: 360, purpose: "guide" });
     expect(enc).toHaveBeenLastCalledWith(expect.anything(), 0.8);
@@ -100,6 +101,35 @@ describe("startContinuous", () => {
     await vi.advanceTimersByTimeAsync(2000);
     expect((app.send as any).mock.calls.length).toBe(n);
   });
+  it("sends a preview frame at once and drops it, unencoded, while the socket is still busy with the last one", async () => {
+    vi.useFakeTimers();
+    const enc = vi.fn(async () => "AAAA");
+    __setCaptureDeps({ encoder: enc });
+    const buffered = app.socket.bufferedAmount as ReturnType<typeof vi.fn>;
+    buffered.mockReturnValue(0);
+    const frames = (purpose = "preview") => (app.send as any).mock.calls.map((c: any[]) => c[0]).filter((m: any) => m.t === "frame" && m.purpose === purpose);
+    expect(socketBusy()).toBe(false);
+    const stop = startContinuous("preview", 8);
+    await vi.advanceTimersByTimeAsync(10);
+    expect(frames()).toHaveLength(1);
+    buffered.mockReturnValue(PREVIEW_MAX_BUFFERED + 1);   // the network has not taken the last frame yet
+    expect(socketBusy()).toBe(true);
+    const encodes = enc.mock.calls.length;
+    await vi.advanceTimersByTimeAsync(500);                 // four ticks: nothing encoded, nothing queued
+    expect(enc.mock.calls.length).toBe(encodes);
+    expect(frames()).toHaveLength(1);
+    buffered.mockReturnValue(0);
+    await vi.advanceTimersByTimeAsync(130);
+    expect(frames()).toHaveLength(2);
+    stop();
+    // other purposes never drop: Gemini's frames are not a preview
+    buffered.mockReturnValue(PREVIEW_MAX_BUFFERED + 1);
+    const stopGuide = startContinuous("guide", 4);
+    await vi.advanceTimersByTimeAsync(10);
+    expect(frames("guide")).toHaveLength(1);
+    stopGuide();
+    buffered.mockReturnValue(0);
+  });
   it("keeps running when a capture fails", async () => {
     vi.useFakeTimers();
     let fail = true;
@@ -108,6 +138,57 @@ describe("startContinuous", () => {
     await vi.advanceTimersByTimeAsync(600);
     stop();
     expect((app.send as any).mock.calls.length).toBeGreaterThanOrEqual(1);
+  });
+});
+
+describe("owner questions come first", () => {
+  it("ask / count / identify / point frames go at 1280 px and quality 0.9", async () => {
+    expect(PRIORITY_MAX_SIDE).toBe(1280);
+    expect(PRIORITY_QUALITY).toBe(0.9);
+    for (const p of ["ask", "count", "identify", "point"] as const) {
+      expect(isPriorityPurpose(p)).toBe(true);
+      expect(frameSpec(p)).toEqual({ maxSide: 1280, quality: 0.9 });
+    }
+    expect(isPriorityPurpose("describe")).toBe(false);
+    const enc = vi.fn(async (_c: HTMLCanvasElement, _q: number) => "AAAA");
+    __setCaptureDeps({ encoder: enc, source: { width: () => 1920, height: () => 1080, draw: () => {} } });
+    const f = await captureFrame("count");
+    expect(f).toMatchObject({ t: "frame", w: 1280, h: 720, purpose: "count" });
+    expect(enc).toHaveBeenLastCalledWith(expect.anything(), 0.9);
+  });
+
+  it("describe and preview frames pause while a priority capture holds the camera", async () => {
+    vi.useFakeTimers();
+    const frames = (purpose: string) => (app.send as any).mock.calls.map((c: any[]) => c[0]).filter((m: any) => m.t === "frame" && m.purpose === purpose);
+    const release = holdBackground();
+    expect(backgroundHeld()).toBe(true);
+    const stopD = startContinuous("describe", 4);
+    const stopG = startContinuous("guide", 4);
+    await vi.advanceTimersByTimeAsync(600);
+    expect(frames("describe")).toHaveLength(0);
+    expect(frames("guide").length).toBeGreaterThanOrEqual(1);   // hand guidance is never paused
+    release();
+    release();                                                  // a second release is harmless
+    expect(backgroundHeld()).toBe(false);
+    await vi.advanceTimersByTimeAsync(300);
+    expect(frames("describe").length).toBeGreaterThanOrEqual(1);
+    stopD();
+    stopG();
+  });
+
+  it("a describe frame that was being encoded when the hold began is dropped, never sent after the ask", async () => {
+    vi.useFakeTimers();
+    let finish: (v: string) => void = () => {};
+    __setCaptureDeps({ encoder: () => new Promise<string>((r) => { finish = r; }) });
+    const frames = () => (app.send as any).mock.calls.map((c: any[]) => c[0]).filter((m: any) => m.t === "frame" && m.purpose === "describe");
+    const stop = startContinuous("describe", 1 / 3);
+    await vi.advanceTimersByTimeAsync(5);
+    const release = holdBackground();
+    finish("AAAA");
+    await vi.advanceTimersByTimeAsync(5);
+    expect(frames()).toHaveLength(0);
+    release();
+    stop();
   });
 });
 

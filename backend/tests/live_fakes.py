@@ -84,6 +84,8 @@ class FakeBackend:
     def __init__(self):
         self.sent_audio: list[bytes] = []
         self.sent_text: list[str] = []
+        self.sent_video: list[bytes] = []
+        self.queued = 0  # what backlog() reports (live video drops frames when it is high)
         self.started_with: list[str | None] = []
         self.system_prompt: str | None = None
         self.tools: list | None = None
@@ -102,6 +104,12 @@ class FakeBackend:
 
     async def send_text(self, text: str) -> None:
         self.sent_text.append(text)
+
+    async def send_video(self, jpeg: bytes) -> None:
+        self.sent_video.append(jpeg)
+
+    def backlog(self) -> int:
+        return self.queued
 
     def push(self, ev) -> None:
         self._loop.call_soon_threadsafe(self._q.put_nowait, ev)

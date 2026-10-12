@@ -219,19 +219,19 @@ describe("tags", () => {
     });
     __setCaptureDeps({ source: { width: () => 1280, height: () => 720, draw: () => {} }, encoder: async () => "AAAA", makeCanvas: fakeCanvas });
     setQualityListener(() => {});
-    const f = await captureFrame("ask");
-    expect(f).toMatchObject({ t: "frame", jpeg: "AAAA", w: 640, h: 360, purpose: "ask" });
+    const f = await captureFrame("guide");
+    expect(f).toMatchObject({ t: "frame", jpeg: "AAAA", w: 640, h: 360, purpose: "guide" });
     const line = logs(socket.sent, "frame")[0].data;
-    expect(line).toMatchObject({ purpose: "ask", bytes: 4, w: 640, h: 360, quality: "skipped" });
+    expect(line).toMatchObject({ purpose: "guide", bytes: 4, w: 640, h: 360, quality: "skipped" });
     expect(JSON.stringify(line)).not.toContain("AAAA");
     vi.setSystemTime(10_300);
-    await captureFrame("ask");
+    await captureFrame("guide");
     vi.setSystemTime(10_600);
-    await captureFrame("ask");                                // every 3rd frame is quality-checked
+    await captureFrame("guide");                                // every 3rd frame is quality-checked
     // a flat grey frame has no edges, so the Laplacian test calls it blurry: the real verdict is logged
     expect(logs(socket.sent, "frame").at(-1)!.data.quality).toBe("blurry");
     vi.setSystemTime(10_700);
-    await captureFrame("ask");                                // inside the 250 ms gap: no line for this one
+    await captureFrame("guide");                                // inside the 250 ms gap: no line for this one
     expect(logs(socket.sent, "frame")).toHaveLength(3);
     setQualityListener(null);
   });

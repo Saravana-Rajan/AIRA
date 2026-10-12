@@ -36,8 +36,10 @@ Lang = Literal["ta", "hi", "en"]
 Verbosity = Literal["short", "detail"]
 # "preview": the monitor's own small stream (2-3 fps) while the dashboard watches; relayed to monitors only, never
 # stored and never shown to Gemini.
+# "live": the camera as Gemini Live video (1 fps) while a Live session runs; forwarded into Live only, never
+# stored for the tools. A live frame may carry ``changed`` (the view settled on something new) and ``labels``.
 FramePurpose = Literal["ask", "count", "point", "identify", "invoice", "cash", "guide", "describe", "identify_held",
-                       "preview"]
+                       "preview", "walk", "live"]
 CueName = Literal["ack", "thinking", "done", "warn", "match", "mismatch", "unsure", "interrupted", "reconnect", "offline"]
 Entity = Literal["order", "delivery", "sale", "payment", "inventory"]
 ConfirmKind = Literal["order", "payment", "sale", "discrepancy", "generic"]
@@ -83,6 +85,7 @@ class _ServerWire(_Wire):
 
 
 # ---------- client -> server ----------
+MAX_FRAME_LABELS = 8  # messages.ts MAX_FRAME_LABELS
 class HelloMsg(_ClientWire):
     t: Literal["hello"]
     uid: StrictStr
@@ -107,6 +110,9 @@ class FrameMsg(_ClientWire):
     h: StrictInt
     ts: Num  # epoch ms
     purpose: FramePurpose
+    changed: Optional[StrictBool] = None  # live frames only: the view settled on something new
+    labels: Optional[list[Annotated[StrictStr, Field(max_length=60)]]] = Field(default=None,
+                                                                              max_length=MAX_FRAME_LABELS)
 
 
 class TextMsg(_ClientWire):
@@ -166,8 +172,56 @@ class BoxesMsg(_ClientWire):
     frame_id: Optional[StrictStr] = None
 
 
+# ---------- WebRTC signalling (phone <-> server <-> monitor; the server only relays) ----------
+# The dashboard asks a phone session for live video with ``want``; the phone answers with an ``offer`` (video
+# only, sendonly), the dashboard with an ``answer`` (recvonly), both trickle ``ice``; the phone says ``connected``
+# once the peer connection is up (``aira_live.rtc`` then pauses that session's JPEG preview for that monitor) and
+# either side says ``bye`` (the preview resumes). ``from`` is always the sender's id as the server knows it (a
+# session id for the phone, a monitor id for the dashboard), so a client may leave it out; ``to`` names the peer.
+RtcKind = Literal["want", "offer", "answer", "ice", "connected", "bye"]
+RTC_KINDS: tuple[str, ...] = typing.get_args(RtcKind)
+
+
+class RtcCandidate(_ServerWire):
+    candidate: StrictStr
+    sdp_mid: Optional[StrictStr] = None  # sdpMid
+    sdp_m_line_index: Optional[StrictInt] = None  # sdpMLineIndex
+
+    @model_serializer(mode="wrap")
+    def _keep_explicit_nulls(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
+        # A browser sends ``sdpMid: null`` on purpose; exclude_none must not drop a null the sender set.
+        data = handler(self)
+        if "sdp_mid" in self.model_fields_set:
+            data.setdefault("sdpMid", self.sdp_mid)
+        if "sdp_m_line_index" in self.model_fields_set:
+            data.setdefault("sdpMLineIndex", self.sdp_m_line_index)
+        return data
+
+
+class RtcMsg(_ClientWire):
+    """Inbound signalling from a phone (/ws) or a monitor (/monitor): ``from`` is ignored and overwritten."""
+
+    t: Literal["rtc"]
+    kind: RtcKind
+    from_: Optional[StrictStr] = Field(default=None, alias="from")
+    to: StrictStr
+    sdp: Optional[StrictStr] = None
+    candidate: Optional[RtcCandidate] = None
+
+
+class RtcOutMsg(_ServerWire):
+    """Outbound signalling, relayed to the peer with the sender's id in ``from``."""
+
+    t: Literal["rtc"] = "rtc"
+    kind: RtcKind
+    from_: StrictStr = Field(alias="from")
+    to: StrictStr
+    sdp: Optional[StrictStr] = None
+    candidate: Optional[RtcCandidate] = None
+
+
 ClientMsg = Annotated[
-    Union[HelloMsg, AudioInMsg, FrameMsg, TextMsg, EventMsg, ConfirmReplyMsg, StopMsg, LogMsg, BoxesMsg],
+    Union[HelloMsg, AudioInMsg, FrameMsg, TextMsg, EventMsg, ConfirmReplyMsg, StopMsg, LogMsg, BoxesMsg, RtcMsg],
     Field(discriminator="t"),
 ]
 
@@ -277,7 +331,7 @@ class BoxesOutMsg(_ServerWire):
 
 ServerMsg = Annotated[
     Union[ReadyMsg, AudioOutMsg, TranscriptMsg, RequestFrameMsg, TargetMsg, CountMsg, StateMsg, ConfirmMsg, CueMsg,
-          ErrorMsg, BoxesOutMsg],
+          ErrorMsg, BoxesOutMsg, RtcOutMsg],
     Field(discriminator="t"),
 ]
 
@@ -300,10 +354,12 @@ class MonAuthMsg(_ClientWire):
     key: StrictStr
 
 
-monitor_client_adapter: TypeAdapter[MonAuthMsg] = TypeAdapter(MonAuthMsg)
+# What a monitor may send: its auth, then WebRTC signalling for one of the shop's sessions (``to`` = session id).
+MonitorClientMsg = Annotated[Union[MonAuthMsg, RtcMsg], Field(discriminator="t")]
+monitor_client_adapter: TypeAdapter[MonitorClientMsg] = TypeAdapter(MonitorClientMsg)
 
 
-def parse_monitor_client_msg(raw: str | bytes) -> MonAuthMsg | None:
+def parse_monitor_client_msg(raw: str | bytes) -> MonAuthMsg | RtcMsg | None:
     """Parse one text frame a monitor sent. None for bad JSON or an unknown/invalid message."""
     try:
         return monitor_client_adapter.validate_json(raw)
@@ -441,7 +497,8 @@ SERVER_MSG_TYPES: tuple[str, ...] = _tags(ServerMsg)
 
 
 def parse_client_msg(raw: str | bytes) -> (
-    HelloMsg | AudioInMsg | FrameMsg | TextMsg | EventMsg | ConfirmReplyMsg | StopMsg | LogMsg | BoxesMsg | None
+    HelloMsg | AudioInMsg | FrameMsg | TextMsg | EventMsg | ConfirmReplyMsg | StopMsg | LogMsg | BoxesMsg | RtcMsg
+    | None
 ):
     """Parse one WebSocket text frame from the app. None for bad JSON or an unknown/invalid message."""
     try:
@@ -452,7 +509,7 @@ def parse_client_msg(raw: str | bytes) -> (
 
 def parse_server_msg(raw: str | bytes) -> (
     ReadyMsg | AudioOutMsg | TranscriptMsg | RequestFrameMsg | TargetMsg | CountMsg | StateMsg | ConfirmMsg | CueMsg
-    | ErrorMsg | BoxesOutMsg | None
+    | ErrorMsg | BoxesOutMsg | RtcOutMsg | None
 ):
     """Parse one server WebSocket text frame (used by tests and dev tools). None when invalid."""
     try:

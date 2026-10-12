@@ -22,6 +22,9 @@ class Settings:
     app_key: str | None = None  # shared demo key: when set, hello.idToken must equal it (shared/docs/ops/security.md)
     job_token: str | None = None  # X-AIRA-Job-Token for /jobs/*
     monitor_key: str | None = None  # ?key= on the read-only /monitor socket (aira_live.monitor); unset = closed
+    live_video: bool = True  # AIRA_LIVE_VIDEO: the phone's 1 fps ``live`` frames go into Gemini Live as video
+    live_nudge: bool = True  # AIRA_LIVE_NUDGE: a settled scene change asks Live to speak up (aira_live.live_video)
+    precount: bool = True  # AIRA_PRECOUNT: a settled scene change starts a background count (vision.precount)
 
 
 def _env(name: str) -> str | None:
@@ -44,4 +47,7 @@ def load() -> Settings:
         app_key=_env("AIRA_APP_KEY"),
         job_token=_env("AIRA_JOB_TOKEN"),
         monitor_key=_env("AIRA_MONITOR_KEY"),
+        live_video=os.getenv("AIRA_LIVE_VIDEO", "1") != "0",
+        live_nudge=os.getenv("AIRA_LIVE_NUDGE", "1") != "0",
+        precount=os.getenv("AIRA_PRECOUNT", "1") != "0",
     )
