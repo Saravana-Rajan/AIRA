@@ -259,38 +259,6 @@ function toFrame(m: Extract<MonitorMsg, { kind: "frame" }>): Frame {
   return { src: `data:image/jpeg;base64,${m.jpeg_b64}`, w: m.w, h: m.h, purpose: m.purpose, ts: m.ts };
 }
 
-// ---------- target card ----------
-export type Side = "left" | "centre" | "right";
-export type Shelf = "top" | "middle" | "bottom";
-export interface TargetInfo {
-  label: string;
-  visible: boolean;
-  found: boolean;
-  /** 0..1 when the object carries a score, else null. */
-  confidence: number | null;
-  distance: "near" | "arm" | "far" | null;
-  side: Side | null;
-  shelf: Shelf | null;
-}
-
-const centreOf = (o: VisionObject): Point | null => (o.box ? centre(o.box) : o.point);
-
-/** What the Target card shows for the current target: null when nothing is being looked for. */
-export function targetInfo(s: Pick<LiveState, "target" | "found" | "er2">): TargetInfo | null {
-  if (!s.target) return null;
-  const o = s.er2.objects.find((x) => isTarget(x, s.target)) ?? null;
-  const c = o ? centreOf(o) : null;
-  return {
-    label: s.target,
-    visible: o !== null,
-    found: s.found,
-    confidence: o && typeof o.score === "number" ? o.score : null,
-    distance: o?.distance ?? null,
-    side: c ? (c[1] < 333 ? "left" : c[1] > 666 ? "right" : "centre") : null,
-    shelf: c ? (c[0] < 333 ? "top" : c[0] > 666 ? "bottom" : "middle") : null,
-  };
-}
-
 // ---------- overlay geometry ----------
 export interface Rect { x: number; y: number; w: number; h: number }
 export interface XY { x: number; y: number }
@@ -376,13 +344,16 @@ export function keyFromHash(hash: string): string | null {
   }
 }
 
-/** The fragment with key= removed ("#/live?key=abc" -> "#/live"; "#key=abc" -> ""). Never the query string. */
+/**
+ * The fragment with key= removed ("#/live?key=abc" -> "#/live"; "#/live#key=abc" -> "#/live"; "#key=abc" -> "").
+ * Never the query string.
+ */
 export function stripKey(hash: string): string {
   const out = hash
     .replace(/\?key=[^&#]*&/, "?")
-    .replace(/([?&#])key=[^&#]*/, (_m, lead: string) => (lead === "#" ? "#" : ""))
+    .replace(/([?&#])key=[^&#]*/, (_m, lead: string, at: number) => (lead === "#" && at === 0 ? "#" : ""))
     .replace(/\?&/, "?")
-    .replace(/[?&]$/, "");
+    .replace(/[?&#]$/, "");
   return out === "#" ? "" : out;
 }
 

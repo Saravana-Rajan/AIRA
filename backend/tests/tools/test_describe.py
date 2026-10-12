@@ -373,3 +373,22 @@ async def test_language_follows_the_session(mk_session, er2):
         assert rec.msgs[0].lang == "ta"
     finally:
         sessions.unregister(s)
+
+
+@pytest.mark.parametrize("error", [RuntimeError('Cannot call "send" once a close message has been sent'),
+                                   __import__("fastapi").WebSocketDisconnect(1001), OSError("socket closed")])
+async def test_stop_is_quiet_when_the_phone_socket_is_already_closed(mk_session, caplog, error):
+    """The phone left: stop() must not raise and must not print a traceback (debug only)."""
+    from aira_live.session import Session
+
+    async def closed(_msg):
+        raise error
+
+    s = Session("u1", "sunrise_dairy", "en", "short", closed)
+    loop = describe.DescribeLoop(s, busy=lambda: False)
+    with caplog.at_level("DEBUG", logger="aira_live.tools.describe"):
+        await loop.stop()
+        await loop.stop()                                                    # idempotent
+    assert not loop.active
+    assert [r for r in caplog.records if r.levelno >= 30] == []              # no warning, no traceback
+    assert any("stop not sent" in r.getMessage() for r in caplog.records)

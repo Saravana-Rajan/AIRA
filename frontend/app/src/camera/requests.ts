@@ -9,8 +9,9 @@ import { clientLog } from "../core/clientLog";
 export const CONTINUOUS_FPS = 2;
 /** Describe mode: one frame every 3 s at most (the capture gate drops frames where nothing changed). */
 export const DESCRIBE_FPS = 1 / 3;
-/** The dashboard's live preview (while a monitor watches): small frames, 2-3 a second, relayed to the monitor only. */
-export const PREVIEW_FPS = 2.5;
+/** The dashboard's live preview (while a monitor watches): small frames, 8 a second, each sent at once (never
+ *  queued: a frame is dropped while the socket is still busy with the last one), relayed to the monitor only. */
+export const PREVIEW_FPS = 8;
 
 export function continuousFps(purpose: FramePurpose): number {
   if (purpose === "describe") return DESCRIBE_FPS;

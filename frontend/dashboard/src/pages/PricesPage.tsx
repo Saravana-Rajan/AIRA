@@ -1,5 +1,6 @@
 import type { JSX } from "preact";
 import type { PriceRow } from "../lib/selectors/prices";
+import { DataTable } from "../components/DataTable";
 
 /**
  * The owner's price board: every active product with its price and when it last changed, grouped by category.
@@ -37,21 +38,19 @@ export function PricesPage(props: { rows: PriceRow[] }) {
       {props.rows.length === 0 ? (
         <p class="empty">No prices yet. They appear here once the shop's catalog is loaded.</p>
       ) : (
-        <div class="table-wrap">
-          <table class="table table--prices">
-            <caption>Price list by category, smaller packs first</caption>
-            <thead>
-              <tr>
-                <th scope="col">Product</th>
-                <th scope="col" class="wide-only">Size</th>
-                <th scope="col" class="wide-only">Unit</th>
-                <th scope="col" class="num">Price</th>
-                <th scope="col">Last changed</th>
-              </tr>
-            </thead>
-            <tbody>{body}</tbody>
-          </table>
-        </div>
+        <DataTable
+          caption="Price list by category, smaller packs first"
+          class="table--prices"
+          columns={[
+            { label: "Product" },
+            { label: "Size", wideOnly: true },
+            { label: "Unit", wideOnly: true },
+            { label: "Price", num: true },
+            { label: "Last changed" },
+          ]}
+        >
+          {body}
+        </DataTable>
       )}
     </section>
   );

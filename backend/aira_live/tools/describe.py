@@ -241,8 +241,9 @@ class DescribeLoop:
             self.task.cancel()
         try:
             await self.session.send(RequestFrameMsg(purpose=PURPOSE, stop=True))
-        except Exception:
-            log.warning("describe: could not send stop to session %s", self.session.session_id, exc_info=True)
+        except Exception as exc:  # noqa: BLE001 - WebSocketDisconnect, RuntimeError (the phone socket is already
+            # closed) or any other send error: there is nothing left to stop, and nothing worth a traceback.
+            log.debug("describe: stop not sent to session %s: %s", self.session.session_id, exc)
 
 
 def _conf(v: Any) -> float:

@@ -6,6 +6,7 @@ import { formatTimeIST } from "../lib/format";
 import { buildViews } from "../lib/views";
 import { publicEvidenceUrl, type ListenFn } from "../lib/connect";
 import { Layout, parseRoute, type Route } from "./Layout";
+import { shopName } from "../lib/shopName";
 import { HomePage } from "../pages/HomePage";
 import { TodayPage } from "../pages/TodayPage";
 import { StockPage } from "../pages/StockPage";
@@ -109,7 +110,7 @@ export function App({ listen, loadForecast, resolveEvidence = publicEvidenceUrl,
   let body;
   if (route === "#/forecast") body = forecastPage;
   else if (route === "#/live") {
-    body = <LivePage state={monitor.state} conn={monitor.conn} keyNeeded={monitor.keyNeeded} onKey={monitor.setKey} onFollow={monitor.follow} record={record} onRecord={setRecord} />;
+    body = <LivePage state={monitor.state} conn={monitor.conn} keyNeeded={monitor.keyNeeded} configured={monitor.configured} onKey={monitor.setKey} onFollow={monitor.follow} record={record} onRecord={setRecord} shopName={shopName(shopId)} />;
   }
   else if (!views) {
     body =

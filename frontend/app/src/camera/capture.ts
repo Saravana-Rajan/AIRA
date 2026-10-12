@@ -14,9 +14,11 @@ export const MAX_SIDE = 640;
 export const JPEG_QUALITY = 0.8;
 export const JPEG_RETRY_QUALITY = 0.6;
 export const MAX_B64 = 1_500_000;
-/** The monitor preview (purpose `preview`): a small, light picture 2-3 times a second, never seen by Gemini. */
-export const PREVIEW_MAX_SIDE = 480;
-export const PREVIEW_QUALITY = 0.5;
+/** The monitor preview (purpose `preview`): a small, light picture 8 times a second, never seen by Gemini. */
+export const PREVIEW_MAX_SIDE = 360;
+export const PREVIEW_QUALITY = 0.45;
+/** A preview tick is skipped while more than this many bytes wait on the socket: a stale picture is never sent. */
+export const PREVIEW_MAX_BUFFERED = 32_000;
 
 /** How big and how good a frame of this purpose is. */
 export function frameSpec(purpose: FramePurpose): { maxSide: number; quality: number } {
@@ -227,18 +229,30 @@ export async function captureFrameIf(purpose: FramePurpose, keep?: FrameKeep): P
   return { t: "frame", id: nextId(), jpeg, w, h, ts: Date.now(), purpose };
 }
 
+/** True while the socket still holds more than PREVIEW_MAX_BUFFERED bytes it could not hand to the network. */
+export function socketBusy(): boolean {
+  try {
+    return (app.socket?.bufferedAmount?.() ?? 0) > PREVIEW_MAX_BUFFERED;
+  } catch {
+    return false;
+  }
+}
+
 /** Sends frames via app.send at `fps` until the returned stop fn is called. Never overlaps captures.
- *  With `keep` (describe mode), a frame the gate refuses is dropped without being encoded or sent. */
+ *  With `keep` (describe mode), a frame the gate refuses is dropped without being encoded or sent.
+ *  A preview frame is sent the moment it is encoded, and dropped (not queued) while the socket is busy. */
 export function startContinuous(purpose: FramePurpose, fps: number, keep?: FrameKeep): () => void {
   const period = Math.max(100, Math.round(1000 / Math.max(0.1, fps)));
+  const dropWhenBusy = purpose === "preview";
   let stopped = false;
   let busy = false;
   const tick = async () => {
     if (stopped || busy) return;
+    if (dropWhenBusy && socketBusy()) return; // the last picture is still on its way: this one is not worth encoding
     busy = true;
     try {
       const f = await captureFrameIf(purpose, keep);
-      if (f && !stopped) app.send(f);
+      if (f && !stopped && !(dropWhenBusy && socketBusy())) app.send(f);
     } catch {
       // Camera errors are surfaced by the request handler and the hint speaker.
     } finally {

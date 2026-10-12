@@ -64,9 +64,8 @@ describe("request_frame handler", () => {
     expect(s.stops).toEqual(["describe"]);                                 // guide keeps running
   });
 
-  it("the monitor preview streams at 2-3 frames a second and stops like any other purpose", async () => {
-    expect(PREVIEW_FPS).toBeGreaterThanOrEqual(2);
-    expect(PREVIEW_FPS).toBeLessThanOrEqual(3);
+  it("the monitor preview streams at 8 frames a second and stops like any other purpose", async () => {
+    expect(PREVIEW_FPS).toBe(8);
     expect(continuousFps("preview")).toBe(PREVIEW_FPS);
     const s = setup();
     await s.handle({ t: "request_frame", purpose: "preview", continuous: true });

@@ -225,7 +225,49 @@ async def test_frames_are_throttled_to_4_fps_per_session(mk_session, monkeypatch
     assert await monitor.publish_frame(s2, frame(2)) is True  # another session has its own budget
     now[0] += 0.2  # 0.3 s after the first frame
     assert await monitor.publish_frame(s, frame(3)) is True
-    assert [m["session"] for m in sub.take()] == [s.session_id, s2.session_id, s.session_id]
+    # an unread frame is replaced by its session's newer one (a slow monitor gets the latest picture)
+    assert [m["session"] for m in sub.take()] == [s2.session_id, s.session_id]
+
+
+async def test_preview_frames_are_relayed_up_to_10_fps_per_session(mk_session, monkeypatch):
+    s, _ = mk_session()
+    sub = monitor.subscribe(SHOP)
+    now = [100.0]
+    monkeypatch.setattr(monitor, "_monotonic", lambda: now[0])
+    b64 = jpeg_b64(64, 48)
+
+    def frame(i, purpose="preview"):
+        return Frame(id=f"p{i}", jpeg_b64=b64, w=64, h=48, ts=float(i), purpose=purpose)
+
+    assert monitor.PREVIEW_MAX_FPS == 10 and monitor.MAX_FPS == 4
+    sent = []
+
+    async def pub(f):
+        ok = await monitor.publish_frame(s, f)
+        sent.extend(m["purpose"] for m in sub.take())  # read each one before the next replaces it
+        return ok
+
+    assert await pub(frame(1)) is True
+    now[0] += 0.05
+    assert await pub(frame(2)) is False  # 20 fps is too fast even for the preview
+    now[0] += 0.06  # 0.11 s after the first: within 10 fps
+    assert await pub(frame(3)) is True
+    now[0] += 0.11
+    assert await pub(frame(4, "guide")) is False  # other purposes keep the 4 fps budget
+    now[0] += 0.15
+    assert await pub(frame(5, "guide")) is True
+    assert sent == ["preview", "preview", "guide"]
+
+
+async def test_a_monitor_queue_keeps_only_the_newest_frame_of_a_session():
+    sub = monitor.subscribe(SHOP)
+    monitor.publish(SHOP, "frame", "s1", jpeg_b64="AAAA", w=1, h=1, purpose="preview")
+    monitor.publish(SHOP, "status", "s1", state="thinking")
+    monitor.publish(SHOP, "frame", "s2", jpeg_b64="BBBB", w=1, h=1, purpose="preview")
+    monitor.publish(SHOP, "frame", "s1", jpeg_b64="CCCC", w=1, h=1, purpose="preview")
+    got = sub.take()
+    assert [(m["kind"], m["session"]) for m in got] == [("status", "s1"), ("frame", "s2"), ("frame", "s1")]
+    assert got[-1]["jpeg_b64"] == "CCCC"  # the older frame of s1 was replaced, not queued behind
 
 
 async def test_undecodable_frame_is_skipped(mk_session):
