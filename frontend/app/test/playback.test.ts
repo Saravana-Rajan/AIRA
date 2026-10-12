@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { PlaybackQueue, PLAYBACK_RATE } from "../src/voice/playback";
+import { PlaybackQueue, PLAYBACK_RATE, PLAYBACK_START_LEAD_MS, type PlayStartInfo } from "../src/voice/playback";
 import { int16ToBase64 } from "../src/voice/pcm";
 
 class FakeSource {
@@ -40,9 +40,57 @@ describe("PlaybackQueue", () => {
   it("schedules chunks back-to-back without gaps", () => {
     const { ctx, q } = make();
     q.enqueue(chunk(100)); q.enqueue(chunk(100));
-    expect(ctx.sources[0].startAt).toBeCloseTo(0, 5);
-    expect(ctx.sources[1].startAt).toBeCloseTo(0.1, 5);
+    const lead = PLAYBACK_START_LEAD_MS / 1000;
+    expect(ctx.sources[0].startAt).toBeCloseTo(lead, 5);
+    expect(ctx.sources[1].startAt).toBeCloseTo(lead + 0.1, 5);
     expect(q.playing).toBe(true);
+  });
+
+  describe("start threshold (latency)", () => {
+    it("the first chunk of an answer starts within 200 ms, never after seconds of buffering", () => {
+      expect(PLAYBACK_START_LEAD_MS).toBeGreaterThanOrEqual(0);
+      expect(PLAYBACK_START_LEAD_MS).toBeLessThanOrEqual(200);
+      const { ctx, q } = make();
+      ctx.currentTime = 1;
+      q.enqueue(chunk(20)); // one tiny 20 ms chunk is enough to start: no waiting for more
+      expect(ctx.sources).toHaveLength(1);
+      expect(ctx.sources[0].started).toBe(true);
+      expect(ctx.sources[0].startAt - 1).toBeLessThanOrEqual(0.2);
+    });
+
+    it("schedules each chunk as it arrives, back to back after the first one", () => {
+      const { ctx, q } = make();
+      for (let i = 0; i < 5; i++) q.enqueue(chunk(20));
+      expect(ctx.sources).toHaveLength(5);
+      for (let i = 1; i < 5; i++) {
+        expect(ctx.sources[i].startAt).toBeCloseTo(ctx.sources[i - 1].startAt + 0.02, 5);
+      }
+    });
+
+    it("reports when a new answer starts playing, once per answer, with the ms since its first chunk", () => {
+      let now = 1000;
+      const starts: PlayStartInfo[] = [];
+      const { ctx, q } = make(new FakeCtx(), { now: () => now, onPlayStart: (i) => starts.push(i) });
+      q.enqueue(chunk(100)); q.enqueue(chunk(100));
+      expect(starts).toHaveLength(1);
+      expect(starts[0].leadMs).toBe(PLAYBACK_START_LEAD_MS);
+      expect(starts[0].msSinceFirstChunk).toBeGreaterThanOrEqual(PLAYBACK_START_LEAD_MS);
+      expect(starts[0].msSinceFirstChunk).toBeLessThanOrEqual(200);
+      ctx.sources.forEach((s) => s.onended!()); // the answer finished
+      now += 5000;
+      q.enqueue(chunk(100)); // next answer
+      expect(starts).toHaveLength(2);
+    });
+
+    it("a chunk after a barge-in flush counts as a new answer", () => {
+      const starts: PlayStartInfo[] = [];
+      const { q } = make(new FakeCtx(), { onPlayStart: (i) => starts.push(i) });
+      q.enqueue(chunk(100));
+      q.flush({ holdUntilResume: true });
+      q.resume();
+      q.enqueue(chunk(100));
+      expect(starts).toHaveLength(2);
+    });
   });
 
   it("flush() stops every scheduled source and resets the clock (barge-in)", () => {
@@ -54,7 +102,7 @@ describe("PlaybackQueue", () => {
     expect(q.playing).toBe(false);
     ctx.currentTime = 0.05;
     q.enqueue(chunk(100)); // new turn after the interruption starts "now", not after old audio
-    expect(ctx.sources.at(-1)!.startAt).toBeCloseTo(0.05, 5);
+    expect(ctx.sources.at(-1)!.startAt).toBeCloseTo(0.05 + PLAYBACK_START_LEAD_MS / 1000, 5);
   });
 
   it("drops chunks that arrive in the same tick as an interruption until resume()", () => {
@@ -152,10 +200,10 @@ describe("PlaybackQueue", () => {
     it("marks the end of the scheduled AIRA audio, so a long burst still counts as speaking", () => {
       const { ctx, q } = make();
       q.enqueue(chunk(1000)); q.enqueue(chunk(1000)); // Live sends 2 s of speech at once
-      expect(q.lastAudioAt).toBeCloseTo(2, 5);
+      expect(q.lastAudioAt).toBeCloseTo(2 + PLAYBACK_START_LEAD_MS / 1000, 5);
       ctx.currentTime = 1.5; // still speaking
       expect(q.msSinceAudio()).toBe(0);
-      ctx.currentTime = 3.2;
+      ctx.currentTime = 3.2 + PLAYBACK_START_LEAD_MS / 1000;
       expect(q.msSinceAudio()).toBeCloseTo(1200, 3);
     });
 

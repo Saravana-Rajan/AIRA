@@ -3,6 +3,7 @@
 Memory only remembers and guides: these tools never write stock or money. A location the owner states is saved
 as user-confirmed; a camera read below 0.6 confidence is spoken as "Not sure", never as a guess.
 """
+import asyncio
 import logging
 
 from aira_live import db as dbmod
@@ -81,10 +82,10 @@ async def location_remember(product: str, zone: str) -> dict:
 async def product_identify() -> dict:
     """Identify the pack in the owner's hand against the shop catalog."""
     s = get_session()
-    frames = await s.request_frames("identify", count=1, timeout_s=4.0)
+    # The frame and the catalog read are independent: wait for both at once.
+    frames, candidates = await asyncio.gather(s.look_frame("identify", timeout_s=4.0), shop_products(s.shop_id))
     if not frames:
         return {"say": t("camera.none", s.lang), "sku": None, "confidence": 0.0}
-    candidates = await shop_products(s.shop_id)
     try:
         res = await identify_product(frames[-1], candidates)
     except VisionError as exc:
@@ -113,7 +114,7 @@ async def _find_free_text(s, label: str, needed: int) -> dict:
     "I can't find it, show me the shelf": never a tone toward a guess.
     """
     base = {"found": False, "sku": None, "free_text": True, "label": label}
-    frames = await s.request_frames("ask", count=1, timeout_s=FREE_FRAME_TIMEOUT_S)
+    frames = await s.look_frame("ask", timeout_s=FREE_FRAME_TIMEOUT_S)
     if not frames:
         return {"say": t("camera.none", s.lang), **base, "confidence": 0.0}
     try:

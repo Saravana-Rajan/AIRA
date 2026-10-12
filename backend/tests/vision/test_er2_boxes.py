@@ -149,7 +149,7 @@ def session(mk_session, monkeypatch):
 async def test_camera_ask_publishes_er2_boxes_to_the_monitor_and_the_phone(session, monkeypatch, published):
     s, rec = session
 
-    async def fake(role, parts, schema_hint, thinking="low", timeout_s=6.0):
+    async def fake(role, parts, schema_hint, thinking="low", timeout_s=6.0, **_kw):
         return {"answer": "A table ahead.", "guidance": [], "confidence": 0.9, "_model": "er2", "objects": [
             {"label": "table", "point": [600, 500], "box_2d": [200, 100, 900, 900], "distance": "near"},
             {"label": "door", "point": [400, 900], "distance": "far"}]}
@@ -172,7 +172,7 @@ async def test_camera_ask_publishes_er2_boxes_to_the_monitor_and_the_phone(sessi
 async def test_camera_ask_without_a_monitor_still_sends_the_phone_its_boxes(session, monkeypatch):
     s, rec = session
 
-    async def fake(role, parts, schema_hint, thinking="low", timeout_s=6.0):
+    async def fake(role, parts, schema_hint, thinking="low", timeout_s=6.0, **_kw):
         return {"answer": "ok", "confidence": 0.9, "objects": [
             {"label": "crate", "point": [600, 500], "box_2d": [300, 200, 900, 800], "distance": "near"}]}
 
@@ -184,7 +184,7 @@ async def test_camera_ask_without_a_monitor_still_sends_the_phone_its_boxes(sess
 async def test_listing_publishes_er2_boxes(session, monkeypatch, published):
     s, rec = session
 
-    async def fake(role, parts, schema_hint, thinking="low", timeout_s=6.0):
+    async def fake(role, parts, schema_hint, thinking="low", timeout_s=6.0, **_kw):
         return {"confidence": 0.9, "areas": [{"area": "top", "area_name": "top shelf", "items": [
             {"label": "milk", "point": [200, 300], "box_2d": [150, 250, 250, 350], "distance": "arm"}]}]}
 
@@ -200,7 +200,7 @@ async def test_describe_step_publishes_er2_boxes(mk_session, monkeypatch, publis
     s, rec = mk_session(lang="en")
     s.frames.add(_frame(5.0, "describe"))
 
-    async def fake(role, parts, schema_hint, thinking="low", timeout_s=6.0):
+    async def fake(role, parts, schema_hint, thinking="low", timeout_s=6.0, **_kw):
         return {"confidence": 0.9, "objects": [
             {"label": "fridge", "point": [500, 200], "box_2d": [100, 50, 900, 350], "distance": "far"}]}
 

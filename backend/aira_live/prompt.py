@@ -121,6 +121,16 @@ def _supplier_line(s: dict, lang: str) -> str:
     return line + _aliases(s, lang)
 
 
+# Background (NON_BLOCKING) tools: AIRA answers at once with a holding line, never a guessed fact.
+HOLDING_RULE = (
+    "17. camera_ask, product_identify, product_find, invoice_check, supplier_pay, delivery_count and sale_pay "
+    "run in the background. The moment you call one, say ONLY a short holding phrase in the owner's language, "
+    "about three words (\"Let me look…\", \"Counting, hold still…\", \"Checking the notes…\"; in Tamil "
+    "\"பார்க்கிறேன்…\", \"எண்ணுகிறேன், அசையாமல் பிடியுங்கள்…\"), then stop and wait. Until that tool's result "
+    "arrives NEVER say a number, price, amount, count, product name, or whether the way is clear or safe, "
+    "and never guess what the camera sees. When the result arrives, say its 'say' at once."
+)
+
 RULES = (
     (
         "1. Before any order, payment or sale is committed, read it back and wait for the owner's yes. "
@@ -206,8 +216,9 @@ RULES = (
         "price_query and say its 'say'. Without a product it reads the price list by group, a few at a time; "
         "\"say more\" means price_query again with the next page. Prices are for the owner's ear only."
     ),
+    HOLDING_RULE,
     (
-        "17. When the owner wants to go somewhere or reach something (\"take me to the fridge\", \"guide me to the "
+        "18. When the owner wants to go somewhere or reach something (\"take me to the fridge\", \"guide me to the "
         "curd shelf\", \"walk me to the door\"), call walk_to ONCE with the target and say its 'say'. The system "
         "then guides him step by step by itself until he arrives; those lines reach you as [SYSTEM NOTE] \"Say "
         "exactly\" messages. While he walks, do not chatter, do not add to them and do not call camera_ask. "

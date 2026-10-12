@@ -311,7 +311,9 @@ def test_live_tools_mark_delivery_count_and_sale_pay_non_blocking(mk_session):
     from google.adk.tools import FunctionTool
     from google.genai import types
 
-    assert NON_BLOCKING_TOOLS == frozenset({"delivery_count", "sale_pay", "walk_to"})
+    # The slow camera / vision tools run in the background so AIRA answers at once with a holding line.
+    assert NON_BLOCKING_TOOLS == frozenset({"delivery_count", "sale_pay", "walk_to", "camera_ask", "product_identify",
+                                            "product_find", "invoice_check", "supplier_pay"})
     s, _ = mk_session()
     tools = live_tools(TOOL_FUNCS, s, NON_BLOCKING_TOOLS)
     by_name = {_tool_name(x): x for x in tools}
@@ -319,6 +321,7 @@ def test_live_tools_mark_delivery_count_and_sale_pay_non_blocking(mk_session):
     for name in NON_BLOCKING_TOOLS:
         tool = by_name[name]
         assert isinstance(tool, FunctionTool) and tool.behavior == types.Behavior.NON_BLOCKING
+        assert tool.response_scheduling == types.FunctionResponseScheduling.WHEN_IDLE
     assert not isinstance(by_name["confirm_action"], FunctionTool)
 
 

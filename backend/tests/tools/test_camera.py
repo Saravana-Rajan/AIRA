@@ -35,7 +35,7 @@ def _script(monkeypatch, *replies):
     seen: list[dict] = []
     items = list(replies)
 
-    async def fake(role, parts, schema_hint, thinking="low", timeout_s=6.0):
+    async def fake(role, parts, schema_hint, thinking="low", timeout_s=6.0, **_kw):
         seen.append({"role": role, "parts": parts, "schema": schema_hint})
         item = items.pop(0)
         if isinstance(item, Exception):

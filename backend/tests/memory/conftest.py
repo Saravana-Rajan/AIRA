@@ -127,6 +127,9 @@ class FakeSession:
         self.requested.append(purpose)
         return self.frames.latest(count, purpose=purpose)
 
+    async def look_frame(self, purpose, timeout_s=4.0, **_kw):
+        return await self.request_frames(purpose, count=1, timeout_s=timeout_s)
+
 
 @pytest.fixture
 def fake_db(monkeypatch):

@@ -230,7 +230,7 @@ async def test_session_is_owner_busy_while_a_question_runs(session, monkeypatch)
 async def test_owner_busy_is_released_when_vision_fails(session, monkeypatch):
     s, _ = session
 
-    async def boom(role, parts, schema_hint, thinking="low", timeout_s=6.0):
+    async def boom(role, parts, schema_hint, thinking="low", timeout_s=6.0, **_kw):
         assert s.owner_busy
         raise VisionError("x")
 

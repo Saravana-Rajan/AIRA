@@ -163,10 +163,11 @@ def _config(thinking: Thinking, max_output_tokens: int = MAX_OUTPUT_TOKENS,
 
 
 async def generate_json(role: Role, parts: list, schema_hint: str,
-                        thinking: Thinking = "low", timeout_s: float = 6.0) -> dict:
+                        thinking: Thinking = "low", timeout_s: float = 6.0, max_attempts: int = 3) -> dict:
     """Call the role's model for JSON: primary, one retry, then ``fallback_for(role)``.
 
-    The timeout applies to each attempt. A JSON list reply is wrapped as ``{"items": [...]}``, and
+    The timeout applies to each attempt. ``max_attempts=2`` is the fast path for an owner waiting on an answer:
+    the primary, then ONE retry on the fallback model (or the primary when the role has none). A JSON list reply is wrapped as ``{"items": [...]}``, and
     ``"_model"`` names the model that answered. Raises VisionError when every attempt fails (timeout,
     API error, or a reply that is not a JSON object or list).
     """
@@ -176,6 +177,8 @@ async def generate_json(role: Role, parts: list, schema_hint: str,
     fb = fallback_for(role)
     if fb and fb != primary:
         attempts.append(fb)
+    if max_attempts < len(attempts):
+        attempts = [primary, *attempts[len(attempts) - max_attempts + 1:]][:max(1, max_attempts)]
     cfg = _config(thinking)
     last: Exception | None = None
     started = time.perf_counter()
@@ -196,6 +199,7 @@ async def generate_json(role: Role, parts: list, schema_hint: str,
             ms = round((time.perf_counter() - started) * 1000)
             diag("vision", role=role, model=model, attempt=attempt, parts=len(parts), thinking=thinking,
                  ms=ms, keys=sorted(k for k in out if k != "_model"))
+            diag("latency", stage="model", role=role, model=model, attempt=attempt, thinking=thinking, ms=ms)
             monitor.count_vision(model, ms)  # the Live page's session stats (ER 2 / Flash calls, latency)
             return out
         except Exception as e:  # timeout, API error, or unparseable reply -> next attempt
@@ -286,6 +290,7 @@ async def generate_count_json(parts: list, thinking: Thinking = "medium", timeou
             ms = round((time.perf_counter() - started) * 1000)
             diag("vision", role="count", model=model, attempt=attempt, parts=len(parts), thinking=thinking,
                  ms=ms, keys=sorted(k for k in out if k != "_model"))
+            diag("latency", stage="model", role="count", model=model, attempt=attempt, thinking=thinking, ms=ms)
             monitor.count_vision(model, ms)
             return out
         except TruncatedReply:
