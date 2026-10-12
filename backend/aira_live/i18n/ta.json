@@ -34,6 +34,7 @@
   "biz.invoice.line_total_mismatch": "பில்லில் {product} மொத்தம் தவறாக உள்ளது.",
   "biz.invoice.total_mismatch": "பில் மொத்தம் {actual} ரூபாய், ஆனால் பொருட்களின் கூட்டு {expected}.",
   "biz.product.ambiguous": "எது வேண்டும்: {options}?",
+  "biz.product.did_you_mean": "{name} என்று சொன்னீர்களா?",
   "biz.product.unknown": "அந்த பொருள் எனக்கு தெரியவில்லை.",
   "biz.supplier.unknown": "அந்த விற்பனையாளர் எனக்கு தெரியவில்லை.",
   "biz.upi.unsure": "பணம் வந்த அறிவிப்பு தெளிவாக கேட்கவில்லை.",

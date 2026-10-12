@@ -59,8 +59,13 @@ QUERIES = {**SINGLE_FIELD, **WINDOW}
 
 # ---------- index model ----------
 
+def is_vector(index: dict) -> bool:
+    """A vector index: one field with ``vectorConfig`` (shared/docs/ops/vector-search.md), not a composite."""
+    return any("vectorConfig" in f for f in index["fields"])
+
+
 def _shape(index: dict) -> tuple:
-    return index["collectionGroup"], tuple((f["fieldPath"], f["order"]) for f in index["fields"])
+    return index["collectionGroup"], tuple((f["fieldPath"], f.get("order", "VECTOR")) for f in index["fields"])
 
 
 def needs_composite(query: Query) -> bool:
@@ -70,7 +75,7 @@ def needs_composite(query: Query) -> bool:
 def serves(index: dict, query: Query) -> bool:
     """True when this composite index serves the query: its fields are exactly the equality fields
     (any order and direction), then the range/order field in the query's direction."""
-    if index["collectionGroup"] != query.collection or query.order is None:
+    if index["collectionGroup"] != query.collection or query.order is None or is_vector(index):
         return False
     fields = [(f["fieldPath"], f["order"]) for f in index["fields"]]
     if len(fields) != len(query.equals) + 1:
@@ -146,6 +151,9 @@ def test_every_index_is_well_formed(indexes):
         assert set(index) == {"collectionGroup", "queryScope", "fields"}, index
         assert index["queryScope"] == "COLLECTION", index
         assert isinstance(index["collectionGroup"], str) and index["collectionGroup"], index
+        if is_vector(index):
+            assert len(index["fields"]) == 1 and set(index["fields"][0]) == {"fieldPath", "vectorConfig"}, index
+            continue
         assert len(index["fields"]) >= 2, f"single-field indexes are automatic: {index}"
         for field in index["fields"]:
             assert set(field) == {"fieldPath", "order"}, field

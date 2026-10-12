@@ -9,6 +9,10 @@ supplier's `phoneEnv` and are never committed.
 
 Writes shops/{shop}, shops/{shop}/products/{sku}, shops/{shop}/inventory/{sku} (onHand 0 unless the
 catalog's optional `inventory` gives starting stock) and shops/{shop}/suppliers/{id}.
+
+Each product doc also carries the vector field `embedding` (Firestore Vector, aira_live.embeddings) for
+`find_nearest` product matching, when GEMINI_API_KEY is set; `--no-embed` skips it. Without a key the docs
+are written without the field, exactly as before (shared/scripts/embed_catalog.py backfills later).
 """
 from __future__ import annotations
 
@@ -17,7 +21,7 @@ import copy
 import json
 import os
 import sys
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -26,10 +30,14 @@ ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_CATALOG = ROOT / "shared" / "catalog" / "sunrise_dairy.json"
 DEFAULT_DATABASE = "aira"
 FORBIDDEN_DATABASE = "(default)"
+EMBEDDING_FIELD = "embedding"
+
+Embed = Callable[[dict], Any]   # product doc -> Firestore Vector, or None to leave the field out
 
 
-def build_docs(catalog: dict, env: Mapping[str, str]) -> list[tuple[str, dict]]:
-    """Firestore (path, data) pairs for the catalog. Pure: does not mutate `catalog`."""
+def build_docs(catalog: dict, env: Mapping[str, str], embed: Embed | None = None) -> list[tuple[str, dict]]:
+    """Firestore (path, data) pairs for the catalog. Pure: does not mutate `catalog`.
+    `embed(product)` (optional) returns the product's `embedding` Vector, or None to write none."""
     shop = catalog["shop"]
     base = f"shops/{shop['id']}"
     now = datetime.now(timezone.utc).isoformat()
@@ -49,7 +57,11 @@ def build_docs(catalog: dict, env: Mapping[str, str]) -> list[tuple[str, dict]]:
     for p in catalog["products"]:
         sku = p["sku"]
         start = stock.get(sku, {})
-        docs.append((f"{base}/products/{sku}", copy.deepcopy(p)))
+        product = copy.deepcopy(p)
+        vector = embed(product) if embed is not None else None
+        if vector is not None:
+            product[EMBEDDING_FIELD] = vector
+        docs.append((f"{base}/products/{sku}", product))
         docs.append((f"{base}/inventory/{sku}", {
             "sku": sku,
             "onHand": start.get("onHand", 0),
@@ -109,13 +121,28 @@ def make_client(project: str, database: str) -> Any:
     return firestore.Client(project=project, database=database)
 
 
+def gemini_embedder(env: Mapping[str, str]) -> Embed | None:
+    """A sync `embed(product)` through aira_live.embeddings when GEMINI_API_KEY is set, else None (no vectors)."""
+    if not env.get("GEMINI_API_KEY"):
+        return None
+    import asyncio
+
+    sys.path.insert(0, str(ROOT / "backend"))
+    from aira_live import embeddings
+
+    def embed(product: dict) -> Any:
+        return asyncio.run(embeddings.product_vector(product))
+
+    return embed
+
+
 def seed(catalog_path: Path, project: str, database: str = DEFAULT_DATABASE, *,
-         env: Mapping[str, str] | None = None, client: Any = None) -> int:
+         env: Mapping[str, str] | None = None, client: Any = None, embed: Embed | None = None) -> int:
     """Write every catalog doc in one batch. Returns the number of docs written."""
     if database == FORBIDDEN_DATABASE:
         raise ValueError('refusing to write to the "(default)" database; AIRA uses database "aira"')
     catalog = json.loads(Path(catalog_path).read_text(encoding="utf-8"))
-    docs = build_docs(catalog, os.environ if env is None else env)
+    docs = build_docs(catalog, os.environ if env is None else env, embed)
     client = client if client is not None else make_client(project, database)
     batch = client.batch()
     for path, data in docs:
@@ -130,11 +157,16 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--database", help='Firestore database id (default: env FIRESTORE_DATABASE, else "aira")')
     ap.add_argument("--catalog", type=Path, default=DEFAULT_CATALOG)
     ap.add_argument("--env-file", type=Path, help="local .env (default: .env at the repo root, else shared/.env)")
+    ap.add_argument("--no-embed", action="store_true", help="write products without the `embedding` vector")
     ns = ap.parse_args(argv)
     env = {**load_env_file(ns.env_file or default_env_file()), **os.environ}
     try:
         project, database = target(ns.project, ns.database, env)
-        count = seed(ns.catalog, project, database, env=env)
+        embed = None if ns.no_embed else gemini_embedder(env)
+        if embed is None:
+            print("note: no GEMINI_API_KEY (or --no-embed): products written without `embedding`; "
+                  "run shared/scripts/embed_catalog.py later", file=sys.stderr)
+        count = seed(ns.catalog, project, database, env=env, embed=embed)
     except ValueError as err:
         print(f"error: {err}", file=sys.stderr)
         return 2

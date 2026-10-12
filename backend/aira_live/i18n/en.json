@@ -34,6 +34,7 @@
   "biz.invoice.line_total_mismatch": "The line total for {product} is wrong on the bill.",
   "biz.invoice.total_mismatch": "Bill total is {actual} rupees, but the items add up to {expected}.",
   "biz.product.ambiguous": "Which one: {options}?",
+  "biz.product.did_you_mean": "Did you mean {name}?",
   "biz.product.unknown": "I don't know that product.",
   "biz.supplier.unknown": "I don't know that vendor.",
   "biz.upi.unsure": "I did not hear the payment confirmation clearly.",

@@ -19,6 +19,8 @@ class Store(Protocol):
     async def get(self, path: str) -> dict | None: ...
     async def set(self, path: str, data: dict) -> None: ...
     async def list(self, collection_path: str) -> list[tuple[str, dict]]: ...
+    async def find_nearest(self, collection_path: str, field: str, query: list[float], *, limit: int = 3,
+                           threshold: float | None = None) -> list[tuple[str, dict, float]]: ...
     def server_ts(self) -> object: ...
 
 
@@ -66,6 +68,13 @@ class MemoryStore:
             if rest and "/" not in rest:
                 out.append((rest, copy.deepcopy(doc)))
         return sorted(out, key=lambda x: x[0])
+
+    async def find_nearest(self, collection_path: str, field: str, query: list[float], *, limit: int = 3,
+                           threshold: float | None = None) -> list[tuple[str, dict, float]]:
+        """Cosine ``find_nearest`` computed locally: (id, doc, distance), nearest first."""
+        from aira_live.embeddings import nearest_local
+
+        return nearest_local(await self.list(collection_path), query, field=field, limit=limit, threshold=threshold)
 
     def server_ts(self) -> object:
         return datetime.now(timezone.utc)
@@ -115,6 +124,22 @@ class FirestoreStore:
     async def list(self, collection_path: str) -> list[tuple[str, dict]]:
         docs = [(d.id, d.to_dict()) async for d in self._c.collection(collection_path).stream()]
         return sorted(docs, key=lambda x: x[0])
+
+    async def find_nearest(self, collection_path: str, field: str, query: list[float], *, limit: int = 3,
+                           threshold: float | None = None) -> list[tuple[str, dict, float]]:
+        """Firestore vector search (GA): ``collection.find_nearest`` with the COSINE measure. Needs the vector
+        index from shared/infra/firestore.indexes.json; without it Firestore raises and the caller falls back."""
+        from google.cloud.firestore_v1.base_vector_query import DistanceMeasure
+        from google.cloud.firestore_v1.vector import Vector
+
+        q = self._c.collection(collection_path).find_nearest(
+            vector_field=field, query_vector=Vector(query), limit=limit, distance_measure=DistanceMeasure.COSINE,
+            distance_result_field="_distance", distance_threshold=threshold)
+        out = []
+        async for snap in q.stream():
+            d = snap.to_dict() or {}
+            out.append((snap.id, d, float(d.pop("_distance", 0.0))))
+        return out
 
     def server_ts(self) -> object:
         from google.cloud.firestore import SERVER_TIMESTAMP

@@ -34,6 +34,7 @@
   "biz.invoice.line_total_mismatch": "बिल में {product} का जोड़ गलत है।",
   "biz.invoice.total_mismatch": "बिल का कुल {actual} रुपये है, पर सामान का जोड़ {expected} है।",
   "biz.product.ambiguous": "कौन सा: {options}?",
+  "biz.product.did_you_mean": "क्या आपका मतलब {name} है?",
   "biz.product.unknown": "यह सामान मुझे नहीं पता।",
   "biz.supplier.unknown": "यह विक्रेता मुझे नहीं पता।",
   "biz.upi.unsure": "भुगतान की आवाज़ साफ़ नहीं सुनाई दी।",

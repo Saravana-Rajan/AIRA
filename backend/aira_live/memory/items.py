@@ -24,10 +24,14 @@ from zoneinfo import ZoneInfo
 from pydantic import BaseModel, Field, ValidationError, field_validator
 
 from aira_live import db as dbmod
+from aira_live import embeddings
 from aira_live.i18n import t
 from aira_live.vision import observers
 
 log = logging.getLogger(__name__)
+
+VECTOR_LIMIT = 3
+VECTOR_THRESHOLD = 0.45    # cosine distance: "keys" ~ "key bunch" is well inside; "keys" vs "wallet" is outside
 
 EXPIRY = timedelta(days=7)
 OLD_AFTER = timedelta(hours=24)
@@ -162,9 +166,12 @@ async def record_sighting(shop_id: str, item: str, place: str, confidence: float
                  place_parts=place_parts)
     if not (await settings(shop_id))["remembering"]:
         return None
-    await _coll(shop_id).document().set({
-        "item": s.item, "place": s.place, "placeParts": s.place_parts, "at": s.at, "confidence": s.confidence,
-        "kind": s.kind, "expiresAt": s.at + EXPIRY})
+    doc = {"item": s.item, "place": s.place, "placeParts": s.place_parts, "at": s.at, "confidence": s.confidence,
+           "kind": s.kind, "expiresAt": s.at + EXPIRY}
+    vec = await embeddings.embed(s.item)          # the label's words only; never the place, never the frame
+    if vec:
+        doc[embeddings.FIELD] = embeddings.to_vector(vec)
+    await _coll(shop_id).document().set(doc)
     return s
 
 
@@ -200,9 +207,35 @@ async def last_seen(shop_id: str, item: str, now: datetime | None = None) -> Sig
     item = normalize_name(item)
     cands = [s for _, s in await _all(shop_id) if s.item == item and not _expired(s, now)]
     if not cands:
+        cands = [s for s in await similar_sightings(shop_id, item) if not _expired(s, now)]
+    if not cands:
         return None
     strong = [s for s in cands if s.is_strong()]
     return max(strong or cands, key=lambda s: s.at)
+
+
+async def similar_sightings(shop_id: str, item: str, limit: int = VECTOR_LIMIT) -> list[Sighting]:
+    """Sightings whose label means the same as ``item`` ("keys" ~ "key bunch"), by Firestore ``find_nearest``
+    over the shop's memory (COSINE). Empty when embeddings or the vector query are unavailable."""
+    query = await embeddings.embed(item, query=True)
+    if not query:
+        return []
+    try:
+        from google.cloud.firestore_v1.base_vector_query import DistanceMeasure
+
+        q = _coll(shop_id).find_nearest(
+            vector_field=embeddings.FIELD, query_vector=embeddings.to_vector(query), limit=limit,
+            distance_measure=DistanceMeasure.COSINE, distance_threshold=VECTOR_THRESHOLD)
+        rows = [(snap.id, snap.to_dict() or {}) async for snap in q.stream()]
+    except Exception as exc:  # noqa: BLE001 - no index yet, or a transport error: as if nothing matched
+        log.warning("vector search over memory failed for %r in %s: %s", item, shop_id, exc)
+        return []
+    out = []
+    for doc_id, d in rows:
+        s = _parse(doc_id, d)
+        if s is not None:
+            out.append(s)
+    return out
 
 
 async def forget(shop_id: str, item: str | None = None) -> int:
