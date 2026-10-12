@@ -50,8 +50,9 @@ class CountResult(BaseModel):
 COUNT_PROMPT = (
     "Point to each {label} in the image, exactly one point per item, at the centre of each visible item, "
     "including items that are partly hidden or only partly in view. Do not point to anything else. "
-    "Label each by its product name as printed on the pack (brand and product), or \"unknown\" if the print is "
-    "not readable. The answer follows the format: "
+    "Label each by its product name (brand and product). When a pack's print is not readable but it has the same "
+    "colour, design and logo as a readable pack of that product in the image, give it that product name. Use "
+    "\"unknown\" only when the pack matches no readable product. The answer follows the format: "
     '{{"items": [{{"point": [y, x], "label": "<product name>"}}]}}. '
     f"Points are [y, x] normalized to 0-1000. Return no more than {MAX_ITEMS} items."
 )
