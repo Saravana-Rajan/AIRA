@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 import type { ClientMsg, ServerMsg } from "@aira/contracts";
-import { wireApp, type WireEnv, type WiredApp, MIC_IDLE_MS, THINKING_LOOP_MS, MIC_MAX_BUFFERED_BYTES } from "../src/core/wire";
+import { wireApp, type WireEnv, type WiredApp, MIC_IDLE_MS, MIC_WATCHDOG_MS, THINKING_LOOP_MS, MIC_MAX_BUFFERED_BYTES } from "../src/core/wire";
 import type { PlaybackOpts } from "../src/voice/playback";
 import { app } from "../src/core/app";
 import { DEFAULT_SETTINGS, SETTINGS_KEY } from "../src/core/settings";
@@ -128,6 +128,52 @@ describe("wireApp: connection", () => {
     const a = setup({ connect: false });
     expect(a.socket.hello).toBeNull();
     expect(app.socket).toBe(a.w.socket);
+  });
+});
+
+describe("wireApp: mic stays available through a hands-free conversation", () => {
+  it("keeps the mic open while the owner is speaking, even with no server transcript (no idle self-lock)", async () => {
+    vi.useFakeTimers();
+    const a = setup();
+    await a.w.startListening();
+    await flush();
+    expect(a.env.startMic).toHaveBeenCalledTimes(1);
+    // The owner keeps talking past the 30 s idle window; Live sends NO user transcript (the bug's trigger).
+    for (let t = 0; t < MIC_IDLE_MS + 10_000; t += 1_000) {
+      a.level(0.2); // onLevel: audible speech energy
+      vi.advanceTimersByTime(1_000);
+      await flush();
+    }
+    expect(a.mic.stop).not.toHaveBeenCalled(); // current code FAILS here: mic idle-closes 30 s after the last transcript
+  });
+
+  it("reopens the mic if it ever closes while a listening session is live (watchdog)", async () => {
+    vi.useFakeTimers();
+    const a = setup();
+    await a.w.startListening();
+    await flush();
+    expect(a.env.startMic).toHaveBeenCalledTimes(1);
+    // Total silence (no speech energy to re-arm): the idle timer closes the mic...
+    vi.advanceTimersByTime(MIC_IDLE_MS + 100);
+    await flush();
+    expect(a.mic.stop).toHaveBeenCalledTimes(1);
+    // ...and the watchdog reopens it, so the owner can still be heard without tapping.
+    vi.advanceTimersByTime(MIC_WATCHDOG_MS + 100);
+    await flush();
+    expect(a.env.startMic).toHaveBeenCalledTimes(2);
+  });
+
+  it("after an explicit stop the watchdog does not reopen the mic", async () => {
+    vi.useFakeTimers();
+    const a = setup();
+    await a.w.startListening();
+    await flush();
+    a.w.onStop();
+    await flush();
+    const opens = (a.env.startMic as ReturnType<typeof vi.fn>).mock.calls.length;
+    vi.advanceTimersByTime((MIC_WATCHDOG_MS + MIC_IDLE_MS) * 2);
+    await flush();
+    expect((a.env.startMic as ReturnType<typeof vi.fn>).mock.calls.length).toBe(opens);
   });
 });
 

@@ -24,6 +24,14 @@ import type { CountProgress } from "../ui/view";
 export const APP_VERSION = "0.1.0";
 /** The mic closes after this long with no talk gesture and no user speech. */
 export const MIC_IDLE_MS = 30_000;
+/** Mic RMS level (0-1) at/above which the owner counts as speaking. Speech re-arms the idle timer, so the mic
+ * never closes mid-conversation: the timer previously re-armed only on a server user-transcript, which lags at
+ * turn boundaries and stalls during slow tool / live-video turns, deadlocking the mic shut. */
+export const MIC_VOICE_LEVEL = 0.02;
+/** While a listening session is live, re-check this often that the mic is still open, and reopen it if not.
+ * The completion-guarantee net: recovers from an idle-close, a dead worklet, or any other silent loss of
+ * capture, so a hands-free conversation can never dead-end with no way back. */
+export const MIC_WATCHDOG_MS = 2_000;
 /** The soft thinking sound repeats at this interval until AIRA answers. */
 export const THINKING_LOOP_MS = 1200;
 /** The same sentence handed to speak() twice within this window is announced or spoken once. */
@@ -492,6 +500,7 @@ export function wireApp(opts: WireOpts): WiredApp {
           if (api.send({ t: "audio", pcm16: b64 })) lastMicChunkAt = Date.now();
         },
         onLevel: (lv) => {
+          if (lv >= MIC_VOICE_LEVEL) armMicIdle(); // the owner is audibly speaking: keep the mic open
           if (Math.abs(lv - lastLevel) < 0.03 && lv !== 0) return; // ~30 chunks/s: redraw only on change
           lastLevel = lv;
           setView({ level: lv });
@@ -518,6 +527,24 @@ export function wireApp(opts: WireOpts): WiredApp {
     return micOpen;
   };
 
+  // ---- mic watchdog (completion-guarantee) ----
+  // An active listening session must keep a working mic until the owner stops. `listening` is true from the
+  // first startListening/talk until an explicit stop or dispose. While it holds, re-check that the mic is open
+  // and reopen it if not — the safety net for an idle-close, a dead worklet, or any silent loss of capture.
+  let listening = false;
+  let watchdog: ReturnType<typeof setTimeout> | null = null;
+  const armWatchdog = () => {
+    if (watchdog || disposed) return;
+    watchdog = later(() => {
+      watchdog = null;
+      if (disposed || !listening) return;
+      if (!mic && !micOpen) void openMic(true); // the mic closed during an active session: recover it
+      armWatchdog();
+    }, MIC_WATCHDOG_MS);
+  };
+  const startSession = () => { listening = true; armWatchdog(); };
+  const endSession = () => { listening = false; };
+
   // ---- hands-free start ----
   // No ack earcon and no thinking timer: nothing was asked yet. Audio output may still be locked (the
   // AudioContext was created without a gesture), but Chrome lets a page with a live getUserMedia stream start
@@ -529,6 +556,7 @@ export function wireApp(opts: WireOpts): WiredApp {
       local("stop");
       return false;
     }
+    startSession();
     if (ctx) {
       void ctx.resume().catch(() => {});
       tryRun(() => env.playEarcon(ctx!, "listening"));
@@ -565,9 +593,11 @@ export function wireApp(opts: WireOpts): WiredApp {
     local("talk");
     thinking.arm();
     void openMic();
+    startSession();
   };
 
   const stop = () => {
+    endSession();
     playback.flush({ holdUntilResume: true });
     thinking.disarm();
     dropWaiting();
@@ -636,6 +666,7 @@ export function wireApp(opts: WireOpts): WiredApp {
     dispose: () => {
       if (disposed) return;
       disposed = true;
+      listening = false;
       stopMic();
       thinking.disarm();
       timers.forEach((id) => clearTimeout(id));
