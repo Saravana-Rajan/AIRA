@@ -224,7 +224,7 @@ async def live_frame(session: Session, bridge: LiveBridge | None, frame: Frame, 
     live_frames.remember(session.session_id, frame)
     if not video or bridge is None:
         return False
-    if precount_on:
+    if precount_on and not session.walking:  # a walk guidance owns the camera: no background count
         if changed:
             precount.scene_changed(session, frame.ts)
         else:
@@ -270,6 +270,7 @@ async def _end_session(session: Session, bridge: LiveBridge | None) -> None:
     await _ambient_hook("stop_session", session)
     live_frames.forget(session.session_id)
     precount.forget(session.session_id)
+    await _lane_hook("aira_live.tools.walk", "stop_session", session)
     if bridge is not None:
         await bridge.close()
     monitor.session_ended(session)
@@ -366,6 +367,7 @@ async def ws_endpoint(ws: WebSocket) -> None:
             elif isinstance(msg, StopMsg):  # long-press: stop guidance and the answer being spoken
                 if session:
                     await _guidance_hook("stop_guidance", session)
+                    await _lane_hook("aira_live.tools.walk", "stop_session", session)
                 if bridge:
                     bridge.hard_stop()
                 await send(CueMsg(cue="done"))
@@ -407,6 +409,8 @@ async def ws_endpoint(ws: WebSocket) -> None:
                      w=msg.w, h=msg.h)
                 await monitor.publish_frame(session, frame)  # a no-op unless a monitor watches this shop
             elif isinstance(msg, BoxesMsg):  # the phone's own boxes: relayed to the monitor, never answered
+                if session:  # a walk with me in progress: the phone's detector can say "Stop." before ER does
+                    await _lane_hook("aira_live.tools.walk", "on_phone_boxes", session, msg)
                 if boxes_limit.allow():
                     await monitor_hooks.monitor_publish(session, monitor_hooks.vision_message(
                         session, msg.source, msg.objects, frame_id=msg.frame_id))

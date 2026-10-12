@@ -7,8 +7,8 @@ import type { ServerMsg } from "@aira/contracts";
 import { app } from "../core/app";
 import type { WiredApp } from "../core/wire";
 import {
-  captureFrame, captureFrameIf, getVideo, setQualityListener, startCamera, startContinuous, stopCamera, toolCaptureBusy,
-  toolCaptureCount, type FrameKeep,
+  backgroundHeld, captureFrame, captureFrameIf, getVideo, holdBackground, setQualityListener, startCamera, startContinuous,
+  stopCamera, toolCaptureBusy, toolCaptureCount, type FrameKeep,
 } from "./capture";
 import { startLiveVideo } from "./liveVideo";
 import { overrideSource } from "./source";
@@ -98,6 +98,7 @@ export function wireCameraAndGuidance(opts: WireOptions = {}): CameraWiring {
     send: (m) => app.send(m),
     hint,
     sleep: defaultSleep,
+    hold: holdBackground,
   });
 
   let near = false;
@@ -134,7 +135,7 @@ export function wireCameraAndGuidance(opts: WireOptions = {}): CameraWiring {
     cameraOn: () => getVideo() !== null || overrideSource() !== null,
     hidden: () => typeof document !== "undefined" && document.hidden,
     buffered: () => { try { return app.socket?.bufferedAmount?.() ?? 0; } catch { return 0; } },
-    toolBusy: toolCaptureBusy,
+    toolBusy: () => toolCaptureBusy() || backgroundHeld(),
     toolCount: toolCaptureCount,
     labels: () => { try { return freshObjects().map((o) => o.label); } catch { return []; } },
   });

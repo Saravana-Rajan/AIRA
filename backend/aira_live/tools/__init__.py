@@ -15,6 +15,7 @@ from aira_live.tools.products import location_remember, product_find, product_id
 from aira_live.tools.sales import sale_add, sale_start
 from aira_live.tools.search import web_search
 from aira_live.tools.stock import expiry_check, stock_query
+from aira_live.tools.walk import walk_stop, walk_to
 
 TOOL_FUNCS: list[Callable[..., Awaitable[dict]]] = [
     order_create, order_status, delivery_start, delivery_count, invoice_check,
@@ -27,8 +28,9 @@ TOOL_FUNCS: list[Callable[..., Awaitable[dict]]] = [
     # catalog by voice (confirm-gated: each proposes, then commits after the owner's yes)
     product_add, product_update, product_disable, stock_add, supplier_add,
     price_query,  # the owner's price board, spoken (read-only: prices come from the products in Firestore)
+    walk_to, walk_stop,  # "walk with me": continuous guidance to a place (background loop, read-only)
 ]
 TOOLS_BY_NAME: dict[str, Callable[..., Awaitable[dict]]] = {f.__name__: f for f in TOOL_FUNCS}
 # Live tools that run in the background (Live NON_BLOCKING behaviour): the conversation goes on while
-# delivery_count streams counts and sale_pay waits for the soundbox.
-NON_BLOCKING_TOOLS: frozenset[str] = frozenset({"delivery_count", "sale_pay"})
+# delivery_count streams counts, sale_pay waits for the soundbox and walk_to starts the walk loop.
+NON_BLOCKING_TOOLS: frozenset[str] = frozenset({"delivery_count", "sale_pay", "walk_to"})

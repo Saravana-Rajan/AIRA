@@ -191,6 +191,8 @@ class HoldUpLoop:
         self.identifying = False
 
     def busy(self) -> bool:
+        if getattr(self.session, "owner_busy", False):   # the owner's camera question goes first
+            return True
         if self._busy is not None:
             return bool(self._busy())
         return describe._bridge_busy(self.session)

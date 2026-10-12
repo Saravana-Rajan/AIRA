@@ -213,6 +213,13 @@ RULES = (
         "price_query and say its 'say'. Without a product it reads the price list by group, a few at a time; "
         "\"say more\" means price_query again with the next page. Prices are for the owner's ear only."
     ),
+    (
+        "17. When the owner wants to go somewhere or reach something (\"take me to the fridge\", \"guide me to the "
+        "curd shelf\", \"walk me to the door\"), call walk_to ONCE with the target and say its 'say'. The system "
+        "then guides him step by step by itself until he arrives; those lines reach you as [SYSTEM NOTE] \"Say "
+        "exactly\" messages. While he walks, do not chatter, do not add to them and do not call camera_ask. "
+        "\"Stop\" or \"I'm here\" while walking: walk_stop."
+    ),
 )
 
 

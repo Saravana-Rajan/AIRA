@@ -169,7 +169,7 @@ async def test_nudge_rate_limit_and_same_labels_dedupe(mk_session):
 
 @pytest.mark.parametrize("state, reason", [
     ("answering", "aira_speaking"), ("partial", "user_speaking"), ("just_spoke", "just_spoke"),
-    ("tool", "tool_running"), ("ambient", "ambient"), ("off", "off")])
+    ("tool", "tool_running"), ("ambient", "other_voice"), ("off", "off")])
 async def test_no_nudge_while_anyone_speaks_or_a_tool_runs(mk_session, monkeypatch, state, reason):
     s, _ = mk_session()
     bridge, b, clock = await _bridge(s, nudge=state != "off")
@@ -219,3 +219,22 @@ def test_prompt_lets_live_see_but_keeps_numbers_on_tools():
     assert "live video" in p and "hold still or step back" in p
     assert "never state a count, a price read from a label, an amount of money, or an expiry date" in p
     assert "never invent counts or amounts" in p and "[system note] camera:" in p
+
+
+async def test_a_walk_silences_nudges_precounts_and_scene_lines(mk_session, monkeypatch):
+    from aira_live.tools import describe, walk
+    from aira_live.vision import precount
+
+    s, _ = mk_session()
+    bridge, b, clock = await _bridge(s)
+    monkeypatch.setitem(walk._ACTIVE, s.session_id, object())
+    assert s.walking and describe._bridge_busy(s)
+    assert bridge.video.nudge_block(bridge, ["bottle"], clock.t) == "other_voice"
+    started = []
+    monkeypatch.setattr(precount, "scene_changed", lambda *a, **k: started.append(a))
+    await main.live_frame(s, bridge, _frame(), video=True, changed=True, precount_on=True)
+    assert started == [] and _nudges(b) == [] and b.sent_video
+    monkeypatch.delitem(walk._ACTIVE, s.session_id)
+    assert not s.walking
+    live_frames.forget(s.session_id)
+    await bridge.close()

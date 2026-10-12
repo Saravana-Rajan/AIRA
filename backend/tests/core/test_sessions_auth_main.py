@@ -311,7 +311,7 @@ def test_live_tools_mark_delivery_count_and_sale_pay_non_blocking(mk_session):
     from google.adk.tools import FunctionTool
     from google.genai import types
 
-    assert NON_BLOCKING_TOOLS == frozenset({"delivery_count", "sale_pay"})
+    assert NON_BLOCKING_TOOLS == frozenset({"delivery_count", "sale_pay", "walk_to"})
     s, _ = mk_session()
     tools = live_tools(TOOL_FUNCS, s, NON_BLOCKING_TOOLS)
     by_name = {_tool_name(x): x for x in tools}

@@ -16,15 +16,20 @@ the obstacle and its direction and never says "safe" or "clear".
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
-from typing import Any
+import time
+from contextlib import asynccontextmanager
+from typing import Any, NamedTuple
 
+from aira_live.contracts import RequestFrameMsg
 from aira_live.diag import diag, summarize, trunc
 from aira_live.i18n import t
 from aira_live.prompt import LANG_NAME
 from aira_live.session import Session, get_session
 from aira_live.vision import listing, observers, precount
+from aira_live.vision.count import CountResult, count_in_frame
 from aira_live.vision.gemini import VisionError, generate_json, image_part
 from aira_live.vision.hints import HINT_KEYS
 from aira_live.vision.point import parse_box
@@ -33,7 +38,9 @@ log = logging.getLogger(__name__)
 
 MIN_CONF = 0.5
 MAX_OBJECTS = 3           # "what's in front of me": up to three objects, nearest first
-FRAME_TIMEOUT_S = 4.0
+FRAME_TIMEOUT_S = 6.0     # the phone may be busy with ambient frames; an owner question waits a little longer
+COUNT_FRAMES = 2          # a count is two frames 400 ms apart, counted in parallel, spoken only when they agree
+COUNT_INTERVAL_MS = 400
 DIST_ORDER = ("near", "arm", "far")
 # Labels that must never be spoken: people are never described, and a label can't smuggle in "safe".
 PERSON = re.compile(r"\b(person|people|man|woman|boy|girl|child|kid|customer|face|human|lady|guy)\b", re.I)
@@ -67,9 +74,65 @@ READ_SCHEMA = '{"text": "<verbatim text>", "confidence": 0.0}'
 _WS = re.compile(r"\s+")
 
 
+COUNT_EN = re.compile(r"\bhow many\b|\bcount\b|\bcount (?:the|these|those|them|all)\b", re.I)
+COUNT_WORDS = ("எத்தனை", "எண்ணு", "எண்ணி", "எண்ணிக்கை", "कितने", "कितनी", "कितना", "गिन")
+_LEAD = re.compile(r"^.*?\b(?:how many|count)\b\s*", re.I | re.S)
+_ARTICLES = {"the", "these", "those", "all", "of", "my", "your"}
+_STOP = re.compile(r"\b(?:are|is|do|does|did|can|could|would|will|in|on|at|there|here|visible|you|i|that|which|"
+                   r"left|remaining|kept|lying|placed|now|please|for)\b.*$", re.I | re.S)
+_PRONOUNS = {"them", "these", "those", "it", "they", "items", "item", "things", "thing", "this", "that"}
+CONTAINERS = {"packet": "packet", "packets": "packet", "pack": "pack", "packs": "pack", "pouch": "pouch",
+              "pouches": "pouch", "bottle": "bottle", "bottles": "bottle", "box": "box", "boxes": "box",
+              "cup": "cup", "cups": "cup", "tub": "tub", "tubs": "tub", "can": "can", "cans": "can",
+              "carton": "carton", "cartons": "carton", "bag": "bag", "bags": "bag", "tin": "tin", "tins": "tin",
+              "jar": "jar", "jars": "jar", "sachet": "sachet", "sachets": "sachet", "tray": "tray", "trays": "tray",
+              "brick": "brick", "bricks": "brick"}
+CATEGORIES = {"milk", "curd", "butter", "ghee", "paneer", "cheese", "buttermilk", "lassi", "yogurt", "yoghurt",
+              "cream", "ice", "dahi", "milkshake", "khoa", "flavoured", "flavored", "toned", "skimmed"}
+_SIZE = re.compile(r"^\d+(?:\.\d+)?(?:ml|l|ltr|litre|liter|g|gm|kg)?$", re.I)
+_UNITS = {"ml", "l", "ltr", "litre", "liter", "litres", "g", "gm", "gram", "grams", "kg"}
+_NON_ASCII_LETTER = re.compile(r"[^\x00-\x7f]")
+
+
+class CountTarget(NamedTuple):
+    generic: str            # what ER points at: "curd packet" (generic, so half-readable packs are pointed too)
+    product: str | None     # the named product the labels must carry ("Hatsun Curd"), or None for every item
+    phrase: str             # the owner's own words for the spoken answer ("Hatsun Curd packets"); "" if unknown
+
+
+def count_target(question: str) -> CountTarget:
+    """What to count, from the owner's question. English questions are parsed; other languages pass the whole
+    question to the model as the item hint (the model reads Tamil and Hindi)."""
+    q = question.strip()
+    if _NON_ASCII_LETTER.search(q):
+        return CountTarget(f'item the owner asks about in "{q}"', None, "")
+    rest = _LEAD.sub("", q, count=1)
+    rest = re.sub(r"[?.!,]", " ", rest)
+    rest = _STOP.sub("", rest).strip()
+    words = rest.split()
+    while words and words[0].lower() in _ARTICLES:
+        words = words[1:]
+    if not words or all(w.lower() in _PRONOUNS for w in words):
+        return CountTarget("item the owner is showing", None, "")
+    phrase = " ".join(words)
+    container = next((CONTAINERS[w.lower()] for w in reversed(words) if w.lower() in CONTAINERS), None)
+    category = [w.lower() for w in words if w.lower() in CATEGORIES]
+    brand = [w for w in words if w.lower() not in CONTAINERS and w.lower() not in CATEGORIES
+             and w.lower() not in _UNITS and not _SIZE.match(w)]
+    if container is None and not category:
+        return CountTarget(phrase, None, phrase)
+    generic = " ".join([*category, container or "packet"])
+    product_words = [w for w in words if w in brand or w.lower() in category]
+    product = " ".join(product_words) if brand else None
+    return CountTarget(generic, product, phrase)
+
+
 def classify(question: str) -> str:
-    """One of "read", "path" or "look" from the owner's words (any language falls back to "look")."""
+    """One of "count", "read", "list", "path" or "look" from the owner's words (any language falls back to
+    "look")."""
     q = question.lower()
+    if COUNT_EN.search(q) or any(w in q for w in COUNT_WORDS):
+        return "count"
     if any(w in q for w in READ_WORDS):
         return "read"
     if listing.is_listing(q):           # "what's in my fridge?": list the items by shelf (spec §4)
@@ -210,18 +273,119 @@ async def _read_twice(frame_b64: str, lang: str) -> dict:
     return {"say": reads[0][0], "answer": reads[0][0], "kind": "read", "confidence": conf, "agreed": True}
 
 
+@asynccontextmanager
+async def owner_first(s: Session):
+    """The owner's camera question goes first: while it runs the ambient and describe loops make no ER 2 call
+    (``Session.owner_busy``), and the phone's describe stream pauses so the question's frames are not queued
+    behind scene frames. The stream resumes when the last question ends."""
+    from aira_live.tools import describe  # describe imports this module
+
+    loop = None
+    with s.owner_asking():
+        if s.owner_asks == 1:
+            loop = describe.active(s)
+            if loop is not None and loop.active:
+                await _send_quiet(s, RequestFrameMsg(purpose=describe.PURPOSE, stop=True))
+            else:
+                loop = None
+        try:
+            yield
+        finally:
+            if loop is not None and s.owner_asks == 1 and describe.active(s) is loop and loop.active:
+                await _send_quiet(s, RequestFrameMsg(purpose=describe.PURPOSE, continuous=True))
+
+
+async def _send_quiet(s: Session, msg: RequestFrameMsg) -> None:
+    try:
+        await s.send(msg)
+    except Exception as exc:  # noqa: BLE001 - a closed socket: nothing to pause or resume
+        log.debug("camera_ask: describe pause/resume not sent to %s: %s", s.session_id, exc)
+
+
+async def _count_one(frame, tgt: CountTarget) -> CountResult | None:
+    try:
+        return await count_in_frame(frame, tgt.generic, product=tgt.product)
+    except VisionError as exc:
+        log.warning("camera_ask: count failed: %s", type(exc).__name__)
+        return None
+
+
+def _usable(r: CountResult | None) -> bool:
+    return r is not None and r.count is not None and r.confidence >= MIN_CONF
+
+
+async def _count(s: Session, question: str) -> dict:
+    """Two frames counted in parallel; a number only when they agree. Off by one: a third read on the newest
+    frame breaks the tie. Anything else is "not sure" plus how to hold the camera. Never an invented count."""
+    tgt = count_target(question)
+    frames = await s.request_frames("count", count=COUNT_FRAMES, interval_ms=COUNT_INTERVAL_MS,
+                                    timeout_s=FRAME_TIMEOUT_S)
+    diag("camera_ask", stage="frames", session=s.session_id, kind="count", lang=s.lang, frames=len(frames),
+         bytes=[len(f.jpeg_b64) for f in frames], sizes=[[f.w, f.h] for f in frames])
+    if not frames:
+        diag("camera_ask", severity="WARNING", stage="no_frames", session=s.session_id, kind="count",
+             timeout_s=FRAME_TIMEOUT_S)
+        return {"say": t("camera.none", s.lang), "answer": "", "kind": "count", "count": None, "agreed": False,
+                "objects": [], "confidence": 0.0}
+    pair = [frames[0], frames[-1]] if len(frames) > 1 else [frames[0], frames[0]]
+    started = time.perf_counter()
+    reads: list[CountResult | None] = list(await asyncio.gather(*(_count_one(f, tgt) for f in pair)))
+    n: int | None = None
+    a, b = reads
+    if _usable(a) and _usable(b):
+        if a.count == b.count:
+            n = a.count
+        elif abs(a.count - b.count) == 1:
+            third = await _count_one(pair[-1], tgt)
+            reads.append(third)
+            if _usable(third) and third.count in (a.count, b.count):
+                n = third.count
+    ms = round((time.perf_counter() - started) * 1000)
+    good = [r for r in reads if r is not None]
+    conf = min((r.confidence for r in good), default=0.0) if len(good) == len(reads) else 0.0
+    diag("camera_ask", stage="count", session=s.session_id, kind="count", frames=len(frames),
+         counts=[r.count if r else None for r in reads], confidences=[r.confidence if r else None for r in reads],
+         hints=[r.aim_hint if r else None for r in reads], models=[r.model if r else None for r in reads],
+         agreed=n is not None, third=len(reads) > 2, product_filter=tgt.product is not None, ms=ms)
+    shown = next((r for r in reversed(reads) if r is not None and r.count is not None), None)
+    if shown is not None:
+        await listing.publish_boxes(s, shown.objects, "camera_ask:count", frame_id=pair[-1].id)
+    hints = {r.aim_hint for r in good if r.aim_hint}
+    hint = hints.pop() if len(hints) == 1 and len(good) == len(reads) else ""
+    if n is None:
+        say = t("cam.count_unsure", s.lang)
+        if hint and hint != "vision.aim.move_back":            # "step back" is already in the line
+            say = f"{say} {t(hint, s.lang)}"
+        return {"say": say, "answer": "", "kind": "count", "count": None, "agreed": False,
+                "objects": [], "confidence": conf, "aim_hint": hint}
+    say = (t("cam.count_label", s.lang, n=n, label=tgt.phrase) if tgt.phrase else t("cam.count", s.lang, n=n))
+    if hint:
+        say = f"{say} {t(hint, s.lang)}"
+    return {"say": say, "answer": say, "kind": "count", "count": n, "agreed": True,
+            "objects": shown.objects if shown else [], "confidence": conf}
+
+
 async def camera_ask(question: str) -> dict:
     """Look through the camera and answer the owner's question as guidance: what is in front of him, where
-    something is (left / ahead / right, how far), whether something is in his way, or read a label or sign.
+    something is (left / ahead / right, how far), how many of something are visible, whether something is in
+    his way, or read a label or sign.
 
-    Call it for ANY question about what is around the owner or in front of the camera. The reply is in the
-    session language; when the picture is unclear it says "not sure" and how to aim.
+    Call it for ANY question about what is around the owner or in front of the camera, including "how many
+    ... are there?". The reply is in the session language; when the picture is unclear it says "not sure" and
+    how to aim. Speak only its 'say': never guess a count or an object yourself.
     """
     s: Session = get_session()
     kind = classify(question)
     precounted = await precount.answer(s, question)  # "how many": the background count of this scene, if any
     if precounted is not None:
         return precounted
+    async with owner_first(s):
+        if kind == "count":
+            return await _count(s, question)
+        return await _ask(s, kind, question)
+
+
+async def _ask(s: Session, kind: str, question: str) -> dict:
     count = 2 if kind == "path" else 1                         # a path needs a short burst: things move
     frames = await s.request_frames("ask", count=count, interval_ms=400 if count > 1 else 0,
                                     timeout_s=FRAME_TIMEOUT_S)

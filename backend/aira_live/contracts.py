@@ -39,7 +39,7 @@ Verbosity = Literal["short", "detail"]
 # "live": the camera as Gemini Live video (1 fps) while a Live session runs; forwarded into Live only, never
 # stored for the tools. A live frame may carry ``changed`` (the view settled on something new) and ``labels``.
 FramePurpose = Literal["ask", "count", "point", "identify", "invoice", "cash", "guide", "describe", "identify_held",
-                       "preview", "live"]
+                       "preview", "walk", "live"]
 CueName = Literal["ack", "thinking", "done", "warn", "match", "mismatch", "unsure", "interrupted", "reconnect", "offline"]
 Entity = Literal["order", "delivery", "sale", "payment", "inventory"]
 ConfirmKind = Literal["order", "payment", "sale", "discrepancy", "generic"]

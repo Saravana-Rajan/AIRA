@@ -28,6 +28,7 @@ EXPECTED = {
     "product_update": ["product", "price_rupees", "name", "supplier_id"], "product_disable": ["product"],
     "stock_add": ["product", "quantity", "unit"], "supplier_add": ["name", "channel"],
     "price_query": ["product", "page"],  # the owner's price board, spoken (tools/prices.py)
+    "walk_to": ["target"], "walk_stop": [],  # walk with me (tools/walk.py)
 }
 
 OPTIONAL_DEFAULTS = {

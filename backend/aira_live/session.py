@@ -4,6 +4,7 @@ import time
 import unicodedata
 import uuid
 from collections.abc import Awaitable, Callable
+from contextlib import contextmanager
 from contextvars import ContextVar
 
 from pydantic import BaseModel
@@ -43,7 +44,23 @@ class Session:
         # Sent-notice ledger: notice key -> when it was last sent. ``sessions.register`` hands a resumed session
         # the ledger of the session it continues, so a reconnect never replays a notice the owner already heard.
         self.notice_ledger: dict[str, float] = {}
+        # Owner questions to the camera in flight (camera_ask, counts). While > 0 the ambient and describe loops
+        # make no ER 2 call: the owner's own question gets the camera and the model first.
+        self.owner_asks = 0
         self._send = send
+
+    @property
+    def owner_busy(self) -> bool:
+        return self.owner_asks > 0
+
+    @contextmanager
+    def owner_asking(self):
+        """Mark an owner camera question in flight (nestable); background vision waits until it ends."""
+        self.owner_asks += 1
+        try:
+            yield
+        finally:
+            self.owner_asks -= 1
 
     async def send(self, msg: BaseModel) -> None:
         await self._send(msg)
@@ -82,6 +99,15 @@ class Session:
         """The newest live-video frame if it arrived at most ``max_age_s`` ago (``aira_live.live_frames``)."""
         from aira_live import live_frames
         return live_frames.latest(self.session_id, max_age_s)
+
+    @property
+    def walking(self) -> bool:
+        """A walk-with-me guidance runs for this session (tools.walk): it owns the voice and the camera."""
+        try:
+            from aira_live.tools import walk
+        except ImportError:
+            return False
+        return self.session_id in walk._ACTIVE
 
     def cached_count(self, product: str | None = None) -> tuple[int, float, float] | None:
         """(count, confidence, age_s) of the background pre-count of the current scene (vision.precount)."""

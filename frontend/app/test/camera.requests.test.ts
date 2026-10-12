@@ -55,6 +55,7 @@ describe("request_frame handler", () => {
     expect(DESCRIBE_FPS).toBeCloseTo(1 / 3);
     expect(continuousFps("describe")).toBe(DESCRIBE_FPS);
     expect(continuousFps("guide")).toBe(CONTINUOUS_FPS);
+    expect(continuousFps("walk")).toBe(1);
     const s = setup();
     await s.handle({ t: "request_frame", purpose: "describe", continuous: true });
     expect(s.deps.startContinuous).toHaveBeenCalledWith("describe", DESCRIBE_FPS);
@@ -163,6 +164,29 @@ describe("request_frame handler", () => {
     const n = setup();
     await n.handle({ t: "request_frame", purpose: "count", burst: { count: Number.NaN, intervalMs: 10 } });
     expect(n.sent).toHaveLength(1);
+  });
+
+  it("an ask / count / identify request holds background capture until its frames are sent", async () => {
+    const log: string[] = [];
+    const s = setup({
+      hold: vi.fn(() => { log.push("hold"); return () => { log.push("release"); }; }),
+      send: vi.fn((m: any) => { log.push(`send:${m.purpose}`); return true; }),
+    });
+    await s.handle({ t: "request_frame", purpose: "count", burst: { count: 2, intervalMs: 400 } });
+    expect(log).toEqual(["hold", "send:count", "send:count", "release"]);
+    log.length = 0;
+    await s.handle({ t: "request_frame", purpose: "ask" });
+    expect(log).toEqual(["hold", "send:ask", "release"]);
+    log.length = 0;
+    await s.handle({ t: "request_frame", purpose: "invoice" });           // not an owner camera question
+    expect(log).toEqual(["send:invoice"]);
+  });
+
+  it("the hold is released even when the camera fails", async () => {
+    const release = vi.fn();
+    const s = setup({ hold: vi.fn(() => release), capture: vi.fn(async () => { throw new CameraError("no_frame"); }) });
+    await s.handle({ t: "request_frame", purpose: "identify" });
+    expect(release).toHaveBeenCalledTimes(1);
   });
 
   it("defaultSleep resolves after the given delay", async () => {

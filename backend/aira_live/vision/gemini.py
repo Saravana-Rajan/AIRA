@@ -147,9 +147,14 @@ def _salvage_truncated(text: str) -> Any:
     return {key.group(1): items} if key and head.startswith("{") else items
 
 
-def _config(thinking: Thinking) -> types.GenerateContentConfig:
+def _config(thinking: Thinking, max_output_tokens: int = MAX_OUTPUT_TOKENS,
+            json_schema: dict | None = None) -> types.GenerateContentConfig:
     # Box lists (box_2d for every object) can be long; a low default output cap truncated replies mid-JSON.
-    base = {"temperature": 0.2, "response_mime_type": "application/json", "max_output_tokens": MAX_OUTPUT_TOKENS}
+    # Temperature is left at the model default, as in the official Robotics-ER samples: a low temperature hurts
+    # the reasoning of Gemini 3-class models.
+    base: dict[str, Any] = {"response_mime_type": "application/json", "max_output_tokens": max_output_tokens}
+    if json_schema is not None:
+        base["response_json_schema"] = json_schema
     try:
         # google-genai accepts thinking_level ("low" | "medium" | "high") for Gemini 3.x and Robotics-ER 2.
         return types.GenerateContentConfig(**base, thinking_config=types.ThinkingConfig(thinking_level=thinking))
@@ -200,3 +205,97 @@ async def generate_json(role: Role, parts: list, schema_hint: str,
                  ms=round((time.perf_counter() - started) * 1000), error=type(e).__name__,
                  message=trunc(str(e), 200))
     raise VisionError(f"{role}: all attempts failed: {last!r}")
+
+
+# --- counting: the official Robotics-ER pointing call ---------------------------------------------------------
+
+class TruncatedReply(VisionError):
+    """The reply hit the output cap (or stopped mid-JSON): its point list may be short, so it is never a count."""
+
+
+COUNT_MAX_OUTPUT_TOKENS = 16384   # thinking eats the 4096 default before a long point list is written
+COUNT_JSON_SCHEMA: dict = {
+    "type": "object",
+    "properties": {
+        "items": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "point": {"type": "array", "items": {"type": "integer"}, "minItems": 2, "maxItems": 2},
+                    "label": {"type": "string"},
+                },
+                "required": ["point", "label"],
+            },
+        },
+    },
+    "required": ["items"],
+}
+
+
+def _hit_max_tokens(resp: Any) -> bool:
+    for cand in getattr(resp, "candidates", None) or []:
+        reason = getattr(cand, "finish_reason", None)
+        if reason is not None and "MAX_TOKENS" in str(getattr(reason, "name", reason)):
+            return True
+    return False
+
+
+def _strict_json(text: str | None) -> Any:
+    """JSON from a schema-constrained reply; a fenced reply is accepted, a truncated one is TruncatedReply."""
+    if not text or not text.strip():
+        raise ValueError("empty model reply")
+    m = _FENCE.search(text)
+    candidate = (m.group(1) if m else text).strip()
+    try:
+        return json.loads(candidate)
+    except json.JSONDecodeError:
+        if _salvage_truncated(candidate) is not None:
+            raise TruncatedReply("reply stopped mid-JSON") from None
+        raise
+
+
+async def generate_count_json(parts: list, thinking: Thinking = "medium", timeout_s: float = 25.0) -> dict:
+    """The ``count`` role's model (Robotics-ER), constrained by ``COUNT_JSON_SCHEMA``: one attempt plus one
+    retry, and NO Flash fallback (a weaker counter must not answer; the caller says "not sure" instead).
+
+    Returns ``{"items": [...], "_model": ...}``. Raises ``TruncatedReply`` when the reply hit the output cap
+    (never salvaged: a cut list undercounts) and ``VisionError`` when both attempts fail.
+    """
+    contents = [*parts]
+    model = model_for("count")
+    cfg = _config(thinking, max_output_tokens=COUNT_MAX_OUTPUT_TOKENS, json_schema=COUNT_JSON_SCHEMA)
+    last: Exception | None = None
+    started = time.perf_counter()
+    for attempt in range(2):
+        try:
+            resp = await asyncio.wait_for(
+                client().aio.models.generate_content(model=model, contents=contents, config=cfg),
+                timeout=timeout_s,
+            )
+            if _hit_max_tokens(resp):
+                raise TruncatedReply("MAX_TOKENS")
+            data = _strict_json(resp.text)
+            if isinstance(data, list):
+                out: dict = {"items": data}
+            elif isinstance(data, dict):
+                out = dict(data)
+            else:
+                raise ValueError(f"model reply is JSON {type(data).__name__}, not an object or list")
+            out["_model"] = model
+            ms = round((time.perf_counter() - started) * 1000)
+            diag("vision", role="count", model=model, attempt=attempt, parts=len(parts), thinking=thinking,
+                 ms=ms, keys=sorted(k for k in out if k != "_model"))
+            monitor.count_vision(model, ms)
+            return out
+        except TruncatedReply:
+            diag("vision_error", severity="WARNING", role="count", model=model, attempt=attempt,
+                 ms=round((time.perf_counter() - started) * 1000), error="TruncatedReply")
+            raise
+        except Exception as e:  # timeout, API error, or unparseable reply -> the one retry
+            last = e
+            log.warning("vision.generate_count_json model=%s failed: %r", model, e)
+            diag("vision_error", severity="WARNING", role="count", model=model, attempt=attempt, parts=len(parts),
+                 ms=round((time.perf_counter() - started) * 1000), error=type(e).__name__,
+                 message=trunc(str(e), 200))
+    raise VisionError(f"count: both attempts failed: {last!r}")

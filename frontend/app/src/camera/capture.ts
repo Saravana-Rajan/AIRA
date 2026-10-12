@@ -20,17 +20,29 @@ export const PREVIEW_QUALITY = 0.45;
 /** A preview tick is skipped while more than this many bytes wait on the socket: a stale picture is never sent. */
 export const PREVIEW_MAX_BUFFERED = 32_000;
 
+/** The owner's own camera questions (ask, count, identify, point): full detail, so ER 2 can count packs. */
+export const PRIORITY_MAX_SIDE = 1280;
+export const PRIORITY_QUALITY = 0.9;
+const PRIORITY: ReadonlySet<FramePurpose> = new Set<FramePurpose>(["ask", "count", "identify", "point"]);
+/** Walk with me (purpose `walk`, about 1 a second): enough detail for ER to see the target and floor obstacles. */
+export const WALK_MAX_SIDE = 1024;
+export const WALK_QUALITY = 0.75;
+/** Background streams that wait while an owner question captures: scene narration and the monitor preview. */
+const PAUSABLE: ReadonlySet<FramePurpose> = new Set<FramePurpose>(["describe", "preview"]);
+
+export function isPriorityPurpose(purpose: FramePurpose): boolean {
+  return PRIORITY.has(purpose);
+}
 /** Gemini Live video (purpose `live`): one frame a second, 768 px long side, quality 0.7 (Live API guidance). */
 export const LIVE_MAX_SIDE = 768;
 export const LIVE_QUALITY = 0.7;
-/** A count frame is sharp: small packs on a fridge shelf need the pixels (ER 2 counts them). */
-export const COUNT_MAX_SIDE = 1280;
 
 /** How big and how good a frame of this purpose is. */
 export function frameSpec(purpose: FramePurpose): { maxSide: number; quality: number } {
   if (purpose === "preview") return { maxSide: PREVIEW_MAX_SIDE, quality: PREVIEW_QUALITY };
+  if (PRIORITY.has(purpose)) return { maxSide: PRIORITY_MAX_SIDE, quality: PRIORITY_QUALITY };
   if (purpose === "live") return { maxSide: LIVE_MAX_SIDE, quality: LIVE_QUALITY };
-  if (purpose === "count") return { maxSide: COUNT_MAX_SIDE, quality: JPEG_QUALITY };
+  if (purpose === "walk") return { maxSide: WALK_MAX_SIDE, quality: WALK_QUALITY };
   return { maxSide: MAX_SIDE, quality: JPEG_QUALITY };
 }
 
@@ -46,6 +58,24 @@ export function toolCaptureBusy(): boolean {
 /** Grows by one each time a tool-requested capture starts. */
 export function toolCaptureCount(): number {
   return toolCaptureSeq;
+}
+
+let backgroundHolds = 0;
+
+/** An owner question is capturing: describe and preview frames pause (and one mid-encode is dropped) until
+ *  the returned release fn is called. Holds nest; releasing twice is harmless. */
+export function holdBackground(): () => void {
+  backgroundHolds++;
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    backgroundHolds = Math.max(0, backgroundHolds - 1);
+  };
+}
+
+export function backgroundHeld(): boolean {
+  return backgroundHolds > 0;
 }
 
 export class CameraError extends Error {
@@ -276,15 +306,17 @@ export function socketBusy(): boolean {
 export function startContinuous(purpose: FramePurpose, fps: number, keep?: FrameKeep): () => void {
   const period = Math.max(100, Math.round(1000 / Math.max(0.1, fps)));
   const dropWhenBusy = purpose === "preview";
+  const pausable = PAUSABLE.has(purpose);
   let stopped = false;
   let busy = false;
   const tick = async () => {
     if (stopped || busy) return;
+    if (pausable && backgroundHeld()) return; // the owner's question has the camera and the socket
     if (dropWhenBusy && socketBusy()) return; // the last picture is still on its way: this one is not worth encoding
     busy = true;
     try {
       const f = await captureFrameIf(purpose, keep);
-      if (f && !stopped && !(dropWhenBusy && socketBusy())) app.send(f);
+      if (f && !stopped && !(pausable && backgroundHeld()) && !(dropWhenBusy && socketBusy())) app.send(f);
     } catch {
       // Camera errors are surfaced by the request handler and the hint speaker.
     } finally {

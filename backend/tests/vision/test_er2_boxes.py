@@ -48,14 +48,14 @@ def _boxes_sent(rec) -> list[dict]:
 # ---------- prompts and schemas ----------
 @pytest.mark.parametrize("prompt, schema", [
     (point.POINT_PROMPT, point.POINT_SCHEMA),
-    (count.COUNT_PROMPT, count.COUNT_SCHEMA),
     (identify.IDENTIFY_PROMPT, identify.IDENTIFY_SCHEMA),
     (identify.FREE_TEXT_PROMPT, identify.FREE_TEXT_SCHEMA),
     (listing.LIST_PROMPT, listing.LIST_SCHEMA),
     (camera.ASK_PROMPT, camera.ASK_SCHEMA),
     (describe.DESCRIBE_PROMPT, describe.DESCRIBE_SCHEMA),
-], ids=["point", "count", "identify", "free_text", "listing", "camera_ask", "describe"])
+], ids=["point", "identify", "free_text", "listing", "camera_ask", "describe"])
 def test_every_er2_prompt_asks_for_box_2d_in_0_1000(prompt, schema):
+    # Counting is the exception: the official ER pointing form asks for points only (one per item).
     assert "box_2d" in prompt and "box_2d" in schema
     assert "[ymin, xmin, ymax, xmax]" in prompt and "0-1000" in prompt
     assert '"box_2d": [ymin, xmin, ymax, xmax]' in schema

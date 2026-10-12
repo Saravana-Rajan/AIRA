@@ -124,7 +124,10 @@ class DescribeLoop:
         self.announced[(obj["label"].casefold(), coarse_side(obj["point"][1]))] = (now, obj["distance"])
 
     def busy(self) -> bool:
-        """True while the owner is talking (or just finished) or AIRA is speaking: nothing is said then."""
+        """True while the owner is talking (or just finished), AIRA is speaking, or the owner's own camera
+        question is being answered: nothing is said and no ER 2 call is made then."""
+        if getattr(self.session, "owner_busy", False):
+            return True
         if self._clock() - self.last_heard_at < PAUSE_AFTER_TALK_S:
             return True
         if self._busy is not None:
@@ -268,7 +271,10 @@ def _registered(session: Session) -> bool:
 
 
 def _bridge_busy(session: Session) -> bool:
-    """AIRA is mid-answer or the owner is mid-sentence, as far as the Live bridge knows."""
+    """AIRA is mid-answer or the owner is mid-sentence, as far as the Live bridge knows, or a walk-with-me
+    guidance owns the voice (ambient and scene lines stay silent then)."""
+    if getattr(session, "walking", False):
+        return True
     bridge = _bridge_of(session)
     if bridge is None:
         return False

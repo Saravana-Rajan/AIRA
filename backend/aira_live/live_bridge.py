@@ -145,7 +145,8 @@ class LiveBridge:
         # The camera as Live video (aira_live.live_video): throttle, scene-change nudge, counters.
         self.video = LiveVideo(session.session_id, nudge=live_nudge,
                                tools_running=lambda: tool_runtime.tools_running(session.session_id),
-                               other_busy=lambda: ambient_holding(session.session_id))
+                               other_busy=lambda: bool(getattr(session, "walking", False))
+                               or ambient_holding(session.session_id))
 
     # ---------- state the live-video nudge reads ----------
     @property

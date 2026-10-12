@@ -126,7 +126,7 @@ class LiveVideo:
             return "tool_running"
         try:
             if self._other_busy():
-                return "ambient"
+                return "other_voice"  # a walk guidance or an ambient hold-up line owns the voice
         except Exception:
             log.debug("live video: busy check failed", exc_info=True)
         if now - self.last_nudge_at < NUDGE_GAP_S:
