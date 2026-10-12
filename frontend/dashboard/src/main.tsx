@@ -1,6 +1,7 @@
 import { render } from "preact";
 import "./styles/app.css";
 import "./styles/dashboard.css";
+import "./styles/live.css";
 import { App } from "./components/App";
 import { forecastLoader, lazyListen } from "./lib/connect";
 

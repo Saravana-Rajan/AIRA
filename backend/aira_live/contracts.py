@@ -237,6 +237,104 @@ ServerMsg = Annotated[
     Field(discriminator="t"),
 ]
 
+# ---------- server -> monitor (GET /monitor?shop=<id>&key=<AIRA_MONITOR_KEY>, read-only) ----------
+# Mirrors the MonitorMsg union in messages.ts and shared/contracts/fixtures/monitor_msgs.json.
+# Every message is {t:"mon", kind, session, ts, ...}; ``jpeg_b64`` keeps its snake_case name on the wire.
+MonitorRole = Literal["owner", "customer", "aira"]
+MonitorSessionState = Literal["start", "end"]
+VisionSource = Literal["camera_ask", "describe", "point", "guidance", "identify"]
+MonitorState = Literal["listening", "thinking", "guiding", "found", "idle"]
+
+
+class _MonWire(_ServerWire):
+    t: Literal["mon"] = "mon"
+    session: StrictStr
+    ts: Num  # epoch ms
+
+
+class MonSessionMsg(_MonWire):
+    kind: Literal["session"] = "session"
+    state: MonitorSessionState
+    lang: StrictStr
+
+
+class MonTranscriptMsg(_MonWire):
+    kind: Literal["transcript"] = "transcript"
+    role: MonitorRole
+    text: StrictStr
+    lang: StrictStr
+    final: StrictBool
+
+
+class MonFrameMsg(_MonWire):
+    kind: Literal["frame"] = "frame"
+    jpeg_b64: StrictStr = Field(alias="jpeg_b64")  # <= 480 px wide, quality 0.6, <= 4 fps a session
+    w: StrictInt
+    h: StrictInt
+    purpose: FramePurpose
+
+
+class VisionObject(_ServerWire):
+    label: StrictStr
+    box: Optional[Box]  # required; null means "no box"
+    point: Optional[Point]  # required; null means "no point"
+
+    @model_serializer(mode="wrap")
+    def _keep_nulls(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
+        data = handler(self)
+        data.setdefault("box", self.box)
+        data.setdefault("point", self.point)
+        return data
+
+
+class MonVisionMsg(_MonWire):
+    kind: Literal["vision"] = "vision"
+    source: VisionSource
+    objects: list[VisionObject]
+    target: Optional[StrictStr] = None
+    found: Optional[StrictBool] = None
+
+
+class MonHandMsg(_MonWire):
+    kind: Literal["hand"] = "hand"
+    point: Point
+    near: StrictBool
+
+
+class MonEventMsg(_MonWire):
+    kind: Literal["event"] = "event"
+    name: StrictStr
+    detail: dict[str, Any]  # small metadata (tool name, confirm id, target label); never audio or image bytes
+
+
+class MonStatusMsg(_MonWire):
+    kind: Literal["status"] = "status"
+    state: MonitorState
+
+
+MonitorMsg = Annotated[
+    Union[MonSessionMsg, MonTranscriptMsg, MonFrameMsg, MonVisionMsg, MonHandMsg, MonEventMsg, MonStatusMsg],
+    Field(discriminator="kind"),
+]
+monitor_adapter: TypeAdapter[MonitorMsg] = TypeAdapter(MonitorMsg)
+MONITOR_KINDS: tuple[str, ...] = ("session", "transcript", "frame", "vision", "hand", "event", "status")
+
+
+def dump_monitor_msg(msg: BaseModel) -> str:
+    """Serialize a monitor message for ``ws.send_text``: camelCase, unset optional fields omitted."""
+    return monitor_adapter.dump_json(msg, by_alias=True, exclude_none=True).decode()
+
+
+def parse_monitor_msg(raw: str | bytes) -> (
+    MonSessionMsg | MonTranscriptMsg | MonFrameMsg | MonVisionMsg | MonHandMsg | MonEventMsg | MonStatusMsg | None
+):
+    """Parse one /monitor text frame. None for bad JSON or an unknown/invalid message."""
+    try:
+        return monitor_adapter.validate_json(raw)
+    except (ValidationError, ValueError):
+        return None
+
+
 client_adapter: TypeAdapter[ClientMsg] = TypeAdapter(ClientMsg)
 server_adapter: TypeAdapter[ServerMsg] = TypeAdapter(ServerMsg)
 
@@ -274,3 +372,4 @@ def parse_server_msg(raw: str | bytes) -> (
 def dump_server_msg(msg: BaseModel) -> str:
     """Serialize a server message for ``ws.send_text``: camelCase, unset optional fields omitted."""
     return server_adapter.dump_json(msg, by_alias=True, exclude_none=True).decode()
+

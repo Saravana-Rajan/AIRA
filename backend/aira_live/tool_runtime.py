@@ -17,6 +17,7 @@ try:  # ADK finds the context parameter by this annotation, or by the name `tool
 except ImportError:  # pragma: no cover - ADK is a declared dependency
     ToolContext = Any  # type: ignore[misc,assignment]
 
+from aira_live import monitor
 from aira_live.diag import diag, summarize, trunc
 from aira_live.session import Session, current_session, current_tool_call_id
 
@@ -45,15 +46,18 @@ def _log_call(name: str, call_id: str, session: Session, sig: inspect.Signature,
     if error is not None:
         fields.update(ok=False, error=type(error).__name__, message=trunc(str(error), 200))
         diag("tool", severity="WARNING", **fields)
-        return
-    fields["ok"] = True
-    if isinstance(result, dict):
-        for key in _LOGGED_RESULT_KEYS:
-            if key in result:
-                fields[key] = summarize(result[key])
     else:
-        fields["result_type"] = type(result).__name__
-    diag("tool", **fields)
+        fields["ok"] = True
+        if isinstance(result, dict):
+            for key in _LOGGED_RESULT_KEYS:
+                if key in result:
+                    fields[key] = summarize(result[key])
+        else:
+            fields["result_type"] = type(result).__name__
+        diag("tool", **fields)
+    # The dashboard's Live page: the same summary (never the result body), under the tool's name.
+    detail = {"tool": name, **{k: v for k, v in fields.items() if k not in ("name", "session", "shop", "call_id")}}
+    monitor.event(session, "tool_call", **detail)
 
 
 def _signature(fn: Callable[..., Any]) -> inspect.Signature:
@@ -97,6 +101,7 @@ def wrap_tool(fn: Callable[..., Any], session: Session) -> ToolFn:
         s_token = current_session.set(session)
         c_token = current_tool_call_id.set(call_id)
         started = time.perf_counter()
+        monitor.status(session, "thinking")
         try:
             result = fn(*args, **kwargs)
             if inspect.isawaitable(result):

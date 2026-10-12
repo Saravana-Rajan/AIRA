@@ -10,6 +10,7 @@ export const ROUTES = [
   { hash: "#/orders", label: "Orders & deliveries" },
   { hash: "#/audit", label: "Audit trail" },
   { hash: "#/forecast", label: "Forecast" },
+  { hash: "#/live", label: "Live" },
 ] as const;
 
 export type Route = (typeof ROUTES)[number]["hash"];
@@ -58,7 +59,7 @@ export function Layout(props: {
           ))}
         </ul>
       </nav>
-      <main id="main" tabIndex={-1} class={props.route === "#/" ? "main" : "main main--single"}>
+      <main id="main" tabIndex={-1} class={props.route === "#/" ? "main" : props.route === "#/live" ? "main main--single main--live" : "main main--single"}>
         {props.children}
       </main>
     </>

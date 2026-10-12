@@ -148,3 +148,67 @@ export function parseClientMsg(raw: string): ClientMsg | null {
     return null;
   }
 }
+
+// ---------- server -> monitor (GET /monitor?shop=<id>&key=<AIRA_MONITOR_KEY>, read-only) ----------
+// A projector view of one shop's live sessions. Every message is {t:"mon", kind, session, ts, ...}.
+// Frames are sent only while a monitor is connected (<= 480 px wide, quality 0.6, <= 4 fps a session).
+// Mirrored in backend/aira_live/contracts.py; fixtures in ../fixtures/monitor_msgs.json.
+export const MONITOR_KINDS = Object.freeze(["session", "transcript", "frame", "vision", "hand", "event", "status"] as const);
+export type MonitorKind = (typeof MONITOR_KINDS)[number];
+export const MONITOR_ROLES = Object.freeze(["owner", "customer", "aira"] as const);
+export type MonitorRole = (typeof MONITOR_ROLES)[number];
+export const MONITOR_SESSION_STATES = Object.freeze(["start", "end"] as const);
+export type MonitorSessionState = (typeof MONITOR_SESSION_STATES)[number];
+export const MONITOR_VISION_SOURCES = Object.freeze(["camera_ask", "describe", "point", "guidance", "identify"] as const);
+export type VisionSource = (typeof MONITOR_VISION_SOURCES)[number];
+export const MONITOR_STATES = Object.freeze(["listening", "thinking", "guiding", "found", "idle"] as const);
+export type MonitorState = (typeof MONITOR_STATES)[number];
+
+export interface VisionObject { label: string; box: Box | null; point: Point | null }
+
+type MonBase = { t: "mon"; session: string; ts: number };
+export type MonitorMsg = MonBase & (
+  | { kind: "session"; state: MonitorSessionState; lang: string }
+  | { kind: "transcript"; role: MonitorRole; text: string; lang: string; final: boolean }
+  | { kind: "frame"; jpeg_b64: string; w: number; h: number; purpose: FramePurpose }
+  | { kind: "vision"; source: VisionSource; objects: VisionObject[]; target?: string; found?: boolean }
+  | { kind: "hand"; point: Point; near: boolean }
+  | { kind: "event"; name: string; detail: Record<string, unknown> }
+  | { kind: "status"; state: MonitorState }
+);
+export type MonitorMsgOf<K extends MonitorKind> = Extract<MonitorMsg, { kind: K }>;
+
+const isVisionObject = (o: unknown): o is VisionObject =>
+  isObj(o) && isStr(o.label) && (o.box === null || isBox(o.box)) && (o.point === null || isPoint(o.point));
+
+export function isMonitorMsg(x: unknown): x is MonitorMsg {
+  if (!isObj(x) || x.t !== "mon" || !inList(MONITOR_KINDS, x.kind) || !isStr(x.session) || !isNum(x.ts)) return false;
+  switch (x.kind as MonitorKind) {
+    case "session":
+      return inList(MONITOR_SESSION_STATES, x.state) && isStr(x.lang);
+    case "transcript":
+      return inList(MONITOR_ROLES, x.role) && isStr(x.text) && isStr(x.lang) && isBool(x.final);
+    case "frame":
+      return isStr(x.jpeg_b64) && isInt(x.w) && isInt(x.h) && inList(FRAME_PURPOSES, x.purpose);
+    case "vision":
+      return inList(MONITOR_VISION_SOURCES, x.source) && Array.isArray(x.objects) && x.objects.every(isVisionObject) &&
+        optional(x.target, isStr) && optional(x.found, isBool);
+    case "hand":
+      return isPoint(x.point) && isBool(x.near);
+    case "event":
+      return isStr(x.name) && isObj(x.detail);
+    case "status":
+      return inList(MONITOR_STATES, x.state);
+  }
+  return false;
+}
+
+/** Parse one WebSocket text frame from the /monitor channel. Returns null for bad JSON or unknown/invalid messages. */
+export function parseMonitorMsg(raw: string): MonitorMsg | null {
+  try {
+    const v: unknown = JSON.parse(raw);
+    return isMonitorMsg(v) ? v : null;
+  } catch {
+    return null;
+  }
+}

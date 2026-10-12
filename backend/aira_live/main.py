@@ -23,13 +23,14 @@ import inspect
 import json
 import logging
 import os
+import time
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, ValidationError
 
-from aira_live import config, confirm, sessions
+from aira_live import config, confirm, monitor, sessions
 from aira_live.auth import AuthError, verify_hello
 from aira_live.cameras.sources import is_camera_session
 from aira_live.contracts import (
@@ -46,7 +47,9 @@ from aira_live.contracts import (
     TextMsg,
     TranscriptMsg,
     client_adapter,
+    dump_monitor_msg,
     dump_server_msg,
+    monitor_adapter,
 )
 from aira_live.diag import RateLimiter, cap_json, diag, trunc
 from aira_live.frames import Frame
@@ -218,6 +221,7 @@ async def _end_session(session: Session, bridge: LiveBridge | None) -> None:
     await _guidance_hook("stop_guidance", session)
     if bridge is not None:
         await bridge.close()
+    monitor.session_ended(session)
 
 
 def parse(raw: str | None, max_frame_b64: int):
@@ -254,6 +258,8 @@ async def ws_endpoint(ws: WebSocket) -> None:
 
     async def send(msg: BaseModel) -> None:
         await ws.send_text(dump_server_msg(msg))
+        if session is not None:  # the dashboard's Live page sees what the phone sees (aira_live.monitor)
+            monitor.mirror(session, msg)
 
     session: Session | None = None
     bridge: LiveBridge | None = None  # real mode only
@@ -297,6 +303,7 @@ async def ws_endpoint(ws: WebSocket) -> None:
                 diag("hello", session=session.session_id, uid=who.uid, shop=who.shop_id, lang=msg.lang,
                      verbosity=msg.verbosity, app_version=msg.app_version, resume=bool(msg.resume),
                      resumed=resumed, mock=settings.mock, camera=is_camera_session(session))
+                monitor.session_started(session)
                 if not settings.mock and not is_camera_session(session):  # a shop camera only sends frames
                     bridge = await _start_live(session, handle)
                 await send(ReadyMsg(session_id=session.session_id, resume=session.session_id, mock=settings.mock))
@@ -316,6 +323,8 @@ async def ws_endpoint(ws: WebSocket) -> None:
                     lang = session.follow_lang(msg.text, typed=True)  # sticky: only a clear sentence switches
                 diag("transcript", session=session.session_id if session else None, role="user", typed=True,
                      lang=lang, text=trunc(msg.text), final=True)
+                if session:
+                    monitor.transcript(session, "owner", msg.text, final=True, lang=lang)
                 if bridge:
                     await bridge.send_text(msg.text)
                 else:
@@ -327,10 +336,11 @@ async def ws_endpoint(ws: WebSocket) -> None:
                 if bridge:  # mock mode has no Live session: audio is accepted and dropped
                     await bridge.send_audio(msg.pcm16)
             elif isinstance(msg, FrameMsg):
-                session.frames.add(Frame(id=msg.id, jpeg_b64=msg.jpeg, w=msg.w, h=msg.h, ts=msg.ts,
-                                         purpose=msg.purpose))
+                frame = Frame(id=msg.id, jpeg_b64=msg.jpeg, w=msg.w, h=msg.h, ts=msg.ts, purpose=msg.purpose)
+                session.frames.add(frame)
                 diag("frame", session=session.session_id, purpose=msg.purpose, id=msg.id, bytes=len(msg.jpeg),
                      w=msg.w, h=msg.h)
+                await monitor.publish_frame(session, frame)  # a no-op unless a monitor watches this shop
             elif isinstance(msg, ConfirmReplyMsg):
                 try:
                     result = await confirm.resolve(msg.id, msg.answer, msg.value)
@@ -347,6 +357,7 @@ async def ws_endpoint(ws: WebSocket) -> None:
                             f"[CONFIRMATION] The owner answered '{msg.answer}' on the phone for {msg.id}. "
                             f"Result: {say}. Do not call confirm_action for it again.")
             elif isinstance(msg, EventMsg):
+                monitor.client_event(session, msg.name, msg.data)
                 await _guidance_hook("handle_client_event", session, msg.name, msg.data)
     except WebSocketDisconnect:
         pass
@@ -355,3 +366,41 @@ async def ws_endpoint(ws: WebSocket) -> None:
              client_logs_dropped=log_limit.dropped)
         if session:
             await _end_session(session, bridge)
+
+
+@app.websocket("/monitor")
+async def monitor_endpoint(ws: WebSocket) -> None:
+    """``GET /monitor?shop=<id>&key=<AIRA_MONITOR_KEY>``: the dashboard's read-only live feed of one shop.
+
+    Guards, in order: the browser Origin allowlist (like ``/ws``), the monitor key (constant-time; with the env
+    unset nobody gets in), a ``shop``, and ``monitor.MAX_MONITORS_PER_SHOP``. Each refusal closes with 4403
+    before the handshake. A connected monitor first hears ``session start`` for every live session of the shop.
+    """
+    origin = ws.headers.get("origin")
+    if not origin_allowed(origin):
+        log.warning("monitor refused: origin %r is missing or not in AIRA_ALLOWED_ORIGINS", origin)
+        await ws.close(code=4403)
+        return
+    shop = (ws.query_params.get("shop") or "").strip()
+    if not monitor.key_ok(ws.query_params.get("key")) or not shop:
+        log.warning("monitor refused: bad key or no shop")
+        await ws.close(code=4403)
+        return
+    if monitor.monitors(shop) >= monitor.MAX_MONITORS_PER_SHOP:
+        log.warning("monitor refused: %d monitors already watch %s", monitor.monitors(shop), shop)
+        await ws.close(code=4403)
+        return
+    await ws.accept()
+    sub = monitor.subscribe(shop)
+    diag("monitor", event="open", shop=shop, origin=origin, monitors=monitor.monitors(shop))
+    try:
+        for live, _bridge in sessions.by_shop(shop):  # what is already going on
+            sub.push(dump_monitor_msg(monitor_adapter.validate_python(
+                {"t": "mon", "kind": "session", "session": live.session_id, "ts": int(time.time() * 1000),
+                 "state": "start", "lang": live.lang})))
+        await monitor.serve(ws, sub)
+    except WebSocketDisconnect:
+        pass
+    finally:
+        monitor.unsubscribe(sub)
+        diag("monitor", event="close", shop=shop, monitors=monitor.monitors(shop))

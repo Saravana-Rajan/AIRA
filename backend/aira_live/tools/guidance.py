@@ -13,6 +13,7 @@ import logging
 import re
 import time
 
+from aira_live import monitor
 from aira_live.contracts import RequestFrameMsg, TargetMsg
 from aira_live.i18n import t
 from aira_live.memory import episodic
@@ -58,6 +59,8 @@ class GuidanceLoop:
         self.needed, self.picked = max(1, needed), 0
         self.interval_s, self.frame_timeout_s, self.max_s = interval_s, frame_timeout_s, max_s
         self.last_ts, self.misses, self.active = 0.0, 0, True
+        self.last_point: tuple[int, int] | None = None  # where the target was last seen (the monitor's "found")
+        self.last_box: tuple[int, int, int, int] | None = None
         self.free_text = is_free_text(ref)
         self.task: asyncio.Task | None = None
         self._touch_busy = False
@@ -81,6 +84,7 @@ class GuidanceLoop:
                 res = None
             if self.active and res is not None and res.confidence >= MIN_POINT_CONF:
                 hit = True
+                self.last_point, self.last_box = res.point, res.box
                 await s.send(TargetMsg(frame_id=frame.id, label=self.ref.name, point=res.point,
                                        box=res.box, confidence=res.confidence))
         if not self.active:
@@ -90,8 +94,13 @@ class GuidanceLoop:
         else:
             self.misses += 1
             if self.misses == LOST_AFTER:
+                monitor.guidance_lost(s, self.ref.name)
                 await notify(s.shop_id, t("guide.lost", s.lang, name=self.ref.name), cue="unsure")
         return self.active
+
+    def _found(self) -> None:
+        """Tell the monitor the owner's hand is on the target (a verified pick)."""
+        monitor.guidance_found(self.session, self.ref.name, self.last_point, self.last_box)
 
     async def run(self) -> None:
         """Tick until stopped; a broken tick is logged and the loop goes on. Stops itself after ``max_s``."""
@@ -145,6 +154,7 @@ class GuidanceLoop:
         if got.sku != self.ref.sku:
             return await self._say(t("pick.wrong", s.lang, got=_item(got), want=_item(self.ref)), "mismatch")
         self.picked += 1
+        self._found()
         remaining = self.needed - self.picked
         if remaining > 0:
             return await self._say(t("pick.ok_more", s.lang, item=_item(self.ref), n=remaining), "match")
@@ -171,6 +181,7 @@ class GuidanceLoop:
                 return await self._say(t("pick.free_wrong", s.lang, seen=res.seen, item=item), "mismatch")
             return await self._say(t("pick.unsure", s.lang), "unsure")
         self.picked += 1
+        self._found()
         remaining = self.needed - self.picked
         if remaining > 0:
             return await self._say(t("pick.ok_more", s.lang, item=item, n=remaining), "match")

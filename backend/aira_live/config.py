@@ -21,6 +21,7 @@ class Settings:
     allow_no_token: bool = False  # hello without a Firebase ID token is accepted (no Firebase Auth)
     app_key: str | None = None  # shared demo key: when set, hello.idToken must equal it (shared/docs/ops/security.md)
     job_token: str | None = None  # X-AIRA-Job-Token for /jobs/*
+    monitor_key: str | None = None  # ?key= on the read-only /monitor socket (aira_live.monitor); unset = closed
 
 
 def _env(name: str) -> str | None:
@@ -42,4 +43,5 @@ def load() -> Settings:
         allow_no_token=os.getenv("AIRA_ALLOW_NO_TOKEN", "0") == "1",
         app_key=_env("AIRA_APP_KEY"),
         job_token=_env("AIRA_JOB_TOKEN"),
+        monitor_key=_env("AIRA_MONITOR_KEY"),
     )

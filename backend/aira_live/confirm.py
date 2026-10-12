@@ -22,7 +22,7 @@ import weakref
 from collections.abc import Awaitable, Callable
 from typing import Literal, Protocol
 
-from aira_live import config
+from aira_live import config, monitor
 from aira_live.contracts import ConfirmMsg
 from aira_live.diag import diag, trunc
 from aira_live.i18n import t
@@ -112,6 +112,9 @@ async def propose(kind: str, prompt: str, payload: dict, committer: str) -> dict
     await s.send(ConfirmMsg(id=cid, kind=kind if kind in _KINDS else "generic", prompt=prompt))
     diag("confirm", action="propose", session=s.session_id, shop=s.shop_id, id=cid, kind=kind,
          committer=committer, prompt=trunc(prompt))
+    # The phone's ConfirmMsg reaches the monitor through main's send mirror when the session is on /ws; a session
+    # without that mirror (tests, dev tools) gets the same event here, deduplicated by the hub's publishers.
+    monitor.confirm_proposed(s, cid, kind if kind in _KINDS else "generic", prompt)
     return {"needs_confirm": True, "confirm_id": cid, "say": prompt}
 
 
@@ -131,6 +134,8 @@ async def resolve(confirm_id: str, answer: Literal["yes", "no"], value: str | No
     diag("confirm", action="resolve", session=s.session_id, shop=s.shop_id, id=confirm_id, answer=answer,
          value=None if value is None else trunc(value), status=result.get("status"), ok=result.get("ok"),
          error=result.get("error"), say=trunc(result.get("say", "")))
+    monitor.event(s, "confirm_resolved", id=confirm_id, answer=answer, status=result.get("status"),
+                  ok=result.get("ok"), say=str(result.get("say", "")), error=result.get("error"))
     return result
 
 

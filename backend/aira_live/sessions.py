@@ -7,6 +7,7 @@ Live is still connecting).
 import logging
 import time
 
+from aira_live import monitor
 from aira_live.contracts import CueMsg, TranscriptMsg
 from aira_live.diag import diag, trunc
 from aira_live.session import Session
@@ -105,5 +106,6 @@ async def notify(shop_id: str, text: str, cue: str = "ack") -> int:
             log.warning("notify: session %s unreachable", s.session_id, exc_info=True)
             continue
         n += 1
+        monitor.notified(s, text, cue)
     diag("notify", shop=shop_id, text=trunc(text), cue=cue, sessions=len(targets), delivered=n)
     return n

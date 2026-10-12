@@ -12,6 +12,8 @@ import { StockPage } from "../pages/StockPage";
 import { OrdersPage } from "../pages/OrdersPage";
 import { AuditPage, type ResolveEvidence } from "../pages/AuditPage";
 import { ForecastPage } from "../pages/ForecastPage";
+import { LivePage } from "../pages/LivePage";
+import { useMonitor } from "../lib/useMonitor";
 
 export type { ListenFn };
 
@@ -88,6 +90,8 @@ export function App({ listen, loadForecast, resolveEvidence = publicEvidenceUrl,
   }, []);
 
   const views = useMemo(() => (data ? buildViews(data, clock) : null), [data, clock]);
+  // The Live page listens to aira-live's /monitor channel only while it is open.
+  const monitor = useMonitor(route === "#/live", shopId);
 
   if (access.mode === "denied") {
     return (
@@ -102,6 +106,7 @@ export function App({ listen, loadForecast, resolveEvidence = publicEvidenceUrl,
   );
   let body;
   if (route === "#/forecast") body = forecastPage;
+  else if (route === "#/live") body = <LivePage state={monitor.state} conn={monitor.conn} keyNeeded={monitor.keyNeeded} onKey={monitor.setKey} />;
   else if (!views) {
     body =
       status === "offline" ? (

@@ -4,7 +4,7 @@
 leaves stock here: the sale completes only in the committer ``sale.complete`` (``tools/payments.py``), after the
 payment has evidence and the owner said "yes".
 """
-from aira_live import ids
+from aira_live import ids, monitor
 from aira_live.business import hints, ledger, sales
 from aira_live.business.ledger import InsufficientStock
 from aira_live.contracts import StateMsg
@@ -26,6 +26,9 @@ async def sale_start(items: list[dict]) -> dict:
     s = get_session()
     if not items:
         return {"ok": False, "say": t("k2.sale.no_items", s.lang)}
+    # The tool registry is frozen (no new parameter), and a sale is a customer talking by definition: the
+    # dashboard labels the next user lines "customer" while this sale is open (aira_live.monitor).
+    monitor.set_speaker(s.session_id, "customer")
     lines, phrases, err = await resolve_lines(s.shop_id, items, s.lang)
     if err:
         return {"ok": False, "say": err}
