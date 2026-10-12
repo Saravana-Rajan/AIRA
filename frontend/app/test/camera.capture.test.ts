@@ -40,6 +40,7 @@ describe("captureFrame", () => {
     expect(PREVIEW_QUALITY).toBe(0.45);
     expect(frameSpec("preview")).toEqual({ maxSide: 360, quality: 0.45 });
     expect(frameSpec("guide")).toEqual({ maxSide: 640, quality: 0.8 });
+    expect(frameSpec("walk")).toEqual({ maxSide: 1024, quality: 0.75 });
     const enc = vi.fn(async (_c: HTMLCanvasElement, _q: number) => "AAAA");
     __setCaptureDeps({ encoder: enc });
     const p = await captureFrame("preview");

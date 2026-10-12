@@ -24,6 +24,9 @@ export const PREVIEW_MAX_BUFFERED = 32_000;
 export const PRIORITY_MAX_SIDE = 1280;
 export const PRIORITY_QUALITY = 0.9;
 const PRIORITY: ReadonlySet<FramePurpose> = new Set<FramePurpose>(["ask", "count", "identify", "point"]);
+/** Walk with me (purpose `walk`, about 1 a second): enough detail for ER to see the target and floor obstacles. */
+export const WALK_MAX_SIDE = 1024;
+export const WALK_QUALITY = 0.75;
 /** Background streams that wait while an owner question captures: scene narration and the monitor preview. */
 const PAUSABLE: ReadonlySet<FramePurpose> = new Set<FramePurpose>(["describe", "preview"]);
 
@@ -35,6 +38,7 @@ export function isPriorityPurpose(purpose: FramePurpose): boolean {
 export function frameSpec(purpose: FramePurpose): { maxSide: number; quality: number } {
   if (purpose === "preview") return { maxSide: PREVIEW_MAX_SIDE, quality: PREVIEW_QUALITY };
   if (PRIORITY.has(purpose)) return { maxSide: PRIORITY_MAX_SIDE, quality: PRIORITY_QUALITY };
+  if (purpose === "walk") return { maxSide: WALK_MAX_SIDE, quality: WALK_QUALITY };
   return { maxSide: MAX_SIDE, quality: JPEG_QUALITY };
 }
 
