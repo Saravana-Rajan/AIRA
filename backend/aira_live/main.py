@@ -34,7 +34,7 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, ValidationError
 
-from aira_live import config, confirm, live_frames, live_video, monitor, monitor_hooks, rtc, sessions
+from aira_live import config, confirm, live_video, monitor, monitor_hooks, rtc, sessions
 from aira_live.auth import AuthError, verify_hello
 from aira_live.cameras.sources import is_camera_session
 from aira_live.contracts import (
@@ -221,7 +221,7 @@ async def live_frame(session: Session, bridge: LiveBridge | None, frame: Frame, 
     bridge runs. Never stored in the tool ring buffer and never relayed to the monitor: the dashboard has its
     own preview stream, so the same picture is never relayed twice. With ``precount_on`` (AIRA_PRECOUNT) a
     settled scene change also starts a background count (``vision.precount``). True when it reached Live."""
-    live_frames.remember(session.session_id, frame)
+    session.frames.remember_recent(frame)  # look_frame / latest_frame reuse it (768 px)
     if not video or bridge is None:
         return False
     if precount_on and not session.walking:  # a walk guidance owns the camera: no background count
@@ -268,7 +268,6 @@ async def _end_session(session: Session, bridge: LiveBridge | None) -> None:
     sessions.remember_ended(session.session_id, bridge._handle if bridge is not None else None)
     await _guidance_hook("stop_guidance", session)
     await _ambient_hook("stop_session", session)
-    live_frames.forget(session.session_id)
     precount.forget(session.session_id)
     await _lane_hook("aira_live.tools.walk", "stop_session", session)
     if bridge is not None:

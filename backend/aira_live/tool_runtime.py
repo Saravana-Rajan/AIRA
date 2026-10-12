@@ -61,6 +61,8 @@ def _log_call(name: str, call_id: str, session: Session, sig: inspect.Signature,
         else:
             fields["result_type"] = type(result).__name__
         diag("tool", **fields)
+    diag("latency", stage="tool", session=session.session_id, name=name, call_id=call_id, ms=fields["ms"],
+         ok=fields["ok"])
     # The dashboard's Live page: the same summary (never the result body), under the tool's name.
     detail = {"tool": name, **{k: v for k, v in fields.items() if k not in ("name", "session", "shop", "call_id")}}
     monitor.event(session, "tool_call", **detail)
@@ -142,7 +144,9 @@ def live_tools(fns: list[Callable[..., Any]], session: Session,
     """The tools handed to the Live agent for ``session``, each wrapped by ``wrap_tool``.
 
     A tool named in ``non_blocking`` becomes an ADK ``FunctionTool`` with Live behaviour ``NON_BLOCKING``, so
-    the model keeps talking while it runs. The others stay plain callables (ADK wraps them itself).
+    the model keeps talking while it runs. Its result is scheduled ``WHEN_IDLE`` (spoken as soon as the holding
+    line ends), or ``INTERRUPT`` when it is a path / safety result (``is_urgent``): that one cuts in at once.
+    The others stay plain callables (ADK wraps them itself).
     """
     out: list = []
     for fn in fns:
@@ -151,9 +155,32 @@ def live_tools(fns: list[Callable[..., Any]], session: Session,
             from google.adk.tools import FunctionTool
             from google.genai import types
 
-            tool = FunctionTool(wrapped)
+            tool = FunctionTool(_scheduled(wrapped))
             tool.behavior = types.Behavior.NON_BLOCKING
+            tool.response_scheduling = types.FunctionResponseScheduling.WHEN_IDLE
             out.append(tool)
         else:
             out.append(wrapped)
     return out
+
+
+def is_urgent(result: Any) -> bool:
+    """A result about the way ahead or a hazard: it must interrupt whatever AIRA is saying."""
+    return isinstance(result, dict) and (result.get("kind") == "path" or bool(result.get("urgent")))
+
+
+def _scheduled(wrapped: ToolFn) -> ToolFn:
+    """``wrapped`` returning an INTERRUPT-scheduled ``FunctionResponse`` for an urgent result (ADK reads the
+    scheduling of a returned FunctionResponse and sends its ``response``); any other result is returned as is."""
+    from google.genai import types
+
+    @functools.wraps(wrapped)
+    async def run(*args: Any, **kwargs: Any) -> Any:
+        result = await wrapped(*args, **kwargs)
+        if is_urgent(result):
+            return types.FunctionResponse(response=result,
+                                          scheduling=types.FunctionResponseScheduling.INTERRUPT)
+        return result
+
+    run.__signature__ = wrapped.__signature__  # type: ignore[attr-defined]
+    return run

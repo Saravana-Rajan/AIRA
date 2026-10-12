@@ -19,6 +19,10 @@ SendFn = Callable[[BaseModel], Awaitable[None]]
 # The same notice (vendor reply, alert, guidance verdict) reaching one session twice within this many seconds
 # is spoken once. Loops (guidance, delivery counts, jobs) may fire the same line again; the owner hears it once.
 NOTICE_DEDUPE_S = 10.0
+# A camera look may reuse a frame that arrived less than FRAME_REUSE_S ago (``request_frames(reuse_s=...)``)
+# when it is at least REUSE_MIN_SIDE px on its long side (ambient / describe frames are 640 px).
+FRAME_REUSE_S = 1.0
+REUSE_MIN_SIDE = 640
 _monotonic = time.monotonic  # tests swap in a clock
 _WS = re.compile(r"\s+")
 
@@ -96,9 +100,9 @@ class Session:
         return self.judge(text, typed=typed).lang
 
     def latest_frame(self, max_age_s: float = 1.0) -> Frame | None:
-        """The newest live-video frame if it arrived at most ``max_age_s`` ago (``aira_live.live_frames``)."""
-        from aira_live import live_frames
-        return live_frames.latest(self.session_id, max_age_s)
+        """The newest frame of any purpose but the preview (the 1 fps live video included) that arrived at most
+        ``max_age_s`` ago, or None (``FrameStore.recent``; ``look_frame`` reuses the same frames)."""
+        return self.frames.recent(max_age_s)
 
     @property
     def walking(self) -> bool:
@@ -131,7 +135,22 @@ class Session:
         diag("frames_got", session=self.session_id, purpose=purpose, wanted=count, got=len(frames),
              waited_ms=round((time.perf_counter() - started) * 1000), bytes=[len(f.jpeg_b64) for f in frames],
              sizes=[[f.w, f.h] for f in frames])
+        diag("latency", stage="frame_wait", session=self.session_id, purpose=purpose, reused=False,
+             ms=round((time.perf_counter() - started) * 1000), got=len(frames), wanted=count)
         return frames
+
+    async def look_frame(self, purpose: str, timeout_s: float = 4.0, max_age_s: float = FRAME_REUSE_S,
+                         min_side: int = REUSE_MIN_SIDE) -> list[Frame]:
+        """One frame for a single-frame look (camera_ask "look"/"read", identify, free-text find): a frame of any
+        purpose that reached the server less than ``max_age_s`` ago and is at least ``min_side`` px on its long
+        side is used at once; otherwise one fresh frame is requested (``request_frames``). Never for a count:
+        a count needs its own sharp 1280 px burst."""
+        hit = self.frames.recent(max_age_s, min_side=min_side)
+        if hit is not None:
+            diag("latency", stage="frame_wait", session=self.session_id, purpose=purpose, reused=True,
+                 ms=0, frame_purpose=hit.purpose, size=[hit.w, hit.h])
+            return [hit]
+        return await self.request_frames(purpose, count=1, timeout_s=timeout_s)
 
 
 current_session: ContextVar[Session] = ContextVar("current_session")

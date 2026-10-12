@@ -5,7 +5,8 @@ from types import SimpleNamespace
 import pytest
 from live_fakes import FakeBackend
 
-from aira_live import config, live_frames, live_video, main, tool_runtime
+from aira_live import config, live_video, main, tool_runtime
+from aira_live import frames as frames_mod
 from aira_live.frames import Frame
 from aira_live.live_bridge import AdkLiveBackend, LiveBridge
 from aira_live.live_video import (MIN_GAP_S, NUDGE_DEDUPE_S, NUDGE_GAP_S, NUDGE_PREFIX, LiveVideo, labels_key,
@@ -95,7 +96,6 @@ async def test_main_forwards_live_frames_caches_them_and_never_stores_them_for_t
     assert await main.live_frame(s, bridge, _frame(), video=True)
     assert b.sent_video and s.frames.latest(5) == []
     assert s.latest_frame(1.0).id == "f1.0"
-    live_frames.forget(s.session_id)
     await bridge.close()
 
 
@@ -111,23 +111,21 @@ async def test_flag_off_keeps_frames_out_of_live(mk_session, monkeypatch):
     monkeypatch.delenv("AIRA_LIVE_VIDEO")
     monkeypatch.delenv("AIRA_LIVE_NUDGE")
     assert config.load().live_video is True and config.load().live_nudge is True
-    live_frames.forget(s.session_id)
     await bridge.close()
 
 
 # ---------- the newest-frame cache ----------
-def test_latest_frame_is_fresh_only(monkeypatch):
+async def test_latest_frame_is_fresh_only_and_look_frame_reuses_it(mk_session, monkeypatch):
     clock = Clock()
-    monkeypatch.setattr(live_frames, "_monotonic", clock)
-    live_frames.remember("s1", _frame(5.0))
-    live_frames.remember("s1", _frame(4.0))  # an older phone ts never replaces a newer frame
-    assert live_frames.latest("s1", 1.0).ts == 5.0
+    monkeypatch.setattr(frames_mod, "time", SimpleNamespace(monotonic=clock))
+    s, _ = mk_session()
+    s.frames.remember_recent(_frame(5.0))
+    assert s.latest_frame(1.0).ts == 5.0
+    assert (await s.look_frame("ask"))[0].ts == 5.0  # 768 px live frame: no request to the phone
     clock.t += 0.8
-    assert live_frames.latest("s1", 1.0) is not None
+    assert s.latest_frame(1.0) is not None
     clock.t += 0.5
-    assert live_frames.latest("s1", 1.0) is None and live_frames.latest("s1", 2.0) is not None
-    live_frames.forget("s1")
-    assert live_frames.latest("s1", 99) is None
+    assert s.latest_frame(1.0) is None and s.latest_frame(2.0) is not None
 
 
 # ---------- the nudge ----------
@@ -236,5 +234,4 @@ async def test_a_walk_silences_nudges_precounts_and_scene_lines(mk_session, monk
     assert started == [] and _nudges(b) == [] and b.sent_video
     monkeypatch.delitem(walk._ACTIVE, s.session_id)
     assert not s.walking
-    live_frames.forget(s.session_id)
     await bridge.close()
