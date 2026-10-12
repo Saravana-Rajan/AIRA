@@ -192,13 +192,18 @@ def test_the_prompt_keeps_the_session_language_and_never_switches_on_a_short_wor
 
 
 # ---------- 3. transcription config ----------
-def test_transcription_config_uses_language_codes_vocabulary_and_diarization():
+def test_transcription_config_uses_language_codes_and_vocabulary_without_diarization():
     from google.genai import types
 
     cfg = live_bridge.transcription_config(types, languages=["ta", "en", "xx"], vocabulary=["Aavin", "rupees"])
     assert cfg.language_codes == ["ta-IN", "en-IN", "xx"]
     assert cfg.custom_vocabulary == ["Aavin", "rupees"] and cfg.adaptation_phrases == ["Aavin", "rupees"]
-    assert cfg.diarization is True
+    # The Live API closes the session (1007) when custom_vocabulary and diarization are both set.
+    assert not cfg.diarization
+    forced = live_bridge.transcription_config(types, languages=["en"], vocabulary=["Aavin"], diarization=True)
+    assert not forced.diarization and forced.custom_vocabulary == ["Aavin"]
+    plain = live_bridge.transcription_config(types, languages=["en"], diarization=True)
+    assert plain.diarization is True
     assert cfg.language_hints is None  # deprecated in google-genai in favour of language_codes
 
 
@@ -223,7 +228,7 @@ def test_transcription_config_skips_fields_an_older_sdk_lacks():
 
     cfg = live_bridge.transcription_config(SimpleNamespace(AudioTranscriptionConfig=HintsOnly, LanguageHints=Hints),
                                            languages=["ta", "en"], vocabulary=["Aavin"])
-    assert cfg.kw["language_hints"].language_codes == ["ta-IN", "en-IN"] and cfg.kw["diarization"] is True
+    assert cfg.kw["language_hints"].language_codes == ["ta-IN", "en-IN"] and "diarization" not in cfg.kw
     assert "custom_vocabulary" not in cfg.kw
 
 
@@ -254,7 +259,7 @@ async def test_build_system_prompt_remembers_the_vocabulary_for_the_live_session
     s.languages = ["ta", "en"]
     cfg = live_bridge.input_transcription_config(types, s)
     assert cfg.language_codes == ["ta-IN", "en-IN"] and "Aavin Milk" in cfg.custom_vocabulary
-    assert cfg.diarization is True
+    assert not cfg.diarization
     s.languages = None  # no shop list: the session language is the only hint
     assert live_bridge.input_transcription_config(types, s).language_codes == ["en-IN"]
 

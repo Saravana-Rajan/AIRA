@@ -565,7 +565,7 @@ def transcription_language_codes(languages) -> list[str]:
     return out
 
 
-def transcription_config(types, *, languages=(), vocabulary=(), diarization: bool = True):
+def transcription_config(types, *, languages=(), vocabulary=(), diarization: bool = False):
     """``types.AudioTranscriptionConfig`` for the input audio: language hints (``language_codes``, or the older
     ``language_hints``), the catalog as ``custom_vocabulary`` / ``adaptation_phrases`` and ``diarization``.
 
@@ -589,7 +589,9 @@ def transcription_config(types, *, languages=(), vocabulary=(), diarization: boo
             kw["custom_vocabulary"] = list(vocab)
         if "adaptation_phrases" in fields:
             kw["adaptation_phrases"] = list(vocab)
-    if diarization and "diarization" in fields:
+    # The Live API rejects the session (close 1007 "custom_vocabulary is incompatible with diarization") when both
+    # are set, so diarization is only used without a vocabulary. Off by default: ADK drops the speaker labels anyway.
+    if diarization and "diarization" in fields and "custom_vocabulary" not in kw and "adaptation_phrases" not in kw:
         kw["diarization"] = True
     return cls(**kw)
 
