@@ -91,3 +91,56 @@ def test_image_part_decodes_base64(frame):
 def test_toolreply_defaults():
     assert ToolReply(say_first="hi").to_dict() == {
         "say_first": "hi", "detail": "", "confidence": 0.0, "needs_retake": False, "aim_hint": ""}
+
+
+# --- the count call: real JSON schema, big output cap, no Flash fallback, truncation is "not sure" --------------
+
+
+def test_config_leaves_temperature_at_the_model_default():
+    from aira_live.vision import gemini
+
+    assert gemini._config("low").temperature is None
+
+
+async def test_count_call_uses_a_json_schema_and_a_big_output_cap(fake_genai):
+    from aira_live.vision import gemini
+
+    client = fake_genai('{"items": [{"point": [10, 20], "label": "curd"}]}')
+    out = await gemini.generate_count_json(["prompt"], timeout_s=1.0)
+    assert out["items"] == [{"point": [10, 20], "label": "curd"}] and out["_model"] == model_for("count")
+    cfg = client.aio.models.calls[0]["config"]
+    assert cfg.max_output_tokens == gemini.COUNT_MAX_OUTPUT_TOKENS >= 16384
+    assert cfg.response_json_schema == gemini.COUNT_JSON_SCHEMA
+    assert cfg.temperature is None
+
+
+async def test_count_call_retries_er_once_and_never_falls_back_to_flash(fake_genai):
+    from aira_live.vision import gemini
+
+    client = fake_genai("x", "y", "z")
+    with pytest.raises(VisionError):
+        await gemini.generate_count_json(["prompt"], timeout_s=1.0)
+    assert [c["model"] for c in client.aio.models.calls] == [model_for("count")] * 2
+
+
+async def test_count_call_never_salvages_a_truncated_reply(fake_genai):
+    from aira_live.vision import gemini
+
+    fake_genai('{"items": [{"point": [10, 20], "label": "a"}, {"point": [3')
+    with pytest.raises(gemini.TruncatedReply):
+        await gemini.generate_count_json(["prompt"], timeout_s=1.0)
+
+
+async def test_count_call_at_max_tokens_is_truncated(fake_genai):
+    from types import SimpleNamespace
+
+    from aira_live.vision import gemini
+
+    client = fake_genai('{"items": []}')
+
+    async def capped(model, contents, config=None):
+        return SimpleNamespace(text='{"items": []}', candidates=[SimpleNamespace(finish_reason="MAX_TOKENS")])
+
+    client.aio.models.generate_content = capped
+    with pytest.raises(gemini.TruncatedReply):
+        await gemini.generate_count_json(["prompt"], timeout_s=1.0)

@@ -57,14 +57,14 @@ SERVER = load("server_msgs.json")
 def test_every_client_fixture_validates_and_covers_all_types():
     seen = {client_adapter.validate_python(m).t for m in CLIENT}
     assert seen == set(ts_list(MESSAGES_TS, "CLIENT_MSG_TYPES"))
-    assert seen == {"hello", "audio", "frame", "text", "event", "confirm", "stop", "log", "boxes"}
+    assert seen == {"hello", "audio", "frame", "text", "event", "confirm", "stop", "log", "boxes", "rtc"}
 
 
 def test_every_server_fixture_validates_and_covers_all_types():
     seen = {server_adapter.validate_python(m).t for m in SERVER}
     assert seen == set(ts_list(MESSAGES_TS, "SERVER_MSG_TYPES"))
     assert seen == {"ready", "audio", "transcript", "request_frame", "target", "count", "state", "confirm", "cue", "error",
-                    "boxes"}
+                    "boxes", "rtc"}
 
 
 def test_type_tuples_match_ts():

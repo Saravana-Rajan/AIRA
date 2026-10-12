@@ -2,6 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act } from "preact/test-utils";
 import { cleanup, findAllByText, flush, mount, text } from "./helpers/render";
 import { App, type ListenFn } from "../src/components/App";
+import { captureMonitorKey } from "../src/lib/useMonitor";
+import { KEY_STORAGE } from "../src/lib/monitor";
 import type { LiveStatus, ShopData } from "../src/lib/live";
 import type { Forecast, ForecastItem } from "../src/lib/forecast";
 
@@ -86,9 +88,10 @@ describe("App", () => {
     expect(findAllByText(el, "li", "Sakthi Curd 1 L: counted 28 L of 30 L ordered")).toHaveLength(1);
     expect(findAllByText(el, "li", "Sakthi Curd 1 L: bill says 30, counted 28")).toHaveLength(1);
     expect(text(el)).not.toMatch(/expected 28, got 30|undefined/);
-    expect(findAllByText(el, ".order__items", "Sakthi Curd 1 L: 30 L")).toHaveLength(1);    expect(findAllByText(el, "dd", "₹180").length).toBeGreaterThan(0);
+    expect(findAllByText(el, ".order__items", "Sakthi Curd 1 L: 30 L")).toHaveLength(1);
+    expect(findAllByText(el, "dd", "₹180").length).toBeGreaterThan(0);
     expect(text(el)).toContain("Forecast unavailable");
-    expect(text(el)).toMatch(/Demo shop/);
+    expect(text(el)).not.toMatch(/Demo shop/);
   });
 
   it("shows one section per hash route and moves focus to it", async () => {
@@ -149,6 +152,20 @@ describe("App", () => {
     expect(text(el)).toContain("Demo history");
     expect(loadForecast).toHaveBeenCalledTimes(1);
     expect(loadForecast).toHaveBeenCalledWith("sunrise_dairy");
+  });
+
+  it("opens the Live page from a #/live#key=... link: the key is taken off before the first render", () => {
+    sessionStorage.clear();
+    history.replaceState(null, "", "/dashboard/#/live#key=abc123");
+    captureMonitorKey(); // what main.tsx does before render
+    expect(location.hash).toBe("#/live");
+    expect(sessionStorage.getItem(KEY_STORAGE)).toBe("abc123");
+    const { listen } = fakeLive();
+    const el = mount(<App listen={listen} loadForecast={async () => null} now={() => NOW} />);
+    expect(el.querySelector(".livepage")).not.toBeNull();
+    expect(el.querySelector("input#monitor-key")).toBeNull();
+    expect(location.href).not.toContain("abc123");
+    sessionStorage.clear();
   });
 
   it("stops listening when it unmounts", () => {

@@ -429,3 +429,19 @@ def test_hello_in_mock_mode_never_starts_ambient(monkeypatch, fake_db):
         assert ws.receive_json()["mock"] is True
     _wait(lambda: calls["stop"])
     assert calls["start"] == []
+
+
+@pytest.mark.parametrize("error", [RuntimeError('Cannot call "send" once a close message has been sent'),
+                                   __import__("fastapi").WebSocketDisconnect(1001)])
+async def test_hold_up_stop_is_quiet_when_the_phone_socket_is_already_closed(caplog, error):
+    from aira_live.session import Session
+
+    async def closed(_msg):
+        raise error
+
+    s = Session("u1", "sunrise_dairy", "en", "short", closed)
+    loop = ambient.HoldUpLoop(s, busy=lambda: False)
+    with caplog.at_level("DEBUG", logger="aira_live.tools.ambient"):
+        await loop.stop()
+    assert not loop.active
+    assert [r for r in caplog.records if r.levelno >= 30] == []

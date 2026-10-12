@@ -38,6 +38,18 @@ export class AiraSocket {
     return true;
   }
 
+  /** True while the WebSocket is open. */
+  isOpen(): boolean {
+    return this.ws?.readyState === 1;
+  }
+
+  /** Bytes queued on the socket that the network has not taken yet; 0 while disconnected. */
+  bufferedAmount(): number {
+    if (!this.ws || this.ws.readyState !== 1) return 0;
+    const n = this.ws.bufferedAmount;
+    return typeof n === "number" && n > 0 ? n : 0;
+  }
+
   on(h: Handler): () => void {
     this.handlers.add(h);
     return () => {

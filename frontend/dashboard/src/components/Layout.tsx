@@ -1,7 +1,9 @@
 import type { ComponentChildren } from "preact";
+import { useEffect, useState } from "preact/hooks";
 import type { Access } from "../lib/access";
 import type { LiveStatus } from "../lib/live";
 import { Header } from "./Header";
+import { Sidebar } from "./Sidebar";
 
 export const ROUTES = [
   { hash: "#/", label: "Overview" },
@@ -26,18 +28,35 @@ export function parseRoute(hash: string): Route | null {
   return ROUTES.find((r) => r.hash === hash)?.hash ?? "#/";
 }
 
-const SHOP_NAMES: Record<string, string> = { sunrise_dairy: "Sunrise Dairy" };
+export const SHOP_NAMES: Record<string, string> = { sunrise_dairy: "Sunrise Dairy" };
 
+/**
+ * The page frame: a left section menu (a drawer behind the header's menu button on a phone), the header with
+ * the shop name and live status, and the main region. The menu stays the same on every section, Live included.
+ */
 export function Layout(props: {
   access: Access;
   route: Route;
   status: LiveStatus;
   updatedText?: string;
-  /** Record mode on the Live page: only the page itself, no header, banner or tabs (a clean screen recording). */
+  /** Record mode on the Live page: only the page itself, no header or menu (a clean screen recording). */
   bare?: boolean;
   children: ComponentChildren;
 }) {
   const shopId = props.access.mode === "denied" ? "" : props.access.shopId;
+  const shopName = SHOP_NAMES[shopId] ?? (shopId || "AIRA");
+  const [menuOpen, setMenuOpen] = useState(false);
+  useEffect(() => setMenuOpen(false), [props.route]);
+  useEffect(() => {
+    if (!menuOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      setMenuOpen(false);
+      document.querySelector<HTMLElement>(".header__menu")?.focus();
+    };
+    addEventListener("keydown", onKey);
+    return () => removeEventListener("keydown", onKey);
+  }, [menuOpen]);
   const skipToMain = (e: MouseEvent) => {
     e.preventDefault();
     document.getElementById("main")?.focus();
@@ -49,29 +68,28 @@ export function Layout(props: {
       </main>
     );
   }
+  const live = props.route === "#/live";
+  const shell = ["shell", menuOpen && "shell--menu-open"].filter(Boolean).join(" ");
   return (
     <>
       <a class="skip-link" href="#main" onClick={skipToMain}>Skip to content</a>
-      <Header shopName={SHOP_NAMES[shopId] ?? (shopId || "AIRA")} status={props.status} updatedText={props.updatedText} />
-      {props.access.mode === "demo" && (
-        <p class="banner">
-          <strong>Demo shop.</strong> Read-only view: records change only through AIRA.
-        </p>
-      )}
-      <nav class="tabs" aria-label="Dashboard sections">
-        <ul class="tabs__list">
-          {ROUTES.map((r) => (
-            <li key={r.hash}>
-              <a class="tabs__link" href={r.hash} aria-current={props.route === r.hash ? "page" : undefined}>
-                {r.label}
-              </a>
-            </li>
-          ))}
-        </ul>
-      </nav>
-      <main id="main" tabIndex={-1} class={props.route === "#/" ? "main" : props.route === "#/live" ? "main main--single main--live" : "main main--single"}>
-        {props.children}
-      </main>
+      <div class={shell}>
+        <Sidebar routes={ROUTES} route={props.route} shopName={shopName} status={props.status} updatedText={props.updatedText} />
+        {menuOpen && <div class="scrim" aria-hidden="true" onClick={() => setMenuOpen(false)} />}
+        <div class="shell__body">
+          <Header
+            shopName={shopName}
+            title={ROUTES.find((r) => r.hash === props.route)?.label}
+            status={props.status}
+            updatedText={props.updatedText}
+            menuOpen={menuOpen}
+            onMenu={() => setMenuOpen((o) => !o)}
+          />
+          <main id="main" tabIndex={-1} class={props.route === "#/" ? "main" : live ? "main main--single main--live" : "main main--single"}>
+            {props.children}
+          </main>
+        </div>
+      </div>
     </>
   );
 }

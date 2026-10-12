@@ -1,5 +1,5 @@
-/* AIRA design tokens for the Shop Dashboard. LIGHT THEME ONLY: no dark-mode styles anywhere.
-   Copy of frontend/app/src/ui/tokens.css (colours from the AIRA logo); change both together.
+/* AIRA design tokens for the Shop Dashboard.
+   The brand block below is a copy of frontend/app/src/ui/tokens.css (colours from the AIRA logo); change both together.
    The dashboard uses 16px body text; the phone app uses 18px. */
 :root {
   color-scheme: light;
@@ -30,4 +30,34 @@
   --radius-pill: 999px;
   --gutter: 16px;
   --focus-ring: 3px solid var(--brand-blue);
+}
+
+/* ---------- Neumorphism (soft UI), the dashboard's surface system ----------
+   Page and cards share one base colour; depth comes only from a dark and a light shadow.
+   Raised = sits above the surface (cards, KPI tiles, hover). Inset = pressed into it (active menu item,
+   pills, table header). Text stays dark (light mode) or light (dark mode) and every coloured "ink" is
+   WCAG AA (4.5:1 or more) on --neu-bg. Reused by the Live page; light only, like the rest of the dashboard. */
+:root {
+  --neu-bg: #E0E0E0;
+  --neu-bg-sunken: #D7D7D7;
+  --neu-shadow-dark: rgba(163, 163, 163, 0.45);
+  --neu-shadow-light: rgba(255, 255, 255, 0.85);
+  --neu-text: #2D3436;        /* 9.6:1 on --neu-bg */
+  --neu-text-muted: #4F5A65;  /* 5.3:1 */
+  --neu-accent: #4338CA;      /* indigo, 6.0:1: active menu item, links, focus */
+  --neu-ok: #0F6630;
+  --neu-danger: #A11A10;
+  --neu-warn: #8A3A08;
+  --neu-info: #1E4FB0;
+  --neu-divider: rgba(45, 52, 54, 0.09);
+  --neu-hover: rgba(45, 52, 54, 0.04);
+
+  --neu-raised: 4px 4px 10px var(--neu-shadow-dark), -4px -4px 10px var(--neu-shadow-light);
+  --neu-raised-sm: 2px 2px 5px var(--neu-shadow-dark), -2px -2px 5px var(--neu-shadow-light);
+  --neu-inset: inset 3px 3px 6px var(--neu-shadow-dark), inset -3px -3px 6px var(--neu-shadow-light);
+  --neu-inset-sm: inset 1.5px 1.5px 3px var(--neu-shadow-dark), inset -1.5px -1.5px 3px var(--neu-shadow-light);
+
+  --neu-radius-card: 22px;
+  --neu-radius-item: 12px;
+  --neu-focus: 3px solid var(--neu-accent);
 }

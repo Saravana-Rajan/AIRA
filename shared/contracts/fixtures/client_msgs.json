@@ -7,6 +7,8 @@
   {"t":"frame","id":"f3","jpeg":"/9j/4AAQ","w":640,"h":480,"ts":1760000003400,"purpose":"describe"},
   {"t":"frame","id":"f4","jpeg":"/9j/4AAQ","w":640,"h":480,"ts":1760000004000,"purpose":"identify_held"},
   {"t":"frame","id":"f5","jpeg":"/9j/4AAQ","w":480,"h":270,"ts":1760000004400,"purpose":"preview"},
+  {"t":"frame","id":"f6","jpeg":"/9j/4AAQ","w":768,"h":432,"ts":1760000005000,"purpose":"live"},
+  {"t":"frame","id":"f7","jpeg":"/9j/4AAQ","w":768,"h":432,"ts":1760000006000,"purpose":"live","changed":true,"labels":["bottle","cup"]},
   {"t":"text","text":"order 30 litres sakthi curd"},
   {"t":"event","name":"fingertip_in_target","data":{"frameId":"f1","dwellMs":500}},
   {"t":"event","name":"visibility","data":{"state":"hidden"}},
@@ -18,5 +20,9 @@
   {"t":"log","tag":"build","data":{"build":"a1b2c3d","appVersion":"0.1.0"}},
   {"t":"boxes","source":"mediapipe","objects":[{"label":"chair","box":[420,310,900,690],"score":0.82,"severity":"danger"},{"label":"bottle","box":[100,50,300,120],"score":0.61}]},
   {"t":"boxes","source":"mediapipe","objects":[]},
-  {"t":"boxes","source":"bump","objects":[{"label":"crate","box":[300,350,950,700],"severity":"danger"}],"frameId":"f1"}
+  {"t":"boxes","source":"bump","objects":[{"label":"crate","box":[300,350,950,700],"severity":"danger"}],"frameId":"f1"},
+  {"t":"rtc","kind":"offer","to":"m1","sdp":"v=0\r\no=- 1 1 IN IP4 127.0.0.1\r\ns=-\r\n"},
+  {"t":"rtc","kind":"ice","from":"s1","to":"m1","candidate":{"candidate":"candidate:1 1 udp 2122260223 192.0.2.1 50000 typ host","sdpMid":"0","sdpMLineIndex":0}},
+  {"t":"rtc","kind":"connected","to":"m1"},
+  {"t":"rtc","kind":"bye","to":"m1"}
 ]

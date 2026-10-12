@@ -576,3 +576,295 @@ a {
   color: var(--text-muted);
   text-align: left;
 }
+
+/* ======================================================================
+   Soft UI (neumorphism): shell, left menu, cards, KPI tiles, tables, pills.
+   One base colour for page and surfaces; depth only from --neu-* shadows (tokens.css).
+   ====================================================================== */
+html,
+body {
+  background: var(--neu-bg);
+  color: var(--neu-text);
+}
+a { color: var(--neu-accent); }
+:focus-visible { outline: var(--neu-focus); outline-offset: 3px; }
+.muted, .header__sub, .card__lead { color: var(--neu-text-muted); }
+.banner, .tabs { display: none; }
+
+/* ---------- shell: menu on the left, page on the right ---------- */
+.shell {
+  display: grid;
+  grid-template-columns: 252px minmax(0, 1fr);
+  min-height: 100vh;
+}
+.shell--compact { grid-template-columns: 84px minmax(0, 1fr); }
+.shell__body { min-width: 0; display: flex; flex-direction: column; }
+
+.sidebar {
+  position: sticky;
+  top: 0;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+  padding: 22px 16px;
+  background: var(--neu-bg);
+  box-shadow: 2px 0 8px -4px var(--neu-shadow-dark);
+  z-index: 20;
+  overflow-y: auto;
+}
+.sidebar__brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px;
+  border-radius: var(--neu-radius-item);
+  box-shadow: var(--neu-raised-sm);
+}
+.sidebar__logo { width: 36px; height: 36px; border-radius: 10px; flex: none; }
+.sidebar__names { display: flex; flex-direction: column; min-width: 0; line-height: 1.2; }
+.sidebar__app { font-weight: 800; letter-spacing: 0.08em; font-size: 13px; color: var(--neu-accent); }
+.sidebar__shop { font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+.nav { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+.nav__link {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 11px 14px;
+  border-radius: var(--neu-radius-item);
+  color: var(--neu-text-muted);
+  font-weight: 600;
+  text-decoration: none;
+  transition: box-shadow 0.18s ease, color 0.18s ease;
+}
+.nav__link:hover { color: var(--neu-text); box-shadow: var(--neu-raised-sm); }
+.nav__link[aria-current="page"] { color: var(--neu-accent); box-shadow: var(--neu-inset-sm); }
+.nav__icon { flex: none; }
+
+.sidebar__foot {
+  margin-top: auto;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 14px;
+  border-radius: var(--neu-radius-item);
+  box-shadow: var(--neu-inset-sm);
+  font-size: var(--text-small);
+  font-weight: 600;
+}
+.sidebar__status { display: flex; flex-direction: column; min-width: 0; }
+.sidebar__updated { color: var(--neu-text-muted); font-weight: 500; font-size: 12px; }
+
+/* Live page: an icon rail so the camera keeps its width */
+.shell--compact .sidebar { padding: 22px 12px; align-items: center; }
+.shell--compact .sidebar__brand { padding: 8px; }
+.shell--compact .sidebar__names,
+.shell--compact .nav__label,
+.shell--compact .sidebar__status { display: none; }
+.shell--compact .nav__link { justify-content: center; padding: 12px; }
+.shell--compact .sidebar__foot { justify-content: center; padding: 12px; }
+
+/* ---------- header ---------- */
+.header {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  border: 0;
+  padding: 18px 28px;
+  background: var(--neu-bg);
+}
+.header::after { display: none; }
+.header__logo { display: none; }
+.header__menu {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  border: 0;
+  border-radius: var(--neu-radius-item);
+  background: var(--neu-bg);
+  color: var(--neu-text);
+  box-shadow: var(--neu-raised-sm);
+  cursor: pointer;
+}
+.header__menu[aria-expanded="true"] { box-shadow: var(--neu-inset-sm); }
+.live {
+  border: 0;
+  padding: 8px 14px;
+  background: var(--neu-bg);
+  box-shadow: var(--neu-raised-sm);
+  color: var(--neu-text);
+}
+.live--offline { color: var(--neu-danger); }
+.live--live .live__dot { background: var(--neu-ok); }
+
+/* ---------- page grid and cards ---------- */
+.main, .main.main--single, .main.main--live { max-width: none; width: 100%; padding: 8px 28px 40px; gap: 28px; margin: 0; }
+.main.main--single { grid-template-columns: minmax(0, 1fr); }
+.card {
+  padding: 22px;
+  border: 0;
+  border-radius: var(--neu-radius-card);
+  background: var(--neu-bg);
+  box-shadow: var(--neu-raised);
+}
+.card__title { font-size: 18px; letter-spacing: -0.01em; }
+.notice { border: 0; border-radius: var(--neu-radius-item); background: var(--neu-bg); box-shadow: var(--neu-inset-sm); }
+.notice--error { color: var(--neu-danger); }
+.empty, .empty-cell { color: var(--neu-text-muted); font-style: italic; }
+
+/* ---------- KPI tiles ---------- */
+.kpis {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 24px;
+}
+.kpi {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 20px 22px;
+  border-radius: var(--neu-radius-card);
+  background: var(--neu-bg);
+  box-shadow: var(--neu-raised);
+}
+.kpi__label { color: var(--neu-text-muted); font-size: var(--text-small); font-weight: 600; }
+.kpi__value { font-size: 30px; font-weight: 800; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
+.kpi__note { color: var(--neu-text-muted); font-size: 13px; }
+.kpi--warn .kpi__value { color: var(--neu-warn); }
+.kpi--danger .kpi__value { color: var(--neu-danger); }
+.kpi--ok .kpi__value { color: var(--neu-ok); }
+
+/* ---------- tables ---------- */
+.table-wrap {
+  overflow: auto;
+  max-height: 70vh;
+  border-radius: 16px;
+  box-shadow: var(--neu-inset-sm);
+  padding: 4px 6px 6px;
+}
+.table-wrap:focus-visible { outline: var(--neu-focus); }
+.table { width: 100%; border-collapse: separate; border-spacing: 0; }
+.table caption { padding: 10px 10px 8px; color: var(--neu-text-muted); }
+.table th,
+.table td { padding: 12px 14px; border-bottom: 1px solid var(--neu-divider); vertical-align: middle; }
+.table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--neu-bg-sunken);
+  color: var(--neu-text-muted);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+.table thead th:first-child { border-top-left-radius: 12px; }
+.table thead th:last-child { border-top-right-radius: 12px; }
+.table tbody tr { transition: background 0.15s ease; }
+.table tbody tr:hover { background: var(--neu-hover); }
+.table tbody tr:last-child > * { border-bottom: 0; }
+.table tbody th { font-weight: 600; color: var(--neu-text); }
+.table .num, .table th.num, .table td.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.row--group > * { background: var(--neu-bg-sunken); font-weight: 700; }
+
+/* ---------- pills ---------- */
+.badge {
+  border: 0;
+  padding: 3px 12px;
+  background: var(--neu-bg);
+  box-shadow: var(--neu-inset-sm);
+  color: var(--neu-text);
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+.badge--ok { color: var(--neu-ok); }
+.badge--low { color: var(--neu-danger); }
+.badge--state { color: var(--neu-info); }
+.expiry--soon { color: var(--neu-warn); }
+.expiry--past { color: var(--neu-danger); }
+.who { box-shadow: var(--neu-raised-sm); border: 0; }
+
+/* ---------- orders ---------- */
+.order {
+  border: 0;
+  border-radius: 18px;
+  background: var(--neu-bg);
+  box-shadow: var(--neu-raised-sm);
+}
+.order--discrepancy { box-shadow: var(--neu-raised-sm), inset 4px 0 0 var(--neu-danger); }
+.mismatch, .drafts { border: 0; border-radius: 16px; background: var(--neu-bg); box-shadow: var(--neu-inset-sm); }
+
+/* ---------- phone: the menu becomes a drawer ---------- */
+@media (max-width: 760px) {
+  .shell, .shell--compact { grid-template-columns: minmax(0, 1fr); }
+  .sidebar {
+    position: fixed;
+    left: 0;
+    top: 0;
+    bottom: 0;
+    width: min(280px, 82vw);
+    transform: translateX(-105%);
+    transition: transform 0.22s ease;
+    box-shadow: var(--neu-raised);
+  }
+  .shell--compact .sidebar { align-items: stretch; padding: 22px 16px; }
+  .shell--compact .sidebar__names,
+  .shell--compact .nav__label,
+  .shell--compact .sidebar__status { display: flex; }
+  .shell--compact .nav__link { justify-content: flex-start; padding: 11px 14px; }
+  .shell--menu-open .sidebar { transform: none; }
+  .scrim { position: fixed; inset: 0; z-index: 15; background: rgba(0, 0, 0, 0.25); }
+  .header { padding: 12px 16px; }
+  .header__menu { display: inline-flex; }
+  .header__logo { display: block; }
+  .main { padding: 4px 16px 32px; gap: 20px; }
+  .kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+  .kpi { padding: 16px; }
+  .kpi__value { font-size: 24px; }
+  .card { padding: 16px; }
+}
+
+/* ---------- no gaps: cards in a row share its height; a single section fills the screen ---------- */
+.main { align-items: stretch; }
+.main:not(.main--single) > .card { display: flex; flex-direction: column; }
+.main:not(.main--single) > .card > .table-wrap { flex: 1; }
+.main.main--single { align-content: start; }
+.main.main--single > .card { min-height: calc(100vh - 120px); display: flex; flex-direction: column; }
+.main.main--single > .card > .table-wrap { max-height: none; flex: 0 1 auto; }
+.main.main--single > .card > .empty:last-child { margin: auto; text-align: center; font-size: 18px; }
+.card--today .today > div,
+.card--today .methods > div {
+  padding: 14px 16px;
+  border-radius: var(--neu-radius-item);
+  box-shadow: var(--neu-inset-sm);
+}
+.card--today .methods { margin-top: 16px; }
+@media (min-width: 760px) {
+  .card--today .today { grid-template-columns: repeat(3, minmax(0, 1fr)) !important; }
+  .card--today .today > div { grid-column: auto !important; }
+}
+@media (min-width: 760px) {
+  .card--today .today,
+  .card--today .methods { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 20px; }
+}
+
+/* one of each: the shop name lives in the menu, the status in the header pill */
+.sidebar__foot { display: none; }
+.main--live .lv-logo,
+.main--live .lv-title { display: none; }
+/* A single section's card title repeats the header's page name: kept for screen readers, hidden on screen. */
+.main.main--single:not(.main--live) > .card > .card__title {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}

@@ -3,10 +3,11 @@
 // first message. Nothing here touches the DOM except the client's WebSocket/timer hooks, which are
 // injected so tests drive them.
 import {
-  NORM_MAX, parseMonitorMsg,
+  NORM_MAX, parseMonitorFeedMsg,
   type Box, type MonitorMsg, type MonitorRole, type MonitorState, type Point, type VisionObject, type VisionSource,
 } from "@aira/contracts";
 import { advanceTask, type Task } from "./liveTask";
+import type { SignalPort } from "./rtcViewer";
 
 export type { MonitorMsg, MonitorRole, MonitorState, VisionObject, VisionSource };
 
@@ -259,38 +260,6 @@ function toFrame(m: Extract<MonitorMsg, { kind: "frame" }>): Frame {
   return { src: `data:image/jpeg;base64,${m.jpeg_b64}`, w: m.w, h: m.h, purpose: m.purpose, ts: m.ts };
 }
 
-// ---------- target card ----------
-export type Side = "left" | "centre" | "right";
-export type Shelf = "top" | "middle" | "bottom";
-export interface TargetInfo {
-  label: string;
-  visible: boolean;
-  found: boolean;
-  /** 0..1 when the object carries a score, else null. */
-  confidence: number | null;
-  distance: "near" | "arm" | "far" | null;
-  side: Side | null;
-  shelf: Shelf | null;
-}
-
-const centreOf = (o: VisionObject): Point | null => (o.box ? centre(o.box) : o.point);
-
-/** What the Target card shows for the current target: null when nothing is being looked for. */
-export function targetInfo(s: Pick<LiveState, "target" | "found" | "er2">): TargetInfo | null {
-  if (!s.target) return null;
-  const o = s.er2.objects.find((x) => isTarget(x, s.target)) ?? null;
-  const c = o ? centreOf(o) : null;
-  return {
-    label: s.target,
-    visible: o !== null,
-    found: s.found,
-    confidence: o && typeof o.score === "number" ? o.score : null,
-    distance: o?.distance ?? null,
-    side: c ? (c[1] < 333 ? "left" : c[1] > 666 ? "right" : "centre") : null,
-    shelf: c ? (c[0] < 333 ? "top" : c[0] > 666 ? "bottom" : "middle") : null,
-  };
-}
-
 // ---------- overlay geometry ----------
 export interface Rect { x: number; y: number; w: number; h: number }
 export interface XY { x: number; y: number }
@@ -376,13 +345,16 @@ export function keyFromHash(hash: string): string | null {
   }
 }
 
-/** The fragment with key= removed ("#/live?key=abc" -> "#/live"; "#key=abc" -> ""). Never the query string. */
+/**
+ * The fragment with key= removed ("#/live?key=abc" -> "#/live"; "#/live#key=abc" -> "#/live"; "#key=abc" -> "").
+ * Never the query string.
+ */
 export function stripKey(hash: string): string {
   const out = hash
     .replace(/\?key=[^&#]*&/, "?")
-    .replace(/([?&#])key=[^&#]*/, (_m, lead: string) => (lead === "#" ? "#" : ""))
+    .replace(/([?&#])key=[^&#]*/, (_m, lead: string, at: number) => (lead === "#" && at === 0 ? "#" : ""))
     .replace(/\?&/, "?")
-    .replace(/[?&]$/, "");
+    .replace(/[?&#]$/, "");
   return out === "#" ? "" : out;
 }
 
@@ -459,6 +431,8 @@ export interface ClientDeps {
   connect: (url: string) => SocketLike;
   setTimer?: (fn: () => void, ms: number) => unknown;
   clearTimer?: (t: unknown) => void;
+  /** WebRTC signalling (rtcViewer): attached once a socket is open, told every {t:"rtc"} line, detached on close. */
+  signal?: SignalPort;
 }
 
 /** WebSocket close codes the server uses to refuse the key: policy violation or auth-style. */
@@ -503,16 +477,28 @@ export function openMonitor(
       }
       attempt = 0;
       onConn("live", 0);
+      deps.signal?.attach((m) => {
+        if (sock !== s) return false;
+        try {
+          s.send(JSON.stringify(m));
+          return true;
+        } catch {
+          return false;
+        }
+      });
     };
     s.onmessage = (ev) => {
       if (stopped || typeof ev.data !== "string") return;
-      const m = parseMonitorMsg(ev.data);
-      if (m) onMsg(m);
+      const m = parseMonitorFeedMsg(ev.data);
+      if (!m) return;
+      if (m.t === "rtc") deps.signal?.receive(m);
+      else onMsg(m);
     };
     s.onerror = () => {};
     s.onclose = (ev) => {
       if (stopped || sock !== s) return;
       sock = null;
+      deps.signal?.detach();
       if (REJECT_CODES.has(ev?.code ?? 0)) {
         onConn("rejected", attempt);
         return;
@@ -539,6 +525,7 @@ export function openMonitor(
     timer = null;
     const s = sock;
     sock = null;
+    deps.signal?.detach();
     try {
       s?.close();
     } catch {

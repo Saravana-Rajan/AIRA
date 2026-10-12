@@ -47,5 +47,9 @@
   {"t":"error","code":"unsupported","say":"I cannot do that yet."},
   {"t":"error","code":"internal","say":"Something went wrong. Please try again."},
   {"t":"boxes","source":"er2","objects":[{"label":"Aavin milk 500 ml","box":[390,505,435,555],"score":0.92},{"label":"Sakthi curd 1 L","box":[400,600,480,700]}],"frameId":"f1","target":"Aavin milk 500 ml","found":true},
-  {"t":"boxes","source":"er2","objects":[{"label":"table","box":[200,100,900,900]}]}
+  {"t":"boxes","source":"er2","objects":[{"label":"table","box":[200,100,900,900]}]},
+  {"t":"rtc","kind":"want","from":"m1","to":"s1"},
+  {"t":"rtc","kind":"answer","from":"m1","to":"s1","sdp":"v=0\r\no=- 2 2 IN IP4 127.0.0.1\r\ns=-\r\n"},
+  {"t":"rtc","kind":"ice","from":"m1","to":"s1","candidate":{"candidate":"candidate:2 1 udp 2122260223 192.0.2.2 50001 typ host","sdpMid":"0","sdpMLineIndex":null}},
+  {"t":"rtc","kind":"bye","from":"m1","to":"s1"}
 ]

@@ -19,7 +19,9 @@ export type BoxObject = { label: string; box: Box; score?: number; severity?: Bo
 export type ClientMsg =
   | { t: "hello"; uid: string; idToken?: string; shopId: string; lang: Lang; verbosity: Verbosity; appVersion: string; resume?: string }
   | { t: "audio"; pcm16: string }
-  | { t: "frame"; id: string; jpeg: string; w: number; h: number; ts: number; purpose: FramePurpose }
+  // `changed`/`labels` only on purpose "live": the view settled on something new (labels: the phone's own
+  // detector labels, at most MAX_FRAME_LABELS), so the server may nudge Live to speak up.
+  | { t: "frame"; id: string; jpeg: string; w: number; h: number; ts: number; purpose: FramePurpose; changed?: boolean; labels?: string[] }
   | { t: "text"; text: string }
   | { t: "event"; name: ClientEventName; data: Record<string, unknown> }
   | { t: "confirm"; id: string; answer: ConfirmAnswer; value?: string }
@@ -32,7 +34,23 @@ export type ClientMsg =
   // Boxes the phone drew itself: MediaPipe on-device detections (at most 5 a second) or the bump guard's
   // obstacles. Never answered: the server relays them to the live monitor as kind "vision" and drops the rest
   // above its per-socket rate limit. Nothing here changes state.
-  | { t: "boxes"; source: BoxSource; objects: BoxObject[]; frameId?: string };
+  | { t: "boxes"; source: BoxSource; objects: BoxObject[]; frameId?: string }
+  // WebRTC signalling from the phone to a dashboard monitor (`to` is the monitor id a `want` carried in `from`).
+  // The server fills `from` with the session id and relays it; it never reads the SDP.
+  | RtcClientMsg;
+
+// ---------- WebRTC signalling (phone <-> server <-> monitor; the server only relays) ----------
+// The dashboard asks a phone session for live video with `want`; the phone answers with an `offer` (video only,
+// sendonly), the dashboard with an `answer` (recvonly), both trickle `ice`; the phone says `connected` once the
+// peer connection is up (the server then pauses that session's JPEG preview for that monitor) and either side
+// says `bye` (the preview resumes). `from` is always the sender's id as the server knows it: a session id for
+// the phone, a monitor id for the dashboard; `to` names the peer. The server relays only inside one shop.
+export const RTC_KINDS = Object.freeze(["want", "offer", "answer", "ice", "connected", "bye"] as const);
+export type RtcKind = (typeof RTC_KINDS)[number];
+export type RtcCandidate = { candidate: string; sdpMid?: string | null; sdpMLineIndex?: number | null };
+export type RtcMsg = { t: "rtc"; kind: RtcKind; from: string; to: string; sdp?: string; candidate?: RtcCandidate };
+/** What a client sends: `from` is optional (the server overwrites it with the sender's own id anyway). */
+export type RtcClientMsg = Omit<RtcMsg, "from"> & { from?: string };
 
 // ---------- server -> client ----------
 export type ServerMsg =
@@ -53,7 +71,9 @@ export type ServerMsg =
   // Boxes Gemini Robotics-ER 2 drew (source "er2") for the phone's optional "Show boxes" overlay: the same shape
   // as the client message, plus the label being looked for (target, hand guidance) and whether it was found
   // (drawn green). Never spoken.
-  | { t: "boxes"; source: BoxSource; objects: BoxObject[]; frameId?: string; target?: string; found?: boolean };
+  | { t: "boxes"; source: BoxSource; objects: BoxObject[]; frameId?: string; target?: string; found?: boolean }
+  // WebRTC signalling relayed from a dashboard monitor (`from` is its monitor id) to this phone session.
+  | RtcMsg;
 
 export type ClientMsgType = ClientMsg["t"];
 export type ServerMsgType = ServerMsg["t"];
@@ -61,10 +81,10 @@ export type ClientMsgOf<T extends ClientMsgType> = Extract<ClientMsg, { t: T }>;
 export type ServerMsgOf<T extends ServerMsgType> = Extract<ServerMsg, { t: T }>;
 
 export const CLIENT_MSG_TYPES = Object.freeze([
-  "hello", "audio", "frame", "text", "event", "confirm", "stop", "log", "boxes",
+  "hello", "audio", "frame", "text", "event", "confirm", "stop", "log", "boxes", "rtc",
 ] as const);
 export const SERVER_MSG_TYPES = Object.freeze([
-  "ready", "audio", "transcript", "request_frame", "target", "count", "state", "confirm", "cue", "error", "boxes",
+  "ready", "audio", "transcript", "request_frame", "target", "count", "state", "confirm", "cue", "error", "boxes", "rtc",
 ] as const);
 
 // Compile-time check that the type lists match the unions exactly.
@@ -89,7 +109,34 @@ const isBox = (b: unknown): b is Box => Array.isArray(b) && b.length === 4 && b.
 const isBurst = (b: unknown): boolean => isObj(b) && isInt(b.count) && isInt(b.intervalMs);
 const isBoxObject = (o: unknown): o is BoxObject =>
   isObj(o) && isStr(o.label) && isBox(o.box) && optional(o.score, isNum) && optional(o.severity, (v) => inList(BOX_SEVERITIES, v));
+/** At most this many detector labels ride on a live frame. */
+export const MAX_FRAME_LABELS = 8;
+const isLabelList = (l: unknown): boolean =>
+  Array.isArray(l) && l.length <= MAX_FRAME_LABELS && l.every((v) => isStr(v) && v.length <= 60);
 const isBoxList = (l: unknown): l is BoxObject[] => Array.isArray(l) && l.length <= MAX_BOXES && l.every(isBoxObject);
+const isCandidate = (c: unknown): c is RtcCandidate =>
+  isObj(c) && isStr(c.candidate) && (c.sdpMid === undefined || c.sdpMid === null || isStr(c.sdpMid)) &&
+  (c.sdpMLineIndex === undefined || c.sdpMLineIndex === null || isInt(c.sdpMLineIndex));
+/** The rtc shape without `from` (a client may leave it out; the server always sets it). */
+const isRtcBody = (x: Obj): boolean =>
+  inList(RTC_KINDS, x.kind) && isStr(x.to) && optional(x.sdp, isStr) && optional(x.candidate, isCandidate);
+
+export function isRtcClientMsg(x: unknown): x is RtcClientMsg {
+  return isObj(x) && x.t === "rtc" && isRtcBody(x) && optional(x.from, isStr);
+}
+
+export function isRtcMsg(x: unknown): x is RtcMsg {
+  return isObj(x) && x.t === "rtc" && isRtcBody(x) && isStr(x.from);
+}
+
+export function parseRtcMsg(raw: string): RtcMsg | null {
+  try {
+    const v: unknown = JSON.parse(raw);
+    return isRtcMsg(v) ? v : null;
+  } catch {
+    return null;
+  }
+}
 
 export function isClientMsg(x: unknown): x is ClientMsg {
   if (!isObj(x) || !inList(CLIENT_MSG_TYPES, x.t)) return false;
@@ -100,7 +147,8 @@ export function isClientMsg(x: unknown): x is ClientMsg {
     case "audio":
       return isStr(x.pcm16);
     case "frame":
-      return isStr(x.id) && isStr(x.jpeg) && isInt(x.w) && isInt(x.h) && isNum(x.ts) && inList(FRAME_PURPOSES, x.purpose);
+      return isStr(x.id) && isStr(x.jpeg) && isInt(x.w) && isInt(x.h) && isNum(x.ts) && inList(FRAME_PURPOSES, x.purpose) &&
+        optional(x.changed, isBool) && optional(x.labels, isLabelList);
     case "text":
       return isStr(x.text);
     case "event":
@@ -113,6 +161,8 @@ export function isClientMsg(x: unknown): x is ClientMsg {
       return isStr(x.tag) && isObj(x.data);
     case "boxes":
       return inList(BOX_SOURCES, x.source) && isBoxList(x.objects) && optional(x.frameId, isStr);
+    case "rtc":
+      return isRtcClientMsg(x);
   }
   return false;
 }
@@ -146,6 +196,8 @@ export function isServerMsg(x: unknown): x is ServerMsg {
     case "boxes":
       return inList(BOX_SOURCES, x.source) && isBoxList(x.objects) && optional(x.frameId, isStr) &&
         optional(x.target, isStr) && optional(x.found, isBool);
+    case "rtc":
+      return isRtcMsg(x);
   }
   return false;
 }
@@ -176,7 +228,8 @@ export function parseClientMsg(raw: string): ClientMsg | null {
 // missing or late (5 s), and publishes nothing before it. The key never travels in the URL.
 // Frames are sent only while a monitor is connected (<= 480 px wide, quality 0.6, <= 4 fps a session).
 // Mirrored in backend/aira_live/contracts.py; fixtures in ../fixtures/monitor_msgs.json.
-export type MonitorClientMsg = { t: "auth"; key: string };
+// After auth a monitor may also send rtc signalling for one of the shop's sessions (`to` = session id).
+export type MonitorClientMsg = { t: "auth"; key: string } | RtcClientMsg;
 export const MONITOR_KINDS = Object.freeze(["session", "transcript", "frame", "vision", "hand", "event", "status", "stats"] as const);
 export type MonitorKind = (typeof MONITOR_KINDS)[number];
 export const MONITOR_ROLES = Object.freeze(["owner", "customer", "aira"] as const);
@@ -225,7 +278,17 @@ const isVisionObject = (o: unknown): o is VisionObject =>
   optional(o.distance, (v) => inList(VISION_DISTANCES, v));
 
 export function isMonitorClientMsg(x: unknown): x is MonitorClientMsg {
-  return isObj(x) && x.t === "auth" && isStr(x.key);
+  return (isObj(x) && x.t === "auth" && isStr(x.key)) || isRtcClientMsg(x);
+}
+
+/** One text frame of the /monitor feed: a monitor message, or rtc signalling from a phone session. */
+export function parseMonitorFeedMsg(raw: string): MonitorMsg | RtcMsg | null {
+  try {
+    const v: unknown = JSON.parse(raw);
+    return isMonitorMsg(v) ? v : isRtcMsg(v) ? v : null;
+  } catch {
+    return null;
+  }
 }
 
 export function isMonitorMsg(x: unknown): x is MonitorMsg {

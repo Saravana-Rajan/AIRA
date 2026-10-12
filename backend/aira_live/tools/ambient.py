@@ -30,6 +30,7 @@ from aira_live import sessions
 from aira_live.contracts import RequestFrameMsg, TranscriptMsg
 from aira_live.i18n import t
 from aira_live.live_bridge import on_input_transcript
+from aira_live.live_video import narrates
 from aira_live.session import Session
 from aira_live.tools import describe
 from aira_live.tools.camera import PERSON
@@ -190,6 +191,8 @@ class HoldUpLoop:
         self.identifying = False
 
     def busy(self) -> bool:
+        if getattr(self.session, "owner_busy", False):   # the owner's camera question goes first
+            return True
         if self._busy is not None:
             return bool(self._busy())
         return describe._bridge_busy(self.session)
@@ -271,8 +274,9 @@ class HoldUpLoop:
             self.task.cancel()
         try:
             await self.session.send(RequestFrameMsg(purpose=PURPOSE, stop=True))
-        except Exception:
-            log.warning("ambient: could not send stop to session %s", self.session.session_id, exc_info=True)
+        except Exception as exc:  # noqa: BLE001 - WebSocketDisconnect, RuntimeError (the phone socket is already
+            # closed) or any other send error: there is nothing left to stop, and nothing worth a traceback.
+            log.debug("ambient: stop not sent to session %s: %s", self.session.session_id, exc)
 
 
 # --- the mode -------------------------------------------------------------------------------------------------------
@@ -347,7 +351,9 @@ async def start(session: Session, run: bool = True, persist: bool = True, **kw) 
     _ensure_switch(session)
     scene_busy = (lambda: holdup.holding() or busy()) if busy is not None else \
         (lambda: holdup.holding() or describe._bridge_busy(session))
-    await describe.start(session, run=run, busy=scene_busy, clock=clock)
+    scene = await describe.start(session, run=run, busy=scene_busy, clock=clock)
+    # Live video speaks up on scene changes itself: the ER scene loop keeps its boxes and memory, but is silent.
+    scene.quiet = narrates(describe._bridge_of(session))
     await session.send(RequestFrameMsg(purpose=PURPOSE, continuous=True))
     if run:
         holdup.task = asyncio.create_task(holdup.run(), name=f"ambient-{session.session_id}")

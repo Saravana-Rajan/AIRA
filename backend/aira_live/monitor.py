@@ -10,8 +10,9 @@ Publishers (all fire-and-forget, none may break the thing it watches):
 - ``mirror`` turns the server messages a session sends to its phone into transcripts (owner / customer / aira),
   status and events. ``main.py`` calls it from the socket's ``send``.
 - ``publish_frame`` copies a phone frame (the owner's chest camera or a ``camera:<name>`` room camera) down to
-  ``MAX_WIDTH`` px / quality ``JPEG_QUALITY``, at most ``MAX_FPS`` a second per session, and only while someone is
-  watching the shop (the image bytes are never decoded otherwise).
+  ``MAX_WIDTH`` px / quality ``JPEG_QUALITY``, at most ``MAX_FPS`` a second per session (the phone's small
+  ``preview`` frames pass as they are, up to ``PREVIEW_MAX_FPS``), and only while someone is watching the shop
+  (the image bytes are never decoded otherwise). A monitor's queue keeps one frame per session: the newest.
 - ``_from_hooks`` is registered with ``monitor_hooks`` (the box producers): every ER 2 result (source ``er2``,
   ``context`` names the prompt) and the phone's own ``boxes`` messages (``mediapipe`` / ``bump``, with
   ``severity: "danger"`` for an obstacle in the walking path) become kind ``vision`` here.
@@ -47,12 +48,14 @@ from typing import Any
 
 from pydantic import BaseModel, ValidationError
 
-from aira_live import config, monitor_hooks
+from aira_live import config, monitor_hooks, rtc
 from aira_live.contracts import (
     CountMsg,
     CueMsg,
     ErrorMsg,
+    MonAuthMsg,
     RequestFrameMsg,
+    RtcMsg,
     StateMsg,
     TargetMsg,
     TranscriptMsg,
@@ -67,12 +70,14 @@ log = logging.getLogger(__name__)
 
 MAX_WIDTH = 480       # a monitor frame is at most this wide
 JPEG_QUALITY = 60     # 0.6
-MAX_FPS = 4           # per session
+MAX_FPS = 4           # per session, frames of any purpose but the preview
+PREVIEW_MAX_FPS = 10  # per session, the phone's own ``preview`` stream (already small: relayed as it is)
 MAX_QUEUE = 64        # lines a slow monitor may fall behind before it loses the oldest
 MAX_MONITORS_PER_SHOP = 8
 AUTH_TIMEOUT_S = 5.0  # a monitor that has not sent {t:"auth", key} by then is closed
 STATS_INTERVAL_S = 2.0
 _MIN_FRAME_GAP_S = 1.0 / MAX_FPS
+_MIN_PREVIEW_GAP_S = 1.0 / PREVIEW_MAX_FPS
 _monotonic = time.monotonic  # tests swap in a clock
 # A user line that names AIRA is the owner talking to it, even in the middle of a sale.
 _ADDRESSES_AIRA = re.compile(r"(?<!\w)(aira|ஐரா|ஐர|आइरा|ऐरा)(?!\w)", re.IGNORECASE)
@@ -80,19 +85,26 @@ _CUE_STATE = {"thinking": "thinking", "done": "idle", "ack": "listening"}
 
 
 class Subscriber:
-    """One connected monitor: a bounded queue of serialised lines and a wake-up for the sender."""
+    """One connected monitor: a bounded queue of serialised lines and a wake-up for the sender.
+
+    A line pushed with a ``key`` replaces any queued line with the same key: a frame of a session supersedes
+    the frame of that session still waiting, so a monitor that fell behind gets the newest picture, never a
+    backlog of old ones.
+    """
 
     def __init__(self, shop_id: str):
         self.shop_id = shop_id
-        self._lines: deque[str] = deque(maxlen=MAX_QUEUE)
+        self._lines: deque[tuple[str | None, str]] = deque(maxlen=MAX_QUEUE)
         self._event = asyncio.Event()
         try:  # the loop that serves this monitor; a publisher on another loop or thread wakes it safely
             self._loop: asyncio.AbstractEventLoop | None = asyncio.get_running_loop()
         except RuntimeError:
             self._loop = None
 
-    def push(self, line: str) -> None:
-        self._lines.append(line)  # a full deque drops its oldest line
+    def push(self, line: str, key: str | None = None) -> None:
+        if key is not None and any(k == key for k, _ in self._lines):
+            self._lines = deque((item for item in self._lines if item[0] != key), maxlen=MAX_QUEUE)
+        self._lines.append((key, line))  # a full deque drops its oldest line
         try:
             same_loop = self._loop is None or asyncio.get_running_loop() is self._loop
         except RuntimeError:
@@ -104,7 +116,7 @@ class Subscriber:
 
     def take(self) -> list[dict]:
         """Every pending line, parsed (tests); empties the queue."""
-        out = [json.loads(line) for line in self._lines]
+        out = [json.loads(line) for _, line in self._lines]
         self._lines.clear()
         self._event.clear()
         return out
@@ -113,7 +125,7 @@ class Subscriber:
         while not self._lines:
             self._event.clear()
             await self._event.wait()
-        return self._lines.popleft()
+        return self._lines.popleft()[1]
 
 
 _HUB: dict[str, list[Subscriber]] = {}
@@ -136,6 +148,7 @@ def reset() -> None:
     _SPEAKER.clear()
     _VOICES.clear()
     _COUNTERS.clear()
+    rtc.reset()
 
 
 # ---------- hub ----------
@@ -146,6 +159,7 @@ def subscribe(shop_id: str) -> Subscriber:
     if len(subs) == 1:
         _start_stats(shop_id)
         _schedule_preview(shop_id, start=True)
+    rtc.monitor_joined(sub)  # its id for WebRTC signalling; a paused preview resumes for this monitor
     return sub
 
 
@@ -157,11 +171,12 @@ def unsubscribe(sub: Subscriber) -> None:
             del _HUB[sub.shop_id]
             _stop_stats(sub.shop_id)
             _schedule_preview(sub.shop_id, start=False)
+        rtc.monitor_left(sub)  # bye to the phones it had video from; the preview resumes for the others
 
 
 # ---------- the preview stream ----------
 # While at least one monitor watches a shop, each of its phone sessions streams small ``preview`` frames
-# (the phone: 2-3 fps, <= 480 px, JPEG quality 0.5). The server relays them to the monitors only (``main.py``
+# (the phone: 8 fps, 360 px wide, JPEG quality 0.45, each sent at once and dropped when the socket is busy). The server relays them to the monitors only (``main.py``
 # hands them to ``publish_frame`` and nowhere else: never stored, never seen by Gemini). The last monitor
 # leaving stops the stream; a session that joins a watched shop starts it (``preview_on_join``).
 PREVIEW_PURPOSE = "preview"
@@ -181,7 +196,9 @@ def _streams_frames(session) -> bool:
         return not str(getattr(session, "uid", "") or "").startswith("camera:")
 
 
-async def _send_preview(session, start: bool) -> bool:
+async def set_preview(session, start: bool) -> bool:
+    """Ask one phone session to start or stop its preview stream (``aira_live.rtc`` pauses it while the
+    dashboards have WebRTC video instead). Never raises; True when the request went out."""
     try:
         await session.send(_preview_msg(start))
     except Exception as exc:  # noqa: BLE001 - a phone that just left
@@ -201,7 +218,7 @@ async def _preview_shop(shop_id: str, start: bool) -> int:
         return 0
     n = 0
     for s, _bridge in live:
-        if _streams_frames(s) and await _send_preview(s, start):
+        if _streams_frames(s) and not (start and rtc.preview_paused(s.session_id)) and await set_preview(s, start):
             n += 1
     return n
 
@@ -220,7 +237,7 @@ async def preview_on_join(session) -> bool:
     """A session said hello: start its preview stream when its shop is already watched. Never raises."""
     if not monitored(session.shop_id) or not _streams_frames(session):
         return False
-    return await _send_preview(session, True)
+    return await set_preview(session, True)
 
 
 def monitored(shop_id: str) -> bool:
@@ -250,8 +267,9 @@ def publish(shop_id: str, kind: str, session_id: str, **fields: Any) -> int:
     except Exception:
         log.exception("monitor: dropped a %s message", kind)
         return 0
+    key = f"frame:{session_id}" if kind == "frame" else None
     for sub in list(subs):
-        sub.push(line)
+        sub.push(line, key)
     return len(subs)
 
 
@@ -300,7 +318,7 @@ async def authenticate(ws, shop_id: str) -> bool:
     except Exception:  # noqa: BLE001 - disconnected, or a binary frame
         return False
     msg = parse_monitor_client_msg(raw)
-    return msg is not None and key_ok(msg.key, shop_id)
+    return isinstance(msg, MonAuthMsg) and key_ok(msg.key, shop_id)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -319,17 +337,25 @@ def main(argv: list[str] | None = None) -> int:
 
 # ---------- the socket ----------
 async def serve(ws, sub: Subscriber) -> None:
-    """Pump ``sub``'s lines to ``ws`` until the monitor goes away. Inbound text is ignored (read-only)."""
+    """Pump ``sub``'s lines to ``ws`` until the monitor goes away. The only inbound text acted on is WebRTC
+    signalling (``{t:"rtc", ...}``, relayed by ``aira_live.rtc`` to a phone of the shop, rate-limited); the
+    feed itself stays read-only and anything else is ignored."""
     async def pump() -> None:
         while True:
             await ws.send_text(await sub.next_line())
 
     task = asyncio.create_task(pump(), name=f"monitor-{sub.shop_id}")
+    rtc_limit = rtc.limiter()
     try:
         while True:
             message = await ws.receive()
             if message["type"] == "websocket.disconnect":
                 break
+            text = message.get("text")
+            if isinstance(text, str):
+                msg = parse_monitor_client_msg(text)
+                if isinstance(msg, RtcMsg) and rtc_limit.allow():
+                    await rtc.from_monitor(sub, msg)
     finally:
         task.cancel()
         try:
@@ -430,6 +456,7 @@ def session_started(session) -> None:
 
 
 def session_ended(session) -> None:
+    rtc.session_ended(session)  # its monitors hear bye first, then the session end
     publish(session.shop_id, "session", session.session_id, state="end", **session_fields(session))
     forget(session.session_id)
 
@@ -549,18 +576,20 @@ def downscale(jpeg_b64: str) -> tuple[str, int, int]:
 
 async def publish_frame(session, frame) -> bool:
     """Copy a phone frame to the shop's monitors: only while one is connected, at most ``MAX_FPS`` a second per
-    session, downscaled off the event loop. True when a frame went out. Every frame counts for the stats."""
+    session (``PREVIEW_MAX_FPS`` for the phone's own preview stream, relayed without re-encoding), downscaled
+    off the event loop otherwise. True when a frame went out. Every frame counts for the stats."""
     sid = session.session_id
     count_frame(sid)
     if not monitored(session.shop_id):
         return False
+    preview = str(frame.purpose) == PREVIEW_PURPOSE
     now = _monotonic()
     last = _LAST_FRAME.get(sid)
-    if last is not None and now - last < _MIN_FRAME_GAP_S:
+    if last is not None and now - last < (_MIN_PREVIEW_GAP_S if preview else _MIN_FRAME_GAP_S):
         return False
     _LAST_FRAME[sid] = now
     try:
-        if str(frame.purpose) == PREVIEW_PURPOSE and 0 < frame.w <= MAX_WIDTH:
+        if preview and 0 < frame.w <= MAX_WIDTH:
             b64, w, h = frame.jpeg_b64, frame.w, frame.h  # the phone already made it small: relay as it is
         else:
             b64, w, h = await asyncio.to_thread(downscale, frame.jpeg_b64)

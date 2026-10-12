@@ -34,7 +34,7 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, ValidationError
 
-from aira_live import config, confirm, monitor, monitor_hooks, sessions
+from aira_live import config, confirm, live_video, monitor, monitor_hooks, rtc, sessions
 from aira_live.auth import AuthError, verify_hello
 from aira_live.cameras.sources import is_camera_session
 from aira_live.contracts import (
@@ -48,6 +48,7 @@ from aira_live.contracts import (
     HelloMsg,
     LogMsg,
     ReadyMsg,
+    RtcMsg,
     StopMsg,
     TextMsg,
     TranscriptMsg,
@@ -58,6 +59,7 @@ from aira_live.contracts import (
 )
 from aira_live.diag import RateLimiter, cap_json, diag, trunc
 from aira_live.frames import Frame
+from aira_live.vision import precount
 from aira_live.i18n import t
 from aira_live.i18n.expected import shop_languages
 from aira_live.live_bridge import AdkLiveBackend, LiveBridge
@@ -212,6 +214,30 @@ async def _ambient_hook(name: str, *args) -> None:
     await _lane_hook("aira_live.tools.ambient", name, *args)
 
 
+async def live_frame(session: Session, bridge: LiveBridge | None, frame: Frame, *, video: bool,
+                     changed: bool = False, labels: list[str] | None = None, precount_on: bool = False) -> bool:
+    """A ``live`` frame (the 1 fps camera video): cached as the session's newest frame for the tools
+    (``Session.latest_frame``), then forwarded into Gemini Live when ``video`` (AIRA_LIVE_VIDEO) is on and a
+    bridge runs. Never stored in the tool ring buffer and never relayed to the monitor: the dashboard has its
+    own preview stream, so the same picture is never relayed twice. With ``precount_on`` (AIRA_PRECOUNT) a
+    settled scene change also starts a background count (``vision.precount``). True when it reached Live."""
+    session.frames.remember_recent(frame)  # look_frame / latest_frame reuse it (768 px)
+    if not video or bridge is None:
+        return False
+    if precount_on and not session.walking:  # a walk guidance owns the camera: no background count
+        if changed:
+            precount.scene_changed(session, frame.ts)
+        else:
+            precount.tick(session)
+    return await bridge.video.offer(bridge, frame.jpeg_b64, changed=changed, labels=labels)
+
+
+def _live_nudge_on() -> bool:
+    """AIRA_LIVE_VIDEO and AIRA_LIVE_NUDGE both on: Live speaks up when the camera view changes."""
+    s = config.load()
+    return s.live_video and s.live_nudge
+
+
 async def _start_live(session: Session, resume_handle: str | None = None) -> LiveBridge | None:
     """Real mode: connect ``session`` to Gemini Live (resuming the previous Live conversation when a reconnecting
     phone brought its handle). On failure, tell the phone and return ``None``."""
@@ -220,7 +246,7 @@ async def _start_live(session: Session, resume_handle: str | None = None) -> Liv
         prompt = await build_system_prompt(session.shop_id, session.lang, session.verbosity)
         tools = live_tools(TOOL_FUNCS, session, NON_BLOCKING_TOOLS)
         bridge = LiveBridge(session, lambda: app.state.backend_factory(session), prompt, tools,
-                            resume_handle=resume_handle)
+                            resume_handle=resume_handle, live_nudge=_live_nudge_on())
         await bridge.start()
     except Exception:
         log.exception("live start failed for session %s", session.session_id)
@@ -242,6 +268,8 @@ async def _end_session(session: Session, bridge: LiveBridge | None) -> None:
     sessions.remember_ended(session.session_id, bridge._handle if bridge is not None else None)
     await _guidance_hook("stop_guidance", session)
     await _ambient_hook("stop_session", session)
+    precount.forget(session.session_id)
+    await _lane_hook("aira_live.tools.walk", "stop_session", session)
     if bridge is not None:
         await bridge.close()
     monitor.session_ended(session)
@@ -279,6 +307,7 @@ async def ws_endpoint(ws: WebSocket) -> None:
     diag("ws", event="open", origin=origin, mock=settings.mock)
     log_limit = _log_limiter()
     boxes_limit = _boxes_limiter()
+    rtc_limit = rtc.limiter()
 
     async def send(msg: BaseModel) -> None:
         await ws.send_text(dump_server_msg(msg))
@@ -337,6 +366,7 @@ async def ws_endpoint(ws: WebSocket) -> None:
             elif isinstance(msg, StopMsg):  # long-press: stop guidance and the answer being spoken
                 if session:
                     await _guidance_hook("stop_guidance", session)
+                    await _lane_hook("aira_live.tools.walk", "stop_session", session)
                 if bridge:
                     bridge.hard_stop()
                 await send(CueMsg(cue="done"))
@@ -369,11 +399,17 @@ async def ws_endpoint(ws: WebSocket) -> None:
                     # never shown to Gemini.
                     await monitor.publish_frame(session, frame)
                     continue
+                if msg.purpose == live_video.PURPOSE:
+                    await live_frame(session, bridge, frame, video=settings.live_video,
+                                     changed=bool(msg.changed), labels=msg.labels, precount_on=settings.precount)
+                    continue
                 session.frames.add(frame)
                 diag("frame", session=session.session_id, purpose=msg.purpose, id=msg.id, bytes=len(msg.jpeg),
                      w=msg.w, h=msg.h)
                 await monitor.publish_frame(session, frame)  # a no-op unless a monitor watches this shop
             elif isinstance(msg, BoxesMsg):  # the phone's own boxes: relayed to the monitor, never answered
+                if session:  # a walk with me in progress: the phone's detector can say "Stop." before ER does
+                    await _lane_hook("aira_live.tools.walk", "on_phone_boxes", session, msg)
                 if boxes_limit.allow():
                     await monitor_hooks.monitor_publish(session, monitor_hooks.vision_message(
                         session, msg.source, msg.objects, frame_id=msg.frame_id))
@@ -397,6 +433,9 @@ async def ws_endpoint(ws: WebSocket) -> None:
             elif isinstance(msg, EventMsg):
                 monitor.client_event(session, msg.name, msg.data)
                 await _guidance_hook("handle_client_event", session, msg.name, msg.data)
+            elif isinstance(msg, RtcMsg):  # WebRTC signalling for a dashboard monitor: relayed, never read
+                if rtc_limit.allow():
+                    await rtc.from_phone(session, msg)
     except WebSocketDisconnect:
         pass
     finally:

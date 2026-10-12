@@ -4,6 +4,7 @@ import time
 import unicodedata
 import uuid
 from collections.abc import Awaitable, Callable
+from contextlib import contextmanager
 from contextvars import ContextVar
 
 from pydantic import BaseModel
@@ -18,6 +19,10 @@ SendFn = Callable[[BaseModel], Awaitable[None]]
 # The same notice (vendor reply, alert, guidance verdict) reaching one session twice within this many seconds
 # is spoken once. Loops (guidance, delivery counts, jobs) may fire the same line again; the owner hears it once.
 NOTICE_DEDUPE_S = 10.0
+# A camera look may reuse a frame that arrived less than FRAME_REUSE_S ago (``request_frames(reuse_s=...)``)
+# when it is at least REUSE_MIN_SIDE px on its long side (ambient / describe frames are 640 px).
+FRAME_REUSE_S = 1.0
+REUSE_MIN_SIDE = 640
 _monotonic = time.monotonic  # tests swap in a clock
 _WS = re.compile(r"\s+")
 
@@ -43,7 +48,23 @@ class Session:
         # Sent-notice ledger: notice key -> when it was last sent. ``sessions.register`` hands a resumed session
         # the ledger of the session it continues, so a reconnect never replays a notice the owner already heard.
         self.notice_ledger: dict[str, float] = {}
+        # Owner questions to the camera in flight (camera_ask, counts). While > 0 the ambient and describe loops
+        # make no ER 2 call: the owner's own question gets the camera and the model first.
+        self.owner_asks = 0
         self._send = send
+
+    @property
+    def owner_busy(self) -> bool:
+        return self.owner_asks > 0
+
+    @contextmanager
+    def owner_asking(self):
+        """Mark an owner camera question in flight (nestable); background vision waits until it ends."""
+        self.owner_asks += 1
+        try:
+            yield
+        finally:
+            self.owner_asks -= 1
 
     async def send(self, msg: BaseModel) -> None:
         await self._send(msg)
@@ -78,6 +99,25 @@ class Session:
         """Update ``lang`` from one user utterance and return it."""
         return self.judge(text, typed=typed).lang
 
+    def latest_frame(self, max_age_s: float = 1.0) -> Frame | None:
+        """The newest frame of any purpose but the preview (the 1 fps live video included) that arrived at most
+        ``max_age_s`` ago, or None (``FrameStore.recent``; ``look_frame`` reuses the same frames)."""
+        return self.frames.recent(max_age_s)
+
+    @property
+    def walking(self) -> bool:
+        """A walk-with-me guidance runs for this session (tools.walk): it owns the voice and the camera."""
+        try:
+            from aira_live.tools import walk
+        except ImportError:
+            return False
+        return self.session_id in walk._ACTIVE
+
+    def cached_count(self, product: str | None = None) -> tuple[int, float, float] | None:
+        """(count, confidence, age_s) of the background pre-count of the current scene (vision.precount)."""
+        from aira_live.vision import precount
+        return precount.cached(self.session_id, product)
+
     async def request_frames(self, purpose: str, count: int = 1, interval_ms: int = 0,
                              timeout_s: float = 4.0) -> list[Frame]:
         """Ask the phone for ``count`` fresh frames and wait for them ([] on timeout).
@@ -95,7 +135,22 @@ class Session:
         diag("frames_got", session=self.session_id, purpose=purpose, wanted=count, got=len(frames),
              waited_ms=round((time.perf_counter() - started) * 1000), bytes=[len(f.jpeg_b64) for f in frames],
              sizes=[[f.w, f.h] for f in frames])
+        diag("latency", stage="frame_wait", session=self.session_id, purpose=purpose, reused=False,
+             ms=round((time.perf_counter() - started) * 1000), got=len(frames), wanted=count)
         return frames
+
+    async def look_frame(self, purpose: str, timeout_s: float = 4.0, max_age_s: float = FRAME_REUSE_S,
+                         min_side: int = REUSE_MIN_SIDE) -> list[Frame]:
+        """One frame for a single-frame look (camera_ask "look"/"read", identify, free-text find): a frame of any
+        purpose that reached the server less than ``max_age_s`` ago and is at least ``min_side`` px on its long
+        side is used at once; otherwise one fresh frame is requested (``request_frames``). Never for a count:
+        a count needs its own sharp 1280 px burst."""
+        hit = self.frames.recent(max_age_s, min_side=min_side)
+        if hit is not None:
+            diag("latency", stage="frame_wait", session=self.session_id, purpose=purpose, reused=True,
+                 ms=0, frame_purpose=hit.purpose, size=[hit.w, hit.h])
+            return [hit]
+        return await self.request_frames(purpose, count=1, timeout_s=timeout_s)
 
 
 current_session: ContextVar[Session] = ContextVar("current_session")

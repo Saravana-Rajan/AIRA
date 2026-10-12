@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { MonitorMsg } from "@aira/contracts";
 import {
   MAX_LINES, backoffMs, detailText, eventLabel, follow, frameAge, initialState, keyFromHash, monitorUrl, openMonitor, overlayShapes,
-  readKey, reduce, sessionClock, storeKey, stripKey, targetInfo, toRect, toXY, type LiveState, type SocketLike,
+  readKey, reduce, sessionClock, storeKey, stripKey, toRect, toXY, type LiveState, type SocketLike,
 } from "../src/lib/monitor";
 
 type MonInput = MonitorMsg extends infer M ? (M extends MonitorMsg ? Omit<M, "t" | "session" | "ts"> & { ts?: number; session?: string } : never) : never;
@@ -64,21 +64,6 @@ describe("overlayShapes", () => {
     const found = overlayShapes({ er2, mediapipe: none, target: "Aavin milk 500 ml", found: true, hand, status: "found" }, 1000, 1000);
     expect(found.some((s) => s.kind === "line")).toBe(false);
     expect(found.at(-1)).toMatchObject({ kind: "dot", tone: "hand" });
-  });
-});
-
-describe("targetInfo", () => {
-  it("is null without a target, and reads visibility, confidence, distance and direction off the ER 2 objects", () => {
-    expect(targetInfo({ target: null, found: false, er2: layer([]) })).toBeNull();
-    const er2 = layer([{ label: "Aavin milk", box: box([100, 700, 200, 900]), point: null, score: 0.92, distance: "arm" }]);
-    expect(targetInfo({ target: "aavin milk", found: false, er2 })).toEqual({
-      label: "aavin milk", visible: true, found: false, confidence: 0.92, distance: "arm", side: "right", shelf: "top",
-    });
-    expect(targetInfo({ target: "curd", found: false, er2 })).toEqual({
-      label: "curd", visible: false, found: false, confidence: null, distance: null, side: null, shelf: null,
-    });
-    const centre = layer([{ label: "curd", box: null, point: [500, 500] }]);
-    expect(targetInfo({ target: "curd", found: true, er2: centre })).toMatchObject({ visible: true, found: true, side: "centre", shelf: "middle", confidence: null });
   });
 });
 
@@ -279,6 +264,7 @@ describe("key handling (the fragment, never the query string)", () => {
   it("reads #key= in its three spellings", () => {
     expect(keyFromHash("#key=abc123")).toBe("abc123");
     expect(keyFromHash("#/live?key=abc123")).toBe("abc123");
+    expect(keyFromHash("#/live#key=abc123")).toBe("abc123");
     expect(keyFromHash("#/live?shop=x&key=a%20b")).toBe("a b");
     expect(keyFromHash("#/live")).toBeNull();
     expect(keyFromHash("")).toBeNull();
@@ -303,6 +289,7 @@ describe("key handling (the fragment, never the query string)", () => {
     expect(stripKey("#/live?shop=x&key=abc")).toBe("#/live?shop=x");
     expect(stripKey("#/live?key=abc&shop=x")).toBe("#/live?shop=x");
     expect(stripKey("#key=abc")).toBe("");
+    expect(stripKey("#/live#key=abc")).toBe("#/live");
     expect(stripKey("#/live")).toBe("#/live");
   });
 });
@@ -375,6 +362,32 @@ describe("reconnect backoff and auth", () => {
     stop();
     timers[2].fn();
     expect(sockets).toHaveLength(3); // no dial after stop
+  });
+
+  it("hands rtc lines to the signal port, attaches it once a socket is open and detaches it on close and stop", () => {
+    const sockets: ReturnType<typeof fakeSocket>[] = [];
+    const onMsg = vi.fn();
+    const port = { attach: vi.fn(), detach: vi.fn(), receive: vi.fn() };
+    const stop = openMonitor("ws://x", "k", onMsg, vi.fn(), {
+      connect: () => { const s = fakeSocket(); sockets.push(s); return s; }, setTimer: vi.fn(), clearTimer: vi.fn(), signal: port,
+    });
+    expect(port.attach).not.toHaveBeenCalled();
+    sockets[0].onopen!({});
+    expect(port.attach).toHaveBeenCalledTimes(1);
+    const send = port.attach.mock.calls[0][0] as (m: unknown) => boolean;
+    expect(send({ t: "rtc", kind: "want", to: "s1" })).toBe(true);
+    expect(sockets[0].sent.at(-1)).toBe(JSON.stringify({ t: "rtc", kind: "want", to: "s1" }));
+    const offer = { t: "rtc", kind: "offer", from: "s1", to: "m1", sdp: "v=0" };
+    sockets[0].onmessage!({ data: JSON.stringify(offer) });
+    sockets[0].onmessage!({ data: JSON.stringify({ t: "mon", kind: "status", session: "s1", ts: 1, state: "idle" }) });
+    expect(port.receive).toHaveBeenCalledWith(offer);
+    expect(onMsg).toHaveBeenCalledTimes(1);
+    expect(onMsg).not.toHaveBeenCalledWith(expect.objectContaining({ t: "rtc" }));
+    sockets[0].onclose!({ code: 1006 });
+    expect(port.detach).toHaveBeenCalledTimes(1);
+    expect(send({ t: "rtc", kind: "bye", to: "s1" })).toBe(false); // a dead socket's send is refused
+    stop();
+    expect(port.detach).toHaveBeenCalledTimes(2);
   });
 
   it("reports a refused key instead of retrying", () => {

@@ -55,7 +55,7 @@ def test_cut_flag_as_string_false_is_not_cut():
 
 
 def test_overlapping_cluster_asks_to_spread_out():
-    items = [{"point": [500, 500 + i * 20], "label": "pack"} for i in range(6)]
+    items = [{"point": [500, 500 + i * 28], "label": "pack"} for i in range(6)]
     r = assess(items)
     assert r.needs_retake is True and r.aim_hint == "vision.aim.spread_out"
     assert r.count == 6 and r.confidence < 1.0
@@ -117,12 +117,66 @@ def test_reply_just_under_the_item_cap_is_counted():
     assert r.count == MAX_ITEMS - 1 and r.needs_retake is False and r.aim_hint == ""
 
 
-def test_prompt_asks_for_separate_edge_and_hidden_flags_and_the_cap():
+def test_prompt_is_the_official_er_pointing_form_with_the_cap():
     assert MAX_ITEMS == 80
     assert f"no more than {MAX_ITEMS} items" in COUNT_PROMPT
-    for flag in ('"edge"', '"hidden"'):
-        assert flag in COUNT_PROMPT and flag in COUNT_SCHEMA
-    assert '"cut"' not in COUNT_PROMPT
+    p = COUNT_PROMPT.format(label="milk pouch")
+    assert "Point to each milk pouch" in p and "one point per item" in p
+    assert "label each" in p.lower() and "product name" in p and "0-1000" in p
+    for dropped in ("box_2d", '"edge"', '"hidden"', '"cut"'):
+        assert dropped not in COUNT_PROMPT and dropped not in COUNT_SCHEMA
+
+
+def test_points_closer_than_25_are_one_item():
+    from aira_live.vision.count import DEDUPE_RADIUS
+
+    assert DEDUPE_RADIUS == 25
+    items = [{"point": [500, 300], "label": "pack"}, {"point": [500, 322], "label": "pack"},
+             {"point": [500, 600], "label": "pack"}]
+    assert assess(items).count == 2
+
+
+def test_named_product_counts_only_matching_labels():
+    items = [{"point": [300, 100], "label": "Hatsun Curd 500g"}, {"point": [300, 300], "label": "hatsun curd"},
+             {"point": [300, 500], "label": "Aavin Curd"}, {"point": [300, 700], "label": "Arokya milk"}]
+    r = assess(items, product="Hatsun Curd")
+    assert r.count == 2 and r.needs_retake is False
+
+
+def test_unreadable_labels_with_a_named_product_are_not_sure():
+    items = [{"point": [300, 100], "label": "Hatsun Curd"}, {"point": [300, 300], "label": "unknown"},
+             {"point": [300, 500], "label": "Hatsun curd"}]
+    r = assess(items, product="Hatsun Curd")
+    assert r.count == 2 and r.needs_retake is True and r.confidence < 0.5
+
+
+async def test_count_in_frame_uses_the_count_call_and_reports_the_model(monkeypatch, frame):
+    from aira_live.vision import count as vcount
+
+    seen = {}
+
+    async def fake(parts, thinking="medium", timeout_s=25.0):
+        seen.update(thinking=thinking, timeout_s=timeout_s, prompt=parts[-1])
+        return {"items": [{"point": [300, 300], "label": "curd"}, {"point": [300, 600], "label": "curd"}],
+                "_model": "er2"}
+
+    monkeypatch.setattr(vcount, "generate_count_json", fake)
+    r = await count_in_frame(frame, "curd packet")
+    assert seen["thinking"] == "medium" and seen["timeout_s"] == vcount.COUNT_TIMEOUT_S >= 20
+    assert "Point to each curd packet" in seen["prompt"]
+    assert r.count == 2 and r.model == "er2"
+
+
+async def test_a_truncated_count_reply_is_never_a_count(monkeypatch, frame):
+    from aira_live.vision import count as vcount
+    from aira_live.vision.gemini import TruncatedReply
+
+    async def cut(parts, thinking="medium", timeout_s=25.0):
+        raise TruncatedReply("MAX_TOKENS")
+
+    monkeypatch.setattr(vcount, "generate_count_json", cut)
+    r = await count_in_frame(frame, "curd packet")
+    assert r.count is None and r.needs_retake is True
 
 
 async def test_count_in_frame_at_the_cap_never_invents_a_count(fake_genai, frame):
