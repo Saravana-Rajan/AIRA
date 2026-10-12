@@ -91,18 +91,65 @@ def extract_json(text: str | None) -> Any:
     except json.JSONDecodeError:
         pass
     starts = [(candidate.find(o), o, c) for o, c in (("[", "]"), ("{", "}")) if candidate.find(o) != -1]
-    for start, o, c in sorted(starts):
+    for start, o, c in sorted(starts)[:1]:  # the outermost value only; an inner object is not the answer
         chunk = _balanced(candidate, start, o, c)
         if chunk:
             try:
                 return json.loads(chunk)
             except json.JSONDecodeError:
-                continue
+                pass
+    salvaged = _salvage_truncated(candidate)
+    if salvaged is not None:
+        return salvaged
     raise ValueError(f"no JSON found in model reply: {text[:80]!r}")
 
 
+MAX_OUTPUT_TOKENS = 4096
+
+
+def _salvage_truncated(text: str) -> Any:
+    """Recover a reply cut off mid-JSON: keep every COMPLETE object of the first list, drop the partial tail.
+    '{"objects": [{"a": 1}, {"b": 2}, {"c": [2' -> {"objects": [{"a": 1}, {"b": 2}]}; None when nothing is whole."""
+    lb = text.find("[")
+    if lb == -1:
+        return None
+    items, depth, start, in_str, esc = [], 0, None, False, False
+    for i in range(lb + 1, len(text)):
+        ch = text[i]
+        if in_str:
+            if esc:
+                esc = False
+            elif ch == "\\":
+                esc = True
+            elif ch == '"':
+                in_str = False
+            continue
+        if ch == '"':
+            in_str = True
+        elif ch == "{":
+            if depth == 0:
+                start = i
+            depth += 1
+        elif ch == "}" and depth > 0:
+            depth -= 1
+            if depth == 0 and start is not None:
+                try:
+                    items.append(json.loads(text[start:i + 1]))
+                except json.JSONDecodeError:
+                    return None
+                start = None
+        elif ch == "]" and depth == 0:
+            break
+    if not items:
+        return None
+    head = text[:lb].strip()
+    key = re.search(r'"([^"]+)"\s*:\s*$', head)
+    return {key.group(1): items} if key and head.startswith("{") else items
+
+
 def _config(thinking: Thinking) -> types.GenerateContentConfig:
-    base = {"temperature": 0.2, "response_mime_type": "application/json"}
+    # Box lists (box_2d for every object) can be long; a low default output cap truncated replies mid-JSON.
+    base = {"temperature": 0.2, "response_mime_type": "application/json", "max_output_tokens": MAX_OUTPUT_TOKENS}
     try:
         # google-genai accepts thinking_level ("low" | "medium" | "high") for Gemini 3.x and Robotics-ER 2.
         return types.GenerateContentConfig(**base, thinking_config=types.ThinkingConfig(thinking_level=thinking))
