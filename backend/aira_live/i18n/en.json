@@ -289,5 +289,11 @@
   "k3.cat.paneer": "Paneer",
   "k3.cat.butter": "Butter",
   "k3.cat.ice_cream": "Ice cream",
-  "k3.cat.other": "Other"
+  "k3.cat.other": "Other",
+  "ambient.on": "Okay. I will tell you what you show me and what comes into view.",
+  "ambient.off": "Quiet mode. I will speak only when you ask.",
+  "ambient.held": "That's {name}, {pack}.",
+  "ambient.held_price": "{price} rupees.",
+  "ambient.held_free": "That's {label}.",
+  "ambient.closer": "Hold it a little closer."
 }

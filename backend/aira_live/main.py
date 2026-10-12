@@ -187,19 +187,29 @@ MOUNTED_ROUTERS: list[str] = include_optional_routers(app)
 log.info("mounted routers: %s", MOUNTED_ROUTERS or "none")
 
 
-async def _guidance_hook(name: str, *args) -> None:
-    """Call ``aira_live.tools.guidance.<name>(*args)`` when Sarmitha's module is present. Never raises."""
-    module = "aira_live.tools.guidance"
+async def _lane_hook(module: str, name: str, *args) -> None:
+    """Call ``<module>.<name>(*args)`` when that lane's module is present. Never raises."""
     try:
-        guidance = importlib.import_module(module)
-        result = getattr(guidance, name)(*args)
+        mod = importlib.import_module(module)
+        result = getattr(mod, name)(*args)
         if inspect.isawaitable(result):
             await result
     except ModuleNotFoundError as exc:
         if not _is_missing(exc, module):
-            log.exception("guidance hook %s failed", name)
+            log.exception("%s hook %s failed", module, name)
     except Exception:
-        log.exception("guidance hook %s failed", name)
+        log.exception("%s hook %s failed", module, name)
+
+
+async def _guidance_hook(name: str, *args) -> None:
+    """Call ``aira_live.tools.guidance.<name>(*args)`` when Sarmitha's module is present. Never raises."""
+    await _lane_hook("aira_live.tools.guidance", name, *args)
+
+
+async def _ambient_hook(name: str, *args) -> None:
+    """Call ``aira_live.tools.ambient.<name>(*args)``: ambient mode (hold-up identification and scene
+    announcements) starts with the Live session and ends with it. Never raises."""
+    await _lane_hook("aira_live.tools.ambient", name, *args)
 
 
 async def _start_live(session: Session, resume_handle: str | None = None) -> LiveBridge | None:
@@ -231,6 +241,7 @@ async def _end_session(session: Session, bridge: LiveBridge | None) -> None:
     sessions.unregister(session.session_id)
     sessions.remember_ended(session.session_id, bridge._handle if bridge is not None else None)
     await _guidance_hook("stop_guidance", session)
+    await _ambient_hook("stop_session", session)
     if bridge is not None:
         await bridge.close()
     monitor.session_ended(session)
@@ -320,6 +331,8 @@ async def ws_endpoint(ws: WebSocket) -> None:
                 if not settings.mock and not is_camera_session(session):  # a shop camera only sends frames
                     bridge = await _start_live(session, handle)
                 await send(ReadyMsg(session_id=session.session_id, resume=session.session_id, mock=settings.mock))
+                if bridge is not None:  # ambient mode (on by default) starts shortly after the greeting
+                    await _ambient_hook("on_session_start", session)
             elif isinstance(msg, StopMsg):  # long-press: stop guidance and the answer being spoken
                 if session:
                     await _guidance_hook("stop_guidance", session)

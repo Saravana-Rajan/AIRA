@@ -17,7 +17,7 @@ vi.mock("../src/guidance/mediapipe", () => ({
 }));
 vi.mock("../src/camera/capture", () => ({ getVideo: vi.fn(() => null), startCamera: vi.fn(async () => { throw new Error("camera must not open"); }) }));
 
-import { fingertipFrom, trackFingertip, __resetHands } from "../src/guidance/hands";
+import { fingertipFrom, handBoxFrom, trackFingertip, trackHand, __resetHands } from "../src/guidance/hands";
 import { setFrameSource } from "../src/camera/source";
 import { startCamera } from "../src/camera/capture";
 
@@ -34,6 +34,43 @@ describe("fingertipFrom (MediaPipe result → 0–1000 image coords)", () => {
   });
   it("clamps landmarks slightly outside the image", () => {
     expect(fingertipFrom(hand(-0.05, 1.02))).toEqual({ x1000: 0, y1000: 1000 });
+  });
+});
+
+describe("handBoxFrom (the whole hand as [ymin, xmin, ymax, xmax])", () => {
+  it("spans every landmark of the first hand, clamped to the image", () => {
+    const lms = Array.from({ length: 21 }, (_, i) => ({ x: 0.3 + i * 0.01, y: 0.5 + i * 0.02 }));
+    expect(handBoxFrom({ landmarks: [lms] })).toEqual([500, 300, 900, 500]);
+    expect(handBoxFrom({ landmarks: [[{ x: -0.1, y: 0.2 }, { x: 1.2, y: 0.9 }]] })).toEqual([200, 0, 900, 1000]);
+  });
+  it("null without a hand", () => {
+    expect(handBoxFrom({ landmarks: [] })).toBeNull();
+    expect(handBoxFrom(null)).toBeNull();
+  });
+});
+
+describe("trackHand", () => {
+  let frames: (() => void)[] = [];
+  beforeEach(() => {
+    frames = [];
+    detectForVideo.mockReset();
+    __resetHands();
+    vi.stubGlobal("requestAnimationFrame", (cb: () => void) => { frames.push(cb); return frames.length; });
+    vi.stubGlobal("cancelAnimationFrame", vi.fn());
+  });
+  afterEach(() => { setFrameSource(null); vi.unstubAllGlobals(); });
+
+  it("streams the fingertip and the hand box together, null without a hand", async () => {
+    const canvas = document.createElement("canvas");
+    canvas.width = 64; canvas.height = 48;
+    setFrameSource(canvas);
+    const seen: unknown[] = [];
+    detectForVideo.mockReturnValueOnce(hand(0.5, 0.5)).mockReturnValue({ landmarks: [] });
+    const stop = await trackHand((h) => seen.push(h));
+    frames.shift()?.();
+    frames.shift()?.();
+    stop();
+    expect(seen).toEqual([{ tip: { x1000: 500, y1000: 500 }, box: [0, 0, 500, 500] }, null]);
   });
 });
 

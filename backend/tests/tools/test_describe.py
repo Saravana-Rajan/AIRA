@@ -40,6 +40,9 @@ def session(mk_session):
     current_session.reset(token)
     sessions.unregister(s)
     describe._ACTIVE.clear()
+    from aira_live.tools import ambient
+    ambient._ACTIVE.clear()
+    ambient._SWITCH.clear()
 
 
 @pytest.fixture
@@ -75,7 +78,9 @@ def _spoken(rec) -> list[str]:
 
 
 def _frame_requests(rec):
-    return [(m.purpose, m.continuous, m.stop) for m in rec.msgs if isinstance(m, RequestFrameMsg)]
+    # describe frames only: describe_mode also switches ambient mode, whose hold-up stream has its own purpose
+    return [(m.purpose, m.continuous, m.stop) for m in rec.msgs
+            if isinstance(m, RequestFrameMsg) and m.purpose == "describe"]
 
 
 # --- registry, prompt, voice trigger ------------------------------------------------------------------------
@@ -276,7 +281,7 @@ async def test_every_er2_result_reaches_the_vision_observers(session, er2, monke
 # --- start, stop, timeout, cap --------------------------------------------------------------------------------------
 
 
-async def test_describe_mode_tool_starts_continuous_frames_and_stop_ends_them(session):
+async def test_describe_mode_tool_starts_continuous_frames_and_stop_ends_them(session, fake_db):
     s, rec = session
     out = await describe.describe_mode(True)
     assert out == {"say": t("describe.on", "en"), "active": True}
