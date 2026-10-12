@@ -9,10 +9,14 @@ import {
   eventLabel, frameAge, overlayShapes, sessionClock, targetInfo, type ActivityItem, type ActivityTag, type Connection,
   type Frame, type LiveState, type MonitorRole, type MonitorState, type Shape, type TranscriptLine,
 } from "../lib/monitor";
+import type { VideoState } from "../lib/rtcViewer";
+import { RtcVideo } from "../components/RtcVideo";
 
 export interface LivePageProps {
   state: LiveState;
   conn: Connection;
+  /** The WebRTC picture (lib/rtcViewer): shown under the overlay while mode is "webrtc", else the JPEG frames. */
+  video?: VideoState;
   /** True when no monitor key is known yet: the page asks for one instead of connecting. */
   keyNeeded: boolean;
   onKey: (key: string) => void;
@@ -47,12 +51,13 @@ function useNow(now: () => number): number {
   return t;
 }
 
-export function LivePage({ state, conn, keyNeeded, onKey, onFollow, record = false, onRecord, now = Date.now }: LivePageProps) {
+export function LivePage({ state, conn, video, keyNeeded, onKey, onFollow, record = false, onRecord, now = Date.now }: LivePageProps) {
   const t = useNow(now);
   const [paused, setPaused] = useState(false);
   const frozen = useRef<Frame | null>(null);
   if (!paused) frozen.current = state.frame;
   const frame = paused ? frozen.current : state.frame;
+  const hasPicture = frame !== null || (video?.mode === "webrtc" && video.stream !== null);
   const rooms = Object.entries(state.rooms);
   const [roomId, setRoomId] = useState<string | null>(null);
   const room = rooms.find(([sid]) => sid === roomId) ?? rooms[0] ?? null;
@@ -63,7 +68,7 @@ export function LivePage({ state, conn, keyNeeded, onKey, onFollow, record = fal
         <div class="record__cams">
           {room && <RoomCamera name={room[1].name} frame={room[1].frame} state={room[1]} now={t} />}
           <div class="record__sam">
-            {frame ? <Camera state={{ ...state, frame }} now={t} /> : <Waiting conn={conn} />}
+            {hasPicture ? <Camera state={{ ...state, frame }} now={t} video={video} paused={paused} /> : <Waiting conn={conn} />}
           </div>
         </div>
         <Captions lines={state.transcript} />
@@ -91,7 +96,7 @@ export function LivePage({ state, conn, keyNeeded, onKey, onFollow, record = fal
 
       <section class="stage" aria-label="Sam's camera">
         <div class="stage__view">
-          {keyNeeded ? <KeyPrompt onKey={onKey} /> : frame ? <Camera state={{ ...state, frame }} now={t} /> : <Waiting conn={conn} />}
+          {keyNeeded ? <KeyPrompt onKey={onKey} /> : hasPicture ? <Camera state={{ ...state, frame }} now={t} video={video} paused={paused} /> : <Waiting conn={conn} />}
           <Hud state={state} now={t} paused={paused} />
         </div>
         <Legend />
@@ -237,19 +242,36 @@ function Hud({ state, now, paused }: { state: LiveState; now: number; paused: bo
 
 const TONE_CLASS = { object: "ov--object", fast: "ov--fast", danger: "ov--danger", target: "ov--target", found: "ov--found", hand: "ov--hand" } as const;
 
-/** The latest frame with the vision overlay drawn in the frame's own pixel space, so it scales with the picture. */
-function Camera({ state, now }: { state: LiveState; now: number }) {
+/** The size of the WebRTC picture before its metadata says otherwise (the phone sends ~640x480). */
+const RTC_DEFAULT_SIZE = { w: 640, h: 480 };
+
+/**
+ * The picture with the vision overlay drawn in its own pixel space, so it scales with it: the WebRTC video
+ * when the viewer is connected (overlay in videoWidth x videoHeight), else the latest JPEG frame.
+ */
+function Camera({ state, now, video, paused = false }: { state: LiveState; now: number; video?: VideoState; paused?: boolean }) {
   const { frame } = state;
-  if (!frame) return null;
-  const shapes = overlayShapes(state, frame.w, frame.h, now);
-  const labelSize = Math.max(14, Math.round(frame.w / 30));
+  const live = video?.mode === "webrtc" ? video.stream : null;
+  const [videoSize, setVideoSize] = useState(RTC_DEFAULT_SIZE);
+  if (!frame && !live) return null;
+  const w = live ? videoSize.w : frame!.w;
+  const h = live ? videoSize.h : frame!.h;
+  const shapes = overlayShapes(state, w, h, now);
+  const labelSize = Math.max(14, Math.round(w / 30));
   const danger = shapes.some((s) => s.kind === "box" && s.tone === "danger");
   return (
-    <div class={`camera${danger ? " camera--danger" : ""}`} style={{ aspectRatio: `${frame.w} / ${frame.h}` }}>
-      <img class="camera__img" src={frame.src} width={frame.w} height={frame.h} alt="" />
-      <svg class="camera__overlay" viewBox={`0 0 ${frame.w} ${frame.h}`} preserveAspectRatio="xMidYMid meet" aria-hidden="true" data-testid="overlay">
+    <div class={`camera${danger ? " camera--danger" : ""}`} style={{ aspectRatio: `${w} / ${h}` }}>
+      {live
+        ? <RtcVideo stream={live} paused={paused} onSize={setVideoSize} />
+        : <img class="camera__img" src={frame!.src} width={w} height={h} alt="" />}
+      <svg class="camera__overlay" viewBox={`0 0 ${w} ${h}`} preserveAspectRatio="xMidYMid meet" aria-hidden="true" data-testid="overlay">
         {shapes.map((s, i) => <OverlayShape key={i} shape={s} labelSize={labelSize} />)}
       </svg>
+      {video && (
+        <span class={`camera__badge camera__badge--${video.mode}`} role="status" data-testid="video-badge">
+          {video.mode === "webrtc" ? "WebRTC" : "Preview"}
+        </span>
+      )}
       {state.found && state.target && (
         <p class="camera__found" role="status">
           <span class="camera__check" aria-hidden="true">✓</span> Found: {state.target}
@@ -258,7 +280,7 @@ function Camera({ state, now }: { state: LiveState; now: number }) {
       {state.target && !state.found && (
         <p class="camera__seek" role="status">Looking for {state.target}</p>
       )}
-      <span class="camera__age">{frameAge(frame.ts, now)}</span>
+      {!live && <span class="camera__age">{frameAge(frame!.ts, now)}</span>}
     </div>
   );
 }

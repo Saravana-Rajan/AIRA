@@ -34,7 +34,7 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, ValidationError
 
-from aira_live import config, confirm, monitor, monitor_hooks, sessions
+from aira_live import config, confirm, monitor, monitor_hooks, rtc, sessions
 from aira_live.auth import AuthError, verify_hello
 from aira_live.cameras.sources import is_camera_session
 from aira_live.contracts import (
@@ -48,6 +48,7 @@ from aira_live.contracts import (
     HelloMsg,
     LogMsg,
     ReadyMsg,
+    RtcMsg,
     StopMsg,
     TextMsg,
     TranscriptMsg,
@@ -279,6 +280,7 @@ async def ws_endpoint(ws: WebSocket) -> None:
     diag("ws", event="open", origin=origin, mock=settings.mock)
     log_limit = _log_limiter()
     boxes_limit = _boxes_limiter()
+    rtc_limit = rtc.limiter()
 
     async def send(msg: BaseModel) -> None:
         await ws.send_text(dump_server_msg(msg))
@@ -397,6 +399,9 @@ async def ws_endpoint(ws: WebSocket) -> None:
             elif isinstance(msg, EventMsg):
                 monitor.client_event(session, msg.name, msg.data)
                 await _guidance_hook("handle_client_event", session, msg.name, msg.data)
+            elif isinstance(msg, RtcMsg):  # WebRTC signalling for a dashboard monitor: relayed, never read
+                if rtc_limit.allow():
+                    await rtc.from_phone(session, msg)
     except WebSocketDisconnect:
         pass
     finally:

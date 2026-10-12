@@ -47,12 +47,14 @@ from typing import Any
 
 from pydantic import BaseModel, ValidationError
 
-from aira_live import config, monitor_hooks
+from aira_live import config, monitor_hooks, rtc
 from aira_live.contracts import (
     CountMsg,
     CueMsg,
     ErrorMsg,
+    MonAuthMsg,
     RequestFrameMsg,
+    RtcMsg,
     StateMsg,
     TargetMsg,
     TranscriptMsg,
@@ -136,6 +138,7 @@ def reset() -> None:
     _SPEAKER.clear()
     _VOICES.clear()
     _COUNTERS.clear()
+    rtc.reset()
 
 
 # ---------- hub ----------
@@ -146,6 +149,7 @@ def subscribe(shop_id: str) -> Subscriber:
     if len(subs) == 1:
         _start_stats(shop_id)
         _schedule_preview(shop_id, start=True)
+    rtc.monitor_joined(sub)  # its id for WebRTC signalling; a paused preview resumes for this monitor
     return sub
 
 
@@ -157,6 +161,7 @@ def unsubscribe(sub: Subscriber) -> None:
             del _HUB[sub.shop_id]
             _stop_stats(sub.shop_id)
             _schedule_preview(sub.shop_id, start=False)
+        rtc.monitor_left(sub)  # bye to the phones it had video from; the preview resumes for the others
 
 
 # ---------- the preview stream ----------
@@ -181,7 +186,9 @@ def _streams_frames(session) -> bool:
         return not str(getattr(session, "uid", "") or "").startswith("camera:")
 
 
-async def _send_preview(session, start: bool) -> bool:
+async def set_preview(session, start: bool) -> bool:
+    """Ask one phone session to start or stop its preview stream (``aira_live.rtc`` pauses it while the
+    dashboards have WebRTC video instead). Never raises; True when the request went out."""
     try:
         await session.send(_preview_msg(start))
     except Exception as exc:  # noqa: BLE001 - a phone that just left
@@ -201,7 +208,7 @@ async def _preview_shop(shop_id: str, start: bool) -> int:
         return 0
     n = 0
     for s, _bridge in live:
-        if _streams_frames(s) and await _send_preview(s, start):
+        if _streams_frames(s) and not (start and rtc.preview_paused(s.session_id)) and await set_preview(s, start):
             n += 1
     return n
 
@@ -220,7 +227,7 @@ async def preview_on_join(session) -> bool:
     """A session said hello: start its preview stream when its shop is already watched. Never raises."""
     if not monitored(session.shop_id) or not _streams_frames(session):
         return False
-    return await _send_preview(session, True)
+    return await set_preview(session, True)
 
 
 def monitored(shop_id: str) -> bool:
@@ -300,7 +307,7 @@ async def authenticate(ws, shop_id: str) -> bool:
     except Exception:  # noqa: BLE001 - disconnected, or a binary frame
         return False
     msg = parse_monitor_client_msg(raw)
-    return msg is not None and key_ok(msg.key, shop_id)
+    return isinstance(msg, MonAuthMsg) and key_ok(msg.key, shop_id)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -319,17 +326,25 @@ def main(argv: list[str] | None = None) -> int:
 
 # ---------- the socket ----------
 async def serve(ws, sub: Subscriber) -> None:
-    """Pump ``sub``'s lines to ``ws`` until the monitor goes away. Inbound text is ignored (read-only)."""
+    """Pump ``sub``'s lines to ``ws`` until the monitor goes away. The only inbound text acted on is WebRTC
+    signalling (``{t:"rtc", ...}``, relayed by ``aira_live.rtc`` to a phone of the shop, rate-limited); the
+    feed itself stays read-only and anything else is ignored."""
     async def pump() -> None:
         while True:
             await ws.send_text(await sub.next_line())
 
     task = asyncio.create_task(pump(), name=f"monitor-{sub.shop_id}")
+    rtc_limit = rtc.limiter()
     try:
         while True:
             message = await ws.receive()
             if message["type"] == "websocket.disconnect":
                 break
+            text = message.get("text")
+            if isinstance(text, str):
+                msg = parse_monitor_client_msg(text)
+                if isinstance(msg, RtcMsg) and rtc_limit.allow():
+                    await rtc.from_monitor(sub, msg)
     finally:
         task.cancel()
         try:
@@ -430,6 +445,7 @@ def session_started(session) -> None:
 
 
 def session_ended(session) -> None:
+    rtc.session_ended(session)  # its monitors hear bye first, then the session end
     publish(session.shop_id, "session", session.session_id, state="end", **session_fields(session))
     forget(session.session_id)
 

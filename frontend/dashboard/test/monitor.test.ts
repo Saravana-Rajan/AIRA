@@ -377,6 +377,32 @@ describe("reconnect backoff and auth", () => {
     expect(sockets).toHaveLength(3); // no dial after stop
   });
 
+  it("hands rtc lines to the signal port, attaches it once a socket is open and detaches it on close and stop", () => {
+    const sockets: ReturnType<typeof fakeSocket>[] = [];
+    const onMsg = vi.fn();
+    const port = { attach: vi.fn(), detach: vi.fn(), receive: vi.fn() };
+    const stop = openMonitor("ws://x", "k", onMsg, vi.fn(), {
+      connect: () => { const s = fakeSocket(); sockets.push(s); return s; }, setTimer: vi.fn(), clearTimer: vi.fn(), signal: port,
+    });
+    expect(port.attach).not.toHaveBeenCalled();
+    sockets[0].onopen!({});
+    expect(port.attach).toHaveBeenCalledTimes(1);
+    const send = port.attach.mock.calls[0][0] as (m: unknown) => boolean;
+    expect(send({ t: "rtc", kind: "want", to: "s1" })).toBe(true);
+    expect(sockets[0].sent.at(-1)).toBe(JSON.stringify({ t: "rtc", kind: "want", to: "s1" }));
+    const offer = { t: "rtc", kind: "offer", from: "s1", to: "m1", sdp: "v=0" };
+    sockets[0].onmessage!({ data: JSON.stringify(offer) });
+    sockets[0].onmessage!({ data: JSON.stringify({ t: "mon", kind: "status", session: "s1", ts: 1, state: "idle" }) });
+    expect(port.receive).toHaveBeenCalledWith(offer);
+    expect(onMsg).toHaveBeenCalledTimes(1);
+    expect(onMsg).not.toHaveBeenCalledWith(expect.objectContaining({ t: "rtc" }));
+    sockets[0].onclose!({ code: 1006 });
+    expect(port.detach).toHaveBeenCalledTimes(1);
+    expect(send({ t: "rtc", kind: "bye", to: "s1" })).toBe(false); // a dead socket's send is refused
+    stop();
+    expect(port.detach).toHaveBeenCalledTimes(2);
+  });
+
   it("reports a refused key instead of retrying", () => {
     const onConn = vi.fn();
     const s = fakeSocket();

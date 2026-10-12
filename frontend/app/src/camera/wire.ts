@@ -6,9 +6,10 @@
 import type { ServerMsg } from "@aira/contracts";
 import { app } from "../core/app";
 import type { WiredApp } from "../core/wire";
-import { captureFrame, setQualityListener, startContinuous, stopCamera, type FrameKeep } from "./capture";
+import { captureFrame, getVideo, setQualityListener, startCamera, startContinuous, stopCamera, type FrameKeep } from "./capture";
 import { createSceneGate } from "./sceneGate";
 import { createFrameRequestHandler, defaultSleep } from "./requests";
+import { createRtcSender } from "./rtcSender";
 import { createHintSpeaker } from "./hints";
 import { startTiltHints } from "./tilt";
 import { createGuidanceSession } from "../guidance/session";
@@ -113,6 +114,11 @@ export function wireCameraAndGuidance(opts: WireOptions = {}): CameraWiring {
   });
   const count = createCountUx({ speak, earcon: (n) => app.earcon(n), lang, onProgress: opts.onCountProgress });
   const openUrl = createOpenUrlHandler({ speak, lang, open: defaultOpen, dial: defaultDial });
+  // Live video for the dashboard over WebRTC: the same camera stream the frames come from, never a second prompt.
+  const rtc = createRtcSender({
+    send: (m) => app.send(m),
+    getStream: async () => ((getVideo() ?? (await startCamera())).srcObject as MediaStream | null),
+  });
 
   let disposed = false;
   let uninstallDev: (() => void) | null = null;
@@ -125,9 +131,11 @@ export function wireCameraAndGuidance(opts: WireOptions = {}): CameraWiring {
       (m) => count.onServerMsg(m),
       (m) => openUrl.onServerMsg(m),
       (m) => boxStore.onServerMsg(m),   // ER 2 boxes for the "Show boxes" overlay
+      (m) => rtc.onServerMsg(m),        // WebRTC signalling from the dashboard
       ...(opts.extraHandlers ?? []),
     ],
     cleanup: [
+      () => rtc.dispose(),
       stopTilt,
       () => setQualityListener(null),
       () => guidance.end(),
