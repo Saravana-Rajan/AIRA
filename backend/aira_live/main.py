@@ -13,6 +13,10 @@
   - Mock mode: text is echoed, and audio is accepted and dropped.
   - Both modes store frames, resolve confirmations, answer ``stop`` and pass client ``event``s and ``stop`` to
     the guidance hooks (``aira_live.tools.guidance``, imported lazily).
+  - ``boxes`` (the phone's MediaPipe / bump-guard boxes) go to the live monitor through
+    ``aira_live.monitor_hooks`` (rate-limited per socket, never answered). Every session's frames, the owner's
+    chest camera and a shop camera's (uid ``camera:<name>``) alike, go to ``monitor.publish_frame``, which
+    downscales and throttles them only while a monitor watches the shop.
 - Other lanes' HTTP routes are ``APIRouter``s in ``OPTIONAL_ROUTERS``, mounted when their module is present.
 
 Review focus: an unknown or invalid message gets ``error/unsupported`` and the socket stays open; a frame
@@ -30,11 +34,12 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, ValidationError
 
-from aira_live import config, confirm, monitor, sessions
+from aira_live import config, confirm, monitor, monitor_hooks, sessions
 from aira_live.auth import AuthError, verify_hello
 from aira_live.cameras.sources import is_camera_session
 from aira_live.contracts import (
     AudioInMsg,
+    BoxesMsg,
     ConfirmReplyMsg,
     CueMsg,
     ErrorMsg,
@@ -78,10 +83,17 @@ MAX_SESSIONS = 6
 MAX_SESSIONS_PER_IP = 3
 # Client diagnostic ``log`` lines kept per socket per second (aira_live.diag); the rest are dropped.
 LOG_MAX_PER_S = 20
+# Client ``boxes`` messages relayed to the monitor per socket per second. The phone sends at most 5 a second;
+# the headroom absorbs wall-clock bucket edges, so the limit only bites a misbehaving client.
+BOXES_MAX_PER_S = 8
 
 
 def _log_limiter() -> RateLimiter:
     return RateLimiter(LOG_MAX_PER_S)
+
+
+def _boxes_limiter() -> RateLimiter:
+    return RateLimiter(BOXES_MAX_PER_S)
 
 # Browser origins allowed on /ws (the Origin header) and on the HTTP API (CORS, the dashboard's forecast card):
 # the Firebase Hosting site and the local Vite servers. Env AIRA_ALLOWED_ORIGINS (comma-separated) replaces it.
@@ -255,6 +267,7 @@ async def ws_endpoint(ws: WebSocket) -> None:
     settings = config.load()
     diag("ws", event="open", origin=origin, mock=settings.mock)
     log_limit = _log_limiter()
+    boxes_limit = _boxes_limiter()
 
     async def send(msg: BaseModel) -> None:
         await ws.send_text(dump_server_msg(msg))
@@ -341,6 +354,12 @@ async def ws_endpoint(ws: WebSocket) -> None:
                 diag("frame", session=session.session_id, purpose=msg.purpose, id=msg.id, bytes=len(msg.jpeg),
                      w=msg.w, h=msg.h)
                 await monitor.publish_frame(session, frame)  # a no-op unless a monitor watches this shop
+            elif isinstance(msg, BoxesMsg):  # the phone's own boxes: relayed to the monitor, never answered
+                if boxes_limit.allow():
+                    await monitor_hooks.monitor_publish(session, monitor_hooks.vision_message(
+                        session, msg.source, msg.objects, frame_id=msg.frame_id))
+                    diag("boxes", session=session.session_id, source=msg.source, objects=len(msg.objects),
+                         danger=sum(1 for o in msg.objects if o.severity == "danger"), dropped=boxes_limit.dropped)
             elif isinstance(msg, ConfirmReplyMsg):
                 try:
                     result = await confirm.resolve(msg.id, msg.answer, msg.value)
@@ -363,18 +382,20 @@ async def ws_endpoint(ws: WebSocket) -> None:
         pass
     finally:
         diag("ws", event="close", session=session.session_id if session else None,
-             client_logs_dropped=log_limit.dropped)
+             client_logs_dropped=log_limit.dropped, boxes_dropped=boxes_limit.dropped)
         if session:
             await _end_session(session, bridge)
 
 
 @app.websocket("/monitor")
 async def monitor_endpoint(ws: WebSocket) -> None:
-    """``GET /monitor?shop=<id>&key=<AIRA_MONITOR_KEY>``: the dashboard's read-only live feed of one shop.
+    """``GET /monitor?shop=<id>``, then ``{t:"auth", key}``: the dashboard's read-only live feed of one shop.
 
-    Guards, in order: the browser Origin allowlist (like ``/ws``), the monitor key (constant-time; with the env
-    unset nobody gets in), a ``shop``, and ``monitor.MAX_MONITORS_PER_SHOP``. Each refusal closes with 4403
-    before the handshake. A connected monitor first hears ``session start`` for every live session of the shop.
+    Guards, in order: the browser Origin allowlist (like ``/ws``), a ``shop`` and ``monitor.MAX_MONITORS_PER_SHOP``
+    (each refusal closes with 4403 before the handshake), then the first message: ``{t:"auth", key}`` within
+    ``monitor.AUTH_TIMEOUT_S``, compared in constant time to ``AIRA_MONITOR_KEY`` (with the env unset nobody gets
+    in). A wrong, malformed or late key closes with 4403; nothing is published before it. The key is never read
+    from the URL. A connected monitor first hears ``session start`` for every live session of the shop.
     """
     origin = ws.headers.get("origin")
     if not origin_allowed(origin):
@@ -382,8 +403,8 @@ async def monitor_endpoint(ws: WebSocket) -> None:
         await ws.close(code=4403)
         return
     shop = (ws.query_params.get("shop") or "").strip()
-    if not monitor.key_ok(ws.query_params.get("key")) or not shop:
-        log.warning("monitor refused: bad key or no shop")
+    if not shop:
+        log.warning("monitor refused: no shop")
         await ws.close(code=4403)
         return
     if monitor.monitors(shop) >= monitor.MAX_MONITORS_PER_SHOP:
@@ -391,13 +412,18 @@ async def monitor_endpoint(ws: WebSocket) -> None:
         await ws.close(code=4403)
         return
     await ws.accept()
+    if not await monitor.authenticate(ws):
+        log.warning("monitor refused: bad, missing or late auth for %s", shop)
+        diag("monitor", event="refused", shop=shop, origin=origin)
+        await ws.close(code=4403)
+        return
     sub = monitor.subscribe(shop)
     diag("monitor", event="open", shop=shop, origin=origin, monitors=monitor.monitors(shop))
     try:
         for live, _bridge in sessions.by_shop(shop):  # what is already going on
             sub.push(dump_monitor_msg(monitor_adapter.validate_python(
                 {"t": "mon", "kind": "session", "session": live.session_id, "ts": int(time.time() * 1000),
-                 "state": "start", "lang": live.lang})))
+                 "state": "start", **monitor.session_fields(live)})))
         await monitor.serve(ws, sub)
     except WebSocketDisconnect:
         pass

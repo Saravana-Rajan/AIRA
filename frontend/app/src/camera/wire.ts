@@ -14,6 +14,7 @@ import { startTiltHints } from "./tilt";
 import { createGuidanceSession } from "../guidance/session";
 import { trackFingertip } from "../guidance/hands";
 import { guideTo, stopTone } from "../guidance/tones";
+import { boxStore } from "../walk/boxes";
 import { parseWalkingModeCommand, walkingMode } from "../walk/mode";
 import { startBumpGuard, type RunningBumpGuard } from "../walk/start";
 import { walkingModeText } from "../walk/strings";
@@ -120,6 +121,7 @@ export function wireCameraAndGuidance(opts: WireOptions = {}): CameraWiring {
       (m) => guidance.onServerMsg(m),
       (m) => count.onServerMsg(m),
       (m) => openUrl.onServerMsg(m),
+      (m) => boxStore.onServerMsg(m),   // ER 2 boxes for the "Show boxes" overlay
       ...(opts.extraHandlers ?? []),
     ],
     cleanup: [

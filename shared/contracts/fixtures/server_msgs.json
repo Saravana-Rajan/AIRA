@@ -41,5 +41,7 @@
   {"t":"error","code":"camera","say":"The camera is not working."},
   {"t":"error","code":"permission","say":"Please allow the camera and microphone."},
   {"t":"error","code":"unsupported","say":"I cannot do that yet."},
-  {"t":"error","code":"internal","say":"Something went wrong. Please try again."}
+  {"t":"error","code":"internal","say":"Something went wrong. Please try again."},
+  {"t":"boxes","source":"er2","objects":[{"label":"Aavin milk 500 ml","box":[390,505,435,555],"score":0.92},{"label":"Sakthi curd 1 L","box":[400,600,480,700]}],"frameId":"f1","target":"Aavin milk 500 ml","found":true},
+  {"t":"boxes","source":"er2","objects":[{"label":"table","box":[200,100,900,900]}]}
 ]

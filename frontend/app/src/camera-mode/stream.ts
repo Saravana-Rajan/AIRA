@@ -5,6 +5,7 @@
 // The wire contracts are unchanged: a normal hello and normal frame messages.
 import type { ClientMsg, ServerMsg } from "@aira/contracts";
 import type { AiraSocket } from "../net/socket";
+import { startRoomBoxes, type RoomBoxes, type RoomBoxesDeps } from "./boxes";
 import type { Settings } from "../core/types";
 import { langFromPhone, phoneLanguages } from "../core/lang";
 import { APP_VERSION } from "../core/wire";
@@ -71,6 +72,8 @@ export interface ShopCameraDeps {
   settings: Settings;
   intervalMs?: number;
   onStatus?: (s: CameraStatus) => void;
+  /** The on-device detector for live boxes (camera-mode/boxes.ts). Absent: frames only. */
+  boxes?: Pick<RoomBoxesDeps, "detect" | "intervalMs">;
 }
 
 export interface RunningShopCamera {
@@ -85,6 +88,7 @@ export function startShopCamera(deps: ShopCameraDeps): RunningShopCamera {
   const interval = Math.max(1000, deps.intervalMs ?? DEFAULT_INTERVAL_MS);
   const status = (s: CameraStatus) => deps.onStatus?.(s);
   let timer: ReturnType<typeof setInterval> | null = null;
+  let boxes: RoomBoxes | null = null;
   let stopped = false;
   let busy = false;
 
@@ -107,6 +111,10 @@ export function startShopCamera(deps: ShopCameraDeps): RunningShopCamera {
     status("streaming");
     timer = setInterval(() => { void tick(); }, interval);
     void tick();
+    if (deps.boxes) {   // live boxes at a low rate, once the server is ready (a reconnect restarts them too)
+      boxes?.stop();
+      boxes = startRoomBoxes({ detect: deps.boxes.detect, intervalMs: deps.boxes.intervalMs, send: (m) => deps.socket.send(m) });
+    }
   });
 
   status("connecting");
@@ -118,6 +126,8 @@ export function startShopCamera(deps: ShopCameraDeps): RunningShopCamera {
       stopped = true;
       if (timer !== null) clearInterval(timer);
       timer = null;
+      boxes?.stop();
+      boxes = null;
       off();
       deps.socket.close();
       status("stopped");

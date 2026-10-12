@@ -5,9 +5,10 @@
 // Every side effect is injected, so the loop and the decisions are testable with fakes.
 import type { Lang, ServerMsg } from "@aira/contracts";
 import {
-  initialBumpState, observe, raiseUrgency as raise, recordWarn, retainStreaks, shouldWarn, timeToContact, WARN_VIBRATE,
-  type BumpDetection, type BumpState, type BumpWarning,
+  initialBumpState, observe, raiseUrgency as raise, recordWarn, retainStreaks, shouldWarn, timeToContact, trigger,
+  WARN_VIBRATE, type BumpDetection, type BumpState, type BumpWarning,
 } from "./bump";
+import type { BoxReport } from "./boxes";
 import type { DetectFrame, DetectResult } from "./detector";
 import { createFloorCheck, FLOOR_BOX, type FloorCheckOptions } from "./floor";
 import { bumpText } from "./strings";
@@ -50,6 +51,11 @@ export interface BumpGuardDeps {
   motion?: MotionSource;
   /** Initial walking-mode switch (default on). Later changes come through setWalkingMode(). */
   walkingMode?: boolean;
+  /**
+   * Every frame's detections (label, box 0-1000, score) with `danger` set when the guard flags the object in
+   * the walking path (before cooldowns): the monitor's boxes and the "Show boxes" overlay. Errors are ignored.
+   */
+  onDetections?: (reports: BoxReport[], ts: number) => void;
 }
 
 export interface BumpGuard {
@@ -116,6 +122,8 @@ export function createBumpGuard(deps: BumpGuardDeps): BumpGuard {
     state = { ...state, hasSensor, walking: hasSensor ? motion!.isWalking(r.ts) : false };
     const cands: Candidate[] = [];
     const seen = new Set<string>();
+    const reports: BoxReport[] = [];
+    const scores = new Map<unknown, number>(r.dets.map((d) => [d.box, d.score]));
     const consider = (det: BumpDetection) => {
       seen.add(det.key);
       state = observe(state, det);
@@ -123,7 +131,12 @@ export function createBumpGuard(deps: BumpGuardDeps): BumpGuard {
       if (warn) cands.push({ det, warn });
     };
     for (const t of tracker.update(r.dets, r.ts)) {
-      consider({ key: t.key, box: t.box, ttcS: timeToContact(t.boxes, t.ts), ts: r.ts });
+      const det = { key: t.key, box: t.box, ttcS: timeToContact(t.boxes, t.ts), ts: r.ts };
+      consider(det);
+      reports.push({ label: t.label, box: t.box, score: scores.get(t.box), danger: trigger(state, det) !== null });
+    }
+    if (deps.onDetections) {
+      try { deps.onDetections(reports, r.ts); } catch { /* the monitor never blocks the guard */ }
     }
     if (floor && r.floor !== null && floor.update(r.floor)) {
       consider({ key: "floor", box: FLOOR_BOX, ttcS: Infinity, ts: r.ts });

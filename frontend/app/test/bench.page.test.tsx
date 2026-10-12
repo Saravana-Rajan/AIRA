@@ -24,7 +24,7 @@ class FakeWS {
 }
 
 const SETTINGS: Settings = {
-  lang: "en", verbosity: "short", screenReaderMode: false, speechRate: 1, shopId: "sunrise_dairy", onboarded: true,
+  lang: "en", verbosity: "short", screenReaderMode: false, speechRate: 1, shopId: "sunrise_dairy", onboarded: true, showBoxes: false,
 };
 
 function wireRealApp(): FakeWS {

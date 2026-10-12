@@ -53,7 +53,7 @@ describe("LivePage: camera overlay", () => {
     const el = page(stateOf([
       frame,
       mon({ kind: "status", state: "guiding" }),
-      mon({ kind: "vision", source: "guidance", objects: [milk, { label: "Sakthi curd 1 L", box: null, point: [600, 200] }], target: "Aavin milk 500 ml", found: false }),
+      mon({ kind: "vision", source: "er2", objects: [milk, { label: "Sakthi curd 1 L", box: null, point: [600, 200] }], target: "Aavin milk 500 ml", found: false }),
     ]));
     const img = el.querySelector<HTMLImageElement>("img.camera__img")!;
     expect(img.getAttribute("src")).toBe("data:image/jpeg;base64,AAAA");
@@ -76,7 +76,7 @@ describe("LivePage: camera overlay", () => {
     const el = page(stateOf([
       frame,
       mon({ kind: "status", state: "guiding" }),
-      mon({ kind: "vision", source: "guidance", objects: [milk], target: "Aavin milk 500 ml", found: true }),
+      mon({ kind: "vision", source: "er2", objects: [milk], target: "Aavin milk 500 ml", found: true }),
     ]));
     const found = el.querySelector("svg [data-tone=found]")!;
     expect(found.getAttribute("class")).toContain("ov--found");
@@ -91,7 +91,7 @@ describe("LivePage: camera overlay", () => {
     const el = page(stateOf([
       frame,
       mon({ kind: "status", state: "guiding" }),
-      mon({ kind: "vision", source: "guidance", objects: [milk], target: "Aavin milk 500 ml", found: false }),
+      mon({ kind: "vision", source: "er2", objects: [milk], target: "Aavin milk 500 ml", found: false }),
       mon({ kind: "hand", point: [800, 100], near: false }),
     ]));
     const hand = el.querySelector("svg [data-tone=hand] circle")!;

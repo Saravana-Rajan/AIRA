@@ -76,12 +76,13 @@ describe("Onboarding", () => {
     expect(document.activeElement).toBe(startBtn());
   });
 
-  it("is one phone-width column: header, then Start, then the TalkBack row last", () => {
+  it("is one phone-width column: header, then Start, then the TalkBack row, then the Show-boxes row", () => {
     mount({ onDone: () => {}, languages: ["en"] });
     const col = root.querySelector(".onboard > .onboard__col")!;
     expect(col).not.toBeNull();
     const kids = Array.from(col.children);
-    expect(kids.map((k) => k.tagName.toLowerCase())).toEqual(["header", "button", "label"]);
+    expect(kids.map((k) => k.tagName.toLowerCase())).toEqual(["header", "button", "label", "label"]);
+    expect(kids[3].className).toBe("tb-switch tb-switch--boxes");
     expect(kids[0].className).toBe("onboard__head");
     expect(kids[0].querySelector("h1")!.textContent).toBe("AIRA");
     expect(kids[0].querySelector("img")!.getAttribute("width")).toBe("40");

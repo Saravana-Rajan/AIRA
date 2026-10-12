@@ -10,6 +10,7 @@ from pydantic import BaseModel
 
 from aira_live.frames import Frame
 from aira_live.vision.gemini import generate_json, image_part
+from aira_live.vision.point import parse_box
 
 ACCEPT = 0.6             # below this we never name a product
 CONFUSION_ACCEPT = 0.8   # look-alike packs (500 ml vs 1 L, paneer vs butter) need more certainty AND a visible label
@@ -35,6 +36,8 @@ class IdentifyResult(BaseModel):
     sku: str | None
     confidence: float
     alternatives: list[str]
+    # Where the held product is: box_2d [ymin, xmin, ymax, xmax] 0-1000, when the model gave a usable one.
+    box: tuple[int, int, int, int] | None = None
 
 
 IDENTIFY_PROMPT = (
@@ -43,11 +46,13 @@ IDENTIFY_PROMPT = (
     "Use the brand logo, colours and the printed product name and pack size (for example 500 ml vs 1 L, "
     "milk vs buttermilk, paneer vs butter). "
     "If the printed name or pack-size text is not readable, set label_visible to false. "
-    "If none of the candidates match, set sku to null. Only use skus from the candidate list."
+    "If none of the candidates match, set sku to null. Only use skus from the candidate list. "
+    "box_2d is the bounding box of the held product, [ymin, xmin, ymax, xmax] normalized to 0-1000."
 )
 IDENTIFY_SCHEMA = (
     '{"sku": "<one candidate sku or null>", "confidence": 0.0, '
-    '"alternatives": ["<other candidate sku>"], "label_visible": true}'
+    '"alternatives": ["<other candidate sku>"], "label_visible": true, '
+    '"box_2d": [ymin, xmin, ymax, xmax] or null}'
 )
 
 
@@ -108,6 +113,7 @@ def decide(data: dict, candidates: list[ProductRef]) -> IdentifyResult:
     by_lower = {c.sku.lower(): c.sku for c in candidates}
     raw = _sku(data.get("sku"), by_lower)
     conf = _conf(data.get("confidence"))
+    box = parse_box(data.get("box_2d") if data.get("box_2d") is not None else data.get("box"))
     # Missing label_visible = unknown; treat as not readable (matters only for look-alike packs).
     label_visible = _flag(data.get("label_visible", False))
     raw_alts = data.get("alternatives")
@@ -117,14 +123,14 @@ def decide(data: dict, candidates: list[ProductRef]) -> IdentifyResult:
         if s and s != raw and s not in alts:
             alts.append(s)
     if raw is None:
-        return IdentifyResult(sku=None, confidence=0.0, alternatives=alts[:MAX_ALTERNATIVES])
+        return IdentifyResult(sku=None, confidence=0.0, alternatives=alts[:MAX_ALTERNATIVES], box=box)
     if conf < ACCEPT:
-        return IdentifyResult(sku=None, confidence=conf, alternatives=[raw, *alts][:MAX_ALTERNATIVES])
+        return IdentifyResult(sku=None, confidence=conf, alternatives=[raw, *alts][:MAX_ALTERNATIVES], box=box)
     partners = confusion_partners(raw, candidates)
     if partners and (conf < CONFUSION_ACCEPT or not label_visible):
         ordered = [raw, *partners, *[a for a in alts if a not in partners]]
-        return IdentifyResult(sku=None, confidence=conf, alternatives=ordered[:MAX_ALTERNATIVES])
-    return IdentifyResult(sku=raw, confidence=conf, alternatives=alts[:MAX_ALTERNATIVES])
+        return IdentifyResult(sku=None, confidence=conf, alternatives=ordered[:MAX_ALTERNATIVES], box=box)
+    return IdentifyResult(sku=raw, confidence=conf, alternatives=alts[:MAX_ALTERNATIVES], box=box)
 
 
 def next_hint(result: IdentifyResult, candidates: list[ProductRef]) -> str:
@@ -144,15 +150,18 @@ MAX_SEEN = 60   # the model's own words for what it saw, kept short enough to sp
 FREE_TEXT_PROMPT = (
     "A blind shopkeeper's fingertip is on, or hand is holding, ONE object in this picture. "
     "Is that object \"{label}\"? Answer match true only if you clearly see that it is. "
-    "seen is a short name (two or three words) for what the object actually is. Never guess."
+    "seen is a short name (two or three words) for what the object actually is. Never guess. "
+    "box_2d is the bounding box of that object, [ymin, xmin, ymax, xmax] normalized to 0-1000."
 )
-FREE_TEXT_SCHEMA = '{"match": true, "confidence": 0.0, "seen": "<what the object is>"}'
+FREE_TEXT_SCHEMA = ('{"match": true, "confidence": 0.0, "seen": "<what the object is>", '
+                    '"box_2d": [ymin, xmin, ymax, xmax] or null}')
 
 
 class FreeTextResult(BaseModel):
     match: bool
     confidence: float
     seen: str
+    box: tuple[int, int, int, int] | None = None
 
 
 def decide_free_text(data: Any, label: str) -> FreeTextResult:
@@ -162,7 +171,8 @@ def decide_free_text(data: Any, label: str) -> FreeTextResult:
     conf = _conf(data.get("confidence"))
     raw_seen = data.get("seen")
     seen = raw_seen.strip()[:MAX_SEEN] if isinstance(raw_seen, str) else ""
-    return FreeTextResult(match=_flag(data.get("match")) and conf >= ACCEPT, confidence=conf, seen=seen)
+    box = parse_box(data.get("box_2d") if data.get("box_2d") is not None else data.get("box"))
+    return FreeTextResult(match=_flag(data.get("match")) and conf >= ACCEPT, confidence=conf, seen=seen, box=box)
 
 
 async def identify_free_text(frame: Frame, label: str) -> FreeTextResult:

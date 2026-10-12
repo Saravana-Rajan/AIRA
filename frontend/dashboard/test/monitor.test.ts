@@ -86,7 +86,7 @@ describe("reduce: camera, vision, hand, status, events and sessions", () => {
   });
   it("vision found=true sets found, status found and logs a Found activity item once", () => {
     const vision = (found: boolean) =>
-      mon({ kind: "vision", source: "guidance", objects: [{ label: "Aavin milk 500 ml", box: [1, 2, 3, 4], point: null }], target: "Aavin milk 500 ml", found });
+      mon({ kind: "vision", source: "er2", objects: [{ label: "Aavin milk 500 ml", box: [1, 2, 3, 4], point: null }], target: "Aavin milk 500 ml", found });
     const s = apply([mon({ kind: "status", state: "guiding" }), vision(false), vision(true), vision(true)]);
     expect(s.found).toBe(true);
     expect(s.status).toBe("found");
@@ -95,7 +95,7 @@ describe("reduce: camera, vision, hand, status, events and sessions", () => {
   });
   it("a new guiding status clears found; hand and events are recorded", () => {
     const s = apply([
-      mon({ kind: "vision", source: "guidance", objects: [], target: "x", found: true }),
+      mon({ kind: "vision", source: "er2", objects: [], target: "x", found: true }),
       mon({ kind: "status", state: "guiding" }),
       mon({ kind: "hand", point: [10, 20], near: true }),
       mon({ kind: "event", name: "order_sent", detail: { summary: "30 L curd" } }),

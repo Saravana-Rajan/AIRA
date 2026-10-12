@@ -114,7 +114,7 @@ def test_monitor_fixtures_validate_round_trip_and_cover_every_kind():
         seen.add(msg.kind)
         assert json.loads(contracts.dump_monitor_msg(msg)) == raw
     assert seen == set(contracts.MONITOR_KINDS) == {"session", "transcript", "frame", "vision", "hand", "event",
-                                                    "status"}
+                                                    "status", "stats"}
 
 
 @pytest.mark.parametrize("raw", [
@@ -125,6 +125,9 @@ def test_monitor_fixtures_validate_round_trip_and_cover_every_kind():
     {"t": "mon", "kind": "vision", "session": "s", "ts": 1, "source": "radar", "objects": []},
     {"t": "mon", "kind": "status", "session": "s", "ts": 1, "state": "sleeping"},
     {"t": "mon", "kind": "frame", "session": "s", "ts": 1, "jpeg_b64": "AAAA", "w": "480", "h": 1, "purpose": "ask"},
+    {"t": "mon", "kind": "vision", "session": "s", "ts": 1, "source": "er2", "objects": [
+        {"label": "x", "box": None, "point": None, "severity": "high"}]},
+    {"t": "mon", "kind": "stats", "session": "s", "ts": 1, "turns": 1, "er2Calls": 0, "flashCalls": 0, "fps": 0},
     {"t": "transcript", "role": "aira", "text": "x", "final": True},
 ])
 def test_bad_monitor_msgs_are_rejected(raw):
@@ -309,9 +312,10 @@ async def test_mirror_maps_state_count_and_target_but_not_confirm(mk_session):
     assert ("event", "confirm_proposed") not in kinds
     state = next(m for m in got if m.get("name") == "state")
     assert state["detail"] == {"entity": "order", "id": "o1", "state": "ORDER_PLACED", "summary": "30 L curd sent"}
-    vision = next(m for m in got if m["kind"] == "vision")
-    assert vision["source"] == "guidance" and vision["target"] == "Aavin milk 500 ml" and vision["found"] is False
-    assert vision["objects"] == [{"label": "Aavin milk 500 ml", "box": [390, 505, 435, 555], "point": [412, 530]}]
+    # The target's box reaches the monitor through the guidance loop's publish_boxes (source er2), not here.
+    assert not [m for m in got if m["kind"] == "vision"]
+    target = next(m for m in got if m.get("name") == "target")
+    assert target["detail"] == {"label": "Aavin milk 500 ml", "confidence": 0.8}
 
 
 async def test_mirror_maps_guidance_frames_and_cues_to_status(mk_session):
@@ -327,35 +331,139 @@ async def test_mirror_maps_guidance_frames_and_cues_to_status(mk_session):
         ("event", "guidance_stop"), ("status", "idle")]
 
 
-# ---------- vision observer ----------
-async def test_vision_observer_publishes_objects_and_found_flag(mk_session):
+# ---------- box producers (monitor_hooks): ER 2 results and the phone's own boxes ----------
+async def test_hub_is_registered_with_monitor_hooks_and_publishes_er2_results(mk_session):
+    from aira_live import monitor_hooks
     s, _ = mk_session()
     sub = monitor.subscribe(SHOP)
-    assert monitor.on_vision_objects in observers.observers()
-    objs = [{"label": "Aavin milk", "point": [500, 400], "box": [450, 350, 550, 450], "distance": "near"},
-            {"label": "fridge", "point": [1200.4, -3]},  # out of range: clamped
+    assert monitor._from_hooks in monitor_hooks.HOOKS
+    objs = [{"label": "Aavin milk", "point": [500, 400], "box": [450, 350, 550, 450], "distance": "near",
+             "confidence": 0.9},
+            {"label": "fridge", "point": [400, 900]},
             {"label": "", "point": [1, 1]},  # no label: dropped
-            {"label": "curd"}]
-    await observers.on_vision_objects(s, objs, {"source": "camera_ask", "purpose": "ask"})
-    await observers.on_vision_objects(s, objs[:1], {"source": "product_find", "target": "Aavin milk"})
-    await observers.on_vision_objects(s, objs[3:], {"source": "product_find", "target": "Aavin milk"})
-    await observers.on_vision_objects(s, [], "describe")
+            {"label": "curd"}]  # neither box nor point: dropped by the producer
+    await monitor_hooks.publish_er2(s, objs, context="camera_ask", frame_id="f1")
+    await monitor_hooks.publish_er2(s, objs[:1], target="Aavin milk", found=True, context="guidance")
+    await monitor_hooks.publish_er2(s, [], target="Aavin milk", found=False, context="guidance")
     got = [m for m in sub.take() if m["kind"] == "vision"]
-    assert [m["source"] for m in got] == ["camera_ask", "point", "point", "describe"]
+    assert [m["source"] for m in got] == ["er2", "er2", "er2"]
+    assert [m["context"] for m in got] == ["camera_ask", "guidance", "guidance"]
+    assert got[0]["frameId"] == "f1" and "target" not in got[0] and "found" not in got[0]
     assert got[0]["objects"] == [
-        {"label": "Aavin milk", "box": [450, 350, 550, 450], "point": [500, 400]},
-        {"label": "fridge", "box": None, "point": [1000, 0]},
-        {"label": "curd", "box": None, "point": None}]
-    assert "found" not in got[0] and "target" not in got[0]
+        {"label": "Aavin milk", "box": [450, 350, 550, 450], "point": [500, 400], "score": 0.9, "distance": "near"},
+        {"label": "fridge", "box": None, "point": [400, 900]}]
     assert got[1]["target"] == "Aavin milk" and got[1]["found"] is True
-    assert got[2]["target"] == "Aavin milk" and got[2]["found"] is False
-    assert got[3]["objects"] == []
+    assert got[2]["target"] == "Aavin milk" and got[2]["found"] is False and got[2]["objects"] == []
+    assert "severity" not in got[0]
 
 
-async def test_vision_observer_never_raises_on_junk(mk_session):
+async def test_phone_boxes_reach_the_monitor_with_their_source_and_severity(mk_session):
+    from aira_live import monitor_hooks
+    from aira_live.contracts import BoxObject
     s, _ = mk_session()
-    monitor.subscribe(SHOP)
-    assert await observers.on_vision_objects(s, [None, 5, {"label": object()}], {"source": "describe"}) >= 1
+    sub = monitor.subscribe(SHOP)
+    danger = [BoxObject(label="chair", box=(420, 310, 900, 690), score=0.82, severity="danger"),
+              BoxObject(label="bottle", box=(100, 50, 300, 120), score=0.61)]
+    await monitor_hooks.monitor_publish(s, monitor_hooks.vision_message(s, "mediapipe", danger[1:], frame_id="f3"))
+    await monitor_hooks.monitor_publish(s, monitor_hooks.vision_message(s, "bump", danger))
+    got = [m for m in sub.take() if m["kind"] == "vision"]
+    assert got[0]["source"] == "mediapipe" and got[0]["frameId"] == "f3" and "severity" not in got[0]
+    assert got[0]["objects"] == [{"label": "bottle", "box": [100, 50, 300, 120], "point": None, "score": 0.61}]
+    assert got[1]["source"] == "bump" and got[1]["severity"] == "danger"
+    assert got[1]["objects"][0] == {"label": "chair", "box": [420, 310, 900, 690], "point": None, "score": 0.82,
+                                    "severity": "danger"}
+
+
+async def test_hook_never_raises_on_junk_and_is_a_no_op_without_a_monitor(mk_session):
+    from aira_live import monitor_hooks
+    s, _ = mk_session()
+    assert await monitor_hooks.publish_er2(s, [{"label": "a", "box": [0, 0, 10, 10]}]) == 1  # the hub ran, silently
+    sub = monitor.subscribe(SHOP)
+    monitor._from_hooks(s, {"kind": "vision", "source": "radar", "objects": [None, 5, {"label": object()}]})
+    monitor._from_hooks(s, {"kind": "frame", "jpeg": "AAAA", "w": 0, "h": 0})
+    monitor._from_hooks(s, {"kind": "frame", "jpeg": "AAAA", "w": 4, "h": 3, "purpose": "ask"})
+    got = sub.take()
+    assert [m["kind"] for m in got] == ["frame"]  # the invalid source was dropped, the sized frame relayed
+    assert got[0]["jpeg_b64"] == "AAAA" and got[0]["w"] == 4
+
+
+async def test_guidance_found_publishes_a_green_target_and_the_event(mk_session):
+    s, _ = mk_session()
+    sub = monitor.subscribe(SHOP)
+    monitor.guidance_found(s, "Aavin milk", point=(412, 530), box=(390, 505, 435, 555))
+    got = sub.take()
+    assert [m["kind"] for m in got] == ["vision", "event", "status"]
+    assert got[0]["source"] == "er2" and got[0]["context"] == "guidance" and got[0]["found"] is True
+    assert got[0]["objects"] == [{"label": "Aavin milk", "box": [390, 505, 435, 555], "point": [412, 530]}]
+    assert got[1]["name"] == "guidance_found" and got[2]["state"] == "found"
+
+
+# ---------- stats ----------
+async def test_stats_count_turns_vision_calls_and_frames(mk_session, monkeypatch):
+    from aira_live.session import current_session
+    s, _ = mk_session()
+    sessions.register(s)
+    sub = monitor.subscribe(SHOP)
+    try:
+        assert monitor.stats_of(s.session_id) == {"turns": 0, "er2_calls": 0, "flash_calls": 0, "vision_ms": None,
+                                                  "fps": 0}
+        monitor.count_turn(s.session_id)
+        monitor.count_turn(s.session_id)
+        monitor.count_vision("gemini-robotics-er-2-preview", 900, s.session_id)
+        monitor.count_vision("gemini-3.8-flash", 300, s.session_id)
+        monitor.count_vision("gemini-3.8-flash", 300)  # no current session: dropped, not invented
+        current_session.set(s)
+        monitor.count_vision("gemini-robotics-er-2-preview", 1200)  # attributed to the current session
+        now = [100.0]
+        monkeypatch.setattr(monitor, "_monotonic", lambda: now[0])
+        for _ in range(5):
+            monitor.count_frame(s.session_id)
+        now[0] += 3.0  # the window moved on: those frames no longer count
+        monitor.count_frame(s.session_id)
+        assert monitor.stats_of(s.session_id) == {"turns": 2, "er2_calls": 2, "flash_calls": 1, "vision_ms": 800,
+                                                  "fps": 0.5}
+        assert monitor.publish_stats(SHOP) == 1
+        got = [m for m in sub.take() if m["kind"] == "stats"]
+        assert got == [{"t": "mon", "kind": "stats", "session": s.session_id, "ts": got[0]["ts"], "turns": 2,
+                        "er2Calls": 2, "flashCalls": 1, "visionMs": 800, "fps": 0.5}]
+        monitor.forget(s.session_id)
+        assert monitor.stats_of(s.session_id)["turns"] == 0
+    finally:
+        sessions.unregister(s)
+    assert monitor.publish_stats("nobody_watches") == 0
+
+
+async def test_stats_ticker_runs_while_the_shop_is_watched(monkeypatch):
+    monkeypatch.setattr(monitor, "STATS_INTERVAL_S", 0.01)
+    calls = []
+    monkeypatch.setattr(monitor, "publish_stats", lambda shop: calls.append(shop))
+    sub = monitor.subscribe(SHOP)
+    task = monitor._STATS_TASKS[SHOP]
+    await asyncio.sleep(0.05)
+    assert calls and set(calls) == {SHOP}
+    monitor.unsubscribe(sub)
+    assert SHOP not in monitor._STATS_TASKS
+    await asyncio.sleep(0)
+    assert task.cancelled() or task.done()
+
+
+async def test_vision_calls_are_counted_from_generate_json(mk_session, monkeypatch):
+    from types import SimpleNamespace
+    from aira_live.session import current_session
+    from aira_live.vision import gemini
+    s, _ = mk_session()
+    current_session.set(s)
+
+    class FakeModels:
+        async def generate_content(self, model, contents, config):
+            return SimpleNamespace(text='{"point": [1, 2]}')
+
+    monkeypatch.setattr(gemini, "client", lambda: SimpleNamespace(aio=SimpleNamespace(models=FakeModels())))
+    monkeypatch.setattr(gemini, "model_for", lambda role: "gemini-robotics-er-2-preview")
+    monkeypatch.setattr(gemini, "fallback_for", lambda role: None)
+    await gemini.generate_json("point", ["x"], "{}")
+    st = monitor.stats_of(s.session_id)
+    assert st["er2_calls"] == 1 and st["flash_calls"] == 0 and isinstance(st["vision_ms"], int)
 
 
 # ---------- events: tools, confirm, notify ----------
@@ -424,38 +532,127 @@ def test_key_ok_needs_the_env_and_an_exact_match(monkeypatch):
     assert not monitor.key_ok("")
 
 
+class _AuthSocket:
+    def __init__(self, raw=None, delay: float = 0.0, fail: Exception | None = None):
+        self.raw, self.delay, self.fail = raw, delay, fail
+
+    async def receive_text(self):
+        await asyncio.sleep(self.delay)
+        if self.fail:
+            raise self.fail
+        return self.raw
+
+
+async def test_authenticate_takes_the_key_from_the_first_message_only(monkeypatch):
+    monkeypatch.setenv("AIRA_MONITOR_KEY", "m-secret")
+    assert await monitor.authenticate(_AuthSocket('{"t": "auth", "key": "m-secret"}')) is True
+    assert await monitor.authenticate(_AuthSocket('{"t": "auth", "key": "wrong"}')) is False
+    assert await monitor.authenticate(_AuthSocket('{"t": "hello", "key": "m-secret"}')) is False
+    assert await monitor.authenticate(_AuthSocket('{"t": "auth"}')) is False
+    assert await monitor.authenticate(_AuthSocket("not json")) is False
+    assert await monitor.authenticate(_AuthSocket(fail=RuntimeError("gone"))) is False
+
+
+async def test_authenticate_gives_up_after_the_timeout(monkeypatch):
+    monkeypatch.setenv("AIRA_MONITOR_KEY", "m-secret")
+    monkeypatch.setattr(monitor, "AUTH_TIMEOUT_S", 0.02)
+    assert await monitor.authenticate(_AuthSocket('{"t": "auth", "key": "m-secret"}', delay=0.2)) is False
+    assert monitor.AUTH_TIMEOUT_S == 0.02
+
+
+def test_auth_timeout_is_five_seconds():
+    assert monitor.AUTH_TIMEOUT_S == 5.0
+
+
 # ---------- the /monitor route ----------
-def test_monitor_refused_without_env_key(monkeypatch):
-    with pytest.raises(WebSocketDisconnect) as closed:
-        with TestClient(main_mod.app).websocket_connect(f"/monitor?shop={SHOP}&key=x", headers=ORIGIN):
-            pass
+AUTH = {"t": "auth", "key": "m-secret"}
+
+
+def _open(client, shop=SHOP, auth=AUTH):
+    """A /monitor socket that has sent its auth message."""
+    mon = client.websocket_connect(f"/monitor?shop={shop}", headers=ORIGIN)
+    ws = mon.__enter__()
+    if auth is not None:
+        ws.send_json(auth)
+    return mon, ws
+
+
+def test_monitor_refused_without_env_key():
+    with TestClient(main_mod.app).websocket_connect(f"/monitor?shop={SHOP}", headers=ORIGIN) as mon:
+        mon.send_json(AUTH)
+        with pytest.raises(WebSocketDisconnect) as closed:
+            mon.receive_json()
+    assert closed.value.code == 4403
+    assert not monitor.monitored(SHOP)
+
+
+@pytest.mark.parametrize("auth", [{"t": "auth", "key": "wrong"}, {"t": "auth"}, {"t": "hello", "key": "m-secret"},
+                                  {"t": "auth", "key": ""}])
+def test_monitor_refused_with_a_wrong_or_malformed_auth(monkeypatch, auth):
+    monkeypatch.setenv("AIRA_MONITOR_KEY", "m-secret")
+    with TestClient(main_mod.app).websocket_connect(f"/monitor?shop={SHOP}", headers=ORIGIN) as mon:
+        mon.send_json(auth)
+        with pytest.raises(WebSocketDisconnect) as closed:
+            mon.receive_json()
+    assert closed.value.code == 4403
+    assert not monitor.monitored(SHOP)
+
+
+def test_monitor_ignores_a_key_in_the_url(monkeypatch):
+    monkeypatch.setenv("AIRA_MONITOR_KEY", "m-secret")
+    with TestClient(main_mod.app).websocket_connect(f"/monitor?shop={SHOP}&key=m-secret", headers=ORIGIN) as mon:
+        mon.send_json({"t": "auth", "key": "wrong"})
+        with pytest.raises(WebSocketDisconnect) as closed:
+            mon.receive_json()
     assert closed.value.code == 4403
 
 
-@pytest.mark.parametrize("query", [f"shop={SHOP}&key=wrong", f"shop={SHOP}", "key=m-secret", ""])
-def test_monitor_refused_with_a_wrong_or_missing_key_or_shop(monkeypatch, query):
+def test_monitor_refused_when_auth_is_late(monkeypatch):
+    monkeypatch.setenv("AIRA_MONITOR_KEY", "m-secret")
+    monkeypatch.setattr(monitor, "AUTH_TIMEOUT_S", 0.05)
+    with TestClient(main_mod.app).websocket_connect(f"/monitor?shop={SHOP}", headers=ORIGIN) as mon:
+        with pytest.raises(WebSocketDisconnect) as closed:
+            mon.receive_json()
+    assert closed.value.code == 4403
+    assert not monitor.monitored(SHOP)
+
+
+@pytest.mark.parametrize("query", ["", "key=m-secret"])
+def test_monitor_refused_without_a_shop(monkeypatch, query):
     monkeypatch.setenv("AIRA_MONITOR_KEY", "m-secret")
     with pytest.raises(WebSocketDisconnect) as closed:
         with TestClient(main_mod.app).websocket_connect(f"/monitor?{query}", headers=ORIGIN):
             pass
     assert closed.value.code == 4403
-    assert not monitor.monitored(SHOP)
 
 
 def test_monitor_refused_from_a_foreign_origin(monkeypatch):
     monkeypatch.setenv("AIRA_MONITOR_KEY", "m-secret")
     for headers in ({"Origin": "https://evil.example"}, {}):
         with pytest.raises(WebSocketDisconnect) as closed:
-            with TestClient(main_mod.app).websocket_connect(f"/monitor?shop={SHOP}&key=m-secret", headers=headers):
+            with TestClient(main_mod.app).websocket_connect(f"/monitor?shop={SHOP}", headers=headers):
                 pass
         assert closed.value.code == 4403
+
+
+def test_nothing_is_published_before_auth(monkeypatch):
+    monkeypatch.setenv("AIRA_MONITOR_KEY", "m-secret")
+    with TestClient(main_mod.app) as client, client.websocket_connect("/ws", headers=ORIGIN) as ws:
+        ws.send_json(HELLO)
+        ws.receive_json()
+        with client.websocket_connect(f"/monitor?shop={SHOP}", headers=ORIGIN) as mon:
+            assert not monitor.monitored(SHOP)  # not subscribed until the key is checked
+            mon.send_json(AUTH)
+            start = _recv_until(mon, "session")  # the first thing it hears is the live session
+            assert start["state"] == "start"
 
 
 def test_monitor_sees_sessions_transcripts_frames_and_hands_in_mock_mode(monkeypatch):
     monkeypatch.setenv("AIRA_MONITOR_KEY", "m-secret")
     # One TestClient context = one portal, so both sockets run on the same loop (as they do on Cloud Run).
     with TestClient(main_mod.app) as client, \
-            client.websocket_connect(f"/monitor?shop={SHOP}&key=m-secret", headers=ORIGIN) as mon:
+            client.websocket_connect(f"/monitor?shop={SHOP}", headers=ORIGIN) as mon:
+        mon.send_json(AUTH)
         _wait(lambda: monitor.monitored(SHOP))
         with client.websocket_connect("/ws", headers=ORIGIN) as ws:
             ws.send_json(HELLO)
@@ -463,6 +660,7 @@ def test_monitor_sees_sessions_transcripts_frames_and_hands_in_mock_mode(monkeyp
             sid = ready["sessionId"]
             start = _recv_until(mon, "session")
             assert start["state"] == "start" and start["lang"] == "en" and start["session"] == sid
+            assert start["uid"] == "u1"
             ws.send_json({"t": "text", "text": "how much milk"})
             ws.receive_json()
             typed = _recv_until(mon, "transcript")
@@ -492,11 +690,13 @@ def test_late_monitor_gets_the_live_sessions_of_its_shop(monkeypatch):
     with TestClient(main_mod.app) as client, client.websocket_connect("/ws", headers=ORIGIN) as ws:
         ws.send_json(HELLO)
         sid = ws.receive_json()["sessionId"]
-        with client.websocket_connect(f"/monitor?shop={SHOP}&key=m-secret", headers=ORIGIN) as mon:
+        with client.websocket_connect(f"/monitor?shop={SHOP}", headers=ORIGIN) as mon:
+            mon.send_json(AUTH)
             start = _recv_until(mon, "session")
-            assert start["state"] == "start" and start["session"] == sid
-        with client.websocket_connect("/monitor?shop=other_shop&key=m-secret", headers=ORIGIN) as mon:
-            mon.send_text("ignored")  # the monitor is read-only: inbound text is dropped, the socket stays open
+            assert start["state"] == "start" and start["session"] == sid and start["uid"] == "u1"
+        with client.websocket_connect("/monitor?shop=other_shop", headers=ORIGIN) as mon:
+            mon.send_json(AUTH)
+            mon.send_text("ignored")  # after auth the monitor is read-only: inbound text is dropped
             _wait(lambda: monitor.monitored("other_shop"))
             assert monitor.publish("other_shop", "status", "x", state="idle") == 1
             assert _recv_until(mon, "status")["state"] == "idle"
@@ -506,7 +706,8 @@ def test_monitor_sees_live_transcripts_with_customer_role(real_mode, monkeypatch
     from aira_live.tools import sales
     monkeypatch.setenv("AIRA_MONITOR_KEY", "m-secret")
     with TestClient(main_mod.app) as client, \
-            client.websocket_connect(f"/monitor?shop={SHOP}&key=m-secret", headers=ORIGIN) as mon:
+            client.websocket_connect(f"/monitor?shop={SHOP}", headers=ORIGIN) as mon:
+        mon.send_json(AUTH)
         _wait(lambda: monitor.monitored(SHOP))
         with client.websocket_connect("/ws", headers=ORIGIN) as ws:
             ws.send_json(HELLO)
@@ -542,3 +743,36 @@ def test_frames_are_not_downscaled_when_nobody_watches(monkeypatch):
         ws.send_json({"t": "stop"})
         assert ws.receive_json() == {"t": "cue", "cue": "done"}
     assert calls == []
+
+
+def test_room_camera_session_is_marked_by_uid_and_its_frames_reach_the_monitor(monkeypatch):
+    monkeypatch.setenv("AIRA_MONITOR_KEY", "m-secret")
+    with TestClient(main_mod.app) as client, \
+            client.websocket_connect(f"/monitor?shop={SHOP}", headers=ORIGIN) as mon:
+        mon.send_json(AUTH)
+        _wait(lambda: monitor.monitored(SHOP))
+        with client.websocket_connect("/ws", headers=ORIGIN) as ws:
+            ws.send_json({**HELLO, "uid": "camera:front"})
+            sid = ws.receive_json()["sessionId"]
+            start = _recv_until(mon, "session")
+            assert start["session"] == sid and start["uid"] == "camera:front"
+            ws.send_json({"t": "frame", "id": "f1", "jpeg": jpeg_b64(1280, 720), "w": 1280, "h": 720, "ts": 1,
+                          "purpose": "ask"})
+            frame = _recv_until(mon, "frame")
+            assert frame["session"] == sid and (frame["w"], frame["h"]) == (480, 270)
+
+
+def test_monitor_hears_stats_for_a_live_session(monkeypatch):
+    monkeypatch.setenv("AIRA_MONITOR_KEY", "m-secret")
+    monkeypatch.setattr(monitor, "STATS_INTERVAL_S", 0.05)
+    with TestClient(main_mod.app) as client, \
+            client.websocket_connect(f"/monitor?shop={SHOP}", headers=ORIGIN) as mon:
+        mon.send_json(AUTH)
+        _wait(lambda: monitor.monitored(SHOP))
+        with client.websocket_connect("/ws", headers=ORIGIN) as ws:
+            ws.send_json(HELLO)
+            sid = ws.receive_json()["sessionId"]
+            stats = _recv_until(mon, "stats")
+            assert stats["session"] == sid
+            assert stats == {"t": "mon", "kind": "stats", "session": sid, "ts": stats["ts"], "turns": 0,
+                             "er2Calls": 0, "flashCalls": 0, "visionMs": None, "fps": 0}

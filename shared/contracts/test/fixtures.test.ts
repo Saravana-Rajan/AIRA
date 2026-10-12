@@ -9,6 +9,8 @@ import {
   CLIENT_MSG_TYPES,
   SERVER_MSG_TYPES,
   CUE_NAMES,
+  BOX_SOURCES,
+  MAX_BOXES,
   CLIENT_EVENT_NAMES,
   CONFIRM_KINDS,
   ENTITIES,
@@ -66,6 +68,34 @@ describe("contract fixtures", () => {
     expect(isClientMsg({ t: "log", tag: "tilt", data: null })).toBe(false);
     expect(isClientMsg({ t: "log", tag: "tilt" })).toBe(false);
     expect(isServerMsg({ t: "log", tag: "tilt", data: {} })).toBe(false);
+  });
+
+  it("boxes: the phone sends MediaPipe/bump boxes, the server sends ER 2 boxes with a target; both 0-1000", () => {
+    expect(valuesOf(client, "boxes", "source")).toEqual(new Set(["mediapipe", "bump"]));
+    expect(valuesOf(server, "boxes", "source")).toEqual(new Set(["er2"]));
+    expect(BOX_SOURCES).toEqual(["mediapipe", "er2", "bump"]);
+    const obj = { label: "chair", box: [420, 310, 900, 690], score: 0.82, severity: "danger" };
+    expect(isClientMsg({ t: "boxes", source: "mediapipe", objects: [obj] })).toBe(true);
+    expect(isClientMsg({ t: "boxes", source: "mediapipe", objects: [], frameId: "f1" })).toBe(true);
+    expect(isServerMsg({ t: "boxes", source: "er2", objects: [obj], target: "chair", found: true })).toBe(true);
+    // rejected: unknown source, a missing/invalid box, a non-finite or string score, an unknown severity, too many
+    expect(isClientMsg({ t: "boxes", source: "yolo", objects: [] })).toBe(false);
+    expect(isClientMsg({ t: "boxes", source: "mediapipe" })).toBe(false);
+    expect(isClientMsg({ t: "boxes", source: "mediapipe", objects: {} })).toBe(false);
+    expect(isClientMsg({ t: "boxes", source: "mediapipe", objects: [{ label: "chair" }] })).toBe(false);
+    expect(isClientMsg({ t: "boxes", source: "mediapipe", objects: [{ label: "chair", box: [0, 0, 1001, 10] }] })).toBe(false);
+    expect(isClientMsg({ t: "boxes", source: "mediapipe", objects: [{ label: "chair", box: [0, 0, 10] }] })).toBe(false);
+    expect(isClientMsg({ t: "boxes", source: "mediapipe", objects: [{ label: "chair", box: [0, 0, 10.5, 10] }] })).toBe(false);
+    expect(isClientMsg({ t: "boxes", source: "mediapipe", objects: [{ label: 5, box: [0, 0, 10, 10] }] })).toBe(false);
+    expect(isClientMsg({ t: "boxes", source: "mediapipe", objects: [{ label: "c", box: [0, 0, 10, 10], score: "0.9" }] })).toBe(false);
+    expect(isClientMsg({ t: "boxes", source: "mediapipe", objects: [{ label: "c", box: [0, 0, 10, 10], score: Infinity }] })).toBe(false);
+    expect(isClientMsg({ t: "boxes", source: "mediapipe", objects: [{ label: "c", box: [0, 0, 10, 10], severity: "warn" }] })).toBe(false);
+    expect(isClientMsg({ t: "boxes", source: "mediapipe", objects: Array(MAX_BOXES + 1).fill(obj) })).toBe(false);
+    expect(isClientMsg({ t: "boxes", source: "mediapipe", objects: Array(MAX_BOXES).fill(obj) })).toBe(true);
+    // found must be a boolean and target a string
+    expect(isServerMsg({ t: "boxes", source: "er2", objects: [obj], found: "yes" })).toBe(false);
+    expect(isServerMsg({ t: "boxes", source: "er2", objects: [obj], target: 7 })).toBe(false);
+    expect(isServerMsg({ t: "boxes", source: "lidar", objects: [] })).toBe(false);
   });
 
   it("hello is valid without an idToken (no Firebase Auth)", () => {

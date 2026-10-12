@@ -82,8 +82,14 @@ class GuidanceLoop:
             except VisionError as exc:
                 log.warning("guidance: point failed for %s: %s", self.ref.sku, exc)
                 res = None
-            if self.active and res is not None and res.confidence >= MIN_POINT_CONF:
-                hit = True
+            hit = self.active and res is not None and res.confidence >= MIN_POINT_CONF
+            if self.active:  # the monitor and the phone overlay first: the target box (green once in hand)
+                from aira_live.vision.listing import publish_boxes
+
+                seen = [{"label": self.ref.name, "point": list(res.point), "box": list(res.box) if res.box else None,
+                         "confidence": res.confidence}] if hit else []
+                await publish_boxes(s, seen, "guidance", target=self.ref.name, found=hit, frame_id=frame.id)
+            if hit and self.active:  # then the `target` the phone's hand guidance acts on
                 self.last_point, self.last_box = res.point, res.box
                 await s.send(TargetMsg(frame_id=frame.id, label=self.ref.name, point=res.point,
                                        box=res.box, confidence=res.confidence))

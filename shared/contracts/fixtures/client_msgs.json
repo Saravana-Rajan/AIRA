@@ -13,5 +13,8 @@
   {"t":"confirm","id":"c2","answer":"no","value":"28"},
   {"t":"stop"},
   {"t":"log","tag":"tilt","data":{"beta":131.2,"gamma":3.5,"reason":"speak"}},
-  {"t":"log","tag":"build","data":{"build":"a1b2c3d","appVersion":"0.1.0"}}
+  {"t":"log","tag":"build","data":{"build":"a1b2c3d","appVersion":"0.1.0"}},
+  {"t":"boxes","source":"mediapipe","objects":[{"label":"chair","box":[420,310,900,690],"score":0.82,"severity":"danger"},{"label":"bottle","box":[100,50,300,120],"score":0.61}]},
+  {"t":"boxes","source":"mediapipe","objects":[]},
+  {"t":"boxes","source":"bump","objects":[{"label":"crate","box":[300,350,950,700],"severity":"danger"}],"frameId":"f1"}
 ]

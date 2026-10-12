@@ -13,6 +13,7 @@ export const DEFAULT_SETTINGS: Readonly<Settings> = {
   speechRate: 1,
   shopId: DEMO_SHOP_ID,
   onboarded: false,
+  showBoxes: false,
 };
 
 const clampRate = (n: unknown): number =>
@@ -43,6 +44,7 @@ export function loadSettings(store: Storage | null = defaultStore()): Settings {
     speechRate: clampRate(r.speechRate),
     shopId: typeof r.shopId === "string" && r.shopId ? r.shopId : DEFAULT_SETTINGS.shopId,
     onboarded: r.onboarded === true,
+    showBoxes: r.showBoxes === true,
   };
 }
 

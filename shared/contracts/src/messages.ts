@@ -3,14 +3,17 @@
 // server 24 kHz PCM16 base64. Coordinates: point [y, x], box [ymin, xmin, ymax, xmax],
 // integers normalised 0..1000.
 import {
-  CLIENT_EVENT_NAMES, CONFIRM_ANSWERS, CONFIRM_KINDS, CUE_NAMES, ENTITIES, ERROR_CODES, FRAME_PURPOSES, LANGS,
-  NORM_MAX, TRANSCRIPT_ROLES, VERBOSITIES,
-  type ClientEventName, type ConfirmAnswer, type ConfirmKind, type CueName, type Entity, type ErrorCode,
-  type FramePurpose, type Lang, type TranscriptRole, type Verbosity,
+  BOX_SEVERITIES, BOX_SOURCES, CLIENT_EVENT_NAMES, CONFIRM_ANSWERS, CONFIRM_KINDS, CUE_NAMES, ENTITIES, ERROR_CODES,
+  FRAME_PURPOSES, LANGS, MAX_BOXES, NORM_MAX, TRANSCRIPT_ROLES, VERBOSITIES,
+  type BoxSeverity, type BoxSource, type ClientEventName, type ConfirmAnswer, type ConfirmKind, type CueName,
+  type Entity, type ErrorCode, type FramePurpose, type Lang, type TranscriptRole, type Verbosity,
 } from "./enums";
 
 export type Point = [number, number];
 export type Box = [number, number, number, number];
+/** One drawn object: a label, its box, an optional detector score (0-1) and "danger" when the bump guard
+ * flags it in the walking path. */
+export type BoxObject = { label: string; box: Box; score?: number; severity?: BoxSeverity };
 
 // ---------- client -> server ----------
 export type ClientMsg =
@@ -25,7 +28,11 @@ export type ClientMsg =
   // jsonPayload.aira="client". tag names what happened ("build", "camera", "tilt", "frame", "hint", "speak");
   // data is small metadata, never audio or image bytes. The server keeps at most 2 KB of it and 20 lines a
   // second per socket, and never answers it.
-  | { t: "log"; tag: string; data: Record<string, unknown> };
+  | { t: "log"; tag: string; data: Record<string, unknown> }
+  // Boxes the phone drew itself: MediaPipe on-device detections (at most 5 a second) or the bump guard's
+  // obstacles. Never answered: the server relays them to the live monitor as kind "vision" and drops the rest
+  // above its per-socket rate limit. Nothing here changes state.
+  | { t: "boxes"; source: BoxSource; objects: BoxObject[]; frameId?: string };
 
 // ---------- server -> client ----------
 export type ServerMsg =
@@ -42,16 +49,22 @@ export type ServerMsg =
   | { t: "state"; entity: Entity; id: string; state: string; summary: string }
   | { t: "confirm"; id: string; kind: ConfirmKind; prompt: string }
   | { t: "cue"; cue: CueName }
-  | { t: "error"; code: ErrorCode; say: string };
+  | { t: "error"; code: ErrorCode; say: string }
+  // Boxes Gemini Robotics-ER 2 drew (source "er2") for the phone's optional "Show boxes" overlay: the same shape
+  // as the client message, plus the label being looked for (target, hand guidance) and whether it was found
+  // (drawn green). Never spoken.
+  | { t: "boxes"; source: BoxSource; objects: BoxObject[]; frameId?: string; target?: string; found?: boolean };
 
 export type ClientMsgType = ClientMsg["t"];
 export type ServerMsgType = ServerMsg["t"];
 export type ClientMsgOf<T extends ClientMsgType> = Extract<ClientMsg, { t: T }>;
 export type ServerMsgOf<T extends ServerMsgType> = Extract<ServerMsg, { t: T }>;
 
-export const CLIENT_MSG_TYPES = Object.freeze(["hello", "audio", "frame", "text", "event", "confirm", "stop", "log"] as const);
+export const CLIENT_MSG_TYPES = Object.freeze([
+  "hello", "audio", "frame", "text", "event", "confirm", "stop", "log", "boxes",
+] as const);
 export const SERVER_MSG_TYPES = Object.freeze([
-  "ready", "audio", "transcript", "request_frame", "target", "count", "state", "confirm", "cue", "error",
+  "ready", "audio", "transcript", "request_frame", "target", "count", "state", "confirm", "cue", "error", "boxes",
 ] as const);
 
 // Compile-time check that the type lists match the unions exactly.
@@ -74,6 +87,9 @@ const isNorm = (n: unknown): boolean => isInt(n) && n >= 0 && n <= NORM_MAX;
 const isPoint = (p: unknown): p is Point => Array.isArray(p) && p.length === 2 && p.every(isNorm);
 const isBox = (b: unknown): b is Box => Array.isArray(b) && b.length === 4 && b.every(isNorm);
 const isBurst = (b: unknown): boolean => isObj(b) && isInt(b.count) && isInt(b.intervalMs);
+const isBoxObject = (o: unknown): o is BoxObject =>
+  isObj(o) && isStr(o.label) && isBox(o.box) && optional(o.score, isNum) && optional(o.severity, (v) => inList(BOX_SEVERITIES, v));
+const isBoxList = (l: unknown): l is BoxObject[] => Array.isArray(l) && l.length <= MAX_BOXES && l.every(isBoxObject);
 
 export function isClientMsg(x: unknown): x is ClientMsg {
   if (!isObj(x) || !inList(CLIENT_MSG_TYPES, x.t)) return false;
@@ -95,6 +111,8 @@ export function isClientMsg(x: unknown): x is ClientMsg {
       return true;
     case "log":
       return isStr(x.tag) && isObj(x.data);
+    case "boxes":
+      return inList(BOX_SOURCES, x.source) && isBoxList(x.objects) && optional(x.frameId, isStr);
   }
   return false;
 }
@@ -125,6 +143,9 @@ export function isServerMsg(x: unknown): x is ServerMsg {
       return inList(CUE_NAMES, x.cue);
     case "error":
       return inList(ERROR_CODES, x.code) && isStr(x.say);
+    case "boxes":
+      return inList(BOX_SOURCES, x.source) && isBoxList(x.objects) && optional(x.frameId, isStr) &&
+        optional(x.target, isStr) && optional(x.found, isBool);
   }
   return false;
 }
@@ -149,61 +170,89 @@ export function parseClientMsg(raw: string): ClientMsg | null {
   }
 }
 
-// ---------- server -> monitor (GET /monitor?shop=<id>&key=<AIRA_MONITOR_KEY>, read-only) ----------
+// ---------- server -> monitor (GET /monitor?shop=<id>, then {t:"auth", key}; read-only) ----------
 // A projector view of one shop's live sessions. Every message is {t:"mon", kind, session, ts, ...}.
+// The monitor's first and only message is {t:"auth", key}: the server closes with 4403 when the key is wrong,
+// missing or late (5 s), and publishes nothing before it. The key never travels in the URL.
 // Frames are sent only while a monitor is connected (<= 480 px wide, quality 0.6, <= 4 fps a session).
 // Mirrored in backend/aira_live/contracts.py; fixtures in ../fixtures/monitor_msgs.json.
-export const MONITOR_KINDS = Object.freeze(["session", "transcript", "frame", "vision", "hand", "event", "status"] as const);
+export type MonitorClientMsg = { t: "auth"; key: string };
+export const MONITOR_KINDS = Object.freeze(["session", "transcript", "frame", "vision", "hand", "event", "status", "stats"] as const);
 export type MonitorKind = (typeof MONITOR_KINDS)[number];
 export const MONITOR_ROLES = Object.freeze(["owner", "customer", "aira"] as const);
 export type MonitorRole = (typeof MONITOR_ROLES)[number];
 export const MONITOR_SESSION_STATES = Object.freeze(["start", "end"] as const);
 export type MonitorSessionState = (typeof MONITOR_SESSION_STATES)[number];
-export const MONITOR_VISION_SOURCES = Object.freeze(["camera_ask", "describe", "point", "guidance", "identify"] as const);
-export type VisionSource = (typeof MONITOR_VISION_SOURCES)[number];
+// Who drew the boxes: the phone's on-device MediaPipe detector, Gemini Robotics-ER 2, or the phone's bump
+// guard (always severity "danger"). `context` names the ER 2 prompt (camera_ask, describe, guidance, ...).
+export const MONITOR_VISION_SOURCES = BOX_SOURCES;
+export type VisionSource = BoxSource;
+export const VISION_DISTANCES = Object.freeze(["near", "arm", "far"] as const);
+export type VisionDistance = (typeof VISION_DISTANCES)[number];
 export const MONITOR_STATES = Object.freeze(["listening", "thinking", "guiding", "found", "idle"] as const);
 export type MonitorState = (typeof MONITOR_STATES)[number];
 
-export interface VisionObject { label: string; box: Box | null; point: Point | null }
+export interface VisionObject {
+  label: string;
+  box: Box | null;
+  point: Point | null;
+  /** Detector score or ER 2 confidence, 0-1. */
+  score?: number;
+  /** "danger": the bump guard flagged it in the walking path. */
+  severity?: BoxSeverity;
+  distance?: VisionDistance;
+}
 
 type MonBase = { t: "mon"; session: string; ts: number };
 export type MonitorMsg = MonBase & (
-  | { kind: "session"; state: MonitorSessionState; lang: string }
+  // uid "camera:<name>" marks a room camera's session.
+  | { kind: "session"; state: MonitorSessionState; lang: string; uid?: string }
   | { kind: "transcript"; role: MonitorRole; text: string; lang: string; final: boolean }
   | { kind: "frame"; jpeg_b64: string; w: number; h: number; purpose: FramePurpose }
-  | { kind: "vision"; source: VisionSource; objects: VisionObject[]; target?: string; found?: boolean }
+  | { kind: "vision"; source: VisionSource; objects: VisionObject[]; target?: string; found?: boolean; severity?: BoxSeverity; context?: string; frameId?: string }
   | { kind: "hand"; point: Point; near: boolean }
   | { kind: "event"; name: string; detail: Record<string, unknown> }
   | { kind: "status"; state: MonitorState }
+  // Every 2 s per live session: Live API turns, ER 2 / Flash calls, average vision latency (ms; null before
+  // the first call) and the phone's frame rate over the last window.
+  | { kind: "stats"; turns: number; er2Calls: number; flashCalls: number; visionMs: number | null; fps: number }
 );
 export type MonitorMsgOf<K extends MonitorKind> = Extract<MonitorMsg, { kind: K }>;
 
 const isVisionObject = (o: unknown): o is VisionObject =>
-  isObj(o) && isStr(o.label) && (o.box === null || isBox(o.box)) && (o.point === null || isPoint(o.point));
+  isObj(o) && isStr(o.label) && (o.box === null || isBox(o.box)) && (o.point === null || isPoint(o.point)) &&
+  optional(o.score, isNum) && optional(o.severity, (v) => inList(BOX_SEVERITIES, v)) &&
+  optional(o.distance, (v) => inList(VISION_DISTANCES, v));
+
+export function isMonitorClientMsg(x: unknown): x is MonitorClientMsg {
+  return isObj(x) && x.t === "auth" && isStr(x.key);
+}
 
 export function isMonitorMsg(x: unknown): x is MonitorMsg {
   if (!isObj(x) || x.t !== "mon" || !inList(MONITOR_KINDS, x.kind) || !isStr(x.session) || !isNum(x.ts)) return false;
   switch (x.kind as MonitorKind) {
     case "session":
-      return inList(MONITOR_SESSION_STATES, x.state) && isStr(x.lang);
+      return inList(MONITOR_SESSION_STATES, x.state) && isStr(x.lang) && optional(x.uid, isStr);
     case "transcript":
       return inList(MONITOR_ROLES, x.role) && isStr(x.text) && isStr(x.lang) && isBool(x.final);
     case "frame":
       return isStr(x.jpeg_b64) && isInt(x.w) && isInt(x.h) && inList(FRAME_PURPOSES, x.purpose);
     case "vision":
       return inList(MONITOR_VISION_SOURCES, x.source) && Array.isArray(x.objects) && x.objects.every(isVisionObject) &&
-        optional(x.target, isStr) && optional(x.found, isBool);
+        optional(x.target, isStr) && optional(x.found, isBool) && optional(x.severity, (v) => inList(BOX_SEVERITIES, v)) &&
+        optional(x.context, isStr) && optional(x.frameId, isStr);
     case "hand":
       return isPoint(x.point) && isBool(x.near);
     case "event":
       return isStr(x.name) && isObj(x.detail);
     case "status":
       return inList(MONITOR_STATES, x.state);
+    case "stats":
+      return isInt(x.turns) && isInt(x.er2Calls) && isInt(x.flashCalls) && (x.visionMs === null || isInt(x.visionMs)) && isNum(x.fps);
   }
   return false;
 }
 
-/** Parse one WebSocket text frame from the /monitor channel. Returns null for bad JSON or unknown/invalid messages. */
 export function parseMonitorMsg(raw: string): MonitorMsg | null {
   try {
     const v: unknown = JSON.parse(raw);

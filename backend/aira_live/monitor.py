@@ -1,23 +1,31 @@
 """Live monitor: a read-only fan-out, per shop, of what a session hears, sees and does (the dashboard's Live page).
 
-``GET /monitor?shop=<id>&key=<AIRA_MONITOR_KEY>`` (``main.py``) subscribes a browser to one shop. The hub
-here keeps a bounded queue per subscriber; ``publish`` builds a ``contracts.MonitorMsg``, serialises it once
-and hands the same text to every monitor of the shop. Nothing is stored: a monitor sees what happens while it
-is connected, and a slow one loses its oldest lines, never the service's time.
+``GET /monitor?shop=<id>`` (``main.py``) subscribes a browser to one shop once it has sent ``{t:"auth", key}``
+(``authenticate``: the key never travels in the URL). The hub here keeps a bounded queue per subscriber;
+``publish`` builds a ``contracts.MonitorMsg``, serialises it once and hands the same text to every monitor of
+the shop. Nothing is stored: a monitor sees what happens while it is connected, and a slow one loses its oldest
+lines, never the service's time.
 
 Publishers (all fire-and-forget, none may break the thing it watches):
 - ``mirror`` turns the server messages a session sends to its phone into transcripts (owner / customer / aira),
-  guidance targets, status and events. ``main.py`` calls it from the socket's ``send``.
-- ``publish_frame`` copies a phone frame down to ``MAX_WIDTH`` px / quality ``JPEG_QUALITY``, at most ``MAX_FPS``
-  a second per session, and only while someone is watching the shop (the image bytes are never decoded otherwise).
-- ``on_vision_objects`` is registered with ``vision.observers`` and relays every ER 2 result.
+  status and events. ``main.py`` calls it from the socket's ``send``.
+- ``publish_frame`` copies a phone frame (the owner's chest camera or a ``camera:<name>`` room camera) down to
+  ``MAX_WIDTH`` px / quality ``JPEG_QUALITY``, at most ``MAX_FPS`` a second per session, and only while someone is
+  watching the shop (the image bytes are never decoded otherwise).
+- ``_from_hooks`` is registered with ``monitor_hooks`` (the box producers): every ER 2 result (source ``er2``,
+  ``context`` names the prompt) and the phone's own ``boxes`` messages (``mediapipe`` / ``bump``, with
+  ``severity: "danger"`` for an obstacle in the walking path) become kind ``vision`` here.
 - ``tool_runtime``, ``confirm`` and ``sessions.notify`` publish events; the guidance loop publishes found / lost.
+- ``publish_stats`` sends kind ``stats`` for every live session of a watched shop every ``STATS_INTERVAL_S``:
+  Live turns (``count_turn``, from live_bridge), ER 2 / Flash calls and their latency (``count_vision``, from
+  vision.gemini), and the phone's frame rate (``count_frame``, from ``publish_frame``).
 
 Who is talking: a user transcript is the owner's, unless a sale is open for that session (``tools.sales.
 active_sale``) and the line does not address AIRA by name; a sale tool may also say ``speaker="customer"``
 (``set_speaker``) and that word wins while the sale is open.
 
-Keys: ``key_ok`` compares ``?key=`` with ``AIRA_MONITOR_KEY`` in constant time; with the env unset nobody gets in.
+Keys: ``key_ok`` compares the auth message's key with ``AIRA_MONITOR_KEY`` in constant time; with the env unset
+nobody gets in.
 """
 from __future__ import annotations
 
@@ -35,18 +43,19 @@ from typing import Any
 
 from pydantic import BaseModel, ValidationError
 
-from aira_live import config
+from aira_live import config, monitor_hooks
 from aira_live.contracts import (
     CountMsg,
     CueMsg,
     ErrorMsg,
-    VisionObject,
     RequestFrameMsg,
     StateMsg,
     TargetMsg,
     TranscriptMsg,
+    VisionObject,
     dump_monitor_msg,
     monitor_adapter,
+    parse_monitor_client_msg,
 )
 from aira_live.diag import diag
 
@@ -57,6 +66,8 @@ JPEG_QUALITY = 60     # 0.6
 MAX_FPS = 4           # per session
 MAX_QUEUE = 64        # lines a slow monitor may fall behind before it loses the oldest
 MAX_MONITORS_PER_SHOP = 8
+AUTH_TIMEOUT_S = 5.0  # a monitor that has not sent {t:"auth", key} by then is closed
+STATS_INTERVAL_S = 2.0
 _MIN_FRAME_GAP_S = 1.0 / MAX_FPS
 _monotonic = time.monotonic  # tests swap in a clock
 # A user line that names AIRA is the owner talking to it, even in the middle of a sale.
@@ -104,19 +115,27 @@ class Subscriber:
 _HUB: dict[str, list[Subscriber]] = {}
 _LAST_FRAME: dict[str, float] = {}   # session_id -> when its last frame went out
 _SPEAKER: dict[str, str] = {}        # session_id -> the speaker a sale tool named ("owner" | "customer")
+_STATS_TASKS: dict[str, asyncio.Task] = {}  # shop_id -> the stats ticker while the shop is watched
 
 
 def reset() -> None:
     """Forget every monitor and per-session state (tests)."""
+    for task in _STATS_TASKS.values():
+        task.cancel()
+    _STATS_TASKS.clear()
     _HUB.clear()
     _LAST_FRAME.clear()
     _SPEAKER.clear()
+    _COUNTERS.clear()
 
 
 # ---------- hub ----------
 def subscribe(shop_id: str) -> Subscriber:
     sub = Subscriber(shop_id)
-    _HUB.setdefault(shop_id, []).append(sub)
+    subs = _HUB.setdefault(shop_id, [])
+    subs.append(sub)
+    if len(subs) == 1:
+        _start_stats(shop_id)
     return sub
 
 
@@ -126,6 +145,7 @@ def unsubscribe(sub: Subscriber) -> None:
         subs.remove(sub)
         if not subs:
             del _HUB[sub.shop_id]
+            _stop_stats(sub.shop_id)
 
 
 def monitored(shop_id: str) -> bool:
@@ -162,11 +182,25 @@ def publish(shop_id: str, kind: str, session_id: str, **fields: Any) -> int:
 
 # ---------- auth ----------
 def key_ok(key: str | None) -> bool:
-    """Constant-time check of ``?key=`` against env ``AIRA_MONITOR_KEY``; False when either is missing."""
+    """Constant-time check of a key against env ``AIRA_MONITOR_KEY``; False when either is missing."""
     expected = config.load().monitor_key
     if not expected or not key:
         return False
     return hmac.compare_digest(key.encode(), expected.encode())
+
+
+async def authenticate(ws) -> bool:
+    """Wait at most ``AUTH_TIMEOUT_S`` for the monitor's first text frame, ``{t:"auth", key}``, and check the key.
+    False on a wrong or malformed message, a timeout, or a socket that went away. Nothing is published before."""
+    try:
+        raw = await asyncio.wait_for(ws.receive_text(), timeout=AUTH_TIMEOUT_S)
+    except asyncio.TimeoutError:
+        log.warning("monitor refused: no auth within %.0f s", AUTH_TIMEOUT_S)
+        return False
+    except Exception:  # noqa: BLE001 - disconnected, or a binary frame
+        return False
+    msg = parse_monitor_client_msg(raw)
+    return msg is not None and key_ok(msg.key)
 
 
 # ---------- the socket ----------
@@ -202,6 +236,7 @@ def set_speaker(session_id: str, speaker: str | None) -> None:
 def forget(session_id: str) -> None:
     _SPEAKER.pop(session_id, None)
     _LAST_FRAME.pop(session_id, None)
+    _COUNTERS.pop(session_id, None)
 
 
 def _sale_open(session_id: str) -> bool:
@@ -228,13 +263,22 @@ def _lang(session) -> str:
     return str(getattr(session, "lang", "") or "en")
 
 
+def session_fields(session) -> dict[str, Any]:
+    """The ``session`` message's fields for ``session`` (``uid`` tells a room camera from the owner's phone)."""
+    fields: dict[str, Any] = {"lang": _lang(session)}
+    uid = getattr(session, "uid", None)
+    if isinstance(uid, str) and uid:
+        fields["uid"] = uid
+    return fields
+
+
 def session_started(session) -> None:
-    publish(session.shop_id, "session", session.session_id, state="start", lang=_lang(session))
+    publish(session.shop_id, "session", session.session_id, state="start", **session_fields(session))
     publish(session.shop_id, "status", session.session_id, state="idle")
 
 
 def session_ended(session) -> None:
-    publish(session.shop_id, "session", session.session_id, state="end", lang=_lang(session))
+    publish(session.shop_id, "session", session.session_id, state="end", **session_fields(session))
     forget(session.session_id)
 
 
@@ -266,7 +310,7 @@ def notified(session, text: str, cue: str) -> None:
 def guidance_found(session, target: str, point=None, box=None) -> None:
     """The hand guidance verified a pick: the target is in the owner's hand."""
     objects = [{"label": target, "point": point, "box": box}]
-    vision(session, "guidance", objects, target=target, found=True)
+    vision(session, objects, target=target, found=True, context="guidance")
     event(session, "guidance_found", target=target)
     status(session, "found")
 
@@ -292,9 +336,8 @@ def _mirror(session, msg: BaseModel) -> None:
         transcript(session, role, msg.text, msg.final, msg.lang)
         if role != "aira":
             status(session, "listening")
-    elif isinstance(msg, TargetMsg):
-        publish(session.shop_id, "vision", session.session_id, source="guidance",
-                objects=[{"label": msg.label, "box": msg.box, "point": msg.point}], target=msg.label, found=False)
+    elif isinstance(msg, TargetMsg):  # the box itself came through the guidance loop's publish_boxes (er2)
+        event(session, "target", label=msg.label, confidence=msg.confidence)
     elif isinstance(msg, RequestFrameMsg) and msg.purpose == "guide":
         if msg.stop:
             event(session, "guidance_stop")
@@ -354,10 +397,11 @@ def downscale(jpeg_b64: str) -> tuple[str, int, int]:
 
 async def publish_frame(session, frame) -> bool:
     """Copy a phone frame to the shop's monitors: only while one is connected, at most ``MAX_FPS`` a second per
-    session, downscaled off the event loop. True when a frame went out."""
+    session, downscaled off the event loop. True when a frame went out. Every frame counts for the stats."""
+    sid = session.session_id
+    count_frame(sid)
     if not monitored(session.shop_id):
         return False
-    sid = session.session_id
     now = _monotonic()
     last = _LAST_FRAME.get(sid)
     if last is not None and now - last < _MIN_FRAME_GAP_S:
@@ -378,8 +422,7 @@ async def publish_frame(session, frame) -> bool:
 
 
 # ---------- vision ----------
-_SOURCE = {"camera_ask": "camera_ask", "describe": "describe", "product_find": "point", "point": "point",
-           "guidance": "guidance", "product_identify": "identify", "identify": "identify"}
+_DISTANCES = ("near", "arm", "far")
 
 
 def _norm(v: Any) -> int | None:
@@ -404,46 +447,172 @@ def _box(b: Any) -> list[int] | None:
     return None if any(v is None for v in vals) else vals
 
 
+def _score(v: Any) -> float | None:
+    if isinstance(v, bool) or not isinstance(v, (int, float)) or v != v:
+        return None
+    return max(0.0, min(1.0, float(v)))
+
+
 def objects_of(objects: list | None) -> list[dict]:
-    """ER 2 objects -> monitor objects ``{label, box|None, point|None}``; unlabeled or junk entries dropped."""
+    """Producer objects -> monitor objects ``{label, box|None, point|None[, score, severity, distance]}``;
+    unlabeled or junk entries dropped."""
     out = []
     for o in objects or []:
+        if hasattr(o, "model_dump"):
+            o = o.model_dump()
         if not isinstance(o, dict):
             continue
         label = o.get("label") or o.get("name")
         if not isinstance(label, str) or not label.strip():
             continue
-        out.append(VisionObject(label=label.strip(), box=_box(o.get("box")), point=_point(o.get("point")))
-                   .model_dump())
+        extra: dict[str, Any] = {}
+        score = _score(o.get("score", o.get("confidence")))
+        if score is not None:
+            extra["score"] = round(score, 3)
+        if o.get("severity") == "danger":
+            extra["severity"] = "danger"
+        if o.get("distance") in _DISTANCES:
+            extra["distance"] = o["distance"]
+        box = _box(o.get("box") if o.get("box") is not None else o.get("box_2d"))
+        out.append(VisionObject(label=label.strip(), box=box, point=_point(o.get("point")), **extra)
+                   .model_dump(exclude_none=True))
     return out
 
 
-def vision(session, source: str, objects: list | None, target: str | None = None,
-           found: bool | None = None) -> int:
-    fields: dict[str, Any] = {"source": _SOURCE.get(source, "point"), "objects": objects_of(objects)}
+def vision(session, objects: list | None, *, source: str = "er2", target: str | None = None,
+           found: bool | None = None, context: str | None = None, frame_id: str | None = None) -> int:
+    """Publish one kind-``vision`` message; ``severity`` is "danger" when any object is."""
+    objs = objects_of(objects)
+    fields: dict[str, Any] = {"source": source, "objects": objs}
     if target:
         fields["target"] = target
     if found is not None:
         fields["found"] = found
+    if context:
+        fields["context"] = context
+    if frame_id:
+        fields["frame_id"] = frame_id
+    if any(o.get("severity") == "danger" for o in objs):
+        fields["severity"] = "danger"
     return publish(session.shop_id, "vision", session.session_id, **fields)
 
 
-def _same(a: str, b: str) -> bool:
-    return a.casefold().strip() == b.casefold().strip()
-
-
-async def on_vision_objects(session, objects: list[dict], context: dict) -> None:
-    """``vision.observers`` callback: every ER 2 result, with ``found`` when the context names a target."""
-    if not monitored(getattr(session, "shop_id", "")):
+def _from_hooks(session, msg: dict) -> None:
+    """``monitor_hooks`` callback: a producer's message (``vision`` from ER 2 or the phone's boxes, or a ``frame``
+    a producer built itself) -> the hub. Never raises into the producer."""
+    shop = getattr(session, "shop_id", None)
+    if not shop or not monitored(shop):
         return
-    ctx = context if isinstance(context, dict) else {}
-    target = ctx.get("target")
-    target = target if isinstance(target, str) and target.strip() else None
-    found = ctx.get("found") if isinstance(ctx.get("found"), bool) else None
-    objs = objects_of(objects)
-    if target and found is None:
-        found = any(_same(o["label"], target) or target.casefold() in o["label"].casefold() for o in objs)
-    vision(session, str(ctx.get("source") or ctx.get("purpose") or "point"), objects, target, found)
+    kind = msg.get("kind")
+    if kind == "vision":
+        vision(session, msg.get("objects"), source=str(msg.get("source") or "er2"), target=msg.get("target"),
+               found=msg.get("found"), context=msg.get("context"), frame_id=msg.get("frameId"))
+    elif kind == "frame" and msg.get("w") and msg.get("h"):
+        publish(shop, "frame", session.session_id, jpeg_b64=msg.get("jpeg"), w=msg["w"], h=msg["h"],
+                purpose=str(msg.get("purpose") or "ask"))
+
+
+# ---------- stats ----------
+class _Counters:
+    __slots__ = ("turns", "er2", "flash", "vision_ms", "vision_n", "frames")
+
+    def __init__(self) -> None:
+        self.turns = self.er2 = self.flash = self.vision_n = 0
+        self.vision_ms = 0.0
+        self.frames: deque[float] = deque(maxlen=64)
+
+
+_COUNTERS: dict[str, _Counters] = {}
+
+
+def _counters(session_id: str) -> _Counters:
+    c = _COUNTERS.get(session_id)
+    if c is None:
+        c = _COUNTERS[session_id] = _Counters()
+    return c
+
+
+def _current_session_id() -> str | None:
+    try:
+        from aira_live.session import current_session
+        return current_session.get().session_id
+    except Exception:  # noqa: BLE001 - no session in this context (tests, jobs)
+        return None
+
+
+def count_turn(session_id: str) -> None:
+    """One Live API turn ended (live_bridge: ``turn_complete`` without ``more``)."""
+    _counters(session_id).turns += 1
+
+
+def count_vision(model: str, ms: float, session_id: str | None = None) -> None:
+    """One vision call answered: Robotics-ER 2 when the model id says so, Flash otherwise. Attributed to
+    ``session_id`` or the current session; dropped when neither is known."""
+    sid = session_id or _current_session_id()
+    if not sid:
+        return
+    c = _counters(sid)
+    if "robotics" in (model or "").lower():
+        c.er2 += 1
+    else:
+        c.flash += 1
+    c.vision_ms += max(0.0, float(ms))
+    c.vision_n += 1
+
+
+def count_frame(session_id: str) -> None:
+    _counters(session_id).frames.append(_monotonic())
+
+
+def stats_of(session_id: str) -> dict[str, Any]:
+    c = _COUNTERS.get(session_id) or _Counters()
+    now = _monotonic()
+    recent = sum(1 for t in c.frames if now - t <= STATS_INTERVAL_S)
+    return {"turns": c.turns, "er2_calls": c.er2, "flash_calls": c.flash,
+            "vision_ms": round(c.vision_ms / c.vision_n) if c.vision_n else None,
+            "fps": round(recent / STATS_INTERVAL_S, 1)}
+
+
+def publish_stats(shop_id: str) -> int:
+    """Kind ``stats`` for every live session of ``shop_id``; returns how many sessions were reported."""
+    if not monitored(shop_id):
+        return 0
+    try:
+        from aira_live import sessions  # lazy: sessions imports this module
+        live = sessions.by_shop(shop_id)
+    except Exception:  # noqa: BLE001
+        log.exception("monitor: stats failed for %s", shop_id)
+        return 0
+    n = 0
+    for s, _bridge in live:
+        if publish(shop_id, "stats", s.session_id, **stats_of(s.session_id)):
+            n += 1
+    return n
+
+
+async def _stats_loop(shop_id: str) -> None:
+    while True:
+        await asyncio.sleep(STATS_INTERVAL_S)
+        try:
+            publish_stats(shop_id)
+        except Exception:  # noqa: BLE001
+            log.exception("monitor: stats tick failed for %s", shop_id)
+
+
+def _start_stats(shop_id: str) -> None:
+    if shop_id in _STATS_TASKS:
+        return
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        return  # no loop (sync tests): stats are published on demand
+    _STATS_TASKS[shop_id] = loop.create_task(_stats_loop(shop_id), name=f"monitor-stats-{shop_id}")
+
+
+def _stop_stats(shop_id: str) -> None:
+    task = _STATS_TASKS.pop(shop_id, None)
+    if task is not None:
+        task.cancel()
 
 
 def _jsonable(value: Any, depth: int = 0) -> Any:
@@ -459,12 +628,8 @@ def _jsonable(value: Any, depth: int = 0) -> Any:
 
 
 def _install() -> None:
-    """Hear every ER 2 result. Registering twice is once (observers.register)."""
-    try:
-        from aira_live.vision import observers
-        observers.register(on_vision_objects)
-    except Exception:  # noqa: BLE001 - the vision lane is optional
-        log.debug("monitor: vision observers not available", exc_info=True)
+    """Hear every box producer (ER 2 results, the phone's boxes). Registering twice is once."""
+    monitor_hooks.register(_from_hooks)
 
 
 _install()

@@ -17,6 +17,7 @@ from pydantic import BaseModel
 
 from aira_live.frames import Frame
 from aira_live.vision.gemini import generate_json, image_part
+from aira_live.vision.point import parse_box
 
 DEDUPE_RADIUS = 12     # two points closer than this (0-1000 space) are the same pack
 OVERLAP_RADIUS = 35    # packs this close are probably stacked or overlapping
@@ -30,16 +31,19 @@ class CountResult(BaseModel):
     confidence: float
     needs_retake: bool
     aim_hint: str          # i18n key, e.g. "vision.aim.move_back"; "" when the count is usable as is
+    # The deduped packs as the monitor draws them: {"label", "point": [y, x], "box": [ymin, xmin, ymax, xmax] | None}
+    objects: list[dict] = []
 
 
 COUNT_PROMPT = (
     "You are counting stock for a blind shopkeeper. Point to EVERY individual {label} visible in this image, "
     "exactly one point per item, at the centre of each item. Do not point to anything else. "
-    'For each item set "edge": true if part of it is cut off by the image edge, and '
-    '"hidden": true if part of it is hidden behind another item. '
-    f"Points are [y, x] normalized to 0-1000. Return no more than {MAX_ITEMS} items."
+    'For each item give its point and its bounding box box_2d, and set "edge": true if part of it is cut off by '
+    'the image edge, and "hidden": true if part of it is hidden behind another item. '
+    f"Points are [y, x] and box_2d is [ymin, xmin, ymax, xmax], normalized to 0-1000. Return no more than {MAX_ITEMS} items."
 )
-COUNT_SCHEMA = '[{"point": [y, x], "label": "<label>", "edge": false, "hidden": false}]'
+COUNT_SCHEMA = ('[{"point": [y, x], "box_2d": [ymin, xmin, ymax, xmax], "label": "<label>", "edge": false, '
+                '"hidden": false}]')
 
 
 def _is_point(p: Any) -> bool:
@@ -64,6 +68,7 @@ def assess(items: list[dict]) -> CountResult:
     pts: list[tuple[float, float]] = []
     edge_flags: list[bool] = []
     hidden_flags: list[bool] = []
+    objects: list[dict] = []
     for it in items if isinstance(items, list) else []:
         p = it.get("point") if isinstance(it, dict) else None
         if not _is_point(p):
@@ -72,6 +77,9 @@ def assess(items: list[dict]) -> CountResult:
         if any(_dist(q, r) < DEDUPE_RADIUS for r in pts):
             continue
         pts.append(q)
+        box = parse_box(it.get("box_2d") if it.get("box_2d") is not None else it.get("box"))
+        objects.append({"label": str(it.get("label") or "").strip(), "point": [round(q[0]), round(q[1])],
+                        "box": list(box) if box else None})
         near_edge = min(q[0], q[1], 1000 - q[0], 1000 - q[1]) < EDGE_MARGIN
         # An older reply shape uses one "cut" flag for both causes: near the edge it is an edge cut,
         # anywhere else it can only be a pack hidden behind another one.
@@ -93,7 +101,8 @@ def assess(items: list[dict]) -> CountResult:
         hint = "vision.aim.spread_out"
     else:
         hint = ""
-    return CountResult(count=n, confidence=round(confidence, 2), needs_retake=bool(hint), aim_hint=hint)
+    return CountResult(count=n, confidence=round(confidence, 2), needs_retake=bool(hint), aim_hint=hint,
+                       objects=objects)
 
 
 def _items_from(data: dict) -> Any:

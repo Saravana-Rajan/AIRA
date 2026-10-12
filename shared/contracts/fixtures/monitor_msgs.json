@@ -1,15 +1,17 @@
 [
   {"t":"mon","kind":"session","session":"s1","ts":1760000000000,"state":"start","lang":"ta"},
+  {"t":"mon","kind":"session","session":"cam1","ts":1760000000500,"state":"start","lang":"en","uid":"camera:front"},
   {"t":"mon","kind":"session","session":"s1","ts":1760000090000,"state":"end","lang":"ta"},
   {"t":"mon","kind":"transcript","session":"s1","ts":1760000001000,"role":"owner","text":"ஐரா, பால் எங்கே?","lang":"ta","final":true},
   {"t":"mon","kind":"transcript","session":"s1","ts":1760000001500,"role":"aira","text":"Looking for","lang":"ta","final":false},
   {"t":"mon","kind":"transcript","session":"s1","ts":1760000002000,"role":"customer","text":"ரெண்டு தயிர் கொடுங்க","lang":"ta","final":true},
   {"t":"mon","kind":"frame","session":"s1","ts":1760000003000,"jpeg_b64":"/9j/4AAQSkZJRg==","w":480,"h":360,"purpose":"guide"},
-  {"t":"mon","kind":"vision","session":"s1","ts":1760000003200,"source":"camera_ask","objects":[{"label":"Aavin milk 500 ml","box":[390,505,435,555],"point":[412,530]},{"label":"fridge door","box":null,"point":[600,200]}]},
-  {"t":"mon","kind":"vision","session":"s1","ts":1760000003300,"source":"describe","objects":[]},
-  {"t":"mon","kind":"vision","session":"s1","ts":1760000003400,"source":"point","objects":[{"label":"Sakthi curd 1 L","box":null,"point":[500,500]}],"target":"Sakthi curd 1 L","found":false},
-  {"t":"mon","kind":"vision","session":"s1","ts":1760000004000,"source":"guidance","objects":[{"label":"Aavin milk 500 ml","box":[390,505,435,555],"point":[412,530]}],"target":"Aavin milk 500 ml","found":true},
-  {"t":"mon","kind":"vision","session":"s1","ts":1760000004100,"source":"identify","objects":[{"label":"Arun ice cream","box":null,"point":null}],"target":"Arun ice cream","found":true},
+  {"t":"mon","kind":"vision","session":"s1","ts":1760000003200,"source":"er2","objects":[{"label":"Aavin milk 500 ml","box":[390,505,435,555],"point":[412,530],"score":0.92,"distance":"arm"},{"label":"fridge door","box":null,"point":[600,200]}],"context":"camera_ask","frameId":"f1"},
+  {"t":"mon","kind":"vision","session":"s1","ts":1760000003300,"source":"mediapipe","objects":[{"label":"chair","box":[420,310,900,690],"point":null,"score":0.82}]},
+  {"t":"mon","kind":"vision","session":"s1","ts":1760000003350,"source":"bump","objects":[{"label":"chair","box":[420,310,900,690],"point":null,"score":0.82,"severity":"danger"}],"severity":"danger"},
+  {"t":"mon","kind":"vision","session":"s1","ts":1760000003400,"source":"er2","objects":[{"label":"Sakthi curd 1 L","box":null,"point":[500,500]}],"target":"Sakthi curd 1 L","found":false,"context":"product_find"},
+  {"t":"mon","kind":"vision","session":"s1","ts":1760000004000,"source":"er2","objects":[{"label":"Aavin milk 500 ml","box":[390,505,435,555],"point":[412,530]}],"target":"Aavin milk 500 ml","found":true,"context":"guidance"},
+  {"t":"mon","kind":"vision","session":"s1","ts":1760000004050,"source":"er2","objects":[],"context":"describe"},
   {"t":"mon","kind":"hand","session":"s1","ts":1760000004200,"point":[420,525],"near":true},
   {"t":"mon","kind":"hand","session":"s1","ts":1760000004300,"point":[800,100],"near":false},
   {"t":"mon","kind":"event","session":"s1","ts":1760000005000,"name":"tool_call","detail":{"tool":"product_find","ok":true,"ms":820,"args":{"product":"milk"}}},
@@ -19,5 +21,7 @@
   {"t":"mon","kind":"status","session":"s1","ts":1760000006100,"state":"thinking"},
   {"t":"mon","kind":"status","session":"s1","ts":1760000006200,"state":"guiding"},
   {"t":"mon","kind":"status","session":"s1","ts":1760000006300,"state":"found"},
-  {"t":"mon","kind":"status","session":"s1","ts":1760000006400,"state":"idle"}
+  {"t":"mon","kind":"status","session":"s1","ts":1760000006400,"state":"idle"},
+  {"t":"mon","kind":"stats","session":"s1","ts":1760000008000,"turns":4,"er2Calls":3,"flashCalls":1,"visionMs":1240,"fps":2.5},
+  {"t":"mon","kind":"stats","session":"s1","ts":1760000002000,"turns":0,"er2Calls":0,"flashCalls":0,"visionMs":null,"fps":0}
 ]

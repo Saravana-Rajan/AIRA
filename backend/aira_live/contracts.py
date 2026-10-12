@@ -42,12 +42,17 @@ ConfirmAnswer = Literal["yes", "no"]
 ClientEventName = Literal["visibility", "network", "fingertip_in_target"]
 TranscriptRole = Literal["user", "aira"]
 ErrorCode = Literal["network", "model_timeout", "camera", "permission", "unsupported", "internal"]
+# Who drew a box: the phone's on-device MediaPipe detector, Gemini Robotics-ER 2, or the phone's bump guard.
+BoxSource = Literal["mediapipe", "er2", "bump"]
+BoxSeverity = Literal["danger"]
 
 # Spatial coordinates: point [y, x], box [ymin, xmin, ymax, xmax], integers 0..NORM_MAX.
 NORM_MAX = 1000
 Norm = Annotated[StrictInt, Field(ge=0, le=NORM_MAX)]
 Point = tuple[Norm, Norm]
 Box = tuple[Norm, Norm, Norm, Norm]
+# A ``boxes`` message carries at most this many objects (the detectors return 8; ER 2 at most a dozen).
+MAX_BOXES = 32
 
 # A finite JSON number (TS `isNum`). Integers stay ints so payloads round-trip unchanged.
 Num = Union[StrictInt, Annotated[float, Strict(), AllowInfNan(False)]]
@@ -135,8 +140,31 @@ class LogMsg(_ClientWire):
     data: dict[str, Any]
 
 
+class BoxObject(_Wire):
+    """One drawn object: a label, its box [ymin, xmin, ymax, xmax] (0-1000), an optional detector score (0-1)
+    and ``severity: "danger"`` when the bump guard flags it in the walking path."""
+
+    label: StrictStr
+    box: Box
+    score: Optional[Num] = None
+    severity: Optional[BoxSeverity] = None
+
+
+class BoxesMsg(_ClientWire):
+    """Boxes the phone drew itself (MediaPipe on-device, at most 5 a second; the bump guard's obstacles).
+
+    The server never answers it: it is relayed to the live monitor (``aira_live.monitor_hooks``) as
+    kind ``vision`` and dropped above the per-socket rate limit. Nothing here changes state.
+    """
+
+    t: Literal["boxes"]
+    source: BoxSource
+    objects: list[BoxObject] = Field(max_length=MAX_BOXES)
+    frame_id: Optional[StrictStr] = None
+
+
 ClientMsg = Annotated[
-    Union[HelloMsg, AudioInMsg, FrameMsg, TextMsg, EventMsg, ConfirmReplyMsg, StopMsg, LogMsg],
+    Union[HelloMsg, AudioInMsg, FrameMsg, TextMsg, EventMsg, ConfirmReplyMsg, StopMsg, LogMsg, BoxesMsg],
     Field(discriminator="t"),
 ]
 
@@ -231,19 +259,53 @@ class ErrorMsg(_ServerWire):
     say: StrictStr
 
 
+class BoxesOutMsg(_ServerWire):
+    """Boxes Gemini Robotics-ER 2 drew (source ``er2``) for the phone's optional "Show boxes" overlay: the same
+    shape as the client message, plus the label being looked for (``target``, hand guidance) and whether it
+    was ``found`` (drawn green). Never spoken; the phone draws it or ignores it."""
+
+    t: Literal["boxes"] = "boxes"
+    source: BoxSource
+    objects: list[BoxObject] = Field(max_length=MAX_BOXES)
+    frame_id: Optional[StrictStr] = None
+    target: Optional[StrictStr] = None
+    found: Optional[StrictBool] = None
+
+
 ServerMsg = Annotated[
     Union[ReadyMsg, AudioOutMsg, TranscriptMsg, RequestFrameMsg, TargetMsg, CountMsg, StateMsg, ConfirmMsg, CueMsg,
-          ErrorMsg],
+          ErrorMsg, BoxesOutMsg],
     Field(discriminator="t"),
 ]
 
-# ---------- server -> monitor (GET /monitor?shop=<id>&key=<AIRA_MONITOR_KEY>, read-only) ----------
+# ---------- server -> monitor (GET /monitor?shop=<id>, then {t:"auth", key}; read-only) ----------
 # Mirrors the MonitorMsg union in messages.ts and shared/contracts/fixtures/monitor_msgs.json.
 # Every message is {t:"mon", kind, session, ts, ...}; ``jpeg_b64`` keeps its snake_case name on the wire.
 MonitorRole = Literal["owner", "customer", "aira"]
 MonitorSessionState = Literal["start", "end"]
-VisionSource = Literal["camera_ask", "describe", "point", "guidance", "identify"]
+# Who drew the boxes of a vision message: the phone's on-device MediaPipe detector, Gemini Robotics-ER 2, or
+# the phone's bump guard (always severity "danger"). ``context`` says which ER 2 prompt it was.
+VisionSource = BoxSource
+VisionDistance = Literal["near", "arm", "far"]
 MonitorState = Literal["listening", "thinking", "guiding", "found", "idle"]
+
+
+class MonAuthMsg(_ClientWire):
+    """The monitor's first (and only) message: the key, compared in constant time to AIRA_MONITOR_KEY."""
+
+    t: Literal["auth"]
+    key: StrictStr
+
+
+monitor_client_adapter: TypeAdapter[MonAuthMsg] = TypeAdapter(MonAuthMsg)
+
+
+def parse_monitor_client_msg(raw: str | bytes) -> MonAuthMsg | None:
+    """Parse one text frame a monitor sent. None for bad JSON or an unknown/invalid message."""
+    try:
+        return monitor_client_adapter.validate_json(raw)
+    except (ValidationError, ValueError):
+        return None
 
 
 class _MonWire(_ServerWire):
@@ -256,6 +318,7 @@ class MonSessionMsg(_MonWire):
     kind: Literal["session"] = "session"
     state: MonitorSessionState
     lang: StrictStr
+    uid: Optional[StrictStr] = None  # "camera:<name>" marks a room camera (aira_live.cameras.sources)
 
 
 class MonTranscriptMsg(_MonWire):
@@ -278,6 +341,9 @@ class VisionObject(_ServerWire):
     label: StrictStr
     box: Optional[Box]  # required; null means "no box"
     point: Optional[Point]  # required; null means "no point"
+    score: Optional[Num] = None  # detector score or ER 2 confidence, 0-1
+    severity: Optional[BoxSeverity] = None  # "danger": the bump guard flagged it in the walking path
+    distance: Optional[VisionDistance] = None
 
     @model_serializer(mode="wrap")
     def _keep_nulls(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
@@ -293,6 +359,9 @@ class MonVisionMsg(_MonWire):
     objects: list[VisionObject]
     target: Optional[StrictStr] = None
     found: Optional[StrictBool] = None
+    severity: Optional[BoxSeverity] = None  # "danger" when any object is
+    context: Optional[StrictStr] = None  # the ER 2 prompt: camera_ask, describe, camera_list, product_find, guidance
+    frame_id: Optional[StrictStr] = None
 
 
 class MonHandMsg(_MonWire):
@@ -312,12 +381,31 @@ class MonStatusMsg(_MonWire):
     state: MonitorState
 
 
+class MonStatsMsg(_MonWire):
+    """Session counters, every 2 s per live session: Live API turns, ER 2 and Flash calls, the average vision
+    latency (ms, null before the first call) and the phone's frame rate over the last window."""
+
+    kind: Literal["stats"] = "stats"
+    turns: StrictInt
+    er2_calls: StrictInt
+    flash_calls: StrictInt
+    vision_ms: Optional[StrictInt]  # required; null before the first vision call
+    fps: Num
+
+    @model_serializer(mode="wrap")
+    def _keep_null_vision_ms(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
+        data = handler(self)
+        data.setdefault("visionMs", self.vision_ms)
+        return data
+
+
 MonitorMsg = Annotated[
-    Union[MonSessionMsg, MonTranscriptMsg, MonFrameMsg, MonVisionMsg, MonHandMsg, MonEventMsg, MonStatusMsg],
+    Union[MonSessionMsg, MonTranscriptMsg, MonFrameMsg, MonVisionMsg, MonHandMsg, MonEventMsg, MonStatusMsg,
+          MonStatsMsg],
     Field(discriminator="kind"),
 ]
 monitor_adapter: TypeAdapter[MonitorMsg] = TypeAdapter(MonitorMsg)
-MONITOR_KINDS: tuple[str, ...] = ("session", "transcript", "frame", "vision", "hand", "event", "status")
+MONITOR_KINDS: tuple[str, ...] = ("session", "transcript", "frame", "vision", "hand", "event", "status", "stats")
 
 
 def dump_monitor_msg(msg: BaseModel) -> str:
@@ -326,7 +414,8 @@ def dump_monitor_msg(msg: BaseModel) -> str:
 
 
 def parse_monitor_msg(raw: str | bytes) -> (
-    MonSessionMsg | MonTranscriptMsg | MonFrameMsg | MonVisionMsg | MonHandMsg | MonEventMsg | MonStatusMsg | None
+    MonSessionMsg | MonTranscriptMsg | MonFrameMsg | MonVisionMsg | MonHandMsg | MonEventMsg | MonStatusMsg
+    | MonStatsMsg | None
 ):
     """Parse one /monitor text frame. None for bad JSON or an unknown/invalid message."""
     try:
@@ -349,7 +438,7 @@ SERVER_MSG_TYPES: tuple[str, ...] = _tags(ServerMsg)
 
 
 def parse_client_msg(raw: str | bytes) -> (
-    HelloMsg | AudioInMsg | FrameMsg | TextMsg | EventMsg | ConfirmReplyMsg | StopMsg | LogMsg | None
+    HelloMsg | AudioInMsg | FrameMsg | TextMsg | EventMsg | ConfirmReplyMsg | StopMsg | LogMsg | BoxesMsg | None
 ):
     """Parse one WebSocket text frame from the app. None for bad JSON or an unknown/invalid message."""
     try:
@@ -360,7 +449,7 @@ def parse_client_msg(raw: str | bytes) -> (
 
 def parse_server_msg(raw: str | bytes) -> (
     ReadyMsg | AudioOutMsg | TranscriptMsg | RequestFrameMsg | TargetMsg | CountMsg | StateMsg | ConfirmMsg | CueMsg
-    | ErrorMsg | None
+    | ErrorMsg | BoxesOutMsg | None
 ):
     """Parse one server WebSocket text frame (used by tests and dev tools). None when invalid."""
     try:

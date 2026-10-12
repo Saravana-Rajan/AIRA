@@ -15,7 +15,7 @@ from aira_live.tools import guidance
 from aira_live.tools.camera import side_key
 from aira_live.vision.gemini import VisionError
 from aira_live.vision.identify import ProductRef, identify_product, next_hint
-from aira_live.vision.listing import observe
+from aira_live.vision.listing import observe, publish_boxes
 from aira_live.vision.point import point_to
 
 log = logging.getLogger(__name__)
@@ -123,8 +123,10 @@ async def _find_free_text(s, label: str, needed: int) -> dict:
         return {"say": t("live.unavailable", s.lang), **base, "confidence": 0.0}
     if res is None or res.confidence < FREE_MIN_CONF:
         return {"say": t("find.free_none", s.lang), **base, "confidence": res.confidence if res else 0.0}
-    await observe(s, [{"label": label, "point": list(res.point), "box": list(res.box) if res.box else None,
-                       "confidence": res.confidence}], "product_find")
+    seen = [{"label": label, "point": list(res.point), "box": list(res.box) if res.box else None,
+             "confidence": res.confidence}]
+    await observe(s, seen, "product_find")
+    await publish_boxes(s, seen, "product_find", target=label, found=True, frame_id=frames[-1].id)
     ref = free_ref(label)
     await guidance.start(s, ref, needed, [])
     await episodic.log(s.shop_id, "find", f"Finding {label}", "free_text", label)

@@ -35,6 +35,12 @@ export const ERROR_CODES = Object.freeze([
 ] as const);
 export type ErrorCode = (typeof ERROR_CODES)[number];
 
+// Who drew a box: the phone's on-device MediaPipe detector, Gemini Robotics-ER 2, or the phone's bump guard.
+export const BOX_SOURCES = Object.freeze(["mediapipe", "er2", "bump"] as const);
+export type BoxSource = (typeof BOX_SOURCES)[number];
+export const BOX_SEVERITIES = Object.freeze(["danger"] as const);
+export type BoxSeverity = (typeof BOX_SEVERITIES)[number];
+
 export const ORDER_STATES = Object.freeze([
   "DRAFT", "ORDER_PLACED", "DELIVERY_PENDING", "DELIVERY_RECONCILED", "DISCREPANCY",
   "PAYMENT_PENDING", "PAYMENT_CONFIRMED", "CLOSED",
@@ -71,3 +77,5 @@ export type SupplierId = (typeof SUPPLIER_IDS)[number];
 
 // Spatial coordinates: point [y, x], box [ymin, xmin, ymax, xmax], integers 0..NORM_MAX.
 export const NORM_MAX = 1000;
+// A `boxes` message carries at most this many objects (the detectors return 8; ER 2 at most a dozen).
+export const MAX_BOXES = 32;

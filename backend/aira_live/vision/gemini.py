@@ -13,7 +13,7 @@ from google import genai
 from google.genai import types
 from pydantic import BaseModel
 
-from aira_live import config
+from aira_live import config, monitor
 from aira_live.diag import diag, trunc
 from aira_live.models import Role, fallback_for, model_for
 
@@ -141,8 +141,10 @@ async def generate_json(role: Role, parts: list, schema_hint: str,
             else:
                 raise ValueError(f"model reply is JSON {type(data).__name__}, not an object or list")
             out["_model"] = model
+            ms = round((time.perf_counter() - started) * 1000)
             diag("vision", role=role, model=model, attempt=attempt, parts=len(parts), thinking=thinking,
-                 ms=round((time.perf_counter() - started) * 1000), keys=sorted(k for k in out if k != "_model"))
+                 ms=ms, keys=sorted(k for k in out if k != "_model"))
+            monitor.count_vision(model, ms)  # the Live page's session stats (ER 2 / Flash calls, latency)
             return out
         except Exception as e:  # timeout, API error, or unparseable reply -> next attempt
             last = e

@@ -9,6 +9,7 @@ import {
   DEFAULT_INTERVAL_MS, loadCameraName, normalizeCameraName, saveCameraName, startShopCamera,
   type CameraStatus, type RunningShopCamera,
 } from "./stream";
+import { createRoomDetect } from "./boxes";
 import "../ui/tokens.css";
 import "./camera.css";
 
@@ -23,8 +24,10 @@ export interface StartArgs {
   onStatus: (s: CameraStatus) => void;
 }
 
-/** Production start: a fresh socket with the camera role and the real rear camera. */
+/** Production start: a fresh socket with the camera role, the real rear camera and the on-device detector
+ * for live boxes (one pass a second). */
 export function defaultStart({ name, onStatus }: StartArgs): RunningShopCamera {
+  const room = createRoomDetect();
   const run = startShopCamera({
     socket: new AiraSocket(wsUrl()),
     capture: captureFrame,
@@ -32,10 +35,12 @@ export function defaultStart({ name, onStatus }: StartArgs): RunningShopCamera {
     settings: loadSettings(),
     intervalMs: DEFAULT_INTERVAL_MS,
     onStatus,
+    boxes: { detect: room.detect },
   });
   return {
     stop() {
       run.stop();
+      room.close();
       stopCamera();
     },
   };

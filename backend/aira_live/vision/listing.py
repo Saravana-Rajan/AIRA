@@ -18,6 +18,7 @@ from aira_live.i18n import t
 from aira_live.prompt import LANG_NAME
 from aira_live.vision.gemini import generate_json, image_part
 from aira_live.vision.hints import HINT_KEYS
+from aira_live.vision.point import parse_box
 
 log = logging.getLogger(__name__)
 
@@ -43,12 +44,14 @@ LIST_PROMPT = (
     "List every product or item you can see, grouped by where it is: each shelf of a fridge or rack from top to "
     "bottom, the fridge door, the floor or the counter. area is one of {areas}; area_name is a short name for "
     "it in {lang}. Name each item in {lang} with its point [y, x] normalized 0-1000 (x: 0 is the owner's left, "
-    "1000 the right) and distance: near (within reach), arm (an arm's length), far (a step or more). Only items "
+    "1000 the right), its bounding box box_2d [ymin, xmin, ymax, xmax] (same 0-1000 scale) and distance: near "
+    "(within reach), arm (an arm's length), far (a step or more). Only items "
     "you actually see; never guess brands you cannot read. Never describe or identify people. If the image is "
     "dark, blurred or shows no shelf, set confidence below 0.5 and aim_hint to one of {hints}."
 )
 LIST_SCHEMA = ('{"areas": [{"area": "top|middle|bottom|door|floor|counter|other", "area_name": "<short name>", '
-               '"items": [{"label": "<name>", "point": [y, x], "distance": "near|arm|far"}]}], '
+               '"items": [{"label": "<name>", "point": [y, x], "box_2d": [ymin, xmin, ymax, xmax] or null, '
+               '"distance": "near|arm|far"}]}], '
                '"confidence": 0.0, "aim_hint": "<optional key>"}')
 
 
@@ -75,7 +78,11 @@ def _items(raw: Any) -> list[dict]:
         if not label or not _point_ok(p):
             continue
         d = str(o.get("distance") or "").lower()
-        out.append({"label": label, "point": [round(p[0]), round(p[1])], "distance": d if d in DISTANCES else "arm"})
+        item = {"label": label, "point": [round(p[0]), round(p[1])], "distance": d if d in DISTANCES else "arm"}
+        box = parse_box(o.get("box_2d") if o.get("box_2d") is not None else o.get("box"))
+        if box:
+            item["box"] = list(box)
+        out.append(item)
     out.sort(key=lambda i: i["point"][1])                      # left to right, as the owner would sweep a hand
     return out
 
@@ -160,6 +167,19 @@ async def observe(session, objects: list[dict], context: str) -> None:
         log.warning("vision observer failed for %s", context, exc_info=True)
 
 
+async def publish_boxes(session, objects: list[dict], context: str, **kw) -> None:
+    """Hand an ER 2 result (points and boxes) to ``aira_live.monitor_hooks.publish_er2``: the live monitor and
+    the phone's optional "Show boxes" overlay. Optional like the observers; never breaks the answer."""
+    try:
+        from aira_live.monitor_hooks import publish_er2
+    except ImportError:
+        return
+    try:
+        await publish_er2(session, objects, context=context, **kw)
+    except Exception:
+        log.warning("monitor publish failed for %s", context, exc_info=True)
+
+
 async def list_shelf(session, frame_b64: str, question: str) -> dict:
     """One frame of a fridge or shelf -> {say, kind: "list", areas, objects, confidence}. Raises VisionError."""
     lang = session.lang
@@ -177,5 +197,6 @@ async def list_shelf(session, frame_b64: str, question: str) -> dict:
     areas = parse_areas(data.get("areas") if "areas" in data else data)
     objects = flat_objects(areas)
     await observe(session, objects, "camera_list")
+    await publish_boxes(session, objects, "camera_list")
     say = say_listing(areas, lang)
     return {"say": say, "answer": say, "kind": "list", "areas": areas, "objects": objects, "confidence": conf}

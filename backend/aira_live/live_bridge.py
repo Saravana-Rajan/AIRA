@@ -18,7 +18,7 @@ from contextlib import suppress
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, AsyncIterator, Awaitable, Callable, Literal, Protocol
 
-from aira_live import safety
+from aira_live import monitor, safety
 from aira_live.contracts import AudioOutMsg, CueMsg, ErrorMsg, TranscriptMsg
 from aira_live.diag import diag, trunc
 from aira_live.i18n import t
@@ -335,6 +335,7 @@ class LiveBridge:
             if ev.more:  # the same answer goes on in another model turn
                 return
             self._muted = self._answering = False
+            monitor.count_turn(s.session_id)
             await self._end_turn()
         elif ev.kind == "resumption_handle":
             if ev.handle:
