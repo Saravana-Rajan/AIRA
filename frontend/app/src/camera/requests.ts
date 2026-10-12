@@ -2,7 +2,7 @@
 // Handles server `request_frame` messages: single, burst, continuous and stop.
 // Camera problems become one spoken hint (through the throttled hint speaker), never a throw or a retry loop.
 import type { ClientMsg, FramePurpose, ServerMsg } from "@aira/contracts";
-import { CameraError, type FrameMsg } from "./capture";
+import { CameraError, isPriorityPurpose, type FrameMsg } from "./capture";
 import type { HintKey } from "../i18n/camera";
 import { clientLog } from "../core/clientLog";
 
@@ -30,6 +30,9 @@ export interface RequestDeps {
   send: (m: ClientMsg) => boolean;
   hint: (k: HintKey) => boolean;
   sleep: (ms: number) => Promise<void>;
+  /** Owner questions (ask / count / identify / point) pre-empt background capture: describe and preview frames
+   *  pause until the returned release fn runs. Optional: without it frames simply go at once. */
+  hold?: () => () => void;
 }
 
 /** An oversize frame means "hold still" (too much detail/noise); anything else means no camera. */
@@ -60,15 +63,21 @@ export function createFrameRequestHandler(deps: RequestDeps): (m: FrameRequest) 
     }
     const count = clamp(m.burst?.count, 1, MAX_BURST, 1);
     const interval = clamp(m.burst?.intervalMs, 0, MAX_INTERVAL_MS, 0);
-    for (let i = 0; i < count; i++) {
-      try {
-        deps.send(await deps.capture(m.purpose));
-      } catch (e) {
-        clientLog("frame", { purpose: m.purpose, error: e instanceof CameraError ? e.code : "unknown" });
-        deps.hint(hintFor(e));
-        return; // one hint, no retry loop
+    // An owner question never waits behind a describe frame: background capture pauses until it is sent.
+    const release = isPriorityPurpose(m.purpose) ? deps.hold?.() : undefined;
+    try {
+      for (let i = 0; i < count; i++) {
+        try {
+          deps.send(await deps.capture(m.purpose));
+        } catch (e) {
+          clientLog("frame", { purpose: m.purpose, error: e instanceof CameraError ? e.code : "unknown" });
+          deps.hint(hintFor(e));
+          return; // one hint, no retry loop
+        }
+        if (i < count - 1 && interval > 0) await deps.sleep(interval);
       }
-      if (i < count - 1 && interval > 0) await deps.sleep(interval);
+    } finally {
+      release?.();
     }
   };
 }

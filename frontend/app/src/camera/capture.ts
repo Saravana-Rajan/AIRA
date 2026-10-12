@@ -20,11 +20,40 @@ export const PREVIEW_QUALITY = 0.45;
 /** A preview tick is skipped while more than this many bytes wait on the socket: a stale picture is never sent. */
 export const PREVIEW_MAX_BUFFERED = 32_000;
 
+/** The owner's own camera questions (ask, count, identify, point): full detail, so ER 2 can count packs. */
+export const PRIORITY_MAX_SIDE = 1280;
+export const PRIORITY_QUALITY = 0.9;
+const PRIORITY: ReadonlySet<FramePurpose> = new Set<FramePurpose>(["ask", "count", "identify", "point"]);
+/** Background streams that wait while an owner question captures: scene narration and the monitor preview. */
+const PAUSABLE: ReadonlySet<FramePurpose> = new Set<FramePurpose>(["describe", "preview"]);
+
+export function isPriorityPurpose(purpose: FramePurpose): boolean {
+  return PRIORITY.has(purpose);
+}
+
 /** How big and how good a frame of this purpose is. */
 export function frameSpec(purpose: FramePurpose): { maxSide: number; quality: number } {
-  return purpose === "preview"
-    ? { maxSide: PREVIEW_MAX_SIDE, quality: PREVIEW_QUALITY }
-    : { maxSide: MAX_SIDE, quality: JPEG_QUALITY };
+  if (purpose === "preview") return { maxSide: PREVIEW_MAX_SIDE, quality: PREVIEW_QUALITY };
+  if (PRIORITY.has(purpose)) return { maxSide: PRIORITY_MAX_SIDE, quality: PRIORITY_QUALITY };
+  return { maxSide: MAX_SIDE, quality: JPEG_QUALITY };
+}
+
+let backgroundHolds = 0;
+
+/** An owner question is capturing: describe and preview frames pause (and one mid-encode is dropped) until
+ *  the returned release fn is called. Holds nest; releasing twice is harmless. */
+export function holdBackground(): () => void {
+  backgroundHolds++;
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    backgroundHolds = Math.max(0, backgroundHolds - 1);
+  };
+}
+
+export function backgroundHeld(): boolean {
+  return backgroundHolds > 0;
 }
 
 export class CameraError extends Error {
@@ -244,15 +273,17 @@ export function socketBusy(): boolean {
 export function startContinuous(purpose: FramePurpose, fps: number, keep?: FrameKeep): () => void {
   const period = Math.max(100, Math.round(1000 / Math.max(0.1, fps)));
   const dropWhenBusy = purpose === "preview";
+  const pausable = PAUSABLE.has(purpose);
   let stopped = false;
   let busy = false;
   const tick = async () => {
     if (stopped || busy) return;
+    if (pausable && backgroundHeld()) return; // the owner's question has the camera and the socket
     if (dropWhenBusy && socketBusy()) return; // the last picture is still on its way: this one is not worth encoding
     busy = true;
     try {
       const f = await captureFrameIf(purpose, keep);
-      if (f && !stopped && !(dropWhenBusy && socketBusy())) app.send(f);
+      if (f && !stopped && !(pausable && backgroundHeld()) && !(dropWhenBusy && socketBusy())) app.send(f);
     } catch {
       // Camera errors are surfaced by the request handler and the hint speaker.
     } finally {

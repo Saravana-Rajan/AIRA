@@ -6,7 +6,7 @@
 import type { ServerMsg } from "@aira/contracts";
 import { app } from "../core/app";
 import type { WiredApp } from "../core/wire";
-import { captureFrame, getVideo, setQualityListener, startCamera, startContinuous, stopCamera, type FrameKeep } from "./capture";
+import { captureFrame, getVideo, holdBackground, setQualityListener, startCamera, startContinuous, stopCamera, type FrameKeep } from "./capture";
 import { createSceneGate } from "./sceneGate";
 import { createFrameRequestHandler, defaultSleep } from "./requests";
 import { createRtcSender } from "./rtcSender";
@@ -93,6 +93,7 @@ export function wireCameraAndGuidance(opts: WireOptions = {}): CameraWiring {
     send: (m) => app.send(m),
     hint,
     sleep: defaultSleep,
+    hold: holdBackground,
   });
 
   let near = false;

@@ -4,6 +4,7 @@ import time
 import unicodedata
 import uuid
 from collections.abc import Awaitable, Callable
+from contextlib import contextmanager
 from contextvars import ContextVar
 
 from pydantic import BaseModel
@@ -43,7 +44,23 @@ class Session:
         # Sent-notice ledger: notice key -> when it was last sent. ``sessions.register`` hands a resumed session
         # the ledger of the session it continues, so a reconnect never replays a notice the owner already heard.
         self.notice_ledger: dict[str, float] = {}
+        # Owner questions to the camera in flight (camera_ask, counts). While > 0 the ambient and describe loops
+        # make no ER 2 call: the owner's own question gets the camera and the model first.
+        self.owner_asks = 0
         self._send = send
+
+    @property
+    def owner_busy(self) -> bool:
+        return self.owner_asks > 0
+
+    @contextmanager
+    def owner_asking(self):
+        """Mark an owner camera question in flight (nestable); background vision waits until it ends."""
+        self.owner_asks += 1
+        try:
+            yield
+        finally:
+            self.owner_asks -= 1
 
     async def send(self, msg: BaseModel) -> None:
         await self._send(msg)
