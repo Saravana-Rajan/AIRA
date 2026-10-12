@@ -858,3 +858,13 @@ a { color: var(--neu-accent); }
 .sidebar__foot { display: none; }
 .main--live .lv-logo,
 .main--live .lv-title { display: none; }
+/* A single section's card title repeats the header's page name: kept for screen readers, hidden on screen. */
+.main.main--single:not(.main--live) > .card > .card__title {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
