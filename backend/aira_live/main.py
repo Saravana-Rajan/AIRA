@@ -13,6 +13,9 @@
   - Mock mode: text is echoed, and audio is accepted and dropped.
   - Both modes store frames, resolve confirmations, answer ``stop`` and pass client ``event``s and ``stop`` to
     the guidance hooks (``aira_live.tools.guidance``, imported lazily).
+  - ``boxes`` (the phone's MediaPipe / bump-guard boxes) go to the live monitor through
+    ``aira_live.monitor_hooks`` (rate-limited per socket, never answered); so do a shop camera's frames
+    (uid ``camera:<name>``), downscaled, and only while a monitor hook is registered.
 - Other lanes' HTTP routes are ``APIRouter``s in ``OPTIONAL_ROUTERS``, mounted when their module is present.
 
 Review focus: an unknown or invalid message gets ``error/unsupported`` and the socket stays open; a frame
@@ -29,11 +32,12 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, ValidationError
 
-from aira_live import config, confirm, sessions
+from aira_live import config, confirm, monitor_hooks, sessions
 from aira_live.auth import AuthError, verify_hello
 from aira_live.cameras.sources import is_camera_session
 from aira_live.contracts import (
     AudioInMsg,
+    BoxesMsg,
     ConfirmReplyMsg,
     CueMsg,
     ErrorMsg,
@@ -75,10 +79,17 @@ MAX_SESSIONS = 6
 MAX_SESSIONS_PER_IP = 3
 # Client diagnostic ``log`` lines kept per socket per second (aira_live.diag); the rest are dropped.
 LOG_MAX_PER_S = 20
+# Client ``boxes`` messages relayed to the monitor per socket per second. The phone sends at most 5 a second;
+# the headroom absorbs wall-clock bucket edges, so the limit only bites a misbehaving client.
+BOXES_MAX_PER_S = 8
 
 
 def _log_limiter() -> RateLimiter:
     return RateLimiter(LOG_MAX_PER_S)
+
+
+def _boxes_limiter() -> RateLimiter:
+    return RateLimiter(BOXES_MAX_PER_S)
 
 # Browser origins allowed on /ws (the Origin header) and on the HTTP API (CORS, the dashboard's forecast card):
 # the Firebase Hosting site and the local Vite servers. Env AIRA_ALLOWED_ORIGINS (comma-separated) replaces it.
@@ -251,6 +262,7 @@ async def ws_endpoint(ws: WebSocket) -> None:
     settings = config.load()
     diag("ws", event="open", origin=origin, mock=settings.mock)
     log_limit = _log_limiter()
+    boxes_limit = _boxes_limiter()
 
     async def send(msg: BaseModel) -> None:
         await ws.send_text(dump_server_msg(msg))
@@ -331,6 +343,15 @@ async def ws_endpoint(ws: WebSocket) -> None:
                                          purpose=msg.purpose))
                 diag("frame", session=session.session_id, purpose=msg.purpose, id=msg.id, bytes=len(msg.jpeg),
                      w=msg.w, h=msg.h)
+                if is_camera_session(session) and monitor_hooks.has_hooks():  # the room camera's preview
+                    await monitor_hooks.monitor_publish(session, monitor_hooks.frame_message(
+                        session, msg.jpeg, frame_id=msg.id, frame_ts=msg.ts, purpose=msg.purpose))
+            elif isinstance(msg, BoxesMsg):  # the phone's own boxes: relayed to the monitor, never answered
+                if boxes_limit.allow():
+                    await monitor_hooks.monitor_publish(session, monitor_hooks.vision_message(
+                        session, msg.source, msg.objects, frame_id=msg.frame_id))
+                    diag("boxes", session=session.session_id, source=msg.source, objects=len(msg.objects),
+                         danger=sum(1 for o in msg.objects if o.severity == "danger"), dropped=boxes_limit.dropped)
             elif isinstance(msg, ConfirmReplyMsg):
                 try:
                     result = await confirm.resolve(msg.id, msg.answer, msg.value)
@@ -352,6 +373,6 @@ async def ws_endpoint(ws: WebSocket) -> None:
         pass
     finally:
         diag("ws", event="close", session=session.session_id if session else None,
-             client_logs_dropped=log_limit.dropped)
+             client_logs_dropped=log_limit.dropped, boxes_dropped=boxes_limit.dropped)
         if session:
             await _end_session(session, bridge)

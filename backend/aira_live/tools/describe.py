@@ -26,7 +26,7 @@ from aira_live.i18n import t
 from aira_live.live_bridge import on_input_transcript
 from aira_live.session import Session, get_session
 from aira_live.tools.camera import MIN_CONF, dist_key, nearest_first, parse_objects, side_key
-from aira_live.vision import observers
+from aira_live.vision import listing, observers
 from aira_live.vision.gemini import VisionError, generate_json, image_part
 
 log = logging.getLogger(__name__)
@@ -45,11 +45,12 @@ DESCRIBE_PROMPT = (
     "You are the eyes of a blind shopkeeper wearing this chest camera while he walks. List the main objects "
     "in view (at most 4, nearest and most useful first): furniture, doors, steps, crates, shelves, fridges, "
     "bags, keys, phones, tools. For each give a short plain label, its point [y, x] normalized 0-1000 (x: 0 is "
-    "his left, 1000 his right), its box [ymin, xmin, ymax, xmax] and its distance: near (within reach), arm "
-    "(an arm's length), far (a step or more away). Walls, floor, ceiling and sky are not objects. Never "
+    "his left, 1000 his right), its bounding box box_2d [ymin, xmin, ymax, xmax] on the same scale, and its "
+    "distance: near (within reach), arm (an arm's length), far (a step or more away). Walls, floor, ceiling and "
+    "sky are not objects. Never "
     "describe or identify people. If the image is dark or blurred, return no objects and confidence below 0.5."
 )
-DESCRIBE_SCHEMA = ('{"objects": [{"label": "<name>", "point": [y, x], "box": [ymin, xmin, ymax, xmax] or null, '
+DESCRIBE_SCHEMA = ('{"objects": [{"label": "<name>", "point": [y, x], "box_2d": [ymin, xmin, ymax, xmax] or null, '
                    '"distance": "near|arm|far"}], "confidence": 0.0}')
 
 _ON = re.compile(r"(describ|narrat|tell me what.?s around|keep telling|what.?s around me as i|"
@@ -165,6 +166,7 @@ class DescribeLoop:
         await observers.on_vision_objects(s, objects, {"source": "describe", "frame_id": frame.id,
                                                        "frame_ts": frame.ts, "confidence": conf,
                                                        "model": data.get("_model")})
+        await listing.publish_boxes(s, objects, "describe", frame_id=frame.id)
         if conf < MIN_CONF or not objects:
             return self.active
         now = self._clock()

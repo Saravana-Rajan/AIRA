@@ -5,6 +5,7 @@ import type { Lang } from "@aira/contracts";
 import { Onboarding, shopName } from "./Onboarding";
 import { Screen } from "./Screen";
 import { ScreenReaderRegion } from "./ScreenReaderRegion";
+import { BoxOverlay } from "./BoxOverlay";
 import type { ScreenState } from "./screenState";
 import { statusLabel, type CountProgress } from "./view";
 import { LABELS, STRINGS } from "../i18n/strings";
@@ -229,6 +230,7 @@ export function AppShell({ wire = wireApp, wsUrl, connect, initial, languages, o
         onTalk={w.onTalk}
         onStop={w.onStop}
       />
+      {settings.showBoxes && <BoxOverlay />}
     </>
   );
 }

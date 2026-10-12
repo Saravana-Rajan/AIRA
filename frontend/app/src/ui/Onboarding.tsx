@@ -39,6 +39,7 @@ export function Onboarding({ onDone, initial, languages }: Props) {
   const base: Settings = { ...DEFAULT_SETTINGS, ...initial };
   const [lang] = useState<Lang>(() => langFromPhone(languages ?? phoneLanguages()));
   const [srMode, setSr] = useState<boolean>(base.screenReaderMode);
+  const [showBoxes, setShowBoxes] = useState<boolean>(base.showBoxes === true);
   const done = useRef(false);
   const start = useRef<HTMLButtonElement>(null);
 
@@ -48,7 +49,7 @@ export function Onboarding({ onDone, initial, languages }: Props) {
   const finish = () => {
     if (done.current) return; // a double tap must not run setup twice
     done.current = true;
-    onDone({ ...base, screenReaderMode: srMode, shopId: base.shopId || DEMO_SHOP_ID, onboarded: true });
+    onDone({ ...base, screenReaderMode: srMode, showBoxes, shopId: base.shopId || DEMO_SHOP_ID, onboarded: true });
   };
 
   const t = (k: keyof typeof ONBOARDING) => ONBOARDING[k][lang];
@@ -85,6 +86,15 @@ export function Onboarding({ onDone, initial, languages }: Props) {
           <span class="tb-switch__text">
             <span class="tb-switch__label">{t("talkback")}</span>
             <span class="tb-switch__hint">{t("talkbackHint")}</span>
+          </span>
+        </label>
+
+        <label class="tb-switch tb-switch--boxes">
+          <input class="tb-switch__input" type="checkbox" role="switch" checked={showBoxes} onChange={() => setShowBoxes(!showBoxes)} />
+          <span class="tb-switch__track" aria-hidden="true"><span class="tb-switch__knob" /></span>
+          <span class="tb-switch__text">
+            <span class="tb-switch__label">{t("showBoxes")}</span>
+            <span class="tb-switch__hint">{t("showBoxesHint")}</span>
           </span>
         </label>
       </div>

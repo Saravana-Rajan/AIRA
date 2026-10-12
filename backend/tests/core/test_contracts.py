@@ -57,13 +57,14 @@ SERVER = load("server_msgs.json")
 def test_every_client_fixture_validates_and_covers_all_types():
     seen = {client_adapter.validate_python(m).t for m in CLIENT}
     assert seen == set(ts_list(MESSAGES_TS, "CLIENT_MSG_TYPES"))
-    assert seen == {"hello", "audio", "frame", "text", "event", "confirm", "stop", "log"}
+    assert seen == {"hello", "audio", "frame", "text", "event", "confirm", "stop", "log", "boxes"}
 
 
 def test_every_server_fixture_validates_and_covers_all_types():
     seen = {server_adapter.validate_python(m).t for m in SERVER}
     assert seen == set(ts_list(MESSAGES_TS, "SERVER_MSG_TYPES"))
-    assert seen == {"ready", "audio", "transcript", "request_frame", "target", "count", "state", "confirm", "cue", "error"}
+    assert seen == {"ready", "audio", "transcript", "request_frame", "target", "count", "state", "confirm", "cue", "error",
+                    "boxes"}
 
 
 def test_type_tuples_match_ts():
@@ -111,6 +112,8 @@ def test_hello_is_valid_without_id_token():
         ("ClientEventName", "CLIENT_EVENT_NAMES"),
         ("TranscriptRole", "TRANSCRIPT_ROLES"),
         ("ErrorCode", "ERROR_CODES"),
+        ("BoxSource", "BOX_SOURCES"),
+        ("BoxSeverity", "BOX_SEVERITIES"),
     ],
 )
 def test_literal_matches_ts_enum(alias, ts_const):
@@ -142,6 +145,18 @@ BAD_CLIENT = [
     {"t": "log", "tag": "tilt"},
     # the wire is camelCase only, as in the TS guard
     {"t": "hello", "uid": "u", "shop_id": "s", "lang": "ta", "verbosity": "short", "app_version": "0"},
+    # boxes: a known source, well-formed objects (box inside 0-1000, finite score, severity only "danger")
+    {"t": "boxes", "source": "yolo", "objects": []},
+    {"t": "boxes", "source": "mediapipe"},
+    {"t": "boxes", "source": "mediapipe", "objects": {}},
+    {"t": "boxes", "source": "mediapipe", "objects": [{"label": "chair"}]},
+    {"t": "boxes", "source": "mediapipe", "objects": [{"label": "chair", "box": [0, 0, 1001, 10]}]},
+    {"t": "boxes", "source": "mediapipe", "objects": [{"label": "chair", "box": [0, 0, 10]}]},
+    {"t": "boxes", "source": "mediapipe", "objects": [{"label": "chair", "box": [0, 0, 10.5, 10]}]},
+    {"t": "boxes", "source": "mediapipe", "objects": [{"label": 5, "box": [0, 0, 10, 10]}]},
+    {"t": "boxes", "source": "mediapipe", "objects": [{"label": "chair", "box": [0, 0, 10, 10], "score": "0.9"}]},
+    {"t": "boxes", "source": "mediapipe", "objects": [{"label": "chair", "box": [0, 0, 10, 10], "severity": "warn"}]},
+    {"t": "boxes", "source": "mediapipe", "objects": [{"label": "chair", "box": [0, 0, 10, 10]}] * 33},
 ]
 
 BAD_SERVER = [
@@ -161,6 +176,10 @@ BAD_SERVER = [
     {"t": "ready", "sessionId": "s", "resume": "s", "mock": "true"},
     {"t": "audio", "pcm16": "AAAA"},
     {"t": "confirm", "id": "c1", "answer": "yes"},
+    {"t": "boxes", "source": "lidar", "objects": []},
+    {"t": "boxes", "source": "er2", "objects": [{"label": "x", "box": [0, 0, 10, 10]}], "found": "yes"},
+    {"t": "boxes", "source": "er2", "objects": [{"label": "x", "box": [0, 0, 10, 10]}], "target": 7},
+    {"t": "boxes", "source": "er2", "objects": [{"label": "x", "box": [0, 0, 10, 10], "severity": "danger"}] * 33},
 ]
 
 
@@ -176,6 +195,24 @@ def test_bad_server_msg_rejected(raw):
     with pytest.raises(ValidationError):
         server_adapter.validate_python(raw)
     assert parse_server_msg(json.dumps(raw)) is None
+
+
+def test_boxes_messages_carry_boxes_in_0_1000_and_an_optional_score_and_severity():
+    msg = client_adapter.validate_python({"t": "boxes", "source": "mediapipe", "objects": [
+        {"label": "chair", "box": [420, 310, 900, 690], "score": 0.82, "severity": "danger"},
+        {"label": "bottle", "box": [100, 50, 300, 120]}]})
+    assert msg.t == "boxes" and msg.source == "mediapipe" and msg.frame_id is None
+    assert msg.objects[0].box == (420, 310, 900, 690) and msg.objects[0].severity == "danger"
+    assert msg.objects[1].score is None and msg.objects[1].severity is None
+    assert contracts.MAX_BOXES == 32
+    out = json.loads(dump_server_msg(contracts.BoxesOutMsg(
+        source="er2", objects=[contracts.BoxObject(label="milk", box=(1, 2, 3, 4), score=0.9)],
+        frame_id="f1", target="milk", found=True)))
+    assert out == {"t": "boxes", "source": "er2", "objects": [{"label": "milk", "box": [1, 2, 3, 4], "score": 0.9}],
+                   "frameId": "f1", "target": "milk", "found": True}
+    assert parse_server_msg(json.dumps(out)).found is True
+    # target/found are server-only: like every other extra key they are ignored on the way in
+    assert not hasattr(parse_client_msg(json.dumps(out)), "found")
 
 
 def test_non_finite_numbers_rejected():

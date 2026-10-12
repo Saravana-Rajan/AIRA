@@ -42,12 +42,17 @@ ConfirmAnswer = Literal["yes", "no"]
 ClientEventName = Literal["visibility", "network", "fingertip_in_target"]
 TranscriptRole = Literal["user", "aira"]
 ErrorCode = Literal["network", "model_timeout", "camera", "permission", "unsupported", "internal"]
+# Who drew a box: the phone's on-device MediaPipe detector, Gemini Robotics-ER 2, or the phone's bump guard.
+BoxSource = Literal["mediapipe", "er2", "bump"]
+BoxSeverity = Literal["danger"]
 
 # Spatial coordinates: point [y, x], box [ymin, xmin, ymax, xmax], integers 0..NORM_MAX.
 NORM_MAX = 1000
 Norm = Annotated[StrictInt, Field(ge=0, le=NORM_MAX)]
 Point = tuple[Norm, Norm]
 Box = tuple[Norm, Norm, Norm, Norm]
+# A ``boxes`` message carries at most this many objects (the detectors return 8; ER 2 at most a dozen).
+MAX_BOXES = 32
 
 # A finite JSON number (TS `isNum`). Integers stay ints so payloads round-trip unchanged.
 Num = Union[StrictInt, Annotated[float, Strict(), AllowInfNan(False)]]
@@ -135,8 +140,31 @@ class LogMsg(_ClientWire):
     data: dict[str, Any]
 
 
+class BoxObject(_Wire):
+    """One drawn object: a label, its box [ymin, xmin, ymax, xmax] (0-1000), an optional detector score (0-1)
+    and ``severity: "danger"`` when the bump guard flags it in the walking path."""
+
+    label: StrictStr
+    box: Box
+    score: Optional[Num] = None
+    severity: Optional[BoxSeverity] = None
+
+
+class BoxesMsg(_ClientWire):
+    """Boxes the phone drew itself (MediaPipe on-device, at most 5 a second; the bump guard's obstacles).
+
+    The server never answers it: it is relayed to the live monitor (``aira_live.monitor_hooks``) as
+    kind ``vision`` and dropped above the per-socket rate limit. Nothing here changes state.
+    """
+
+    t: Literal["boxes"]
+    source: BoxSource
+    objects: list[BoxObject] = Field(max_length=MAX_BOXES)
+    frame_id: Optional[StrictStr] = None
+
+
 ClientMsg = Annotated[
-    Union[HelloMsg, AudioInMsg, FrameMsg, TextMsg, EventMsg, ConfirmReplyMsg, StopMsg, LogMsg],
+    Union[HelloMsg, AudioInMsg, FrameMsg, TextMsg, EventMsg, ConfirmReplyMsg, StopMsg, LogMsg, BoxesMsg],
     Field(discriminator="t"),
 ]
 
@@ -231,9 +259,22 @@ class ErrorMsg(_ServerWire):
     say: StrictStr
 
 
+class BoxesOutMsg(_ServerWire):
+    """Boxes Gemini Robotics-ER 2 drew (source ``er2``) for the phone's optional "Show boxes" overlay: the same
+    shape as the client message, plus the label being looked for (``target``, hand guidance) and whether it
+    was ``found`` (drawn green). Never spoken; the phone draws it or ignores it."""
+
+    t: Literal["boxes"] = "boxes"
+    source: BoxSource
+    objects: list[BoxObject] = Field(max_length=MAX_BOXES)
+    frame_id: Optional[StrictStr] = None
+    target: Optional[StrictStr] = None
+    found: Optional[StrictBool] = None
+
+
 ServerMsg = Annotated[
     Union[ReadyMsg, AudioOutMsg, TranscriptMsg, RequestFrameMsg, TargetMsg, CountMsg, StateMsg, ConfirmMsg, CueMsg,
-          ErrorMsg],
+          ErrorMsg, BoxesOutMsg],
     Field(discriminator="t"),
 ]
 
@@ -251,7 +292,7 @@ SERVER_MSG_TYPES: tuple[str, ...] = _tags(ServerMsg)
 
 
 def parse_client_msg(raw: str | bytes) -> (
-    HelloMsg | AudioInMsg | FrameMsg | TextMsg | EventMsg | ConfirmReplyMsg | StopMsg | LogMsg | None
+    HelloMsg | AudioInMsg | FrameMsg | TextMsg | EventMsg | ConfirmReplyMsg | StopMsg | LogMsg | BoxesMsg | None
 ):
     """Parse one WebSocket text frame from the app. None for bad JSON or an unknown/invalid message."""
     try:
@@ -262,7 +303,7 @@ def parse_client_msg(raw: str | bytes) -> (
 
 def parse_server_msg(raw: str | bytes) -> (
     ReadyMsg | AudioOutMsg | TranscriptMsg | RequestFrameMsg | TargetMsg | CountMsg | StateMsg | ConfirmMsg | CueMsg
-    | ErrorMsg | None
+    | ErrorMsg | BoxesOutMsg | None
 ):
     """Parse one server WebSocket text frame (used by tests and dev tools). None when invalid."""
     try:

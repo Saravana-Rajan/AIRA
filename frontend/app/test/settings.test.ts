@@ -39,10 +39,18 @@ describe("settings", () => {
   });
 
   it("round-trips every field", () => {
-    const s = { lang: "hi" as const, verbosity: "detail" as const, screenReaderMode: true, speechRate: 1.25, shopId: "sunrise_dairy", onboarded: true };
+    const s = { lang: "hi" as const, verbosity: "detail" as const, screenReaderMode: true, speechRate: 1.25, shopId: "sunrise_dairy", onboarded: true, showBoxes: true };
     saveSettings(s, store);
     expect(loadSettings(store)).toEqual(s);
     expect(store.getItem(SETTINGS_KEY)).not.toBeNull();
+  });
+
+  it("'Show boxes' is off by default and only a real true turns it on", () => {
+    expect(DEFAULT_SETTINGS.showBoxes).toBe(false);
+    store.setItem("aira.settings", JSON.stringify({ showBoxes: "yes" }));
+    expect(loadSettings(store).showBoxes).toBe(false);
+    store.setItem("aira.settings", JSON.stringify({ showBoxes: true }));
+    expect(loadSettings(store).showBoxes).toBe(true);
   });
 
   it("ignores corrupt JSON and unknown languages", () => {

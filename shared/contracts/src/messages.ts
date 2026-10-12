@@ -3,14 +3,17 @@
 // server 24 kHz PCM16 base64. Coordinates: point [y, x], box [ymin, xmin, ymax, xmax],
 // integers normalised 0..1000.
 import {
-  CLIENT_EVENT_NAMES, CONFIRM_ANSWERS, CONFIRM_KINDS, CUE_NAMES, ENTITIES, ERROR_CODES, FRAME_PURPOSES, LANGS,
-  NORM_MAX, TRANSCRIPT_ROLES, VERBOSITIES,
-  type ClientEventName, type ConfirmAnswer, type ConfirmKind, type CueName, type Entity, type ErrorCode,
-  type FramePurpose, type Lang, type TranscriptRole, type Verbosity,
+  BOX_SEVERITIES, BOX_SOURCES, CLIENT_EVENT_NAMES, CONFIRM_ANSWERS, CONFIRM_KINDS, CUE_NAMES, ENTITIES, ERROR_CODES,
+  FRAME_PURPOSES, LANGS, MAX_BOXES, NORM_MAX, TRANSCRIPT_ROLES, VERBOSITIES,
+  type BoxSeverity, type BoxSource, type ClientEventName, type ConfirmAnswer, type ConfirmKind, type CueName,
+  type Entity, type ErrorCode, type FramePurpose, type Lang, type TranscriptRole, type Verbosity,
 } from "./enums";
 
 export type Point = [number, number];
 export type Box = [number, number, number, number];
+/** One drawn object: a label, its box, an optional detector score (0-1) and "danger" when the bump guard
+ * flags it in the walking path. */
+export type BoxObject = { label: string; box: Box; score?: number; severity?: BoxSeverity };
 
 // ---------- client -> server ----------
 export type ClientMsg =
@@ -25,7 +28,11 @@ export type ClientMsg =
   // jsonPayload.aira="client". tag names what happened ("build", "camera", "tilt", "frame", "hint", "speak");
   // data is small metadata, never audio or image bytes. The server keeps at most 2 KB of it and 20 lines a
   // second per socket, and never answers it.
-  | { t: "log"; tag: string; data: Record<string, unknown> };
+  | { t: "log"; tag: string; data: Record<string, unknown> }
+  // Boxes the phone drew itself: MediaPipe on-device detections (at most 5 a second) or the bump guard's
+  // obstacles. Never answered: the server relays them to the live monitor as kind "vision" and drops the rest
+  // above its per-socket rate limit. Nothing here changes state.
+  | { t: "boxes"; source: BoxSource; objects: BoxObject[]; frameId?: string };
 
 // ---------- server -> client ----------
 export type ServerMsg =
@@ -42,16 +49,22 @@ export type ServerMsg =
   | { t: "state"; entity: Entity; id: string; state: string; summary: string }
   | { t: "confirm"; id: string; kind: ConfirmKind; prompt: string }
   | { t: "cue"; cue: CueName }
-  | { t: "error"; code: ErrorCode; say: string };
+  | { t: "error"; code: ErrorCode; say: string }
+  // Boxes Gemini Robotics-ER 2 drew (source "er2") for the phone's optional "Show boxes" overlay: the same shape
+  // as the client message, plus the label being looked for (target, hand guidance) and whether it was found
+  // (drawn green). Never spoken.
+  | { t: "boxes"; source: BoxSource; objects: BoxObject[]; frameId?: string; target?: string; found?: boolean };
 
 export type ClientMsgType = ClientMsg["t"];
 export type ServerMsgType = ServerMsg["t"];
 export type ClientMsgOf<T extends ClientMsgType> = Extract<ClientMsg, { t: T }>;
 export type ServerMsgOf<T extends ServerMsgType> = Extract<ServerMsg, { t: T }>;
 
-export const CLIENT_MSG_TYPES = Object.freeze(["hello", "audio", "frame", "text", "event", "confirm", "stop", "log"] as const);
+export const CLIENT_MSG_TYPES = Object.freeze([
+  "hello", "audio", "frame", "text", "event", "confirm", "stop", "log", "boxes",
+] as const);
 export const SERVER_MSG_TYPES = Object.freeze([
-  "ready", "audio", "transcript", "request_frame", "target", "count", "state", "confirm", "cue", "error",
+  "ready", "audio", "transcript", "request_frame", "target", "count", "state", "confirm", "cue", "error", "boxes",
 ] as const);
 
 // Compile-time check that the type lists match the unions exactly.
@@ -74,6 +87,9 @@ const isNorm = (n: unknown): boolean => isInt(n) && n >= 0 && n <= NORM_MAX;
 const isPoint = (p: unknown): p is Point => Array.isArray(p) && p.length === 2 && p.every(isNorm);
 const isBox = (b: unknown): b is Box => Array.isArray(b) && b.length === 4 && b.every(isNorm);
 const isBurst = (b: unknown): boolean => isObj(b) && isInt(b.count) && isInt(b.intervalMs);
+const isBoxObject = (o: unknown): o is BoxObject =>
+  isObj(o) && isStr(o.label) && isBox(o.box) && optional(o.score, isNum) && optional(o.severity, (v) => inList(BOX_SEVERITIES, v));
+const isBoxList = (l: unknown): l is BoxObject[] => Array.isArray(l) && l.length <= MAX_BOXES && l.every(isBoxObject);
 
 export function isClientMsg(x: unknown): x is ClientMsg {
   if (!isObj(x) || !inList(CLIENT_MSG_TYPES, x.t)) return false;
@@ -95,6 +111,8 @@ export function isClientMsg(x: unknown): x is ClientMsg {
       return true;
     case "log":
       return isStr(x.tag) && isObj(x.data);
+    case "boxes":
+      return inList(BOX_SOURCES, x.source) && isBoxList(x.objects) && optional(x.frameId, isStr);
   }
   return false;
 }
@@ -125,6 +143,9 @@ export function isServerMsg(x: unknown): x is ServerMsg {
       return inList(CUE_NAMES, x.cue);
     case "error":
       return inList(ERROR_CODES, x.code) && isStr(x.say);
+    case "boxes":
+      return inList(BOX_SOURCES, x.source) && isBoxList(x.objects) && optional(x.frameId, isStr) &&
+        optional(x.target, isStr) && optional(x.found, isBool);
   }
   return false;
 }

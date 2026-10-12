@@ -27,6 +27,7 @@ from aira_live.session import Session, get_session
 from aira_live.vision import listing, observers
 from aira_live.vision.gemini import VisionError, generate_json, image_part
 from aira_live.vision.hints import HINT_KEYS
+from aira_live.vision.point import parse_box
 
 log = logging.getLogger(__name__)
 
@@ -47,14 +48,15 @@ ASK_PROMPT = (
     "You are the eyes of a blind shopkeeper wearing this chest camera in a small dairy shop. "
     "Question: \"{question}\". Answer in {lang}. Describe what is there so a blind person can act on it: "
     "list the main objects (at most 3, nearest and most relevant first), each with a short plain label, "
-    "its point [y, x] normalized 0-1000 (x: 0 is the owner's left, 1000 the right), its box "
-    "[ymin, xmin, ymax, xmax] and its distance: near (within reach), arm (an arm's length), far (a step or "
-    "more away). Walls, floor and the sky are not objects. guidance lists the next one or two actions. "
+    "its point [y, x] normalized 0-1000 (x: 0 is the owner's left, 1000 the right), its bounding box box_2d "
+    "[ymin, xmin, ymax, xmax] on the same 0-1000 scale, and its distance: near (within reach), arm (an arm's "
+    "length), far (a step or more away). Walls, floor and the sky are not objects. guidance lists the next one "
+    "or two actions. "
     "Never describe or identify people. If the image is dark, blurred or the thing asked about is not "
     "visible, set confidence below 0.5 and aim_hint to one of {hints}."
 )
 ASK_SCHEMA = ('{"answer": "<one short sentence>", "guidance": ["<step>"], '
-              '"objects": [{"label": "<name>", "point": [y, x], "box": [ymin, xmin, ymax, xmax] or null, '
+              '"objects": [{"label": "<name>", "point": [y, x], "box_2d": [ymin, xmin, ymax, xmax] or null, '
               '"distance": "near|arm|far"}], '
               '"confidence": 0.0, "aim_hint": "<optional key>"}')
 READ_PROMPT = (
@@ -96,12 +98,8 @@ def dist_key(distance: Any) -> str:
 
 
 def _box(raw: Any) -> list[int] | None:
-    if not (isinstance(raw, (list, tuple)) and len(raw) == 4):
-        return None
-    if not all(isinstance(v, (int, float)) and not isinstance(v, bool) and 0 <= v <= 1000 for v in raw):
-        return None
-    ymin, xmin, ymax, xmax = (round(v) for v in raw)
-    return [ymin, xmin, ymax, xmax] if ymax > ymin and xmax > xmin else None
+    box = parse_box(raw)
+    return list(box) if box else None
 
 
 def distance_from_box(box: list[int] | None) -> str | None:
@@ -126,7 +124,7 @@ def parse_objects(raw: Any) -> list[dict]:
         if not (isinstance(p, (list, tuple)) and len(p) == 2
                 and all(isinstance(v, (int, float)) and not isinstance(v, bool) and 0 <= v <= 1000 for v in p)):
             continue
-        box = _box(o.get("box") if o.get("box") is not None else o.get("box_2d"))
+        box = _box(o.get("box_2d") if o.get("box_2d") is not None else o.get("box"))
         d = str(o.get("distance") or "").lower()
         if d not in DIST_ORDER:
             d = distance_from_box(box) or "arm"
@@ -264,6 +262,8 @@ async def camera_ask(question: str) -> dict:
     await observers.on_vision_objects(s, objects, {"source": "camera_ask", "kind": kind, "question": question,
                                                    "frame_id": frames[-1].id, "frame_ts": frames[-1].ts,
                                                    "confidence": conf, "model": data.get("_model")})
+    # ...and to the live monitor and the phone's "Show boxes" overlay (source "er2", boxes included).
+    await listing.publish_boxes(s, objects, f"camera_ask:{kind}", frame_id=frames[-1].id)
     # A tip alone is not doubt: the model often adds one ("show me the items") while it is sure of what it sees
     # (seen live: confidence 0.9, an answer, and a tip). It means "not sure" only when the model is unsure, or is
     # sure but has nothing to say.

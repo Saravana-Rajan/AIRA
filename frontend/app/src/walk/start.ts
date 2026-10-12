@@ -6,6 +6,7 @@ import { app } from "../core/app";
 import { startCamera } from "../camera/capture";
 import { getFrameSource } from "../camera/source";
 import type { BumpWarning } from "./bump";
+import { boxStore, createBoxSender } from "./boxes";
 import { createDetector, type Detector } from "./detector";
 import { createBumpGuard, type BumpGuard } from "./guard";
 import { walkingMode } from "./mode";
@@ -51,6 +52,8 @@ export interface StartBumpGuardOptions {
   motion?: MotionSensor;
   /** Told about each warning right after the vibration (e.g. the red "Stop!" chip). Errors here are ignored. */
   onWarn?: (w: BumpWarning) => void;
+  /** false: no `boxes` messages to the server (tests). The overlay store is always fed. */
+  sendBoxes?: boolean;
 }
 
 /**
@@ -63,11 +66,17 @@ export async function startBumpGuard(opts: StartBumpGuardOptions = {}): Promise<
   const motionP = opts.motion ? Promise.resolve(opts.motion) : startMotionSensor();
   const detector = opts.detector ?? (await createDetector());
   const motion = await motionP;
+  // The detector's boxes go to the live monitor at up to 5 a second (walk/boxes.ts) and to the overlay store.
+  const boxes = opts.sendBoxes === false ? null : createBoxSender({ send: (m) => app.send(m), now: () => performance.now() });
   const guard = createBumpGuard({
     grab: grabFrame,
     detector,
     motion,
     walkingMode: walkingMode.get(),
+    onDetections: (reports) => {
+      boxStore.setMediapipe(reports);
+      boxes?.push(reports);
+    },
     vibrate: (p) => { try { navigator.vibrate?.(p); } catch { /* not supported */ } },
     earcon: () => app.earcon("warn"),
     speak: (s) => app.speak(s),

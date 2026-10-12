@@ -17,6 +17,8 @@ export interface Settings {
   /** "sunrise_dairy" by default (the demo shop). */
   shopId: string;
   onboarded: boolean;
+  /** Draw the MediaPipe and ER 2 boxes over a small camera preview (for sighted helpers and the video). Off by default. */
+  showBoxes: boolean;
 }
 
 export interface AppDeps {
