@@ -111,17 +111,19 @@ describe("keep gate (describe mode)", () => {
   it("startContinuous at 1/3 fps sends only the frames the gate keeps", async () => {
     vi.useFakeTimers();
     __setCaptureDeps({ makeCanvas: sized });
+    // app.send also carries the "log" diagnostics line for each frame; count the frames alone.
+    const frames = () => (app.send as any).mock.calls.map((c: any[]) => c[0]).filter((m: any) => m.t === "frame");
     let allow = true;
     const stop = startContinuous("describe", 1 / 3, () => allow);
     await vi.advanceTimersByTimeAsync(50);
-    expect((app.send as any).mock.calls.length).toBe(1);
+    expect(frames().length).toBe(1);
     allow = false;
     await vi.advanceTimersByTimeAsync(6100);                 // two more ticks, both refused
-    expect((app.send as any).mock.calls.length).toBe(1);
+    expect(frames().length).toBe(1);
     allow = true;
     await vi.advanceTimersByTimeAsync(3000);
-    expect((app.send as any).mock.calls.length).toBe(2);
-    expect((app.send as any).mock.calls[1][0]).toMatchObject({ t: "frame", purpose: "describe" });
+    expect(frames().length).toBe(2);
+    expect(frames()[1]).toMatchObject({ t: "frame", purpose: "describe" });
     stop();
   });
 });

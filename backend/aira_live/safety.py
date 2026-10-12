@@ -95,8 +95,21 @@ def money_stock_numbers(text: str) -> set[Num]:
     return {_parse(a or b) for a, b in _PAT.findall(_normalise(text))}
 
 
+def is_external(result) -> bool:
+    """A tool result marked ``external`` (web_search) is information from outside the shop: its numbers are not
+    tool-verified business numbers and never whitelist a spoken price, amount or stock count."""
+    return isinstance(result, dict) and bool(result.get("external"))
+
+
+def verified_results(results) -> list:
+    """``results`` without the external ones (the only numbers the safety checks may allow)."""
+    return [r for r in (results or []) if not is_external(r)]
+
+
 def numbers_in_results(results) -> set[Num]:
     nums: set[Num] = set()
+    if is_external(results):
+        return nums
 
     def walk(v):
         if isinstance(v, bool) or v is None:
@@ -107,6 +120,8 @@ def numbers_in_results(results) -> set[Num]:
             for m in re.findall(_NUM, _normalise(v)):
                 nums.add(_parse(m))
         elif isinstance(v, dict):
+            if is_external(v):
+                return
             for x in v.values():
                 walk(x)
         elif isinstance(v, (list, tuple, set)):
@@ -147,6 +162,7 @@ def _as_num(x) -> Num | None:
 
 
 async def llm_verify(spoken: str, results: list[dict]) -> SafetyVerdict:
+    results = verified_results(results)  # web_search text is external: never an allowed number
     shown = json.dumps(results, ensure_ascii=False, default=str)
     prompt = (
         "A shop assistant said this to a blind shopkeeper:\n"
