@@ -6,7 +6,12 @@
 import type { ServerMsg } from "@aira/contracts";
 import { app } from "../core/app";
 import type { WiredApp } from "../core/wire";
-import { captureFrame, getVideo, setQualityListener, startCamera, startContinuous, stopCamera, type FrameKeep } from "./capture";
+import {
+  captureFrame, captureFrameIf, getVideo, setQualityListener, startCamera, startContinuous, stopCamera, toolCaptureBusy,
+  toolCaptureCount, type FrameKeep,
+} from "./capture";
+import { startLiveVideo } from "./liveVideo";
+import { overrideSource } from "./source";
 import { createSceneGate } from "./sceneGate";
 import { createFrameRequestHandler, defaultSleep } from "./requests";
 import { createRtcSender } from "./rtcSender";
@@ -22,7 +27,7 @@ import { walkingModeText } from "../walk/strings";
 import { createCountUx, type CountProgress } from "./countUx";
 import { createOpenUrlHandler, defaultDial, defaultOpen } from "./openUrl";
 import { createCameraWiring } from "./wiring";
-import { noteBumpWarning, startHoldUpWatch } from "../ambient/watch";
+import { freshObjects, noteBumpWarning, startHoldUpWatch } from "../ambient/watch";
 
 export interface WireOptions {
   /** Live count updates ("Counting 12 / 30"). The core wiring already drives the chip; this is optional. */
@@ -120,6 +125,21 @@ export function wireCameraAndGuidance(opts: WireOptions = {}): CameraWiring {
     getStream: async () => ((getVideo() ?? (await startCamera())).srcObject as MediaStream | null),
   });
 
+  // The camera as Gemini Live video, 1 fps, while the Live session is up (`ready`, not mock) and the camera is on.
+  let liveReady = false;
+  const stopLive = startLiveVideo({
+    capture: (keep) => captureFrameIf("live", keep),
+    send: (m) => app.send(m),
+    active: () => liveReady && ((app.socket as { isOpen?: () => boolean }).isOpen?.() ?? true),
+    cameraOn: () => getVideo() !== null || overrideSource() !== null,
+    hidden: () => typeof document !== "undefined" && document.hidden,
+    buffered: () => { try { return app.socket?.bufferedAmount?.() ?? 0; } catch { return 0; } },
+    toolBusy: toolCaptureBusy,
+    toolCount: toolCaptureCount,
+    labels: () => { try { return freshObjects().map((o) => o.label); } catch { return []; } },
+  });
+  const onReady = (m: ServerMsg) => { if (m.t === "ready") liveReady = !m.mock; };
+
   let disposed = false;
   let uninstallDev: (() => void) | null = null;
   const socket = app.socket;
@@ -132,9 +152,11 @@ export function wireCameraAndGuidance(opts: WireOptions = {}): CameraWiring {
       (m) => openUrl.onServerMsg(m),
       (m) => boxStore.onServerMsg(m),   // ER 2 boxes for the "Show boxes" overlay
       (m) => rtc.onServerMsg(m),        // WebRTC signalling from the dashboard
+      onReady,                          // live video starts once the Live session is up
       ...(opts.extraHandlers ?? []),
     ],
     cleanup: [
+      stopLive,
       () => rtc.dispose(),
       stopTilt,
       () => setQualityListener(null),

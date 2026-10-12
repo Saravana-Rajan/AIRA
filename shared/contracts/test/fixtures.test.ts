@@ -106,6 +106,9 @@ describe("contract fixtures", () => {
   it("rejects unknown types, bad purposes and out-of-range points", () => {
     expect(isClientMsg({ t: "nope" })).toBe(false);
     expect(isClientMsg({ t: "frame", id: "f", jpeg: "x", w: 1, h: 1, ts: 1, purpose: "selfie" })).toBe(false);
+    expect(isClientMsg({ t: "frame", id: "f", jpeg: "x", w: 1, h: 1, ts: 1, purpose: "live", changed: "yes" })).toBe(false);
+    expect(isClientMsg({ t: "frame", id: "f", jpeg: "x", w: 1, h: 1, ts: 1, purpose: "live", labels: [1] })).toBe(false);
+    expect(isClientMsg({ t: "frame", id: "f", jpeg: "x", w: 1, h: 1, ts: 1, purpose: "live", labels: Array(9).fill("a") })).toBe(false);
     expect(isServerMsg({ t: "target", frameId: "f", label: "x", point: [1200, 5], confidence: 1 })).toBe(false);
     expect(isServerMsg({ t: "target", frameId: "f", label: "x", point: [5], confidence: 1 })).toBe(false);
   });

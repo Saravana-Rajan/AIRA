@@ -79,8 +79,8 @@ describe("captureFrame with a demo frame source", () => {
     __setCaptureDeps({ source: cam });
     setFrameSource(image(800, 600));
     setFrameSource(null);
-    const f = await captureFrame("count");
-    expect(f).toMatchObject({ w: 640, h: 360, purpose: "count" });
+    const f = await captureFrame("ask");
+    expect(f).toMatchObject({ w: 640, h: 360, purpose: "ask" });
     expect(cam.draw).toHaveBeenCalledTimes(1);
     expect(drawn).toEqual([]);
   });

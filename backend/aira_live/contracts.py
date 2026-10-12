@@ -36,8 +36,10 @@ Lang = Literal["ta", "hi", "en"]
 Verbosity = Literal["short", "detail"]
 # "preview": the monitor's own small stream (2-3 fps) while the dashboard watches; relayed to monitors only, never
 # stored and never shown to Gemini.
+# "live": the camera as Gemini Live video (1 fps) while a Live session runs; forwarded into Live only, never
+# stored for the tools. A live frame may carry ``changed`` (the view settled on something new) and ``labels``.
 FramePurpose = Literal["ask", "count", "point", "identify", "invoice", "cash", "guide", "describe", "identify_held",
-                       "preview"]
+                       "preview", "live"]
 CueName = Literal["ack", "thinking", "done", "warn", "match", "mismatch", "unsure", "interrupted", "reconnect", "offline"]
 Entity = Literal["order", "delivery", "sale", "payment", "inventory"]
 ConfirmKind = Literal["order", "payment", "sale", "discrepancy", "generic"]
@@ -83,6 +85,7 @@ class _ServerWire(_Wire):
 
 
 # ---------- client -> server ----------
+MAX_FRAME_LABELS = 8  # messages.ts MAX_FRAME_LABELS
 class HelloMsg(_ClientWire):
     t: Literal["hello"]
     uid: StrictStr
@@ -107,6 +110,9 @@ class FrameMsg(_ClientWire):
     h: StrictInt
     ts: Num  # epoch ms
     purpose: FramePurpose
+    changed: Optional[StrictBool] = None  # live frames only: the view settled on something new
+    labels: Optional[list[Annotated[StrictStr, Field(max_length=60)]]] = Field(default=None,
+                                                                              max_length=MAX_FRAME_LABELS)
 
 
 class TextMsg(_ClientWire):

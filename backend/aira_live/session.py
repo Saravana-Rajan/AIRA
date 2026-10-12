@@ -78,6 +78,16 @@ class Session:
         """Update ``lang`` from one user utterance and return it."""
         return self.judge(text, typed=typed).lang
 
+    def latest_frame(self, max_age_s: float = 1.0) -> Frame | None:
+        """The newest live-video frame if it arrived at most ``max_age_s`` ago (``aira_live.live_frames``)."""
+        from aira_live import live_frames
+        return live_frames.latest(self.session_id, max_age_s)
+
+    def cached_count(self, product: str | None = None) -> tuple[int, float, float] | None:
+        """(count, confidence, age_s) of the background pre-count of the current scene (vision.precount)."""
+        from aira_live.vision import precount
+        return precount.cached(self.session_id, product)
+
     async def request_frames(self, purpose: str, count: int = 1, interval_ms: int = 0,
                              timeout_s: float = 4.0) -> list[Frame]:
         """Ask the phone for ``count`` fresh frames and wait for them ([] on timeout).

@@ -23,6 +23,12 @@ from aira_live.session import Session, current_session, current_tool_call_id
 
 ToolFn = Callable[..., Awaitable[dict]]
 _CTX = "tool_context"
+_RUNNING: dict[str, int] = {}  # session id -> tool calls running now (the live-video nudge waits for them)
+
+
+def tools_running(session_id: str) -> int:
+    """How many wrapped tool calls of ``session_id`` are running now."""
+    return _RUNNING.get(session_id, 0)
 # Result keys worth a log line (never the whole result: a count may carry frames or long lists).
 _LOGGED_RESULT_KEYS = ("say", "aim_hint", "confidence", "kind", "needs_confirm", "confirm_id", "error", "ok")
 
@@ -102,6 +108,8 @@ def wrap_tool(fn: Callable[..., Any], session: Session) -> ToolFn:
         c_token = current_tool_call_id.set(call_id)
         started = time.perf_counter()
         monitor.status(session, "thinking")
+        sid = session.session_id
+        _RUNNING[sid] = _RUNNING.get(sid, 0) + 1
         try:
             result = fn(*args, **kwargs)
             if inspect.isawaitable(result):
@@ -110,6 +118,11 @@ def wrap_tool(fn: Callable[..., Any], session: Session) -> ToolFn:
             _log_call(fn.__name__, call_id, session, sig, args, kwargs, started, error=exc)
             raise
         finally:
+            left = _RUNNING.get(sid, 1) - 1
+            if left > 0:
+                _RUNNING[sid] = left
+            else:
+                _RUNNING.pop(sid, None)
             current_tool_call_id.reset(c_token)
             current_session.reset(s_token)
         _log_call(fn.__name__, call_id, session, sig, args, kwargs, started, result=result)

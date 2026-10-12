@@ -9,7 +9,9 @@ export type Verbosity = (typeof VERBOSITIES)[number];
 
 // "preview": the live monitor's own small stream (2-3 fps, <= 480 px, quality 0.5) while a dashboard watches the
 // shop; the server relays it to the monitors only, never stores it and never shows it to Gemini.
-export const FRAME_PURPOSES = Object.freeze(["ask", "count", "point", "identify", "invoice", "cash", "guide", "describe", "identify_held", "preview"] as const);
+// "live": the camera as Gemini Live video (1 fps, <= 768 px, quality 0.7) while a Live session runs; forwarded
+// into the Live session only (never stored for the tools). `changed` marks a settled scene change.
+export const FRAME_PURPOSES = Object.freeze(["ask", "count", "point", "identify", "invoice", "cash", "guide", "describe", "identify_held", "preview", "live"] as const);
 export type FramePurpose = (typeof FRAME_PURPOSES)[number];
 
 export const CUE_NAMES = Object.freeze([

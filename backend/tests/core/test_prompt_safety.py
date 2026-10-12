@@ -39,7 +39,7 @@ def test_render_prompt_has_shop_products_suppliers_language_and_rules():
     # the touch check is a client event (fingertip_in_target → guidance.handle_client_event), never a text the
     # phone sends: a dead "check touch" rule would only cause spurious product_find calls
     assert "check touch" not in low
-    assert "8. Payments" in p and "9. Evidence" in p and "10. For ANY question" in p
+    assert "8. Payments" in p and "9. Evidence" in p and "10. You can see Sam's camera as live video" in p
     assert "11. The owner can change the shop by voice" in p and "product_add" in p
     assert "12. Ambient mode is on by default" in p and "describe_mode" in p
     assert "13. For" in p and "memory_where" in p and "LAST SEEN" in p

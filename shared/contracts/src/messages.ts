@@ -19,7 +19,9 @@ export type BoxObject = { label: string; box: Box; score?: number; severity?: Bo
 export type ClientMsg =
   | { t: "hello"; uid: string; idToken?: string; shopId: string; lang: Lang; verbosity: Verbosity; appVersion: string; resume?: string }
   | { t: "audio"; pcm16: string }
-  | { t: "frame"; id: string; jpeg: string; w: number; h: number; ts: number; purpose: FramePurpose }
+  // `changed`/`labels` only on purpose "live": the view settled on something new (labels: the phone's own
+  // detector labels, at most MAX_FRAME_LABELS), so the server may nudge Live to speak up.
+  | { t: "frame"; id: string; jpeg: string; w: number; h: number; ts: number; purpose: FramePurpose; changed?: boolean; labels?: string[] }
   | { t: "text"; text: string }
   | { t: "event"; name: ClientEventName; data: Record<string, unknown> }
   | { t: "confirm"; id: string; answer: ConfirmAnswer; value?: string }
@@ -107,6 +109,10 @@ const isBox = (b: unknown): b is Box => Array.isArray(b) && b.length === 4 && b.
 const isBurst = (b: unknown): boolean => isObj(b) && isInt(b.count) && isInt(b.intervalMs);
 const isBoxObject = (o: unknown): o is BoxObject =>
   isObj(o) && isStr(o.label) && isBox(o.box) && optional(o.score, isNum) && optional(o.severity, (v) => inList(BOX_SEVERITIES, v));
+/** At most this many detector labels ride on a live frame. */
+export const MAX_FRAME_LABELS = 8;
+const isLabelList = (l: unknown): boolean =>
+  Array.isArray(l) && l.length <= MAX_FRAME_LABELS && l.every((v) => isStr(v) && v.length <= 60);
 const isBoxList = (l: unknown): l is BoxObject[] => Array.isArray(l) && l.length <= MAX_BOXES && l.every(isBoxObject);
 const isCandidate = (c: unknown): c is RtcCandidate =>
   isObj(c) && isStr(c.candidate) && (c.sdpMid === undefined || c.sdpMid === null || isStr(c.sdpMid)) &&
@@ -141,7 +147,8 @@ export function isClientMsg(x: unknown): x is ClientMsg {
     case "audio":
       return isStr(x.pcm16);
     case "frame":
-      return isStr(x.id) && isStr(x.jpeg) && isInt(x.w) && isInt(x.h) && isNum(x.ts) && inList(FRAME_PURPOSES, x.purpose);
+      return isStr(x.id) && isStr(x.jpeg) && isInt(x.w) && isInt(x.h) && isNum(x.ts) && inList(FRAME_PURPOSES, x.purpose) &&
+        optional(x.changed, isBool) && optional(x.labels, isLabelList);
     case "text":
       return isStr(x.text);
     case "event":

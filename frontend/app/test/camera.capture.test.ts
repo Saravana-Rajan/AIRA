@@ -29,8 +29,8 @@ describe("fitWithin", () => {
 
 describe("captureFrame", () => {
   it("builds an exact frame message", async () => {
-    const f = await captureFrame("count");
-    expect(f).toMatchObject({ t: "frame", jpeg: "AAAA", w: 640, h: 360, purpose: "count" });
+    const f = await captureFrame("ask");
+    expect(f).toMatchObject({ t: "frame", jpeg: "AAAA", w: 640, h: 360, purpose: "ask" });
     expect(Object.keys(f).sort()).toEqual(["h", "id", "jpeg", "purpose", "t", "ts", "w"]);
     expect(typeof f.id).toBe("string");
     expect(typeof f.ts).toBe("number");

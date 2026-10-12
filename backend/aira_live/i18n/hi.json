@@ -296,5 +296,6 @@
   "ambient.held": "यह {name}, {pack} है।",
   "ambient.held_price": "{price} रुपये।",
   "ambient.held_free": "यह {label} है।",
+  "precount.count": "यहाँ मुझे {n} पैकेट दिख रहे हैं।",
   "ambient.closer": "इसे थोड़ा पास लाइए।"
 }

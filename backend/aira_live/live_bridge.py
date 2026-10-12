@@ -18,11 +18,12 @@ from contextlib import suppress
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, AsyncIterator, Awaitable, Callable, Literal, Protocol
 
-from aira_live import monitor, safety
+from aira_live import monitor, safety, tool_runtime
 from aira_live.contracts import AudioOutMsg, CueMsg, ErrorMsg, TranscriptMsg
 from aira_live.diag import diag, trunc
 from aira_live.i18n import t
 from aira_live.i18n.detect import detect_lang, latin_lang
+from aira_live.live_video import LiveVideo, ambient_holding
 from aira_live.prompt import LANG_NAME, last_catalog_facts, last_vocabulary, unclear_note
 from aira_live.session import NOTICE_DEDUPE_S, notice_key
 
@@ -63,6 +64,7 @@ class LiveBackend(Protocol):
     async def start(self, system_prompt: str, tools: list, resume_handle: str | None) -> None: ...
     async def send_audio(self, pcm16: bytes) -> None: ...
     async def send_text(self, text: str) -> None: ...
+    # Optional: ``async send_video(jpeg: bytes)`` and ``backlog() -> int`` (live video; see LiveBridge.send_video).
     def events(self) -> AsyncIterator[LiveEvent]: ...
     async def close(self) -> None: ...
 
@@ -111,7 +113,7 @@ class LiveBridge:
     MAX_PENDING_TEXT = 20
 
     def __init__(self, session: Session, backend_factory: Callable[[], LiveBackend], system_prompt: str,
-                 tools: list, resume_handle: str | None = None):
+                 tools: list, resume_handle: str | None = None, live_nudge: bool = True):
         self.session = session
         self._factory = backend_factory
         self.system_prompt = system_prompt
@@ -139,6 +141,23 @@ class LiveBridge:
         self._last_lock_at = float("-inf")
         self._recent_results: deque[list[dict]] = deque(maxlen=self.RECENT_RESULT_TURNS)
         self._listener_tasks: set[asyncio.Task] = set()
+        self.last_speech_at = float("-inf")  # last words heard (owner/customer) or an AIRA answer ending
+        # The camera as Live video (aira_live.live_video): throttle, scene-change nudge, counters.
+        self.video = LiveVideo(session.session_id, nudge=live_nudge,
+                               tools_running=lambda: tool_runtime.tools_running(session.session_id),
+                               other_busy=lambda: ambient_holding(session.session_id))
+
+    # ---------- state the live-video nudge reads ----------
+    @property
+    def answering(self) -> bool:
+        return self._answering
+
+    @property
+    def user_speaking(self) -> bool:
+        return bool(self._in_partial)
+
+    def lang_name(self) -> str:
+        return self._lang_name()
 
     # ---------- lifecycle ----------
     async def start(self) -> None:
@@ -150,6 +169,7 @@ class LiveBridge:
         """Stop the pump, close the Live connection and drop this session's transcript listeners. Idempotent."""
         self._closed = True
         self._connected = False
+        self.video.flush(force=True)
         task, self._task = self._task, None
         if task is not None and task is not asyncio.current_task():
             task.cancel()
@@ -189,6 +209,27 @@ class LiveBridge:
             await self._backend.send_audio(pcm)
         except Exception as exc:  # the pump notices a dead connection and reconnects
             log.debug("audio send failed: %s", exc)
+
+    def video_backlog(self) -> int:
+        """Items waiting in the Live request queue (0 when the backend cannot tell)."""
+        try:
+            return int(getattr(self._backend, "backlog", lambda: 0)())
+        except Exception:
+            return 0
+
+    async def send_video(self, jpeg: bytes) -> bool:
+        """One camera frame (JPEG bytes) as realtime Live video. False when dropped (reconnecting, closed)."""
+        if self._closed or not self._connected or self._backend is None:
+            return False
+        send = getattr(self._backend, "send_video", None)
+        if send is None:
+            return False
+        try:
+            await send(jpeg)
+        except Exception as exc:  # the pump notices a dead connection and reconnects
+            log.debug("video send failed: %s", exc)
+            return False
+        return True
 
     async def send_text(self, text: str, _notice: bool = False) -> None:
         """Typed text, notices and corrections. Queued while reconnecting and sent once Live is back."""
@@ -318,6 +359,7 @@ class LiveBridge:
             await self._output_caption(ev)
         elif ev.kind == "input_transcript":
             self._muted = False  # a new question has started
+            self.last_speech_at = _monotonic()
             lang = unclear = None
             if ev.final:
                 utterance, self._in_partial = ev.text or self._in_partial, ""
@@ -336,6 +378,7 @@ class LiveBridge:
         elif ev.kind == "interrupted":
             # Live cut the answer (barge-in or a new prompt): the stopped answer is over, the next one is new.
             self._muted = self._answering = False
+            self.last_speech_at = _monotonic()
             self._caption, self._out_partial = "hold", ""
             diag("live", event="interrupted", session=s.session_id)
             await s.send(CueMsg(cue="interrupted"))
@@ -351,6 +394,7 @@ class LiveBridge:
             if ev.more:  # the same answer goes on in another model turn
                 return
             self._muted = self._answering = False
+            self.last_speech_at = _monotonic()
             self._caption = "hold"
             if self._echo_hit:  # the notice was said in this turn: nothing later is its echo
                 self._echo.clear()
@@ -659,6 +703,19 @@ class AdkLiveBackend:
     async def send_audio(self, pcm16: bytes) -> None:
         from google.genai import types
         self._queue.send_realtime(types.Blob(data=pcm16, mime_type="audio/pcm;rate=16000"))
+
+    async def send_video(self, jpeg: bytes) -> None:
+        """One camera frame as realtime video input (Live API: JPEG, <= 1 fps)."""
+        from google.genai import types
+        self._queue.send_realtime(types.Blob(data=jpeg, mime_type="image/jpeg"))
+
+    def backlog(self) -> int:
+        """Requests waiting in the ADK LiveRequestQueue (its asyncio.Queue; 0 when unknown)."""
+        q = getattr(self._queue, "_queue", None)
+        try:
+            return q.qsize() if q is not None else 0
+        except Exception:
+            return 0
 
     async def send_text(self, text: str) -> None:
         from google.genai import types

@@ -296,5 +296,6 @@
   "ambient.held": "இது {name}, {pack}.",
   "ambient.held_price": "{price} ரூபாய்.",
   "ambient.held_free": "இது {label}.",
+  "precount.count": "இங்கே {n} பாக்கெட்டுகள் இருக்கின்றன.",
   "ambient.closer": "கொஞ்சம் அருகில் பிடியுங்கள்."
 }

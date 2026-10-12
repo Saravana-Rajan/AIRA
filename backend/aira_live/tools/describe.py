@@ -167,8 +167,8 @@ class DescribeLoop:
                                                        "frame_ts": frame.ts, "confidence": conf,
                                                        "model": data.get("_model")})
         await listing.publish_boxes(s, objects, "describe", frame_id=frame.id)
-        if conf < MIN_CONF or not objects:
-            return self.active
+        if conf < MIN_CONF or not objects or getattr(self, "quiet", False):
+            return self.active  # quiet: Live video narrates the scene (aira_live.live_video); boxes still go out
         now = self._clock()
         if now - self.last_spoken_at < self.min_gap_s or self.busy():
             return self.active

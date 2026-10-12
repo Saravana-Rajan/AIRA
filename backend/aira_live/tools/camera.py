@@ -24,7 +24,7 @@ from aira_live.diag import diag, summarize, trunc
 from aira_live.i18n import t
 from aira_live.prompt import LANG_NAME
 from aira_live.session import Session, get_session
-from aira_live.vision import listing, observers
+from aira_live.vision import listing, observers, precount
 from aira_live.vision.gemini import VisionError, generate_json, image_part
 from aira_live.vision.hints import HINT_KEYS
 from aira_live.vision.point import parse_box
@@ -219,7 +219,10 @@ async def camera_ask(question: str) -> dict:
     """
     s: Session = get_session()
     kind = classify(question)
-    count = 2 if kind == "path" else 1                          # a path needs a short burst: things move
+    precounted = await precount.answer(s, question)  # "how many": the background count of this scene, if any
+    if precounted is not None:
+        return precounted
+    count = 2 if kind == "path" else 1                         # a path needs a short burst: things move
     frames = await s.request_frames("ask", count=count, interval_ms=400 if count > 1 else 0,
                                     timeout_s=FRAME_TIMEOUT_S)
     diag("camera_ask", stage="frames", session=s.session_id, kind=kind, lang=s.lang, question=trunc(question),

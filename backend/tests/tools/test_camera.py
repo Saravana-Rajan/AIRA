@@ -57,7 +57,7 @@ def test_registered_as_a_live_tool():
 def test_prompt_rule_sends_vision_questions_to_camera_ask():
     text = prompt.render_prompt({"name": "Sunrise Dairy"}, [], [], "en", "short")
     assert "camera_ask" in text
-    assert "cannot see without" in text
+    assert "never answer from imagination" in text.lower() and "live video" in text
     assert "product_find" in text
 
 

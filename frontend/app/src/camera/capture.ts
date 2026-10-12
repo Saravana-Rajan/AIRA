@@ -20,11 +20,32 @@ export const PREVIEW_QUALITY = 0.45;
 /** A preview tick is skipped while more than this many bytes wait on the socket: a stale picture is never sent. */
 export const PREVIEW_MAX_BUFFERED = 32_000;
 
+/** Gemini Live video (purpose `live`): one frame a second, 768 px long side, quality 0.7 (Live API guidance). */
+export const LIVE_MAX_SIDE = 768;
+export const LIVE_QUALITY = 0.7;
+/** A count frame is sharp: small packs on a fridge shelf need the pixels (ER 2 counts them). */
+export const COUNT_MAX_SIDE = 1280;
+
 /** How big and how good a frame of this purpose is. */
 export function frameSpec(purpose: FramePurpose): { maxSide: number; quality: number } {
-  return purpose === "preview"
-    ? { maxSide: PREVIEW_MAX_SIDE, quality: PREVIEW_QUALITY }
-    : { maxSide: MAX_SIDE, quality: JPEG_QUALITY };
+  if (purpose === "preview") return { maxSide: PREVIEW_MAX_SIDE, quality: PREVIEW_QUALITY };
+  if (purpose === "live") return { maxSide: LIVE_MAX_SIDE, quality: LIVE_QUALITY };
+  if (purpose === "count") return { maxSide: COUNT_MAX_SIDE, quality: JPEG_QUALITY };
+  return { maxSide: MAX_SIDE, quality: JPEG_QUALITY };
+}
+
+// Tool frames (anything but the live video and the monitor preview) beat the live video: while one is being
+// captured, and once one started during a live capture, the live frame is skipped.
+let toolCaptures = 0;
+let toolCaptureSeq = 0;
+const isToolPurpose = (p: FramePurpose) => p !== "live" && p !== "preview";
+/** True while a tool-requested frame (ask, count, identify, ...) is being captured. */
+export function toolCaptureBusy(): boolean {
+  return toolCaptures > 0;
+}
+/** Grows by one each time a tool-requested capture starts. */
+export function toolCaptureCount(): number {
+  return toolCaptureSeq;
 }
 
 export class CameraError extends Error {
@@ -193,6 +214,17 @@ export async function captureFrame(purpose: FramePurpose): Promise<FrameMsg> {
 
 /** Like captureFrame, but returns null (without encoding) when `keep` says the frame is not worth sending. */
 export async function captureFrameIf(purpose: FramePurpose, keep?: FrameKeep): Promise<FrameMsg | null> {
+  if (!isToolPurpose(purpose)) return captureFrameRaw(purpose, keep);
+  toolCaptures++;
+  toolCaptureSeq++;
+  try {
+    return await captureFrameRaw(purpose, keep);
+  } finally {
+    toolCaptures--;
+  }
+}
+
+async function captureFrameRaw(purpose: FramePurpose, keep?: FrameKeep): Promise<FrameMsg | null> {
   // Demo mode (/try): draw the demo media and never open the camera. null = real camera.
   const demo = overrideSource();
   if (!demo && !deps.source) await startCamera();
@@ -209,7 +241,7 @@ export async function captureFrameIf(purpose: FramePurpose, keep?: FrameKeep): P
   // Quality check on every 3rd frame (cheap enough at 640 px); the keep gate reads the same gray copy.
   // Preview frames are for the dashboard only: they never earn the owner a "hold still" hint.
   let quality: "ok" | "dark" | "blurry" | "skipped" = "skipped";
-  const checkQuality = purpose !== "preview" && qualityListener !== null && ++qualityCounter % 3 === 0;
+  const checkQuality = isToolPurpose(purpose) && qualityListener !== null && ++qualityCounter % 3 === 0;
   if (checkQuality || keep) {
     const img = ctx.getImageData(0, 0, w, h);
     const gray = toGray(img.data, w, h);

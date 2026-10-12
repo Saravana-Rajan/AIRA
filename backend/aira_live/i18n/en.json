@@ -296,5 +296,6 @@
   "ambient.held": "That's {name}, {pack}.",
   "ambient.held_price": "{price} rupees.",
   "ambient.held_free": "That's {label}.",
+  "precount.count": "I count {n} packs here.",
   "ambient.closer": "Hold it a little closer."
 }
