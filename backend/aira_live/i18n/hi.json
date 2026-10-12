@@ -274,5 +274,20 @@
   "mem.forgot_item": "ठीक है। आपकी {item} कहाँ थी, भूल गया।",
   "mem.remember_on": "ठीक है। आपकी चीज़ें जहाँ दिखेंगी, याद रखूँगा।",
   "mem.remember_off": "ठीक है। याद रखना बंद किया। अब कुछ नया सेव नहीं होगा।",
-  "mem.watch_item": "ठीक है। आपकी {item} जहाँ दिखेगी, याद रखूँगा।"
+  "mem.watch_item": "ठीक है। आपकी {item} जहाँ दिखेगी, याद रखूँगा।",
+  "k3.price.one": "{product} {price} रुपये है।",
+  "k3.price.unset": "{product} का दाम अभी नहीं है। दाम बताइए।",
+  "k3.price.item": "{product} {price}",
+  "k3.price.group": "{category}: {list}।",
+  "k3.price.more": "बाकी के लिए 'और' कहिए।",
+  "k3.price.end": "बस, सारे दाम हो गए।",
+  "k3.price.none": "अभी कोई दाम नहीं। पहले कोई प्रोडक्ट जोड़िए।",
+  "k3.cat.milk": "दूध",
+  "k3.cat.curd": "दही",
+  "k3.cat.buttermilk": "छाछ",
+  "k3.cat.ghee": "घी",
+  "k3.cat.paneer": "पनीर",
+  "k3.cat.butter": "मक्खन",
+  "k3.cat.ice_cream": "आइसक्रीम",
+  "k3.cat.other": "अन्य"
 }

@@ -74,6 +74,15 @@ def payment(shop_id: str, payment_id: str) -> str:
     return f"shops/{shop_id}/payments/{doc_id(payment_id)}"
 
 
+def price_history(shop_id: str, entry_id: str) -> str:
+    """Server-only: one entry per committed price change (tools/catalog.py product_update)."""
+    return f"shops/{shop_id}/priceHistory/{entry_id}"
+
+
+def price_histories(shop_id: str) -> str:
+    return f"shops/{shop_id}/priceHistory"
+
+
 def audit(shop_id: str, audit_id: str) -> str:
     return f"shops/{shop_id}/auditLogs/{audit_id}"
 

@@ -29,7 +29,7 @@ import { findFirebase, findJava, javaEnv, FIREBASE_TOOLS } from "../e2e/prereqs.
 export const LIGHTHOUSE = "lighthouse@12";
 
 /** Every dashboard section, by its hash route (src/components/Layout.tsx ROUTES). */
-export const PAGES = ["#/", "#/today", "#/stock", "#/orders", "#/audit", "#/forecast"];
+export const PAGES = ["#/", "#/today", "#/stock", "#/prices", "#/orders", "#/audit", "#/forecast"];
 
 const PAGE_NAMES = { overview: "#/", today: "#/today", stock: "#/stock", orders: "#/orders", audit: "#/audit", forecast: "#/forecast" };
 

@@ -19,7 +19,7 @@ const report = (score: number) => ({ categories: { accessibility: { score, audit
 
 describe("PAGES", () => {
   it("covers every dashboard section by its hash route", () => {
-    expect(PAGES).toEqual(["#/", "#/today", "#/stock", "#/orders", "#/audit", "#/forecast"]);
+    expect(PAGES).toEqual(["#/", "#/today", "#/stock", "#/prices", "#/orders", "#/audit", "#/forecast"]);
   });
 });
 

@@ -27,6 +27,7 @@ EXPECTED = {
     "product_add": ["name", "brand", "unit", "pack_size", "price_rupees", "supplier_id"],
     "product_update": ["product", "price_rupees", "name", "supplier_id"], "product_disable": ["product"],
     "stock_add": ["product", "quantity", "unit"], "supplier_add": ["name", "channel"],
+    "price_query": ["product", "page"],  # the owner's price board, spoken (tools/prices.py)
 }
 
 OPTIONAL_DEFAULTS = {
@@ -39,6 +40,7 @@ OPTIONAL_DEFAULTS = {
     ("product_update", "price_rupees"): None, ("product_update", "name"): None,
     ("product_update", "supplier_id"): None, ("stock_add", "unit"): None,
     ("memory_forget", "item"): None, ("memory_remembering", "item"): None,
+    ("price_query", "product"): None, ("price_query", "page"): 0,
 }
 
 LITERALS = {

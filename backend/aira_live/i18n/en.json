@@ -274,5 +274,20 @@
   "mem.forgot_item": "Done. I forgot where your {item} was.",
   "mem.remember_on": "Okay. I will remember where I see your things.",
   "mem.remember_off": "Okay. I stopped remembering. Nothing new will be saved.",
-  "mem.watch_item": "Okay. I will remember where I see your {item}."
+  "mem.watch_item": "Okay. I will remember where I see your {item}.",
+  "k3.price.one": "{product} is {price} rupees.",
+  "k3.price.unset": "{product} has no price yet. Say the price to set it.",
+  "k3.price.item": "{product} {price}",
+  "k3.price.group": "{category}: {list}.",
+  "k3.price.more": "Say more for the rest.",
+  "k3.price.end": "That is all the prices.",
+  "k3.price.none": "No prices yet. Add a product first.",
+  "k3.cat.milk": "Milk",
+  "k3.cat.curd": "Curd",
+  "k3.cat.buttermilk": "Buttermilk",
+  "k3.cat.ghee": "Ghee",
+  "k3.cat.paneer": "Paneer",
+  "k3.cat.butter": "Butter",
+  "k3.cat.ice_cream": "Ice cream",
+  "k3.cat.other": "Other"
 }
