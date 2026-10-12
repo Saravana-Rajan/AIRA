@@ -64,6 +64,19 @@ describe("Layout", () => {
     expect(view("#/stock").querySelector("main")!.className).toContain("main--single");
   });
 
+  it("record mode (bare) keeps only the main region: no header, banner or tabs", () => {
+    const el = mount(
+      <Layout access={demo} route="#/live" status="live" bare>
+        <p>camera</p>
+      </Layout>,
+    );
+    expect(el.querySelector("header")).toBeNull();
+    expect(el.querySelector("nav")).toBeNull();
+    expect(el.querySelector(".banner")).toBeNull();
+    expect(el.querySelector("main")!.className).toContain("main--record");
+    expect(text(el.querySelector("main"))).toBe("camera");
+  });
+
   it("moves focus to the main region when the skip link is used, without changing the route", () => {
     const el = view();
     const before = location.hash;

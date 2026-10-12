@@ -1,5 +1,6 @@
-// Wires the Live page to /monitor: key from the URL or the tab, the socket URL from the app's
-// VITE_AIRA_LIVE_WS, one reconnecting client, and the reducer's state.
+// Wires the Live page to /monitor: the key from the URL fragment or the tab, the socket URL from the app's
+// VITE_AIRA_LIVE_WS, one reconnecting client that authenticates with its first message, and the reducer's
+// state.
 import { useEffect, useMemo, useState } from "preact/hooks";
 import {
   initialState, monitorUrl, openMonitor, readKey, reduce, storeKey, stripKey, type Connection, type LiveState, type SocketLike,
@@ -15,39 +16,46 @@ function sessionStore(): Storage | null {
   }
 }
 
-/** Takes ?key= off the address bar once it has been read, without reloading or touching the hash route. */
-function hideKeyInAddress(): void {
+/**
+ * Takes #key=... off the address bar once it has been read (saved for this tab), without reloading. Called
+ * from main.tsx before the first render, so the router never sees the key and it never reaches history.
+ */
+export function captureMonitorKey(): void {
   try {
-    if (typeof history === "undefined" || !location.search.includes("key=")) return;
-    history.replaceState(history.state, "", `${location.pathname}${stripKey(location.search)}${location.hash}`);
+    if (typeof location === "undefined") return;
+    const key = readKey(location.hash, sessionStore());
+    if (!key || !location.hash.includes("key=")) return;
+    const hash = stripKey(location.hash);
+    history.replaceState(history.state, "", `${location.pathname}${location.search}${hash}`);
   } catch {
-    /* a sandboxed frame: the key stays visible, which is harmless */
+    /* a sandboxed frame: the key stays visible until the next navigation, which is harmless */
   }
 }
 
 export function useMonitor(enabled: boolean, shopId: string | null, env: Record<string, unknown> = import.meta.env): Monitor {
-  const [key, setKeyState] = useState<string | null>(() => readKey(typeof location === "undefined" ? "" : location.search, sessionStore()));
+  const [key, setKeyState] = useState<string | null>(() => readKey(typeof location === "undefined" ? "" : location.hash, sessionStore()));
   const [state, setState] = useState<LiveState>(initialState);
   const [conn, setConn] = useState<Connection>("waiting");
-  const url = useMemo(() => (shopId && key ? monitorUrl(env, shopId, key) : null), [shopId, key]);
+  const url = useMemo(() => (shopId ? monitorUrl(env, shopId) : null), [shopId]);
 
   useEffect(() => {
-    if (key) hideKeyInAddress();
+    if (key) captureMonitorKey();
   }, [key]);
 
   useEffect(() => {
-    if (!enabled || !url || typeof WebSocket === "undefined") {
+    if (!enabled || !url || !key || typeof WebSocket === "undefined") {
       setConn("waiting");
       return;
     }
     return openMonitor(
       url,
+      key,
       (m) => setState((s) => reduce(s, m)),
       (c) => setConn(c),
       // A WebSocket has every member of SocketLike; its handler types are just narrower (MessageEvent, CloseEvent).
       { connect: (u) => new WebSocket(u) as unknown as SocketLike },
     );
-  }, [enabled, url]);
+  }, [enabled, url, key]);
 
   const setKey = (k: string) => {
     storeKey(k, sessionStore());

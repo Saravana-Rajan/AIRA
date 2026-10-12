@@ -1,14 +1,16 @@
 import { describe, expect, it, vi } from "vitest";
 import type { MonitorMsg } from "@aira/contracts";
 import {
-  backoffMs, detailText, eventLabel, initialState, monitorUrl, openMonitor, overlayShapes, readKey, reduce, storeKey, stripKey,
-  toRect, toXY, type LiveState, type SocketLike,
+  backoffMs, detailText, eventLabel, frameAge, initialState, keyFromHash, monitorUrl, openMonitor, overlayShapes, readKey, reduce,
+  sessionClock, storeKey, stripKey, targetInfo, toRect, toXY, type LiveState, type SocketLike,
 } from "../src/lib/monitor";
 
-type MonInput = MonitorMsg extends infer M ? (M extends MonitorMsg ? Omit<M, "t" | "session" | "ts"> & { ts?: number } : never) : never;
+type MonInput = MonitorMsg extends infer M ? (M extends MonitorMsg ? Omit<M, "t" | "session" | "ts"> & { ts?: number; session?: string } : never) : never;
 const mon = (m: MonInput): MonitorMsg =>
   ({ t: "mon", session: "s1", ts: 1, ...m }) as MonitorMsg;
 const apply = (msgs: MonitorMsg[], s: LiveState = initialState()) => msgs.reduce(reduce, s);
+const box = (b: number[]) => b as [number, number, number, number];
+const layer = (objects: any[], ts = 0) => ({ objects, ts });
 
 describe("coordinate mapping ([y, x] in 0..1000 -> pixels)", () => {
   it("maps a point with y first", () => {
@@ -21,30 +23,62 @@ describe("coordinate mapping ([y, x] in 0..1000 -> pixels)", () => {
 });
 
 describe("overlayShapes", () => {
-  const objects = [
-    { label: "Aavin milk 500 ml", box: [400, 500, 440, 560] as [number, number, number, number], point: [420, 530] as [number, number] },
-    { label: "Sakthi curd 1 L", box: null, point: [600, 200] as [number, number] },
-  ];
-  it("draws every object in the object tone, the target in the target tone, and a point-only object as a dot", () => {
-    const shapes = overlayShapes({ objects, target: "Aavin milk 500 ml", found: false, hand: null, status: "guiding" }, 1000, 1000);
+  const er2 = layer([
+    { label: "Aavin milk 500 ml", box: box([400, 500, 440, 560]), point: [420, 530], score: 0.92 },
+    { label: "Sakthi curd 1 L", box: null, point: [600, 200] },
+  ]);
+  const none = layer([]);
+  it("draws ER 2 objects in the object tone with their score, the target in the target tone, and a point-only object as a dot", () => {
+    const shapes = overlayShapes({ er2, mediapipe: none, target: "Aavin milk 500 ml", found: false, hand: null, status: "guiding" }, 1000, 1000);
     expect(shapes).toEqual([
-      { kind: "box", label: "Aavin milk 500 ml", rect: { x: 500, y: 400, w: 60, h: 40 }, tone: "target" },
+      { kind: "box", label: "Aavin milk 500 ml", rect: { x: 500, y: 400, w: 60, h: 40 }, tone: "target", score: 0.92 },
       { kind: "dot", label: "Sakthi curd 1 L", at: { x: 200, y: 600 }, tone: "object" },
     ]);
   });
   it("turns the target green (found tone) when found, matching the label case-insensitively", () => {
-    const shapes = overlayShapes({ objects, target: "aavin MILK 500 ml", found: true, hand: null, status: "found" }, 100, 100);
+    const shapes = overlayShapes({ er2, mediapipe: none, target: "aavin MILK 500 ml", found: true, hand: null, status: "found" }, 100, 100);
     expect(shapes[0]).toMatchObject({ kind: "box", tone: "found" });
     expect(shapes[1]).toMatchObject({ tone: "object" });
   });
+  it("draws MediaPipe boxes first, thin (fast tone), red when the bump guard flags danger, and only while fresh", () => {
+    const mediapipe = layer([
+      { label: "chair", box: box([420, 310, 900, 690]), point: null, score: 0.82, severity: "danger" },
+      { label: "bottle", box: box([100, 50, 300, 120]), point: null, score: 0.61 },
+      { label: "no box", box: null, point: [1, 1] },
+    ], 10_000);
+    const shapes = overlayShapes({ er2, mediapipe, target: null, found: false, hand: null, status: "idle" }, 1000, 1000, 10_500);
+    expect(shapes.slice(0, 2)).toEqual([
+      { kind: "box", label: "chair", rect: { x: 310, y: 420, w: 380, h: 480 }, tone: "danger", score: 0.82 },
+      { kind: "box", label: "bottle", rect: { x: 50, y: 100, w: 70, h: 200 }, tone: "fast", score: 0.61 },
+    ]);
+    expect(shapes).toHaveLength(4);
+    const stale = overlayShapes({ er2, mediapipe, target: null, found: false, hand: null, status: "idle" }, 1000, 1000, 10_000 + 5000);
+    expect(stale.every((s) => s.kind !== "box" || s.tone !== "fast")).toBe(true);
+    expect(stale).toHaveLength(2);
+  });
   it("adds the fingertip dot and a line from the hand to the target centre while guiding, but no line once found", () => {
     const hand = { point: [800, 100] as [number, number], near: false };
-    const guiding = overlayShapes({ objects, target: "Aavin milk 500 ml", found: false, hand, status: "guiding" }, 1000, 1000);
+    const guiding = overlayShapes({ er2, mediapipe: none, target: "Aavin milk 500 ml", found: false, hand, status: "guiding" }, 1000, 1000);
     expect(guiding.at(-2)).toEqual({ kind: "line", from: { x: 100, y: 800 }, to: { x: 530, y: 420 } });
     expect(guiding.at(-1)).toEqual({ kind: "dot", label: "hand", at: { x: 100, y: 800 }, tone: "hand" });
-    const found = overlayShapes({ objects, target: "Aavin milk 500 ml", found: true, hand, status: "found" }, 1000, 1000);
+    const found = overlayShapes({ er2, mediapipe: none, target: "Aavin milk 500 ml", found: true, hand, status: "found" }, 1000, 1000);
     expect(found.some((s) => s.kind === "line")).toBe(false);
     expect(found.at(-1)).toMatchObject({ kind: "dot", tone: "hand" });
+  });
+});
+
+describe("targetInfo", () => {
+  it("is null without a target, and reads visibility, confidence, distance and direction off the ER 2 objects", () => {
+    expect(targetInfo({ target: null, found: false, er2: layer([]) })).toBeNull();
+    const er2 = layer([{ label: "Aavin milk", box: box([100, 700, 200, 900]), point: null, score: 0.92, distance: "arm" }]);
+    expect(targetInfo({ target: "aavin milk", found: false, er2 })).toEqual({
+      label: "aavin milk", visible: true, found: false, confidence: 0.92, distance: "arm", side: "right", shelf: "top",
+    });
+    expect(targetInfo({ target: "curd", found: false, er2 })).toEqual({
+      label: "curd", visible: false, found: false, confidence: null, distance: null, side: null, shelf: null,
+    });
+    const centre = layer([{ label: "curd", box: null, point: [500, 500] }]);
+    expect(targetInfo({ target: "curd", found: true, er2: centre })).toMatchObject({ visible: true, found: true, side: "centre", shelf: "middle", confidence: null });
   });
 });
 
@@ -79,30 +113,57 @@ describe("reduce: transcript", () => {
   });
 });
 
-describe("reduce: camera, vision, hand, status, events and sessions", () => {
+describe("reduce: camera, vision, hand, status, stats, events and sessions", () => {
   it("stores the latest frame as a data URL", () => {
     const s = apply([mon({ kind: "frame", jpeg_b64: "AAAA", w: 480, h: 640, purpose: "guide" })]);
     expect(s.frame).toMatchObject({ src: "data:image/jpeg;base64,AAAA", w: 480, h: 640, purpose: "guide" });
   });
+  it("keeps ER 2 and MediaPipe boxes apart; an obstacle is logged once", () => {
+    const s = apply([
+      mon({ kind: "vision", source: "er2", objects: [{ label: "milk", box: box([1, 2, 3, 4]), point: null }], context: "camera_ask" }),
+      mon({ kind: "vision", source: "mediapipe", objects: [{ label: "chair", box: box([1, 2, 3, 4]), point: null, severity: "danger" }], severity: "danger", ts: 5 }),
+      mon({ kind: "vision", source: "bump", objects: [{ label: "chair", box: box([1, 2, 3, 4]), point: null, severity: "danger" }], severity: "danger", ts: 6 }),
+    ]);
+    expect(s.er2.objects.map((o) => o.label)).toEqual(["milk"]);
+    expect(s.context).toBe("camera_ask");
+    expect(s.mediapipe).toEqual({ objects: [{ label: "chair", box: [1, 2, 3, 4], point: null, severity: "danger" }], ts: 6 });
+    expect(s.activity.filter((a) => a.name === "obstacle")).toHaveLength(1);
+    expect(s.activity[0]).toMatchObject({ detail: "chair", tag: "vision" });
+  });
   it("vision found=true sets found, status found and logs a Found activity item once", () => {
     const vision = (found: boolean) =>
-      mon({ kind: "vision", source: "er2", objects: [{ label: "Aavin milk 500 ml", box: [1, 2, 3, 4], point: null }], target: "Aavin milk 500 ml", found });
+      mon({ kind: "vision", source: "er2", objects: [{ label: "Aavin milk 500 ml", box: box([1, 2, 3, 4]), point: null }], target: "Aavin milk 500 ml", found, context: "guidance" });
     const s = apply([mon({ kind: "status", state: "guiding" }), vision(false), vision(true), vision(true)]);
     expect(s.found).toBe(true);
     expect(s.status).toBe("found");
     expect(s.activity.filter((a) => a.name === "found")).toHaveLength(1);
     expect(s.activity[0].detail).toBe("Aavin milk 500 ml");
   });
-  it("a new guiding status clears found; hand and events are recorded", () => {
+  it("a guidance message without a target keeps the one being looked for", () => {
+    const s = apply([
+      mon({ kind: "vision", source: "er2", objects: [], target: "curd", found: false, context: "guidance" }),
+      mon({ kind: "vision", source: "er2", objects: [], context: "guidance" }),
+    ]);
+    expect(s.target).toBe("curd");
+  });
+  it("a new guiding status clears found; hand and events are recorded with a tag", () => {
     const s = apply([
       mon({ kind: "vision", source: "er2", objects: [], target: "x", found: true }),
       mon({ kind: "status", state: "guiding" }),
       mon({ kind: "hand", point: [10, 20], near: true }),
       mon({ kind: "event", name: "order_sent", detail: { summary: "30 L curd" } }),
+      mon({ kind: "event", name: "tool_call", detail: { tool: "camera_ask", ok: true } }),
+      mon({ kind: "event", name: "client_event", detail: { name: "network" } }),
     ]);
     expect(s.found).toBe(false);
     expect(s.hand).toEqual({ point: [10, 20], near: true });
-    expect(s.activity.at(-1)).toMatchObject({ name: "order_sent", detail: "30 L curd" });
+    expect(s.activity.slice(-3).map((a) => [a.name, a.detail, a.tag])).toEqual([
+      ["order_sent", "30 L curd", "order"], ["tool_call", "camera_ask", "vision"], ["client_event", "network", "sam"],
+    ]);
+  });
+  it("keeps the latest stats", () => {
+    const s = apply([mon({ kind: "stats", turns: 3, er2Calls: 2, flashCalls: 1, visionMs: 820, fps: 2.5, ts: 9 })]);
+    expect(s.stats).toEqual({ turns: 3, er2Calls: 2, flashCalls: 1, visionMs: 820, fps: 2.5, ts: 9 });
   });
   it("turns an event's detail object into one readable line", () => {
     expect(detailText("count", { sku: "sakthi_curd_1l", counted: 28, expected: 30 })).toBe("Counted 28/30");
@@ -116,13 +177,31 @@ describe("reduce: camera, vision, hand, status, events and sessions", () => {
       mon({ kind: "frame", jpeg_b64: "A", w: 1, h: 1, purpose: "ask" }),
       mon({ kind: "transcript", role: "owner", text: "hi", lang: "en", final: true }),
     ]);
-    const s1 = reduce(s0, mon({ kind: "session", state: "start", lang: "ta", ts: 5 }));
+    const s1 = reduce(s0, mon({ kind: "session", state: "start", lang: "ta", ts: 5, uid: "u1" }));
     expect(s1.frame).toBeNull();
     expect(s1.transcript).toHaveLength(1);
-    expect(s1).toMatchObject({ session: "s1", lang: "ta", status: "listening", lastMsgAt: 5 });
+    expect(s1).toMatchObject({ session: "s1", sessionStartedAt: 5, lang: "ta", status: "listening", lastMsgAt: 5 });
     expect(s1.activity.at(-1)?.name).toBe("session_start");
     const s2 = reduce(s1, mon({ kind: "session", state: "end", lang: "ta" }));
     expect(s2).toMatchObject({ session: null, status: "idle" });
+  });
+  it("a room camera session lives in rooms: its frames and MediaPipe boxes go there, not to Sam's view", () => {
+    const s = apply([
+      mon({ kind: "session", state: "start", lang: "en", uid: "u1", ts: 1 }),
+      mon({ kind: "session", state: "start", lang: "en", uid: "camera:front", session: "cam1", ts: 2 }),
+      mon({ kind: "frame", jpeg_b64: "ROOM", w: 480, h: 270, purpose: "ask", session: "cam1", ts: 3 }),
+      mon({ kind: "vision", source: "mediapipe", objects: [{ label: "door", box: box([1, 2, 3, 4]), point: null }], session: "cam1", ts: 4 }),
+      mon({ kind: "frame", jpeg_b64: "SAM", w: 480, h: 640, purpose: "guide", ts: 5 }),
+    ]);
+    expect(s.session).toBe("s1");
+    expect(s.frame?.src).toBe("data:image/jpeg;base64,SAM");
+    expect(s.mediapipe.objects).toEqual([]);
+    expect(s.rooms.cam1).toMatchObject({ name: "front", frame: { src: "data:image/jpeg;base64,ROOM", w: 480, h: 270 } });
+    expect(s.rooms.cam1.mediapipe.objects.map((o) => o.label)).toEqual(["door"]);
+    expect(s.activity.map((a) => a.name)).toEqual(["session_start", "room_start"]);
+    const gone = reduce(s, mon({ kind: "session", state: "end", lang: "en", uid: "camera:front", session: "cam1", ts: 6 }));
+    expect(gone.rooms).toEqual({});
+    expect(gone.session).toBe("s1");
   });
   it("labels known events for the timeline", () => {
     expect(eventLabel("order_sent")).toBe("Order sent");
@@ -131,63 +210,89 @@ describe("reduce: camera, vision, hand, status, events and sessions", () => {
   });
 });
 
-describe("key handling", () => {
+describe("key handling (the fragment, never the query string)", () => {
   const mem = () => {
     const m = new Map<string, string>();
     return { getItem: (k: string) => m.get(k) ?? null, setItem: (k: string, v: string) => void m.set(k, v), removeItem: (k: string) => void m.delete(k), m };
   };
-  it("takes ?key= from the URL and remembers it for the tab", () => {
+  it("reads #key= in its three spellings", () => {
+    expect(keyFromHash("#key=abc123")).toBe("abc123");
+    expect(keyFromHash("#/live?key=abc123")).toBe("abc123");
+    expect(keyFromHash("#/live?shop=x&key=a%20b")).toBe("a b");
+    expect(keyFromHash("#/live")).toBeNull();
+    expect(keyFromHash("")).toBeNull();
+    expect(keyFromHash("#/live?monkey=1")).toBeNull();
+  });
+  it("takes the key from the fragment and remembers it for the tab", () => {
     const st = mem();
-    expect(readKey("?shop=x&key=abc123", st)).toBe("abc123");
+    expect(readKey("#/live?key=abc123", st)).toBe("abc123");
     expect(st.m.get("aira.monitorKey")).toBe("abc123");
-    expect(readKey("", st)).toBe("abc123");
+    expect(readKey("#/live", st)).toBe("abc123");
   });
   it("returns null with no key anywhere, and survives a throwing storage", () => {
-    expect(readKey("?shop=x", mem())).toBeNull();
+    expect(readKey("#/live", mem())).toBeNull();
     const broken = { getItem: () => { throw new Error("blocked"); }, setItem: () => { throw new Error("blocked"); }, removeItem: () => {} };
-    expect(readKey("?key=k", broken)).toBe("k");
+    expect(readKey("#key=k", broken)).toBe("k");
     expect(readKey("", broken)).toBeNull();
     expect(() => storeKey("k", broken)).not.toThrow();
-    expect(readKey("?key=k", null)).toBe("k");
+    expect(readKey("#key=k", null)).toBe("k");
   });
-  it("strips ?key= from the address", () => {
-    expect(stripKey("?shop=x&key=abc")).toBe("?shop=x");
-    expect(stripKey("?key=abc")).toBe("");
+  it("strips key= from the fragment and nothing else", () => {
+    expect(stripKey("#/live?key=abc")).toBe("#/live");
+    expect(stripKey("#/live?shop=x&key=abc")).toBe("#/live?shop=x");
+    expect(stripKey("#/live?key=abc&shop=x")).toBe("#/live?shop=x");
+    expect(stripKey("#key=abc")).toBe("");
+    expect(stripKey("#/live")).toBe("#/live");
   });
 });
 
 describe("monitorUrl", () => {
-  it("replaces /ws with /monitor and adds shop and key", () => {
-    expect(monitorUrl({ VITE_AIRA_LIVE_WS: "wss://aira-live-abc.a.run.app/ws" }, "sunrise_dairy", "k1")).toBe(
-      "wss://aira-live-abc.a.run.app/monitor?shop=sunrise_dairy&key=k1",
+  it("replaces /ws with /monitor and adds the shop, never the key", () => {
+    expect(monitorUrl({ VITE_AIRA_LIVE_WS: "wss://aira-live-abc.a.run.app/ws" }, "sunrise_dairy")).toBe(
+      "wss://aira-live-abc.a.run.app/monitor?shop=sunrise_dairy",
     );
-    expect(monitorUrl({ VITE_AIRA_LIVE_WS: "ws://localhost:8080/ws" }, "s", "k")).toBe("ws://localhost:8080/monitor?shop=s&key=k");
+    expect(monitorUrl({ VITE_AIRA_LIVE_WS: "ws://localhost:8080/ws" }, "s")).toBe("ws://localhost:8080/monitor?shop=s");
   });
   it("is null when unset or not a WebSocket URL", () => {
-    expect(monitorUrl({}, "s", "k")).toBeNull();
-    expect(monitorUrl({ VITE_AIRA_LIVE_WS: "https://x/ws" }, "s", "k")).toBeNull();
+    expect(monitorUrl({}, "s")).toBeNull();
+    expect(monitorUrl({ VITE_AIRA_LIVE_WS: "https://x/ws" }, "s")).toBeNull();
   });
 });
 
-describe("reconnect backoff", () => {
+describe("clocks", () => {
+  it("formats the session timer and the frame age", () => {
+    expect(sessionClock(null, 5000)).toBe("T+00:00");
+    expect(sessionClock(1000, 85_500)).toBe("T+01:24");
+    expect(frameAge(null, 1)).toBe("—");
+    expect(frameAge(1000, 1400)).toBe("0.4s ago");
+    expect(frameAge(1000, 13_400)).toBe("12s ago");
+  });
+});
+
+describe("reconnect backoff and auth", () => {
   it("doubles from 1 s and caps at 15 s", () => {
     expect([0, 1, 2, 3, 4, 9].map(backoffMs)).toEqual([1000, 2000, 4000, 8000, 15000, 15000]);
   });
 
-  function fakeSocket(): SocketLike & { closed: boolean } {
-    return { onopen: null, onmessage: null, onclose: null, onerror: null, closed: false, close() { this.closed = true; } };
+  function fakeSocket(): SocketLike & { closed: boolean; sent: string[] } {
+    return {
+      onopen: null, onmessage: null, onclose: null, onerror: null, closed: false, sent: [],
+      send(d: string) { this.sent.push(d); },
+      close() { this.closed = true; },
+    };
   }
 
-  it("reconnects after each close with growing delays, resets after an open, and stops cleanly", () => {
+  it("sends {t:auth, key} as its first message, reconnects after each close with growing delays, resets after an open, and stops cleanly", () => {
     const sockets: ReturnType<typeof fakeSocket>[] = [];
     const timers: Array<{ fn: () => void; ms: number }> = [];
     const onMsg = vi.fn();
     const onConn = vi.fn();
     const stop = openMonitor(
-      "ws://x/monitor?shop=s&key=k",
+      "ws://x/monitor?shop=s",
+      "k-secret",
       onMsg,
       onConn,
-      { connect: () => { const s = fakeSocket(); sockets.push(s); return s; }, setTimer: (fn, ms) => { timers.push({ fn, ms }); return timers.length; }, clearTimer: vi.fn() },
+      { connect: () => { const s = fakeSocket(); sockets.push(s); return s; }, setTimer: (fn: () => void, ms: number) => { timers.push({ fn, ms }); return timers.length; }, clearTimer: vi.fn() },
     );
     expect(onConn).toHaveBeenLastCalledWith("connecting", 0);
     sockets[0].onclose!({ code: 1006 });
@@ -198,6 +303,7 @@ describe("reconnect backoff", () => {
     expect(timers.map((t) => t.ms)).toEqual([1000, 2000]);
     timers[1].fn();
     sockets[2].onopen!({});
+    expect(sockets[2].sent).toEqual([JSON.stringify({ t: "auth", key: "k-secret" })]);
     expect(onConn).toHaveBeenLastCalledWith("live", 0);
     sockets[2].onmessage!({ data: JSON.stringify({ t: "mon", kind: "status", session: "s", ts: 1, state: "thinking" }) });
     sockets[2].onmessage!({ data: "not json" });
@@ -213,8 +319,9 @@ describe("reconnect backoff", () => {
   it("reports a refused key instead of retrying", () => {
     const onConn = vi.fn();
     const s = fakeSocket();
-    openMonitor("ws://x", vi.fn(), onConn, { connect: () => s, setTimer: vi.fn(), clearTimer: vi.fn() });
-    s.onclose!({ code: 1008 });
+    openMonitor("ws://x", "k", vi.fn(), onConn, { connect: () => s, setTimer: vi.fn(), clearTimer: vi.fn() });
+    s.onopen!({});
+    s.onclose!({ code: 4403 });
     expect(onConn).toHaveBeenLastCalledWith("rejected", 0);
   });
 });

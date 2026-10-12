@@ -33,6 +33,8 @@ export function Layout(props: {
   route: Route;
   status: LiveStatus;
   updatedText?: string;
+  /** Record mode on the Live page: only the page itself, no header, banner or tabs (a clean screen recording). */
+  bare?: boolean;
   children: ComponentChildren;
 }) {
   const shopId = props.access.mode === "denied" ? "" : props.access.shopId;
@@ -40,6 +42,13 @@ export function Layout(props: {
     e.preventDefault();
     document.getElementById("main")?.focus();
   };
+  if (props.bare) {
+    return (
+      <main id="main" tabIndex={-1} class="main main--single main--record">
+        {props.children}
+      </main>
+    );
+  }
   return (
     <>
       <a class="skip-link" href="#main" onClick={skipToMain}>Skip to content</a>
