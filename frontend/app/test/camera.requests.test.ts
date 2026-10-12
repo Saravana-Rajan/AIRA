@@ -55,6 +55,7 @@ describe("request_frame handler", () => {
     expect(DESCRIBE_FPS).toBeCloseTo(1 / 3);
     expect(continuousFps("describe")).toBe(DESCRIBE_FPS);
     expect(continuousFps("guide")).toBe(CONTINUOUS_FPS);
+    expect(continuousFps("walk")).toBe(1);
     const s = setup();
     await s.handle({ t: "request_frame", purpose: "describe", continuous: true });
     expect(s.deps.startContinuous).toHaveBeenCalledWith("describe", DESCRIBE_FPS);

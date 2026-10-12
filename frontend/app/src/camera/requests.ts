@@ -13,9 +13,13 @@ export const DESCRIBE_FPS = 1 / 3;
  *  queued: a frame is dropped while the socket is still busy with the last one), relayed to the monitor only. */
 export const PREVIEW_FPS = 8;
 
+/** Walk with me: one frame a second (the server pipelines up to two ER looks). */
+export const WALK_FPS = 1;
+
 export function continuousFps(purpose: FramePurpose): number {
   if (purpose === "describe") return DESCRIBE_FPS;
   if (purpose === "preview") return PREVIEW_FPS;
+  if (purpose === "walk") return WALK_FPS;
   return CONTINUOUS_FPS;
 }
 /** Upper bounds so a malformed server burst can't keep the camera busy for minutes. */

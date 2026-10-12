@@ -37,7 +37,7 @@ Verbosity = Literal["short", "detail"]
 # "preview": the monitor's own small stream (2-3 fps) while the dashboard watches; relayed to monitors only, never
 # stored and never shown to Gemini.
 FramePurpose = Literal["ask", "count", "point", "identify", "invoice", "cash", "guide", "describe", "identify_held",
-                       "preview"]
+                       "preview", "walk"]
 CueName = Literal["ack", "thinking", "done", "warn", "match", "mismatch", "unsure", "interrupted", "reconnect", "offline"]
 Entity = Literal["order", "delivery", "sale", "payment", "inventory"]
 ConfirmKind = Literal["order", "payment", "sale", "discrepancy", "generic"]
