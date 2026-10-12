@@ -14,7 +14,7 @@ import { ConfirmState } from "./confirm";
 import { createDispatcher } from "./dispatch";
 import type { AppApi, HapticName, Settings } from "./types";
 import { STRINGS } from "../i18n/strings";
-import { PlaybackQueue } from "../voice/playback";
+import { PlaybackQueue, type PlaybackOpts } from "../voice/playback";
 import { playEarcon, type EarconName } from "../voice/earcons";
 import { startMic, type StartMicOpts } from "../voice/mic";
 import { announceToRegion } from "../ui/ScreenReaderRegion";
@@ -33,6 +33,12 @@ export const SPEAK_STALE_MS = 8_000;
 /** Live audio that ended less than this long ago still counts as busy: the next chunk is usually in flight. */
 export const SPEAK_WAIT_GAP_MS = 400;
 const SPEAK_POLL_MS = 250;
+/**
+ * Mic chunks are dropped while this many bytes sit unsent on the socket (about half a second of 32 ms
+ * chunks as JSON). Old audio must never queue up behind a stalled link: AIRA would hear it seconds late
+ * and answer late. Dropping a little speech during a stall is the lesser harm.
+ */
+export const MIC_MAX_BUFFERED_BYTES = 24_000;
 
 /** The identity of a spoken line: trimmed, lowercased, punctuation and symbols dropped, spaces collapsed. */
 export function normaliseSpeech(text: string): string {
@@ -50,14 +56,14 @@ export interface PlaybackLike {
   msSinceAudio(): number;
 }
 
-type SocketLike = Pick<AiraSocket, "connect" | "send" | "on" | "close">;
+type SocketLike = Pick<AiraSocket, "connect" | "send" | "on" | "close"> & Partial<Pick<AiraSocket, "bufferedAmount">>;
 type Listenable = Pick<EventTarget, "addEventListener" | "removeEventListener">;
 
 /** Browser adapters. `browserEnv()` gives the real ones; tests pass fakes. */
 export interface WireEnv {
   createSocket(url: string): SocketLike;
   createAudioContext(): AudioContext | null;
-  createPlayback(ctx: AudioContext): PlaybackLike;
+  createPlayback(ctx: AudioContext, opts?: PlaybackOpts): PlaybackLike;
   playEarcon(ctx: AudioContext, n: EarconName): void;
   vibrate(n: HapticName): void;
   /** Client TTS for local status and fallbacks. Null where speechSynthesis is missing. */
@@ -157,7 +163,7 @@ export function browserEnv(): WireEnv {
       const AC = globalThis.AudioContext ?? (globalThis as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
       return AC ? new AC() : null;
     },
-    createPlayback: (ctx) => new PlaybackQueue(ctx),
+    createPlayback: (ctx, opts) => new PlaybackQueue(ctx, undefined, opts),
     playEarcon,
     vibrate: (n) => { vibrate(n); },
     speech: synth
@@ -258,7 +264,22 @@ export function wireApp(opts: WireOpts): WiredApp {
   tryRun(() => env.requestPermissions());
 
   const socket = env.createSocket(opts.wsUrl ?? wsDefault());
-  const playback = ctx ? env.createPlayback(ctx) : NULL_PLAYBACK;
+  // Latency diagnostics: one "latency" line per AIRA answer, when its first chunk starts playing.
+  let lastMicChunkAt = 0; // wall clock of the last mic chunk sent
+  let lastUserFinalAt = 0; // wall clock of the last final user transcript
+  const playback = ctx
+    ? env.createPlayback(ctx, {
+        onPlayStart: (i) => {
+          const now = Date.now();
+          clientLog("latency", {
+            stage: "play_start",
+            ms: Math.round(i.msSinceFirstChunk),
+            ...(lastUserFinalAt ? { sinceUserFinalMs: now - lastUserFinalAt } : {}),
+            ...(lastMicChunkAt ? { sinceMicMs: now - lastMicChunkAt } : {}),
+          });
+        },
+      })
+    : NULL_PLAYBACK;
   const confirm = new ConfirmState();
   const queue = new OfflineQueue(env.queueStore());
   const timers = new Set<ReturnType<typeof setTimeout>>();
@@ -414,7 +435,7 @@ export function wireApp(opts: WireOpts): WiredApp {
       }
       if (m.t === "transcript" && m.role === "user") {
         // The owner is still speaking: no thinking sound yet. When he finishes, start the 1.5 s wait.
-        if (m.final) thinking.arm();
+        if (m.final) { thinking.arm(); lastUserFinalAt = Date.now(); }
         else thinking.disarm();
         if (mic || micOpen) armMicIdle();
       }
@@ -461,7 +482,15 @@ export function wireApp(opts: WireOpts): WiredApp {
     let lastLevel = 0;
     micOpen = env
       .startMic({
-        onChunk: (b64) => { api.send({ t: "audio", pcm16: b64 }); },
+        onChunk: (b64) => {
+          // Sent at once, one 32 ms chunk per call. Never queued behind a stalled socket: see MIC_MAX_BUFFERED_BYTES.
+          const buffered = socket.bufferedAmount?.() ?? 0;
+          if (buffered > MIC_MAX_BUFFERED_BYTES) {
+            clientLog("mic_drop", { buffered }, { minGapMs: 2000 });
+            return;
+          }
+          if (api.send({ t: "audio", pcm16: b64 })) lastMicChunkAt = Date.now();
+        },
         onLevel: (lv) => {
           if (Math.abs(lv - lastLevel) < 0.03 && lv !== 0) return; // ~30 chunks/s: redraw only on change
           lastLevel = lv;

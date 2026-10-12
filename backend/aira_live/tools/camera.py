@@ -27,7 +27,7 @@ from aira_live.contracts import RequestFrameMsg
 from aira_live.diag import diag, summarize, trunc
 from aira_live.i18n import t
 from aira_live.prompt import LANG_NAME
-from aira_live.session import Session, get_session
+from aira_live.session import REUSE_MIN_SIDE, Session, get_session
 from aira_live.vision import listing, observers
 from aira_live.vision.count import CountResult, count_in_frame
 from aira_live.vision.gemini import VisionError, generate_json, image_part
@@ -41,6 +41,8 @@ MAX_OBJECTS = 3           # "what's in front of me": up to three objects, neares
 FRAME_TIMEOUT_S = 6.0     # the phone may be busy with ambient frames; an owner question waits a little longer
 COUNT_FRAMES = 2          # a count is two frames 400 ms apart, counted in parallel, spoken only when they agree
 COUNT_INTERVAL_MS = 400
+LOOK_TIMEOUT_S = 4.0      # per-attempt model timeout for a look / path answer (one retry)
+READ_MIN_SIDE = 1280      # a reused frame for reading text must be a full-size owner frame
 DIST_ORDER = ("near", "arm", "far")
 # Labels that must never be spoken: people are never described, and a label can't smuggle in "safe".
 PERSON = re.compile(r"\b(person|people|man|woman|boy|girl|child|kid|customer|face|human|lady|guy)\b", re.I)
@@ -260,10 +262,10 @@ def _say_path(steps: list[str], objects: list[dict], lang: str) -> str:
 
 async def _read_twice(frame_b64: str, lang: str) -> dict:
     """Two independent reads (read + verify models) must agree, else "not sure" and the label hint."""
-    reads = []
-    for role in ("read", "verify"):
-        data = await generate_json(role, [image_part(frame_b64), READ_PROMPT], READ_SCHEMA, timeout_s=6.0)
-        reads.append((str(data.get("text") or "").strip(), _conf(data.get("confidence"))))
+    # The two reads are independent: run them at the same time (one model wait instead of two).
+    datas = await asyncio.gather(*(generate_json(role, [image_part(frame_b64), READ_PROMPT], READ_SCHEMA,
+                                                 timeout_s=6.0) for role in ("read", "verify")))
+    reads = [(str(data.get("text") or "").strip(), _conf(data.get("confidence"))) for data in datas]
     texts = [_WS.sub(" ", r[0]).casefold() for r in reads]
     conf = min(r[1] for r in reads)
     if not texts[0] or texts[0] != texts[1] or conf < MIN_CONF:
@@ -383,9 +385,12 @@ async def camera_ask(question: str) -> dict:
 
 
 async def _ask(s: Session, kind: str, question: str) -> dict:
-    count = 2 if kind == "path" else 1                         # a path needs a short burst: things move
-    frames = await s.request_frames("ask", count=count, interval_ms=400 if count > 1 else 0,
-                                    timeout_s=FRAME_TIMEOUT_S)
+    if kind == "path":                                         # a path needs a short burst: things move
+        frames = await s.request_frames("ask", count=2, interval_ms=400, timeout_s=FRAME_TIMEOUT_S)
+    else:  # a look or a read: a frame that arrived under a second ago is reused (no phone round trip)
+        # (small print needs a full 1280 px owner frame; a 640 px ambient frame is enough for a look)
+        frames = await s.look_frame("ask", timeout_s=FRAME_TIMEOUT_S,
+                                    min_side=READ_MIN_SIDE if kind == "read" else REUSE_MIN_SIDE)
     diag("camera_ask", stage="frames", session=s.session_id, kind=kind, lang=s.lang, question=trunc(question),
          frames=len(frames), bytes=[len(f.jpeg_b64) for f in frames], sizes=[[f.w, f.h] for f in frames])
     if not frames:
@@ -406,7 +411,10 @@ async def _ask(s: Session, kind: str, question: str) -> dict:
         parts = [image_part(f.jpeg_b64) for f in frames]
         parts.append(ASK_PROMPT.format(question=question, lang=LANG_NAME.get(s.lang, "English"),
                                        hints=", ".join(HINT_KEYS)))
-        data = await generate_json("point", parts, ASK_SCHEMA, thinking="low", timeout_s=6.0)
+        # The owner is waiting: low thinking, LOOK_TIMEOUT_S per attempt and a single retry (worst case ~8 s,
+        # not 3 x 6 s).
+        data = await generate_json("point", parts, ASK_SCHEMA, thinking="low", timeout_s=LOOK_TIMEOUT_S,
+                                   max_attempts=2)
     except VisionError as exc:
         log.warning("camera_ask: vision failed for %s: %s", s.shop_id, exc)
         diag("camera_ask", severity="WARNING", stage="error", session=s.session_id, kind=kind,

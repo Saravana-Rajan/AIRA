@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 import type { ClientMsg, ServerMsg } from "@aira/contracts";
-import { wireApp, type WireEnv, type WiredApp, MIC_IDLE_MS, THINKING_LOOP_MS } from "../src/core/wire";
+import { wireApp, type WireEnv, type WiredApp, MIC_IDLE_MS, THINKING_LOOP_MS, MIC_MAX_BUFFERED_BYTES } from "../src/core/wire";
+import type { PlaybackOpts } from "../src/voice/playback";
 import { app } from "../src/core/app";
 import { DEFAULT_SETTINGS, SETTINGS_KEY } from "../src/core/settings";
 import type { Settings } from "../src/core/types";
@@ -22,8 +23,10 @@ class FakeSocket {
   closed = false;
   hello: Extract<ClientMsg, { t: "hello" }> | null = null;
   sent: ClientMsg[] = [];
+  buffered = 0;
   private hs = new Set<(m: ServerMsg) => void>();
   constructor(public url: string) {}
+  bufferedAmount() { return this.buffered; }
   connect(h: Extract<ClientMsg, { t: "hello" }>) { this.hello = h; }
   send(m: ClientMsg) { if (!this.open) return false; this.sent.push(m); return true; }
   on(h: (m: ServerMsg) => void) { this.hs.add(h); return () => { this.hs.delete(h); }; }
@@ -39,13 +42,14 @@ function setup(over: { settings?: Partial<Settings>; env?: Partial<WireEnv>; con
   let onChunk: ((b64: string) => void) | null = null;
   let onLevel: ((l: number) => void) | null = null;
   const playback = { enqueue: vi.fn(), flush: vi.fn(), resume: vi.fn(), msSinceAudio: vi.fn(() => Infinity) };
+  let playbackOpts: PlaybackOpts = {};
   const win = new EventTarget();
   const doc = Object.assign(new EventTarget(), { hidden: false });
   const ctx = { resume: vi.fn(() => Promise.resolve()), close: vi.fn(() => Promise.resolve()) } as unknown as AudioContext;
   const env: WireEnv = {
     createSocket: (url) => (socket = new FakeSocket(url)) as never,
     createAudioContext: () => ctx,
-    createPlayback: () => playback,
+    createPlayback: (_ctx, opts) => { playbackOpts = opts ?? {}; return playback; },
     playEarcon: vi.fn(),
     vibrate: vi.fn(),
     speech: { speak: vi.fn(), cancel: vi.fn() },
@@ -70,6 +74,7 @@ function setup(over: { settings?: Partial<Settings>; env?: Partial<WireEnv>; con
   return {
     w, env, storage, playback, mic, win, doc, ctx,
     get socket() { return socket; },
+    get playbackOpts() { return playbackOpts; },
     chunk: (b64: string) => onChunk?.(b64),
     level: (l: number) => onLevel?.(l),
     earcons: () => (env.playEarcon as ReturnType<typeof vi.fn>).mock.calls.map((c) => c[1]),
@@ -320,6 +325,41 @@ describe("wireApp: hands-free start (startListening)", () => {
     a.w.onTalk();
     await flush();
     expect(a.env.startMic).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("wireApp: audio latency", () => {
+  it("drops a mic chunk instead of queuing it behind a stalled socket (old audio never piles up)", async () => {
+    const a = setup();
+    a.w.onTalk();
+    await flush();
+    a.chunk("AAAA");
+    expect(a.socket.sent.filter((m) => m.t === "audio")).toHaveLength(1);
+    a.socket.buffered = MIC_MAX_BUFFERED_BYTES + 1;
+    a.chunk("BBBB");
+    a.chunk("CCCC");
+    expect(a.socket.sent.filter((m) => m.t === "audio")).toHaveLength(1);
+    a.socket.buffered = 0;
+    a.chunk("DDDD");
+    expect(a.socket.sent.filter((m) => m.t === "audio").map((m) => (m as { pcm16: string }).pcm16)).toEqual(["AAAA", "DDDD"]);
+    expect(MIC_MAX_BUFFERED_BYTES).toBeLessThanOrEqual(32_000); // about half a second of 32 ms chunks
+  });
+
+  it("logs one latency line when AIRA's answer starts playing, with the ms since the user finished", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(10_000);
+    const a = setup();
+    a.w.onTalk();
+    await flush();
+    a.chunk("AAAA");
+    vi.setSystemTime(10_300);
+    a.socket.emit({ t: "transcript", role: "user", text: "two curd", final: true });
+    vi.setSystemTime(11_100);
+    a.socket.emit({ t: "audio", pcm24: "AAAA" });
+    a.playbackOpts.onPlayStart?.({ msSinceFirstChunk: 62, leadMs: 60 });
+    const logs = a.socket.sent.filter((m) => m.t === "log" && m.tag === "latency");
+    expect(logs).toHaveLength(1);
+    expect(logs[0]).toMatchObject({ t: "log", tag: "latency", data: { stage: "play_start", ms: 62, sinceUserFinalMs: 800, sinceMicMs: 1100 } });
   });
 });
 

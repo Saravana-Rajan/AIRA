@@ -30,5 +30,11 @@ TOOL_FUNCS: list[Callable[..., Awaitable[dict]]] = [
 ]
 TOOLS_BY_NAME: dict[str, Callable[..., Awaitable[dict]]] = {f.__name__: f for f in TOOL_FUNCS}
 # Live tools that run in the background (Live NON_BLOCKING behaviour): the conversation goes on while
-# delivery_count streams counts and sale_pay waits for the soundbox.
-NON_BLOCKING_TOOLS: frozenset[str] = frozenset({"delivery_count", "sale_pay"})
+# delivery_count streams counts and sale_pay waits for the soundbox, and every camera / vision tool that takes
+# over ~1.5 s (frames + a model call) runs while AIRA says a short holding line, so the owner hears AIRA within
+# a second or two instead of silence. The prompt (rule 17) forbids any number, price, count or path claim in
+# that holding line; the result is spoken when it lands (``tool_runtime`` sets the response scheduling).
+NON_BLOCKING_TOOLS: frozenset[str] = frozenset({
+    "delivery_count", "sale_pay",
+    "camera_ask", "product_identify", "product_find", "invoice_check", "supplier_pay",
+})
