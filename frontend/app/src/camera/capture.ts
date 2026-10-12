@@ -14,6 +14,16 @@ export const MAX_SIDE = 640;
 export const JPEG_QUALITY = 0.8;
 export const JPEG_RETRY_QUALITY = 0.6;
 export const MAX_B64 = 1_500_000;
+/** The monitor preview (purpose `preview`): a small, light picture 2-3 times a second, never seen by Gemini. */
+export const PREVIEW_MAX_SIDE = 480;
+export const PREVIEW_QUALITY = 0.5;
+
+/** How big and how good a frame of this purpose is. */
+export function frameSpec(purpose: FramePurpose): { maxSide: number; quality: number } {
+  return purpose === "preview"
+    ? { maxSide: PREVIEW_MAX_SIDE, quality: PREVIEW_QUALITY }
+    : { maxSide: MAX_SIDE, quality: JPEG_QUALITY };
+}
 
 export class CameraError extends Error {
   readonly code: CameraErrorCode;
@@ -189,13 +199,15 @@ export async function captureFrameIf(purpose: FramePurpose, keep?: FrameKeep): P
   const sw = src.width();
   const sh = src.height();
   if (!sw || !sh) throw new CameraError("no_frame");
-  const { w, h } = fitWithin(sw, sh);
+  const spec = frameSpec(purpose);
+  const { w, h } = fitWithin(sw, sh, spec.maxSide);
   const { canvas, ctx } = deps.makeCanvas(w, h);
   if (!ctx) throw new CameraError("no_canvas");
   src.draw(ctx, w, h);
   // Quality check on every 3rd frame (cheap enough at 640 px); the keep gate reads the same gray copy.
+  // Preview frames are for the dashboard only: they never earn the owner a "hold still" hint.
   let quality: "ok" | "dark" | "blurry" | "skipped" = "skipped";
-  const checkQuality = qualityListener !== null && ++qualityCounter % 3 === 0;
+  const checkQuality = purpose !== "preview" && qualityListener !== null && ++qualityCounter % 3 === 0;
   if (checkQuality || keep) {
     const img = ctx.getImageData(0, 0, w, h);
     const gray = toGray(img.data, w, h);
@@ -207,8 +219,8 @@ export async function captureFrameIf(purpose: FramePurpose, keep?: FrameKeep): P
     }
     if (keep && !keep(gray, w, h)) return null;
   }
-  let jpeg = await deps.encoder(canvas, JPEG_QUALITY);
-  if (jpeg.length > MAX_B64) jpeg = await deps.encoder(canvas, JPEG_RETRY_QUALITY);
+  let jpeg = await deps.encoder(canvas, spec.quality);
+  if (jpeg.length > MAX_B64) jpeg = await deps.encoder(canvas, Math.min(spec.quality, JPEG_RETRY_QUALITY));
   if (jpeg.length > MAX_B64) throw new CameraError("too_large");
   // Diagnostics: the frame about to go out, by size only (never the jpeg). At most a few lines a second.
   clientLog("frame", { purpose, bytes: jpeg.length, w, h, quality, demo: demo !== null }, { minGapMs: 250 });

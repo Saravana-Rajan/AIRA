@@ -90,7 +90,7 @@ async def test_client_audio_and_text_reach_the_backend(mk_session):
     await bridge.send_text("hello")
     await bridge.speak_notice("Sakthi vendor confirmed: delivery at 6 pm.")
     assert b.sent_audio == [b"\x00\x01"] and b.sent_text[0] == "hello"
-    assert b.sent_text[1].startswith("[NOTICE FOR THE SHOPKEEPER]") and "6 pm" in b.sent_text[1]
+    assert b.sent_text[1].startswith("[SYSTEM NOTE] Say exactly, word for word") and "6 pm" in b.sent_text[1]
     assert b.system_prompt == "prompt" and b.tools is tools and b.started_with == [None]
     await bridge.close()
     assert b.closed
@@ -296,7 +296,8 @@ async def test_a_long_press_while_idle_never_swallows_the_next_notice(mk_session
     b.push(LiveEvent("turn_complete"))
     await wait_until(lambda: _of(rec, "audio"))
     assert _audio(rec) == [b"notice"]
-    assert [m.text for m in _of(rec, "transcript")] == ["Sakthi vendor delivers at 6 pm."]
+    # The words are the notice itself, which the server captioned when it was raised: not captioned twice.
+    assert [m.text for m in _of(rec, "transcript")] == []
     await bridge.close()
 
 

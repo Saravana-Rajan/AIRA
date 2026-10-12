@@ -6,6 +6,7 @@
   {"t":"frame","id":"f2","jpeg":"/9j/4AAQ","w":1280,"h":720,"ts":1760000000400,"purpose":"cash"},
   {"t":"frame","id":"f3","jpeg":"/9j/4AAQ","w":640,"h":480,"ts":1760000003400,"purpose":"describe"},
   {"t":"frame","id":"f4","jpeg":"/9j/4AAQ","w":640,"h":480,"ts":1760000004000,"purpose":"identify_held"},
+  {"t":"frame","id":"f5","jpeg":"/9j/4AAQ","w":480,"h":270,"ts":1760000004400,"purpose":"preview"},
   {"t":"text","text":"order 30 litres sakthi curd"},
   {"t":"event","name":"fingertip_in_target","data":{"frameId":"f1","dwellMs":500}},
   {"t":"event","name":"visibility","data":{"state":"hidden"}},

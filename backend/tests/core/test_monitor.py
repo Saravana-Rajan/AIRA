@@ -775,6 +775,7 @@ def test_monitor_sees_live_transcripts_with_customer_role(real_mode, monkeypatch
         with client.websocket_connect("/ws", headers=ORIGIN) as ws:
             ws.send_json(HELLO)
             sid = ws.receive_json()["sessionId"]
+            assert ws.receive_json()["t"] == "request_frame"  # the watched session streams its preview
             _wait(lambda: len(real_mode) == 1)
             backend = real_mode[0]
             backend.push(LiveEvent("input_transcript", text="how much milk is left", final=True))

@@ -1,6 +1,6 @@
 // frontend/app/test/camera.requests.test.ts
 import { describe, it, expect, vi } from "vitest";
-import { createFrameRequestHandler, CONTINUOUS_FPS, DESCRIBE_FPS, continuousFps, MAX_BURST, MAX_INTERVAL_MS, defaultSleep } from "../src/camera/requests";
+import { createFrameRequestHandler, CONTINUOUS_FPS, DESCRIBE_FPS, PREVIEW_FPS, continuousFps, MAX_BURST, MAX_INTERVAL_MS, defaultSleep } from "../src/camera/requests";
 import { CameraError } from "../src/camera/capture";
 
 vi.mock("../src/core/app", () => ({ app: { send: vi.fn(), speak: vi.fn(), earcon: vi.fn(), settings: { lang: "en" } } }));
@@ -62,6 +62,17 @@ describe("request_frame handler", () => {
     expect(s.deps.startContinuous).toHaveBeenLastCalledWith("guide", CONTINUOUS_FPS);
     await s.handle({ t: "request_frame", purpose: "describe", stop: true });
     expect(s.stops).toEqual(["describe"]);                                 // guide keeps running
+  });
+
+  it("the monitor preview streams at 2-3 frames a second and stops like any other purpose", async () => {
+    expect(PREVIEW_FPS).toBeGreaterThanOrEqual(2);
+    expect(PREVIEW_FPS).toBeLessThanOrEqual(3);
+    expect(continuousFps("preview")).toBe(PREVIEW_FPS);
+    const s = setup();
+    await s.handle({ t: "request_frame", purpose: "preview", continuous: true });
+    expect(s.deps.startContinuous).toHaveBeenCalledWith("preview", PREVIEW_FPS);
+    await s.handle({ t: "request_frame", purpose: "preview", stop: true });
+    expect(s.stops).toEqual(["preview"]);
   });
 
   it("a second continuous request of the same purpose replaces the first", async () => {

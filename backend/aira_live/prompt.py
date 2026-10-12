@@ -63,13 +63,14 @@ def language_rule(lang: str, languages=None) -> str:
              "Indian-language words that the transcript shows in Latin letters (amo, aama, illa, venum, paal, "
              "haan, nahi) are still that language, not English.")
     return (
-        "LANGUAGE: Always reply in the language the speaker used in their last utterance. Keep the current "
-        "language unless the speaker clearly speaks a full sentence in another language; a short reply, a "
-        f"number, 'ok' or a product name never changes it. {latin} "
+        f"LANGUAGE: Stay in {name}, the session language, and reply in it. Follow the speaker only when he "
+        "clearly speaks a full sentence in another language and keeps speaking it. NEVER switch language "
+        "because of a single short or unclear word: a greeting that sounds foreign ('Hola' is a misheard "
+        f"'Hello'), a short reply, a number, 'ok' or a product name never changes it. {latin} "
         f"Never switch language mid-reply. Mixed {mix} is fine and natural; so is any language mixed with "
         f"English. Never ask which language. Until the speaker has spoken, use {name}. "
         "When a tool's 'say' text, a notice or a correction is written in another language, say it in the "
-        "speaker's language."
+        "session language."
         + (f" {expected_rule(languages)}" if languages else "")
     )
 
@@ -137,10 +138,11 @@ RULES = (
     "4. Customers may also speak. Only the owner can confirm actions.",
     "5. Never describe or identify people. Never say a currency note is real or fake.",
     (
-        "6. Messages starting with [NOTICE FOR THE SHOPKEEPER] or [CONFIRMATION] come from the system: relay or "
-        "acknowledge them briefly. A message starting with \"Correction needed:\" comes from the safety checker: "
-        "correct yourself in one short sentence. A message starting with [SYSTEM NOTE] is an instruction from "
-        "the system: follow it and never read it out."
+        "6. A message starting with [CONFIRMATION] comes from the system: acknowledge it briefly. A message "
+        "starting with \"Correction needed:\" comes from the safety checker: correct yourself in one short "
+        "sentence. A message starting with [SYSTEM NOTE] is an instruction from the system: follow it and never "
+        "read it out. \"[SYSTEM NOTE] Say exactly, word for word, in <language>: «...»\" means say the quoted "
+        "line once, exactly as written, in that language, and nothing else."
     ),
     (
         "7. For a customer sale, first call product_find with count_needed set to how many packs to pick, then "
@@ -170,9 +172,10 @@ RULES = (
     (
         "12. Ambient mode is on by default: when the owner holds something up to the camera, the system itself "
         "says what it is and its price, and as he moves it says each new object that comes into view. These "
-        "ambient announcements reach you as [NOTICE FOR THE SHOPKEEPER] messages: say the notice once, in the "
-        "speaker's language, and do not repeat it afterwards, do not add to it, and do not call camera_ask or "
-        "product_identify for it. It never means the way is safe. \"Stop describing\", \"quiet mode\", \"be "
+        "ambient announcements reach you as \"[SYSTEM NOTE] Say exactly, word for word, in <language>: «...»\" "
+        "messages: say the quoted line once, exactly, in that language, and do not repeat it afterwards, do not "
+        "add to it, and do not call camera_ask or product_identify for it. It never means the way is safe. "
+        "\"Stop describing\", \"quiet mode\", \"be "
         "quiet\" and \"describe again\" are handled by the system, which confirms aloud; when you hear them, say "
         "nothing more. Call describe_mode (on=true for \"describe as I walk\", on=false for \"stop describing\") "
         "only when the owner asks explicitly and the system did not confirm."
@@ -239,10 +242,54 @@ def catalog_facts(products: list[dict]) -> dict:
 
 _LAST_FACTS: dict[str, dict] = {}
 
+# Words the Live transcription should expect (``live_bridge.transcription_config``): the shop, its brands,
+# products, their spoken aliases, its suppliers and the money words. Capped so the config stays small.
+MAX_VOCABULARY = 120
+MAX_VOCABULARY_TERM = 40
+FIXED_VOCABULARY = ("AIRA", "rupees", "UPI")
+
+
+def catalog_vocabulary(shop: dict, products: list[dict], suppliers: list[dict]) -> list[str]:
+    """Unique, ordered transcription hints from the catalog, at most ``MAX_VOCABULARY`` of them."""
+    out: list[str] = []
+    seen: set[str] = set()
+
+    def add(term) -> None:
+        term = " ".join(str(term or "").split())[:MAX_VOCABULARY_TERM]
+        key = term.casefold()
+        if term and key not in seen and len(out) < MAX_VOCABULARY:
+            seen.add(key)
+            out.append(term)
+
+    for term in FIXED_VOCABULARY:
+        add(term)
+    add((shop or {}).get("name"))
+    for p in products:
+        add(p.get("brand"))
+        add(_label(p))
+        add(p.get("name"))
+        for names in (p.get("aliases") or {}).values():
+            for a in names or []:
+                add(a)
+    for s in suppliers:
+        add(s.get("name"))
+        for names in (s.get("aliases") or {}).values():
+            for a in names or []:
+                add(a)
+    return out
+
+
+_LAST_VOCAB: dict[str, list[str]] = {}
+
 
 def last_catalog_facts(shop_id: str) -> dict:
     """``catalog_facts`` of the products in the last prompt built for ``shop_id`` ({} before the first build)."""
     return _LAST_FACTS.get(shop_id, {})
+
+
+def last_vocabulary(shop_id: str) -> list[str]:
+    """``catalog_vocabulary`` of the last prompt built for ``shop_id`` (the fixed words before the first build)."""
+    return list(_LAST_VOCAB.get(shop_id) or FIXED_VOCABULARY)
 
 
 async def build_system_prompt(shop_id: str, lang: str, verbosity: str) -> str:
@@ -254,4 +301,5 @@ async def build_system_prompt(shop_id: str, lang: str, verbosity: str) -> str:
     suppliers = [(d.to_dict() or {}) | {"id": d.id} async for d in shop_ref.collection("suppliers").stream()
                  if (d.to_dict() or {}).get("active") is not False]
     _LAST_FACTS[shop_id] = catalog_facts(products)
+    _LAST_VOCAB[shop_id] = catalog_vocabulary(shop, products, suppliers)
     return render_prompt(shop, products, suppliers, lang, verbosity)

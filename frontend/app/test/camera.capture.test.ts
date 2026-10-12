@@ -5,7 +5,7 @@ const { app } = vi.hoisted(() => ({
   app: { send: vi.fn((_m: unknown) => true), speak: vi.fn(), earcon: vi.fn(), haptic: vi.fn(), settings: { lang: "en" } },
 }));
 vi.mock("../src/core/app", () => ({ app }));
-import { captureFrame, captureFrameIf, startContinuous, fitWithin, CameraError, __setCaptureDeps, setQualityListener, MAX_B64 } from "../src/camera/capture";
+import { captureFrame, captureFrameIf, startContinuous, fitWithin, frameSpec, CameraError, __setCaptureDeps, setQualityListener, MAX_B64, PREVIEW_MAX_SIDE, PREVIEW_QUALITY } from "../src/camera/capture";
 
 const fakeCanvas = () => ({ canvas: {} as HTMLCanvasElement, ctx: { getImageData: () => ({ data: new Uint8ClampedArray(4 * 4 * 4).fill(200) }) } as unknown as CanvasRenderingContext2D });
 
@@ -34,6 +34,28 @@ describe("captureFrame", () => {
     expect(Object.keys(f).sort()).toEqual(["h", "id", "jpeg", "purpose", "t", "ts", "w"]);
     expect(typeof f.id).toBe("string");
     expect(typeof f.ts).toBe("number");
+  });
+  it("a monitor preview frame is small (480 px) and light (quality 0.5); other purposes keep 640 px / 0.8", async () => {
+    expect(PREVIEW_MAX_SIDE).toBe(480);
+    expect(PREVIEW_QUALITY).toBe(0.5);
+    expect(frameSpec("preview")).toEqual({ maxSide: 480, quality: 0.5 });
+    expect(frameSpec("guide")).toEqual({ maxSide: 640, quality: 0.8 });
+    const enc = vi.fn(async (_c: HTMLCanvasElement, _q: number) => "AAAA");
+    __setCaptureDeps({ encoder: enc });
+    const p = await captureFrame("preview");
+    expect(p).toMatchObject({ t: "frame", w: 480, h: 270, purpose: "preview" });
+    expect(enc).toHaveBeenLastCalledWith(expect.anything(), 0.5);
+    const g = await captureFrame("guide");
+    expect(g).toMatchObject({ w: 640, h: 360, purpose: "guide" });
+    expect(enc).toHaveBeenLastCalledWith(expect.anything(), 0.8);
+  });
+  it("preview frames never trigger a camera quality hint", async () => {
+    const hints: string[] = [];
+    setQualityListener((h) => hints.push(h));
+    __setCaptureDeps({ makeCanvas: () => ({ canvas: {} as HTMLCanvasElement, ctx: { getImageData: () => ({ data: new Uint8ClampedArray(4 * 4 * 4).fill(0) }) } as unknown as CanvasRenderingContext2D }) });
+    for (let i = 0; i < 6; i++) await captureFrame("preview");
+    expect(hints).toEqual([]);
+    setQualityListener(null);
   });
   it("gives every frame a unique id", async () => {
     const a = await captureFrame("ask");

@@ -331,6 +331,7 @@ async def ws_endpoint(ws: WebSocket) -> None:
                 if not settings.mock and not is_camera_session(session):  # a shop camera only sends frames
                     bridge = await _start_live(session, handle)
                 await send(ReadyMsg(session_id=session.session_id, resume=session.session_id, mock=settings.mock))
+                await monitor.preview_on_join(session)  # the dashboard is watching: stream the small preview
                 if bridge is not None:  # ambient mode (on by default) starts shortly after the greeting
                     await _ambient_hook("on_session_start", session)
             elif isinstance(msg, StopMsg):  # long-press: stop guidance and the answer being spoken
@@ -363,6 +364,11 @@ async def ws_endpoint(ws: WebSocket) -> None:
                     await bridge.send_audio(msg.pcm16)
             elif isinstance(msg, FrameMsg):
                 frame = Frame(id=msg.id, jpeg_b64=msg.jpeg, w=msg.w, h=msg.h, ts=msg.ts, purpose=msg.purpose)
+                if msg.purpose == monitor.PREVIEW_PURPOSE:
+                    # The monitor's own stream: relayed to the dashboard only, never stored for the tools and
+                    # never shown to Gemini.
+                    await monitor.publish_frame(session, frame)
+                    continue
                 session.frames.add(frame)
                 diag("frame", session=session.session_id, purpose=msg.purpose, id=msg.id, bytes=len(msg.jpeg),
                      w=msg.w, h=msg.h)

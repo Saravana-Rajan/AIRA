@@ -22,7 +22,8 @@ from aira_live import monitor, safety
 from aira_live.contracts import AudioOutMsg, CueMsg, ErrorMsg, TranscriptMsg
 from aira_live.diag import diag, trunc
 from aira_live.i18n import t
-from aira_live.prompt import last_catalog_facts, unclear_note
+from aira_live.i18n.detect import detect_lang, latin_lang
+from aira_live.prompt import LANG_NAME, last_catalog_facts, last_vocabulary, unclear_note
 from aira_live.session import NOTICE_DEDUPE_S, notice_key
 
 if TYPE_CHECKING:
@@ -30,7 +31,14 @@ if TYPE_CHECKING:
 
 log = logging.getLogger(__name__)
 
-NOTICE_PREFIX = "[NOTICE FOR THE SHOPKEEPER]"
+# A notice (vendor reply, alert, ambient line) goes to Live as a system note to say word for word; the server has
+# already captioned it, so the model's re-speak is heard but not captioned a second time (``_echo_of``).
+NOTICE_PREFIX = "[SYSTEM NOTE] Say exactly, word for word"
+NOTICE_ECHO_S = 20.0      # a notice waits this long for the model's re-speak before it is forgotten
+# Reply-language lock: an answer outside the session language and the shop's languages is corrected at once,
+# and its caption is hidden; one correction per LANG_LOCK_GAP_S so a wordy model never gets a flood of notes.
+LANG_LOCK_GAP_S = 5.0
+CAPTION_HOLD_WORDS = 4    # aira partial captions are held until this many words can be judged
 _monotonic = time.monotonic  # tests swap in a clock
 
 EventKind = Literal["audio", "input_transcript", "output_transcript", "interrupted", "turn_complete",
@@ -47,6 +55,8 @@ class LiveEvent:
     # turn_complete only: the model is still answering the same prompt in another turn
     # (Live ``interaction_status`` IN_PROGRESS), so the answer is not over yet.
     more: bool = False
+    # input_transcript only: the diarization speaker label, when the SDK gives one ("speaker_1", ...).
+    speaker: str | None = None
 
 
 class LiveBackend(Protocol):
@@ -120,6 +130,13 @@ class LiveBridge:
         self._in_partial = ""
         self._out_final: list[str] = []
         self._out_partial = ""
+        # Captions of the answer being spoken: "hold" (a few words are not judged yet, or a notice echo is
+        # pending), "stream" (judged fine: partials go out as they come) or "hide" (wrong language, or the
+        # re-speak of a notice the server already captioned).
+        self._caption: Literal["hold", "stream", "hide"] = "hold"
+        self._echo: deque[tuple[str, float]] = deque()  # notices told to Live, awaiting the model's re-speak
+        self._echo_hit = False  # a pending notice was recognised in the turn being spoken
+        self._last_lock_at = float("-inf")
         self._recent_results: deque[list[dict]] = deque(maxlen=self.RECENT_RESULT_TURNS)
         self._listener_tasks: set[asyncio.Task] = set()
 
@@ -211,8 +228,12 @@ class LiveBridge:
             return
         self._notices[key] = now
         diag("notice", session=self.session.session_id, text=trunc(text), deduped=False)
-        await self.send_text(f"{NOTICE_PREFIX} Tell the shopkeeper briefly, in the language he last spoke: {text}",
-                             _notice=True)
+        self._echo.append((key, now))
+        self._caption = "hold"  # the re-speak is captioned by the server already: hold until it is recognised
+        await self.send_text(f"{NOTICE_PREFIX}, in {self._lang_name()}: «{text}»", _notice=True)
+
+    def _lang_name(self) -> str:
+        return LANG_NAME.get(str(self.session.lang or "en"), "English")
 
     def hard_stop(self) -> None:
         """Long-press: drop the rest of the current answer (audio + captions).
@@ -294,15 +315,7 @@ class LiveBridge:
             self._answering = True
             if self._muted:  # the owner stopped this answer: he never hears these words
                 return
-            # Live streams fragments, then (usually) the whole sentence with final=True.
-            if ev.final:
-                self._out_final.append(ev.text)
-                self._out_partial = ""
-                diag("transcript", session=s.session_id, role="aira", text=trunc(ev.text), final=True)
-            else:
-                self._out_partial += ev.text
-            if ev.text:
-                await s.send(TranscriptMsg(role="aira", text=ev.text, final=ev.final))
+            await self._output_caption(ev)
         elif ev.kind == "input_transcript":
             self._muted = False  # a new question has started
             lang = unclear = None
@@ -311,9 +324,11 @@ class LiveBridge:
                 # AIRA follows the speaker: the catalog and the phone's labels switch with him, but only when he
                 # clearly speaks another language (sticky: "Amo" in Latin letters is still Tamil).
                 lang, unclear = await self._judge(utterance)
+                if ev.speaker:  # diarization: the monitor tells the owner from a customer by voice
+                    monitor.note_speaker(s.session_id, ev.speaker)
                 self._notify_listeners(utterance)
                 diag("transcript", session=s.session_id, role="user", text=trunc(utterance), final=True,
-                     lang=lang, unclear=unclear)
+                     lang=lang, unclear=unclear, speaker=ev.speaker)
             else:
                 self._in_partial += ev.text
             if ev.text:
@@ -321,6 +336,7 @@ class LiveBridge:
         elif ev.kind == "interrupted":
             # Live cut the answer (barge-in or a new prompt): the stopped answer is over, the next one is new.
             self._muted = self._answering = False
+            self._caption, self._out_partial = "hold", ""
             diag("live", event="interrupted", session=s.session_id)
             await s.send(CueMsg(cue="interrupted"))
         elif ev.kind == "turn_complete":
@@ -335,12 +351,105 @@ class LiveBridge:
             if ev.more:  # the same answer goes on in another model turn
                 return
             self._muted = self._answering = False
+            self._caption = "hold"
+            if self._echo_hit:  # the notice was said in this turn: nothing later is its echo
+                self._echo.clear()
+                self._echo_hit = False
             monitor.count_turn(s.session_id)
             await self._end_turn()
         elif ev.kind == "resumption_handle":
             if ev.handle:
                 self._handle = ev.handle
         # "go_away" is handled by _pump (reconnect with the last handle).
+
+    # ---------- aira captions: one line per notice, reply-language lock ----------
+    async def _output_caption(self, ev: LiveEvent) -> None:
+        """Live streams fragments, then the whole sentence with final=True. Captions are held until a few words
+        can be judged (or until the final while a notice echo is pending), hidden for an answer in the wrong
+        language (with a correction to Live) or for the re-speak of a notice the server captioned already, and
+        streamed otherwise."""
+        s = self.session
+        if ev.final:
+            text = ev.text or self._out_partial
+            self._out_final.append(ev.text)
+            self._out_partial = ""
+            diag("transcript", session=s.session_id, role="aira", text=trunc(ev.text), final=True)
+            mode = self._caption
+            self._caption = "hold"  # the next sentence of this turn is judged afresh
+            if mode == "hide" or not text:
+                return
+            if await self._lang_lock(text):
+                self._caption = "hide"
+                return
+            if self._echo_of(text) is not None:
+                diag("notice_echo", session=s.session_id, text=trunc(text))
+                return
+            await s.send(TranscriptMsg(role="aira", text=text, final=True))
+            return
+        self._out_partial += ev.text
+        if self._caption == "hide" or not ev.text:
+            return
+        if self._caption == "stream":
+            await s.send(TranscriptMsg(role="aira", text=ev.text, final=False))
+            return
+        if self._echo_pending() or len(self._out_partial.split()) < CAPTION_HOLD_WORDS:
+            return  # keep holding: a notice echo may be coming, or too few words to judge
+        if await self._lang_lock(self._out_partial):
+            self._caption = "hide"
+            return
+        self._caption = "stream"
+        await s.send(TranscriptMsg(role="aira", text=self._out_partial, final=False))
+
+    def _echo_pending(self) -> bool:
+        now = _monotonic()
+        while self._echo and now - self._echo[0][1] > NOTICE_ECHO_S:
+            self._echo.popleft()
+        return bool(self._echo)
+
+    def _echo_of(self, text: str) -> str | None:
+        """The pending notice ``text`` is the model's re-speak of, or None. The model may split a notice into
+        sentences or reword it a little, so a sentence contained in the notice or sharing most of its words
+        counts. Matched notices stay pending until the turn ends or they expire."""
+        if not self._echo_pending():
+            return None
+        key = notice_key(text)
+        words = set(key.split())
+        if not words:
+            return None
+        for notice, _at in self._echo:
+            n_words = set(notice.split())
+            shared = len(words & n_words)
+            if key == notice or key in notice or notice in key or \
+                    (shared >= 2 and shared / max(1, min(len(words), len(n_words))) >= 0.5):
+                self._echo_hit = True  # the notice was said: forgotten once this turn ends
+                return notice
+        return None
+
+    def _reply_lang(self, text: str) -> str:
+        lang = detect_lang(text, str(self.session.lang or "en"))
+        if lang == "en":
+            lang = latin_lang(text) or "en"
+        return lang
+
+    async def _lang_lock(self, text: str) -> bool:
+        """True when ``text`` is in a language that is neither the session's nor one of the shop's (English
+        always passes: product names and mixed sentences are normal). Sends the correction, at most one per
+        ``LANG_LOCK_GAP_S``, and records it."""
+        s = self.session
+        heard = self._reply_lang(text)
+        expected = str(s.lang or "en")
+        allowed = {expected, "en", *[str(c).lower().split("-")[0] for c in (getattr(s, "languages", None) or ())]}
+        if heard in allowed:
+            return False
+        now = _monotonic()
+        diag("lang_lock", severity="WARNING", session=s.session_id, heard=heard, expected=expected,
+             text=trunc(text), corrected=now - self._last_lock_at > LANG_LOCK_GAP_S)
+        monitor.event(s, "lang_lock", heard=heard, expected=expected)
+        if now - self._last_lock_at > LANG_LOCK_GAP_S:
+            self._last_lock_at = now
+            name = self._lang_name()
+            await self.send_text(f"[SYSTEM NOTE] Reply only in {name}; the owner speaks {name}.")
+        return True
 
     async def _judge(self, utterance: str) -> tuple[str, bool | None]:
         """Follow the speaker's language. A transcript in a language the shop does not usually speak (shop doc
@@ -418,7 +527,9 @@ def translate(e) -> list[LiveEvent]:
         out.append(LiveEvent("interrupted"))
     it = getattr(e, "input_transcription", None)
     if it is not None and getattr(it, "text", None):
-        out.append(LiveEvent("input_transcript", text=it.text, final=bool(getattr(it, "finished", False))))
+        speaker = getattr(it, "speaker_label", None)  # diarization, when the SDK (and ADK) pass it on
+        out.append(LiveEvent("input_transcript", text=it.text, final=bool(getattr(it, "finished", False)),
+                             speaker=str(speaker) if speaker else None))
     ot = getattr(e, "output_transcription", None)
     if ot is not None and getattr(ot, "text", None):
         out.append(LiveEvent("output_transcript", text=ot.text, final=bool(getattr(ot, "finished", False))))
@@ -435,6 +546,60 @@ def translate(e) -> list[LiveEvent]:
     if getattr(e, "turn_complete", False):
         out.append(LiveEvent("turn_complete", more=_in_progress(getattr(e, "interaction_status", None))))
     return out
+
+
+# Base language codes -> the BCP-47 tags the transcription expects (Indian variants for the shop's languages).
+TRANSCRIPTION_LANG = {
+    "ta": "ta-IN", "en": "en-IN", "hi": "hi-IN", "te": "te-IN", "kn": "kn-IN", "ml": "ml-IN", "bn": "bn-IN",
+    "gu": "gu-IN", "pa": "pa-IN", "or": "or-IN", "mr": "mr-IN",
+}
+
+
+def transcription_language_codes(languages) -> list[str]:
+    out: list[str] = []
+    for code in languages or ():
+        base = str(code or "").strip().lower().split("-")[0]
+        tag = TRANSCRIPTION_LANG.get(base, str(code).strip())
+        if tag and tag not in out:
+            out.append(tag)
+    return out
+
+
+def transcription_config(types, *, languages=(), vocabulary=(), diarization: bool = True):
+    """``types.AudioTranscriptionConfig`` for the input audio: language hints (``language_codes``, or the older
+    ``language_hints``), the catalog as ``custom_vocabulary`` / ``adaptation_phrases`` and ``diarization``.
+
+    Every field is set only when the installed SDK's config has it (``model_fields``), so an older google-genai
+    and the test stubs get a plain config. Checked against google-genai 2.29: ``language_codes: list[str]``,
+    ``language_hints: LanguageHints`` (deprecated), ``custom_vocabulary: list[str]``,
+    ``adaptation_phrases: list[str]``, ``diarization: bool``.
+    """
+    cls = types.AudioTranscriptionConfig
+    fields = getattr(cls, "model_fields", None) or {}
+    kw: dict = {}
+    codes = transcription_language_codes(languages)
+    if codes:
+        if "language_codes" in fields:
+            kw["language_codes"] = codes
+        elif "language_hints" in fields and hasattr(types, "LanguageHints"):
+            kw["language_hints"] = types.LanguageHints(language_codes=codes)
+    vocab = [str(v) for v in vocabulary if v]
+    if vocab:
+        if "custom_vocabulary" in fields:
+            kw["custom_vocabulary"] = list(vocab)
+        if "adaptation_phrases" in fields:
+            kw["adaptation_phrases"] = list(vocab)
+    if diarization and "diarization" in fields:
+        kw["diarization"] = True
+    return cls(**kw)
+
+
+def input_transcription_config(types, session):
+    """The input transcription config of ``session``: the shop's expected languages (else the session language)
+    and the vocabulary of the last prompt built for its shop."""
+    languages = list(getattr(session, "languages", None) or []) or [str(getattr(session, "lang", "") or "en")]
+    return transcription_config(types, languages=languages,
+                                vocabulary=last_vocabulary(str(getattr(session, "shop_id", "") or "")))
 
 
 def live_extras(types) -> dict:
@@ -479,7 +644,7 @@ class AdkLiveBackend:
         run_config = RunConfig(
             streaming_mode=StreamingMode.BIDI,
             response_modalities=["AUDIO"],
-            input_audio_transcription=types.AudioTranscriptionConfig(),
+            input_audio_transcription=input_transcription_config(types, self._s),
             output_audio_transcription=types.AudioTranscriptionConfig(),
             session_resumption=types.SessionResumptionConfig(handle=resume_handle),
             context_window_compression=types.ContextWindowCompressionConfig(

@@ -68,15 +68,16 @@ def test_i18n_gives_the_english_line_for_any_language_without_a_catalog():
 def test_prompt_tells_live_to_follow_the_speaker_and_never_pin_a_language():
     p = render_prompt({"name": "Sunrise Dairy"}, [], [], "ta", "short")
     low = p.lower()
-    assert "language the speaker used in their last utterance" in low
+    assert "stay in tamil, the session language" in low
     assert "full sentence in another language" in low  # sticky: a short reply never flips the language
+    assert "never switch language because of a single short or unclear word" in low  # "Hola" is not Spanish
     assert "never ask which language" in low
     assert "tamil-english" in low
     assert "default language" not in low and "always speak" not in low
     # the hello language is only the hint for the first line, before anyone has spoken
     assert "until the speaker has spoken, use tamil" in low
-    # fixed English lines (tool 'say' texts, notices) are spoken in the speaker's language, never dropped
-    assert "speaker's language" in low
+    # fixed English lines (tool 'say' texts, notices) are spoken in the session language, never dropped
+    assert "say it in the session language" in low
 
 
 def test_prompt_first_line_hint_covers_japac_and_falls_back_to_english():
@@ -124,7 +125,8 @@ async def test_notice_is_spoken_in_the_language_the_speaker_last_used(mk_session
     try:
         await bridge.speak_notice(t("jobs.expired_alert", s.lang, items="curd"))
         sent = b.sent_text[-1]
-        assert "Expired: curd" in sent and "last spoke" in sent and "his language" not in sent
+        # the note names the session language, so a Japanese session hears the alert in Japanese
+        assert "Expired: curd" in sent and "in Japanese" in sent and sent.startswith("[SYSTEM NOTE] Say exactly")
     finally:
         await bridge.close()
 

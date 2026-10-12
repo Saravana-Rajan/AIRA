@@ -9,9 +9,13 @@ import { clientLog } from "../core/clientLog";
 export const CONTINUOUS_FPS = 2;
 /** Describe mode: one frame every 3 s at most (the capture gate drops frames where nothing changed). */
 export const DESCRIBE_FPS = 1 / 3;
+/** The dashboard's live preview (while a monitor watches): small frames, 2-3 a second, relayed to the monitor only. */
+export const PREVIEW_FPS = 2.5;
 
 export function continuousFps(purpose: FramePurpose): number {
-  return purpose === "describe" ? DESCRIBE_FPS : CONTINUOUS_FPS;
+  if (purpose === "describe") return DESCRIBE_FPS;
+  if (purpose === "preview") return PREVIEW_FPS;
+  return CONTINUOUS_FPS;
 }
 /** Upper bounds so a malformed server burst can't keep the camera busy for minutes. */
 export const MAX_BURST = 10;

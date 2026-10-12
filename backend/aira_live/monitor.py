@@ -120,16 +120,21 @@ _HUB: dict[str, list[Subscriber]] = {}
 _LAST_FRAME: dict[str, float] = {}   # session_id -> when its last frame went out
 _SPEAKER: dict[str, str] = {}        # session_id -> the speaker a sale tool named ("owner" | "customer")
 _STATS_TASKS: dict[str, asyncio.Task] = {}  # shop_id -> the stats ticker while the shop is watched
+_PREVIEW_TASKS: set[asyncio.Task] = set()   # preview start/stop requests on their way to the phones
 
 
 def reset() -> None:
     """Forget every monitor and per-session state (tests)."""
     for task in _STATS_TASKS.values():
         task.cancel()
+    for task in list(_PREVIEW_TASKS):
+        task.cancel()
     _STATS_TASKS.clear()
+    _PREVIEW_TASKS.clear()
     _HUB.clear()
     _LAST_FRAME.clear()
     _SPEAKER.clear()
+    _VOICES.clear()
     _COUNTERS.clear()
 
 
@@ -140,6 +145,7 @@ def subscribe(shop_id: str) -> Subscriber:
     subs.append(sub)
     if len(subs) == 1:
         _start_stats(shop_id)
+        _schedule_preview(shop_id, start=True)
     return sub
 
 
@@ -150,6 +156,71 @@ def unsubscribe(sub: Subscriber) -> None:
         if not subs:
             del _HUB[sub.shop_id]
             _stop_stats(sub.shop_id)
+            _schedule_preview(sub.shop_id, start=False)
+
+
+# ---------- the preview stream ----------
+# While at least one monitor watches a shop, each of its phone sessions streams small ``preview`` frames
+# (the phone: 2-3 fps, <= 480 px, JPEG quality 0.5). The server relays them to the monitors only (``main.py``
+# hands them to ``publish_frame`` and nowhere else: never stored, never seen by Gemini). The last monitor
+# leaving stops the stream; a session that joins a watched shop starts it (``preview_on_join``).
+PREVIEW_PURPOSE = "preview"
+
+
+def _preview_msg(start: bool) -> RequestFrameMsg:
+    return RequestFrameMsg(purpose=PREVIEW_PURPOSE, continuous=True) if start \
+        else RequestFrameMsg(purpose=PREVIEW_PURPOSE, stop=True)
+
+
+def _streams_frames(session) -> bool:
+    """A phone session; a shop camera (uid ``camera:<name>``) only sends frames and is never asked."""
+    try:
+        from aira_live.cameras.sources import is_camera_session  # lazy: cameras import the session machinery
+        return not is_camera_session(session)
+    except Exception:  # noqa: BLE001
+        return not str(getattr(session, "uid", "") or "").startswith("camera:")
+
+
+async def _send_preview(session, start: bool) -> bool:
+    try:
+        await session.send(_preview_msg(start))
+    except Exception as exc:  # noqa: BLE001 - a phone that just left
+        log.debug("monitor: preview %s not sent to %s: %s", "start" if start else "stop", session.session_id, exc)
+        return False
+    diag("monitor_preview", session=session.session_id, shop=session.shop_id, start=start)
+    return True
+
+
+async def _preview_shop(shop_id: str, start: bool) -> int:
+    """Ask every phone session of ``shop_id`` to start or stop its preview stream; returns how many were asked."""
+    try:
+        from aira_live import sessions  # lazy: sessions imports this module
+        live = sessions.by_shop(shop_id)
+    except Exception:  # noqa: BLE001
+        log.exception("monitor: preview %s failed for %s", "start" if start else "stop", shop_id)
+        return 0
+    n = 0
+    for s, _bridge in live:
+        if _streams_frames(s) and await _send_preview(s, start):
+            n += 1
+    return n
+
+
+def _schedule_preview(shop_id: str, start: bool) -> None:
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        return  # no loop (sync tests): nothing to ask
+    task = loop.create_task(_preview_shop(shop_id, start), name=f"monitor-preview-{shop_id}")
+    _PREVIEW_TASKS.add(task)
+    task.add_done_callback(_PREVIEW_TASKS.discard)
+
+
+async def preview_on_join(session) -> bool:
+    """A session said hello: start its preview stream when its shop is already watched. Never raises."""
+    if not monitored(session.shop_id) or not _streams_frames(session):
+        return False
+    return await _send_preview(session, True)
 
 
 def monitored(shop_id: str) -> bool:
@@ -278,8 +349,39 @@ def set_speaker(session_id: str, speaker: str | None) -> None:
 
 def forget(session_id: str) -> None:
     _SPEAKER.pop(session_id, None)
+    _VOICES.pop(session_id, None)
     _LAST_FRAME.pop(session_id, None)
     _COUNTERS.pop(session_id, None)
+
+
+class _Voices:
+    """Diarization labels heard in one session: how often each spoke, in order of first hearing, and who spoke
+    last. The owner is the voice heard most (the first one on a tie): Sam talks to AIRA all day."""
+    __slots__ = ("counts", "last")
+
+    def __init__(self) -> None:
+        self.counts: dict[str, int] = {}
+        self.last: str | None = None
+
+    def owner(self) -> str | None:
+        if not self.counts:
+            return None
+        return max(self.counts, key=lambda k: (self.counts[k], -list(self.counts).index(k)))
+
+
+_VOICES: dict[str, _Voices] = {}
+
+
+def note_speaker(session_id: str, label: str | None) -> None:
+    """The transcription's diarization named the voice of the last finished utterance (live_bridge)."""
+    if not isinstance(label, str) or not label.strip():
+        return
+    label = label.strip()
+    v = _VOICES.get(session_id)
+    if v is None:
+        v = _VOICES[session_id] = _Voices()
+    v.counts[label] = v.counts.get(label, 0) + 1
+    v.last = label
 
 
 def _sale_open(session_id: str) -> bool:
@@ -291,14 +393,21 @@ def _sale_open(session_id: str) -> bool:
 
 
 def speaker_role(session, text: str) -> str:
-    """"owner" or "customer" for a user transcript of ``session``."""
+    """"owner" or "customer" for a user transcript of ``session``: nobody is a customer outside a sale; during
+    one, a sale tool's word wins, then a line naming AIRA is the owner's, then the diarization (a voice other
+    than the owner's is the customer), else the line is the customer's."""
     sid = session.session_id
     if not _sale_open(sid):
         return "owner"
     named = _SPEAKER.get(sid)
     if named:
         return named
-    return "owner" if _ADDRESSES_AIRA.search(text or "") else "customer"
+    if _ADDRESSES_AIRA.search(text or ""):
+        return "owner"
+    voices = _VOICES.get(sid)
+    if voices is not None and voices.last is not None:
+        return "owner" if voices.last == voices.owner() else "customer"
+    return "customer"
 
 
 # ---------- publishers ----------
@@ -451,7 +560,10 @@ async def publish_frame(session, frame) -> bool:
         return False
     _LAST_FRAME[sid] = now
     try:
-        b64, w, h = await asyncio.to_thread(downscale, frame.jpeg_b64)
+        if str(frame.purpose) == PREVIEW_PURPOSE and 0 < frame.w <= MAX_WIDTH:
+            b64, w, h = frame.jpeg_b64, frame.w, frame.h  # the phone already made it small: relay as it is
+        else:
+            b64, w, h = await asyncio.to_thread(downscale, frame.jpeg_b64)
     except (binascii.Error, ValueError, OSError) as exc:
         log.debug("monitor: frame %s skipped: %s", getattr(frame, "id", "?"), exc)
         return False
