@@ -157,8 +157,8 @@ RULES = (
     (
         "10. For ANY question about what is around the owner, what is in front of the camera, reading text or "
         "finding things, call camera_ask (or product_find to guide the hand to a product). Never answer from "
-        "imagination; you cannot see without these tools. Speak the tool's 'say' as guidance: side, distance, "
-        "next step."
+        "imagination; you cannot see without these tools. Speak the tool's 'say' as guidance: it names what is "
+        "there (up to three objects, nearest first), each with its side and distance, then the next step."
     ),
     (
         "11. The owner can change the shop by voice: product_add (a new product; ask the price and unit if "
@@ -166,6 +166,12 @@ RULES = (
         "an order) and supplier_add (a new vendor; for Telegram, read out the link). \"Add buttermilk\" for a "
         "product the shop already has: ask whether to add stock or a new product. Each of these waits for the "
         "owner's yes."
+    ),
+    (
+        "12. \"Describe as I walk\", \"keep telling me what's around\", \"guide me step by step as I move\": call "
+        "describe_mode with on=true. \"Stop describing\", \"enough\", \"quiet\": call describe_mode with on=false. "
+        "While describe mode runs, the system speaks each new object by itself; do not repeat or invent "
+        "objects, and do not call camera_ask for it. It never means the way is safe."
     ),
 )
 

@@ -1,6 +1,6 @@
 // frontend/app/test/camera.requests.test.ts
 import { describe, it, expect, vi } from "vitest";
-import { createFrameRequestHandler, CONTINUOUS_FPS, MAX_BURST, MAX_INTERVAL_MS, defaultSleep } from "../src/camera/requests";
+import { createFrameRequestHandler, CONTINUOUS_FPS, DESCRIBE_FPS, continuousFps, MAX_BURST, MAX_INTERVAL_MS, defaultSleep } from "../src/camera/requests";
 import { CameraError } from "../src/camera/capture";
 
 vi.mock("../src/core/app", () => ({ app: { send: vi.fn(), speak: vi.fn(), earcon: vi.fn(), settings: { lang: "en" } } }));
@@ -49,6 +49,19 @@ describe("request_frame handler", () => {
     await s.handle({ t: "request_frame", purpose: "guide", stop: true });
     expect(s.stops).toEqual(["guide"]);
     expect(s.sent).toHaveLength(2);
+  });
+
+  it("describe mode streams at one frame per 3 s, other purposes at CONTINUOUS_FPS", async () => {
+    expect(DESCRIBE_FPS).toBeCloseTo(1 / 3);
+    expect(continuousFps("describe")).toBe(DESCRIBE_FPS);
+    expect(continuousFps("guide")).toBe(CONTINUOUS_FPS);
+    const s = setup();
+    await s.handle({ t: "request_frame", purpose: "describe", continuous: true });
+    expect(s.deps.startContinuous).toHaveBeenCalledWith("describe", DESCRIBE_FPS);
+    await s.handle({ t: "request_frame", purpose: "guide", continuous: true });
+    expect(s.deps.startContinuous).toHaveBeenLastCalledWith("guide", CONTINUOUS_FPS);
+    await s.handle({ t: "request_frame", purpose: "describe", stop: true });
+    expect(s.stops).toEqual(["describe"]);                                 // guide keeps running
   });
 
   it("a second continuous request of the same purpose replaces the first", async () => {

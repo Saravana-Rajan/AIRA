@@ -6,6 +6,10 @@ The Live model only hears audio. For "what's in front of me?", "is my path clear
 (0-1000) and distances. The spoken line is built here, not by the model: a side (left / ahead / right), a
 distance (arm's length, a few steps) and the next action, in the session language.
 
+"What's in front of me?" names up to three objects, nearest first, each with its side and distance ("a table
+straight ahead, at arm's length"). Every ER 2 result also goes to ``vision.observers.on_vision_objects`` so
+the visual memory can record what was seen.
+
 Rules: low confidence or a bad frame says "not sure" plus an aim hint, never a guess. "Read this" is read
 twice (``read`` and ``verify`` roles) and spoken verbatim only when both reads agree. A path question names
 the obstacle and its direction and never says "safe" or "clear".
@@ -20,14 +24,19 @@ from aira_live.diag import diag, summarize, trunc
 from aira_live.i18n import t
 from aira_live.prompt import LANG_NAME
 from aira_live.session import Session, get_session
+from aira_live.vision import observers
 from aira_live.vision.gemini import VisionError, generate_json, image_part
 from aira_live.vision.hints import HINT_KEYS
 
 log = logging.getLogger(__name__)
 
 MIN_CONF = 0.5
-MAX_OBJECTS = 2
+MAX_OBJECTS = 3           # "what's in front of me": up to three objects, nearest first
 FRAME_TIMEOUT_S = 4.0
+DIST_ORDER = ("near", "arm", "far")
+# Labels that must never be spoken: people are never described, and a label can't smuggle in "safe".
+PERSON = re.compile(r"\b(person|people|man|woman|boy|girl|child|kid|customer|face|human|lady|guy)\b", re.I)
+UNSAFE_WORDS = re.compile(r"\bsafe\b|\bclear\b", re.I)
 
 READ_WORDS = ("read", "what does it say", "what does this say", "label", "text", "written", "price tag",
               "expiry", "படி", "எழுத", "पढ़", "लिखा")
@@ -36,15 +45,17 @@ PATH_WORDS = ("path", "way clear", "walk", "step", "in my way", "obstacle", "tri
 
 ASK_PROMPT = (
     "You are the eyes of a blind shopkeeper wearing this chest camera in a small dairy shop. "
-    "Question: \"{question}\". Answer in {lang}. Give short guidance a blind person can act on, not a "
-    "description: name each relevant object with its point [y, x] normalized 0-1000 (x: 0 is the owner's left, "
-    "1000 the right) and its distance: near (within reach), arm (an arm's length), far (a step or more away). "
-    "guidance lists the next one or two actions. Never describe or identify people. If the image is dark, "
-    "blurred or the thing asked about is not visible, set confidence below 0.5 and aim_hint to one of "
-    "{hints}."
+    "Question: \"{question}\". Answer in {lang}. Describe what is there so a blind person can act on it: "
+    "list the main objects (at most 3, nearest and most relevant first), each with a short plain label, "
+    "its point [y, x] normalized 0-1000 (x: 0 is the owner's left, 1000 the right), its box "
+    "[ymin, xmin, ymax, xmax] and its distance: near (within reach), arm (an arm's length), far (a step or "
+    "more away). Walls, floor and the sky are not objects. guidance lists the next one or two actions. "
+    "Never describe or identify people. If the image is dark, blurred or the thing asked about is not "
+    "visible, set confidence below 0.5 and aim_hint to one of {hints}."
 )
 ASK_SCHEMA = ('{"answer": "<one short sentence>", "guidance": ["<step>"], '
-              '"objects": [{"label": "<name>", "point": [y, x], "distance": "near|arm|far"}], '
+              '"objects": [{"label": "<name>", "point": [y, x], "box": [ymin, xmin, ymax, xmax] or null, '
+              '"distance": "near|arm|far"}], '
               '"confidence": 0.0, "aim_hint": "<optional key>"}')
 READ_PROMPT = (
     "Read every printed text in this image exactly as written, in reading order, as one line. "
@@ -82,21 +93,54 @@ def dist_key(distance: Any) -> str:
     return f"cam.dist.{d}" if d in ("near", "arm", "far") else "cam.dist.arm"
 
 
-def _objects(raw: Any) -> list[dict]:
-    """Only well-formed objects: a label, a [y, x] point inside 0-1000 and a distance word."""
+def _box(raw: Any) -> list[int] | None:
+    if not (isinstance(raw, (list, tuple)) and len(raw) == 4):
+        return None
+    if not all(isinstance(v, (int, float)) and not isinstance(v, bool) and 0 <= v <= 1000 for v in raw):
+        return None
+    ymin, xmin, ymax, xmax = (round(v) for v in raw)
+    return [ymin, xmin, ymax, xmax] if ymax > ymin and xmax > xmin else None
+
+
+def distance_from_box(box: list[int] | None) -> str | None:
+    """Rough distance from how much of the frame a box fills: half the height is "near", a quarter "arm"."""
+    if not box:
+        return None
+    size = max(box[2] - box[0], box[3] - box[1]) / 1000.0
+    return "near" if size >= 0.5 else "arm" if size >= 0.25 else "far"
+
+
+def parse_objects(raw: Any) -> list[dict]:
+    """Only well-formed objects: a label, a [y, x] point inside 0-1000 and a distance word (from the model, or
+    from the box size when the model gave none). People and labels with "safe"/"clear" are dropped."""
     out: list[dict] = []
     for o in raw if isinstance(raw, list) else []:
         if not isinstance(o, dict):
             continue
         p = o.get("point")
-        label = str(o.get("label") or "").strip()
-        if not label or not (isinstance(p, (list, tuple)) and len(p) == 2
-                             and all(isinstance(v, (int, float)) and not isinstance(v, bool)
-                                     and 0 <= v <= 1000 for v in p)):
+        label = _WS.sub(" ", str(o.get("label") or "")).strip()
+        if not label or PERSON.search(label) or UNSAFE_WORDS.search(label):
             continue
+        if not (isinstance(p, (list, tuple)) and len(p) == 2
+                and all(isinstance(v, (int, float)) and not isinstance(v, bool) and 0 <= v <= 1000 for v in p)):
+            continue
+        box = _box(o.get("box") if o.get("box") is not None else o.get("box_2d"))
         d = str(o.get("distance") or "").lower()
-        out.append({"label": label, "point": [round(p[0]), round(p[1])], "distance": d if d in ("near", "arm", "far") else "arm"})
+        if d not in DIST_ORDER:
+            d = distance_from_box(box) or "arm"
+        obj = {"label": label, "point": [round(p[0]), round(p[1])], "distance": d}
+        if box:
+            obj["box"] = box
+        out.append(obj)
     return out
+
+
+_objects = parse_objects
+
+
+def nearest_first(objects: list[dict]) -> list[dict]:
+    """Nearest first; the model's own order (most relevant first) breaks ties."""
+    return sorted(objects, key=lambda o: DIST_ORDER.index(o["distance"]))
 
 
 def _conf(v: Any) -> float:
@@ -130,15 +174,12 @@ def _sentence(text: str) -> str:
 
 
 def _say_look(answer: str, steps: list[str], objects: list[dict], lang: str) -> str:
-    """1-3 short sentences: the answer, where the nearest object is, the next action."""
-    parts: list[str] = []
-    if answer:
+    """Up to three objects with side and distance, nearest first; the model's answer only when it sees fewer
+    than two objects; then the next action. At most four short sentences."""
+    parts: list[str] = [_where(obj, lang) for obj in nearest_first(objects)[:MAX_OBJECTS]]
+    if answer and len(objects) < 2:
         parts.append(_sentence(answer))
-    for obj in sorted(objects, key=lambda o: ("near", "arm", "far").index(o["distance"]))[:MAX_OBJECTS]:
-        if len(parts) >= 2:
-            break
-        parts.append(_where(obj, lang))
-    if steps and len(parts) < 3:
+    if steps and len(parts) < 4:
         parts.append(_sentence(steps[0]))
     return " ".join(parts) if parts else t("cam.not_sure", lang)
 
@@ -147,10 +188,10 @@ def _say_path(steps: list[str], objects: list[dict], lang: str) -> str:
     """The obstacle and its direction. Never the model's own words: those could say "safe"."""
     if not objects:
         return t("cam.path_nothing", lang)
-    nearest = sorted(objects, key=lambda o: ("near", "arm", "far").index(o["distance"]))[0]
+    nearest = nearest_first(objects)[0]
     line = t("cam.obstacle", lang, label=nearest["label"], side=t(side_key(nearest["point"][1]), lang),
              dist=t(dist_key(nearest["distance"]), lang))
-    step = next((s for s in steps if not re.search(r"\bsafe\b|\bclear\b", s, re.I)), "")
+    step = next((s for s in steps if not UNSAFE_WORDS.search(s)), "")
     return f"{line} {_sentence(step)}".strip() if step else line
 
 
@@ -203,7 +244,7 @@ async def camera_ask(question: str) -> dict:
              error=type(exc).__name__, message=trunc(str(exc), 200))
         return {"say": t("live.unavailable", s.lang), "answer": "", "kind": kind, "objects": [], "confidence": 0.0}
 
-    objects = _objects(data.get("objects"))
+    objects = parse_objects(data.get("objects"))
     conf = _conf(data.get("confidence"))
     steps = _steps(data.get("guidance"))
     answer = str(data.get("answer") or "").strip()
@@ -212,6 +253,10 @@ async def camera_ask(question: str) -> dict:
          keys=sorted(k for k in data if k != "_model"), confidence=conf, raw_confidence=summarize(data.get("confidence")),
          objects=len(objects), raw_objects=len(raw_objects) if isinstance(raw_objects, list) else None,
          aim_hint=summarize(data.get("aim_hint")), answer=trunc(answer), steps=len(steps))
+    # Every ER 2 result is offered to the observers (the "last seen" memory), whatever gets spoken.
+    await observers.on_vision_objects(s, objects, {"source": "camera_ask", "kind": kind, "question": question,
+                                                   "frame_id": frames[-1].id, "frame_ts": frames[-1].ts,
+                                                   "confidence": conf, "model": data.get("_model")})
     # A tip alone is not doubt: the model often adds one ("show me the items") while it is sure of what it sees
     # (seen live: confidence 0.9, an answer, and a tip). It means "not sure" only when the model is unsure, or is
     # sure but has nothing to say.

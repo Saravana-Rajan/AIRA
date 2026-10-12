@@ -29,7 +29,7 @@ vi.mock("../src/walk/start", () => ({ startBumpGuard: vi.fn() }));
 
 import { initApp } from "../src/core/app";
 import type { Settings } from "../src/core/types";
-import { captureFrame, setQualityListener, stopCamera } from "../src/camera/capture";
+import { captureFrame, setQualityListener, startContinuous, stopCamera } from "../src/camera/capture";
 import { trackFingertip } from "../src/guidance/hands";
 import { guideTo, stopTone } from "../src/guidance/tones";
 import { startBumpGuard } from "../src/walk/start";
@@ -109,6 +109,23 @@ describe("wireCameraAndGuidance", () => {
     await flush();
     expect(captureFrame).toHaveBeenCalledWith("invoice");
     expect(socket.sent).toEqual([expect.objectContaining({ t: "frame", id: "fr1", purpose: "invoice" })]);
+  });
+
+  it("a continuous describe stream gets the scene-change gate; guide frames stream ungated", async () => {
+    vi.mocked(startContinuous).mockClear();
+    wire();
+    socket.emit({ t: "request_frame", purpose: "guide", continuous: true });
+    socket.emit({ t: "request_frame", purpose: "describe", continuous: true });
+    await flush();
+    const calls = vi.mocked(startContinuous).mock.calls;
+    expect(calls.map((c) => c[0])).toEqual(["guide", "describe"]);
+    expect(calls[0][2]).toBeUndefined();
+    expect(calls[1][1]).toBeCloseTo(1 / 3);
+    expect(typeof calls[1][2]).toBe("function");
+    const keep = calls[1][2]!;
+    const gray = new Float32Array(64 * 48).fill(90);
+    expect(keep(gray, 64, 48)).toBe(true);        // the first frame goes
+    expect(keep(gray, 64, 48)).toBe(false);       // the same scene again does not
   });
 
   it("a camera failure speaks one hint and sends nothing", async () => {

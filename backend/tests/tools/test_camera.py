@@ -218,3 +218,69 @@ def test_i18n_keys_exist_in_all_three_languages():
         for key in ("cam.not_sure", "cam.path_nothing", "cam.where", "cam.obstacle", "cam.side.left",
                     "cam.side.right", "cam.side.centre", "cam.dist.near", "cam.dist.arm", "cam.dist.far"):
             assert t(key, lang) != key, (key, lang)
+
+
+# --- "what's in front of me": describe up to three objects with position, nearest first ------------------------
+
+
+async def test_look_describes_up_to_three_objects_nearest_first(session, monkeypatch):
+    _script(monkeypatch, {
+        "answer": "A shop aisle.", "guidance": ["Walk slowly."],
+        "objects": [{"label": "fridge", "point": [500, 850], "distance": "arm"},
+                    {"label": "table", "point": [600, 500], "distance": "near"},
+                    {"label": "milk crates", "point": [800, 150], "distance": "far"},
+                    {"label": "door", "point": [400, 900], "distance": "far"}],
+        "confidence": 0.9,
+    })
+    out = await camera.camera_ask("what's in front of me?")
+    say = out["say"]
+    assert say.startswith("The table is straight ahead, within arm's reach.")
+    assert say.index("table") < say.index("fridge") < say.index("milk crates")
+    assert "door" not in say                                   # at most three objects
+    assert "A shop aisle" not in say                           # the positions say more than the summary
+    assert say.endswith("Walk slowly.")
+    assert camera.MAX_OBJECTS == 3
+
+
+async def test_distance_falls_back_to_the_box_size_and_people_are_dropped(session, monkeypatch):
+    _script(monkeypatch, {
+        "answer": "", "guidance": [],
+        "objects": [{"label": "table", "point": [600, 500], "box": [200, 100, 900, 900]},        # big: near
+                    {"label": "shelf", "point": [400, 300], "box": [300, 200, 600, 500]},        # a quarter: arm
+                    {"label": "door", "point": [400, 900], "box": [400, 850, 500, 950]},         # small: far
+                    {"label": "a man", "point": [500, 500], "distance": "near"}],
+        "confidence": 0.9,
+    })
+    out = await camera.camera_ask("what's around?")
+    assert [(o["label"], o["distance"]) for o in out["objects"]] == [("table", "near"), ("shelf", "arm"), ("door", "far")]
+    assert out["objects"][0]["box"] == [200, 100, 900, 900]
+    assert "man" not in out["say"]
+
+
+def test_parse_objects_drops_bad_points_boxes_and_safe_labels():
+    objs = camera.parse_objects([
+        {"label": "crate", "point": [100, 1200], "distance": "near"},                 # out of range
+        {"label": "", "point": [100, 100]},                                           # no label
+        {"label": "safe path", "point": [100, 100], "distance": "near"},              # never "safe"
+        {"label": "crate", "point": [100, 100], "box": [500, 500, 100, 100]},         # inverted box: dropped box
+        "junk",
+    ])
+    assert objs == [{"label": "crate", "point": [100, 100], "distance": "arm"}]
+    assert camera.distance_from_box(None) is None
+
+
+async def test_every_camera_ask_result_reaches_the_vision_observers(session, monkeypatch):
+    from aira_live.vision import observers
+    got = []
+
+    async def cb(session_, objects, context):
+        got.append((session_, objects, context))
+
+    monkeypatch.setattr(observers, "OBSERVERS", [cb])
+    s, _ = session
+    _script(monkeypatch, {"answer": "", "guidance": [],
+                          "objects": [{"label": "keys", "point": [700, 150], "distance": "near"}], "confidence": 0.3})
+    await camera.camera_ask("what's on the counter?")
+    assert got[0][0] is s and got[0][1] == [{"label": "keys", "point": [700, 150], "distance": "near"}]
+    assert got[0][2]["source"] == "camera_ask" and got[0][2]["kind"] == "look"
+    assert got[0][2]["confidence"] == 0.3 and got[0][2]["frame_id"] == "f1.0"

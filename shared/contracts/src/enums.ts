@@ -7,7 +7,7 @@ export type Lang = (typeof LANGS)[number];
 export const VERBOSITIES = Object.freeze(["short", "detail"] as const);
 export type Verbosity = (typeof VERBOSITIES)[number];
 
-export const FRAME_PURPOSES = Object.freeze(["ask", "count", "point", "identify", "invoice", "cash", "guide"] as const);
+export const FRAME_PURPOSES = Object.freeze(["ask", "count", "point", "identify", "invoice", "cash", "guide", "describe"] as const);
 export type FramePurpose = (typeof FRAME_PURPOSES)[number];
 
 export const CUE_NAMES = Object.freeze([

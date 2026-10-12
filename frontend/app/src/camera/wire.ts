@@ -6,7 +6,8 @@
 import type { ServerMsg } from "@aira/contracts";
 import { app } from "../core/app";
 import type { WiredApp } from "../core/wire";
-import { captureFrame, setQualityListener, startContinuous, stopCamera } from "./capture";
+import { captureFrame, setQualityListener, startContinuous, stopCamera, type FrameKeep } from "./capture";
+import { createSceneGate } from "./sceneGate";
 import { createFrameRequestHandler, defaultSleep } from "./requests";
 import { createHintSpeaker } from "./hints";
 import { startTiltHints } from "./tilt";
@@ -27,6 +28,19 @@ export interface WireOptions {
   extraHandlers?: Array<(m: ServerMsg) => void>;
   /** Force the dev dispatch hook on/off. Default: Vite dev server, or any build opened with `?devtools`. */
   devtools?: boolean;
+  /** The accelerometer says the owner walks: describe frames go even when the picture looks the same. */
+  isWalking?: () => boolean;
+}
+
+/**
+ * Continuous streams: guide/identify frames go as they come; `describe` frames (describe mode, 1 per 3 s) pass
+ * a scene-change gate so an unchanged view costs no upload and no ER 2 call.
+ */
+export function continuousStarter(isWalking?: () => boolean): typeof startContinuous {
+  return (purpose, fps, keep?: FrameKeep) => {
+    if (purpose !== "describe" || keep) return startContinuous(purpose, fps, keep);
+    return startContinuous(purpose, fps, createSceneGate({ isWalking }).keep);
+  };
 }
 
 export interface CameraWiring {
@@ -70,7 +84,7 @@ export function wireCameraAndGuidance(opts: WireOptions = {}): CameraWiring {
 
   const handleFrame = createFrameRequestHandler({
     capture: captureFrame,
-    startContinuous,
+    startContinuous: continuousStarter(opts.isWalking),
     send: (m) => app.send(m),
     hint,
     sleep: defaultSleep,
@@ -181,8 +195,11 @@ export interface PhoneWiring {
  */
 export function wireCameraIntoApp(w: WiredHooks, opts: PhoneWireOptions = {}): PhoneWiring {
   const { bumpGuard = true, ...camOpts } = opts;
-  const cam = wireCameraAndGuidance(camOpts);
   let guard: RunningBumpGuard | null = null;
+  const cam = wireCameraAndGuidance({
+    isWalking: () => guard?.motion?.available === true && guard.motion.isWalking(performance.now()),
+    ...camOpts,
+  });
   let disposed = false;
   let chipTimer: ReturnType<typeof setTimeout> | null = null;
 

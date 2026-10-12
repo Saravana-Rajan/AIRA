@@ -23,7 +23,7 @@ describe("enums match the interface registry", () => {
   it("languages, verbosity and frame purposes", () => {
     expect(LANGS).toEqual(["ta", "hi", "en"]);
     expect(VERBOSITIES).toEqual(["short", "detail"]);
-    expect(FRAME_PURPOSES).toEqual(["ask", "count", "point", "identify", "invoice", "cash", "guide"]);
+    expect(FRAME_PURPOSES).toEqual(["ask", "count", "point", "identify", "invoice", "cash", "guide", "describe"]);
   });
 
   it("cue names include interrupted", () => {

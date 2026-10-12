@@ -216,5 +216,10 @@
   "check.camOffline": "I could not reach AIRA to check the camera. Check the internet, then try again.",
   "check.camBusy": "Too many checks. Wait a minute, then try again.",
   "check.camUnavailable": "AIRA's camera check is not answering. Try again in a moment.",
-  "check.allGood": "Microphone and camera work. Tap anywhere to start talking."
+  "check.allGood": "Microphone and camera work. Tap anywhere to start talking.",
+  "describe.on": "Describe mode on. I will tell you what comes into view as you move.",
+  "describe.off": "Describe mode off.",
+  "describe.item": "{label} {side}, {dist}.",
+  "describe.timeout": "Describe mode stopped after ten minutes. Say describe as I walk to start again.",
+  "describe.cap": "Describe mode paused to save the camera budget. Say describe as I walk to start again."
 }
