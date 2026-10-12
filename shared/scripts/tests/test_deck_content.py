@@ -140,9 +140,27 @@ def test_slide_12_never_states_a_number_before_it_is_measured():
     assert not re.search(r"\d+(\.\d+)?\s*(%|ms\b|₹)|₹\s*\d", body), "benchmark slide states an unmeasured number"
 
 
-def test_slide_10_never_states_a_cost_before_it_is_computed():
+def test_slide_10_costs_come_from_cost_per_sale():
+    """Every rupee figure on the cost slide must be printed by cost_per_sale.py run with the slide's own command."""
+    import subprocess
+    import sys
+    from pathlib import Path
+
     body = slides()[10]
-    assert not re.search(r"₹\s*\d|\d\s*₹|\$\s*\d", body), "cost slide states a number not printed by cost_per_sale.py"
+    if not re.search(r"₹\s*\d|\d\s*₹|\$\s*\d", body):
+        return  # still a placeholder
+    m = re.search(r"cost_per_sale\.py --rate (\d+(?:\.\d+)?) --sales-per-day (\d+) --deliveries-per-day (\d+)", body)
+    assert m, "cost slide shows numbers but not the exact cost_per_sale.py command that produced them"
+    script = Path(__file__).resolve().parents[1] / "cost_per_sale.py"
+    out = subprocess.run(
+        [sys.executable, str(script), "--rate", m.group(1), "--sales-per-day", m.group(2),
+         "--deliveries-per-day", m.group(3)],
+        capture_output=True, text=True, check=True,
+    ).stdout
+    printed = {s.replace(",", "") for s in re.findall(r"₹([\d,]+(?:\.\d+)?)", out)}
+    for amount in re.findall(r"₹([\d,]+(?:\.\d+)?)", body):
+        assert amount.replace(",", "") in printed, f"₹{amount} on the cost slide is not printed by cost_per_sale.py"
+    assert "$" not in body
 
 
 def test_no_project_id_secrets_or_personal_contacts():

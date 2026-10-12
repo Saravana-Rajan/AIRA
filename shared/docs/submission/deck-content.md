@@ -117,10 +117,19 @@ model proposes; deterministic code commits."
   Firebase Hosting on every push to main.
 
 ## Slide 10: Estimated implementation cost
-Paste the three lines printed by `python3 shared/scripts/cost_per_sale.py --rate <today's USD to INR rate>`:
-- Per sale (about 1 minute of voice, 1 product check, one cash check read twice): `<fill: cost_per_sale.py line 1>`
-- Per delivery (30 packs counted one by one, bill and cash read twice): `<fill: cost_per_sale.py line 2>`
-- Per shop-month (60 sales/day, 2 deliveries/day): `<fill: cost_per_sale.py line 3>`
+From `python3 shared/scripts/cost_per_sale.py --rate 88 --sales-per-day 60 --deliveries-per-day 3` (run on Oct 12;
+re-run with the day's rate on Oct 17):
+- Per sale (about 1 minute of voice, 1 product check, one cash check read twice): **₹1.89**
+- Per delivery (30 packs counted one by one, bill and cash read twice): **₹36.60**
+- Per shop-month today (60 sales/day, 3 deliveries/day, Live always on): **≈ ₹6,700**
+
+**Path to a much lower per-shop cost** (planned optimisations, re-measured with the same script; target on Slide 15):
+| Lever | Saving |
+|---|---|
+| Gemini Live only while Sam is talking (double-tap or "Hey Google, open AIRA"), not always listening | Large: Live audio is the biggest cost |
+| Delivery counting: MediaPipe on the phone first, Robotics-ER 2 only for the final check | about 70% cheaper per delivery |
+| Gemini Flash for routine vision (describe, checks); Robotics-ER 2 only for counting and pointing | Medium |
+| Frames sent only when the view changes (built) | Medium |
 
 Note: "Gemini API only, thinking tokens included. Cloud Run, Firestore and Hosting are shared across shops. The design scales to many
 shops on the same services, so per-shop infrastructure cost falls as shops are added."
@@ -161,7 +170,10 @@ These are measurable results from the functional prototype on a named mid-range 
 - Connected fridge temperature sensors.
 - Direct bank UPI APIs instead of the soundbox.
 - Multi-shop owners and distributor integration (auto-replenishment).
-- Offline on-device model for counting.
+- Offline mode with on-device Gemini Nano (ML Kit GenAI) on flagship phones; on-device counting.
+- AIRA Shop Camera: CCTV/RTSP camera support (built, off by default).
+- More fixed-string languages (AIRA already follows the speaker; Gemini Live converses in 70 languages).
+- WhatsApp Cloud API vendor channel (Telegram today).
 - Invoice and evidence images in Cloud Storage with 30-day retention, faces blurred on the phone before upload.
 - Family alerts on a helper's phone (Firebase Cloud Messaging) and owner sign-in (Firebase Auth) once AIRA
   serves more than one shop.
@@ -184,6 +196,20 @@ raise the Cloud Run instance limit and add session routing as shops are added.
   sell-through and cuts stock-outs.
 - Banks and UPI soundbox providers partner for merchants who can verify payments by voice.
 - Later: a small monthly subscription for sighted small-shop owners (voice inventory, ordering, forecasting).
+
+**Cost target:** about ₹600-1,000 per shop-month after the Slide 10 optimisations (an estimate until re-measured):
+"AIRA should cost about ₹25-35 a day to run, less than a sighted helper's wage of ₹400+ a day."
+
+**Pricing options:**
+| Model | Who pays | Price |
+|---|---|---|
+| Subsidised by social programmes | Disability schemes (ADIP, NHFDC, state welfare boards), CSR funds, NGOs for the blind (NAB, Saksham) | Free for the shopkeeper; the sponsor pays about ₹800 per shop per month |
+| Dairy co-operative / brand partner | Aavin, Amul and other brands, for their blind retailers (accurate orders, less wastage, stock data) | ₹500-800 per shop per month (B2B) |
+| Low subscription | The shopkeeper, after a free trial | ₹199-299 per month, the price of a phone recharge (once costs are optimised) |
+| Freemium | Free core (voice, prices, billing); paid camera features (live counting, describe mode) | Free, then ₹199 per month |
+
+Pitch line: "CSR, disability schemes or dairy brands sponsor AIRA, so a blind shopkeeper pays nothing."
+Runs on a budget Android phone (demo device: Samsung Galaxy A22 5G).
 
 **Privacy and safety:**
 - The camera sends frames only when a task needs them (count, point, invoice, cash, product). Frames stay in
