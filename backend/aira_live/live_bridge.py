@@ -437,6 +437,16 @@ def translate(e) -> list[LiveEvent]:
     return out
 
 
+def live_extras(types) -> dict:
+    """Extra Live RunConfig fields. Proactive audio (on unless AIRA_PROACTIVE_AUDIO=0): the model may stay
+    silent when speech is not meant for it, e.g. Sam chatting with a customer, and answers only when needed."""
+    import os
+
+    if os.environ.get("AIRA_PROACTIVE_AUDIO", "1") == "0" or not hasattr(types, "ProactivityConfig"):
+        return {}
+    return {"proactivity": types.ProactivityConfig(proactive_audio=True)}
+
+
 class AdkLiveBackend:
     """Production backend: Google ADK ``run_live`` + ``LiveRequestQueue`` on ``model_for("live")``.
 
@@ -453,7 +463,7 @@ class AdkLiveBackend:
         self._gen = None
 
     async def start(self, system_prompt: str, tools: list, resume_handle: str | None) -> None:
-        from google.adk.agents import Agent, LiveRequestQueue
+        from google.adk.agents import Agent, LiveRequestQueue  # noqa: I001
         from google.adk.agents.run_config import RunConfig, StreamingMode
         from google.adk.runners import InMemoryRunner
         from google.genai import types
@@ -474,6 +484,7 @@ class AdkLiveBackend:
             session_resumption=types.SessionResumptionConfig(handle=resume_handle),
             context_window_compression=types.ContextWindowCompressionConfig(
                 trigger_tokens=100_000, sliding_window=types.SlidingWindow(target_tokens=60_000)),
+            **live_extras(types),
         )
         self._gen = runner.run_live(user_id=self._s.uid, session_id=adk_session.id,
                                     live_request_queue=self._queue, run_config=run_config)
