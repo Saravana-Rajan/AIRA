@@ -288,7 +288,7 @@ async def _curd_sale(liters=2) -> dict:
 async def test_sale_start_prices_and_checks_stock(store, session, phone):
     r = await _curd_sale()
     price = (await store.get(paths.product(SHOP, CURD)))["price"]
-    assert r["total"] == 2 * price and r["say"].endswith(f"Total {2 * price} rupees. Cash or UPI?")
+    assert r["total"] == 2 * price and r["say"].endswith(f", total {2 * price} rupees. Cash or UPI?")
     assert sale_tools.active_sale[session.session_id] == r["saleId"]
     assert (await store.get(paths.sale(SHOP, r["saleId"])))["state"] == "SALE_PENDING"
 
@@ -407,13 +407,14 @@ async def test_upi_soundbox_wrong_amount_does_not_confirm(store, session, propos
     task = asyncio.create_task(pay.sale_pay(s["saleId"], "upi"))
     while not listeners:
         await asyncio.sleep(0)
-    wrong = s["total"] * 10
-    await listeners[0](f"Received rupees {wrong} on PhonePe")
+    short = s["total"] - 20
+    await listeners[0](f"Received rupees {short} on PhonePe")
+    assert not task.done()
     await task
-    assert any(text == f"The soundbox said {wrong} rupees, but the bill is {s['total']}." for _, text, _ in notified)
+    assert any(text == "20 rupees short, ask for 20 more." for _, text, _ in notified)
     p = proposals[-1]
-    assert p["payload"]["evidence"] == {"type": "user_confirm"}
-    assert p["prompt"] == t("k2.sale.upi_timeout_q", "en", total=s["total"])
+    assert p["payload"]["evidence"]["type"] == "user_confirm"
+    assert p["prompt"] == t("k2.sale.upi_short_q", "en", paid=short, total=s["total"], short=20)
     assert listeners == []
 
 
@@ -489,3 +490,184 @@ async def test_two_milk_is_two_pouches_not_two_litres(store, session):
     """Bug sweep: a customer's "2 milk" was charged as 2 litres (₹88) instead of 2 pouches (₹44)."""
     r = await sale_tools.sale_start([{"product": "aavin milk 500 ml", "qty": 2}])
     assert r["total"] == 44
+
+
+# ---------------------------------------------------------------------------------------------------- billing speech
+# These lines go to Sam's earphone only (speak_to): he may miscount, so AIRA says the running total, the change
+# with the notes to hand back, and whether a UPI payment is short or over. Nothing completes the sale until the
+# paid total equals the bill or Sam explicitly confirms the shortfall.
+
+async def _curd_and_milk() -> dict:
+    return await sale_tools.sale_start([{"product": "sakthi curd 1 litre", "qty": 2, "unit": "L"},
+                                        {"product": "aavin milk 500 ml", "qty": 1}])
+
+
+async def _upi(monkeypatch, sale_id: str):
+    listeners = _listen(monkeypatch)
+    task = asyncio.create_task(pay.sale_pay(sale_id, "upi"))
+    while not listeners:
+        await asyncio.sleep(0)
+    return task, listeners
+
+
+async def test_sale_start_says_items_and_running_total(store, session):
+    r = await _curd_and_milk()
+    assert r["total"] == 2 * 60 + 22
+    assert r["say"] == ("2 L Sakthi Curd 1 L and 0.5 L Aavin Milk 500 ml (1 × 500 ml pouch = 0.5 L), "
+                        "total 142 rupees. Cash or UPI?")
+
+
+async def test_sale_add_merges_into_the_open_sale_and_says_the_running_total(store, session):
+    first = await _curd_sale()
+    use_call("tc-2")
+    r = await sale_tools.sale_add([{"product": "aavin milk 500 ml", "qty": 1}])
+    assert r["ok"] is True and r["total"] == 142 and r["saleId"] != first["saleId"]
+    assert r["say"] == ("2 L Sakthi Curd 1 L and 0.5 L Aavin Milk 500 ml (1 × 500 ml pouch = 0.5 L), "
+                        "total 142 rupees so far. Cash or UPI?")
+    assert sale_tools.active_sale[session.session_id] == r["saleId"]
+    assert (await store.get(paths.sale(SHOP, first["saleId"])))["state"] == "SALE_VOID"
+    assert (await store.get(paths.sale(SHOP, r["saleId"])))["state"] == "SALE_PENDING"
+
+
+async def test_sale_add_without_open_sale_starts_one(store, session):
+    r = await sale_tools.sale_add([{"product": "aavin milk 500 ml", "qty": 2}])
+    assert r["ok"] is True and r["total"] == 44 and sale_tools.active_sale[session.session_id] == r["saleId"]
+
+
+async def test_sale_add_insufficient_stock_keeps_the_open_sale(store, session):
+    first = await _curd_sale()
+    use_call("tc-2")
+    r = await sale_tools.sale_add([{"product": "sakthi curd 1 litre", "qty": 20, "unit": "L"}])
+    assert r["ok"] is False
+    assert sale_tools.active_sale[session.session_id] == first["saleId"]
+    assert (await store.get(paths.sale(SHOP, first["saleId"])))["state"] == "SALE_PENDING"
+
+
+async def test_cash_change_line_names_the_notes_to_give_back(store, session, phone, proposals, notified,
+                                                            monkeypatch):
+    s = await _curd_sale()                                      # 120
+    use_call("tc-2")
+    monkeypatch.setattr(pay, "CASH_PREP_S", 0)
+    monkeypatch.setattr(vcash, "read_cash", cash_reads(200, 80))
+    phone.queue("cash", "c1", "c2", "c3", "c4")
+    await pay.sale_pay(s["saleId"], "cash")
+    assert notified[0][1] == ("Received 200. Give back 80 rupees: one 50, one 20, one 10. "
+                              "Show the change to the camera.")
+    assert proposals[0]["prompt"] == "Received 200, change 80. Complete the sale?"
+
+
+async def test_cash_change_line_counts_repeated_notes(store, session, phone, proposals, notified, monkeypatch):
+    s = await _curd_sale()                                      # 120
+    use_call("tc-2")
+    monkeypatch.setattr(pay, "CASH_PREP_S", 0)
+    monkeypatch.setattr(vcash, "read_cash", cash_reads(160, 40))
+    phone.queue("cash", "c1", "c2", "c3", "c4")
+    await pay.sale_pay(s["saleId"], "cash")
+    assert notified[0][1].startswith("Received 160. Give back 40 rupees: two 20s.")
+
+
+def test_notes_words_in_three_languages():
+    notes = [{"denomination": 50, "count": 1}, {"denomination": 10, "count": 3}]
+    assert pay._notes_words(notes, "en") == "one 50, three 10s"
+    assert pay._notes_words(notes, "ta") == (t("k2.notes.one", "ta", d=50) + ", "
+                                             + t("k2.notes.many", "ta", count=3, d=10))
+    assert pay._notes_words(notes, "hi") == (t("k2.notes.one", "hi", d=50) + ", "
+                                             + t("k2.notes.many", "hi", count=3, d=10))
+    assert len({pay._notes_words(notes, lang) for lang in ("en", "ta", "hi")}) == 3
+
+
+async def test_upi_exact_amount_proposes_with_soundbox_evidence(store, session, proposals, notified, monkeypatch):
+    s = await _curd_sale()
+    use_call("tc-2")
+    task, listeners = await _upi(monkeypatch, s["saleId"])
+    await listeners[0]("Received rupees 120 on PhonePe")
+    r = await task
+    assert r["needs_confirm"] is True
+    ev = proposals[-1]["payload"]["evidence"]
+    assert (ev["type"], ev["amount"], ev["provider"], ev["payments"]) == ("soundbox", 120, "PhonePe", [120])
+    assert proposals[-1]["prompt"] == "120 rupees received by UPI. Complete the sale?"
+    assert not any(c == "mismatch" for _, _, c in notified)
+
+
+async def test_upi_short_payment_says_how_much_more_and_keeps_waiting(store, session, proposals, notified,
+                                                                      monkeypatch):
+    s = await _curd_sale()
+    use_call("tc-2")
+    monkeypatch.setattr(pay, "UPI_WAIT_S", 0.3)
+    task, listeners = await _upi(monkeypatch, s["saleId"])
+    await listeners[0]("Received rupees 110 on PhonePe")
+    assert not task.done()
+    assert notified[-1][1:] == ("10 rupees short, ask for 10 more.", "mismatch")
+    r = await task                                              # soundbox went quiet: Sam decides
+    assert r["needs_confirm"] is True
+    p = proposals[-1]
+    assert p["prompt"] == "Only 110 of 120 rupees received by UPI, 10 short. Complete the sale anyway?"
+    assert p["payload"]["evidence"] == {"type": "user_confirm", "heard": 110, "payments": [110]}
+    assert listeners == []
+
+
+async def test_upi_two_partial_payments_add_up_to_the_bill(store, session, proposals, notified, monkeypatch):
+    s = await _curd_sale()
+    use_call("tc-2")
+    task, listeners = await _upi(monkeypatch, s["saleId"])
+    await listeners[0]("Received rupees 50 on PhonePe")
+    assert not task.done() and notified[-1][1] == "70 rupees short, ask for 70 more."
+    await listeners[0]("Received rupees 70 on Google Pay")
+    r = await task
+    assert r["needs_confirm"] is True
+    ev = proposals[-1]["payload"]["evidence"]
+    assert (ev["type"], ev["amount"], ev["payments"], ev["provider"]) == ("soundbox", 120, [50, 70], None)
+    assert proposals[-1]["prompt"] == "120 rupees received by UPI. Complete the sale?"
+    r = await pay._commit_sale(proposals[-1]["payload"], None)
+    assert r["ok"] is True
+    assert (await store.get(paths.sale(SHOP, s["saleId"])))["state"] == "SALE_COMPLETED"
+
+
+async def test_upi_over_payment_says_what_to_return_and_asks(store, session, proposals, notified, monkeypatch):
+    s = await _curd_sale()
+    use_call("tc-2")
+    task, listeners = await _upi(monkeypatch, s["saleId"])
+    await listeners[0]("Received rupees 140 on PhonePe")
+    r = await task
+    assert notified[-1][1:] == ("20 rupees extra received, return 20.", "mismatch")
+    assert r["needs_confirm"] is True
+    p = proposals[-1]
+    assert p["prompt"] == "140 rupees received by UPI, 20 extra. Return 20 and complete the sale?"
+    ev = p["payload"]["evidence"]
+    assert (ev["type"], ev["amount"], ev["heard"], ev["extra"], ev["payments"]) == ("soundbox", 120, 140, 20, [140])
+    done = await pay._commit_sale(p["payload"], None)
+    assert done["ok"] is True
+
+
+async def test_upi_short_then_over_across_partials(store, session, proposals, notified, monkeypatch):
+    s = await _curd_sale()
+    use_call("tc-2")
+    task, listeners = await _upi(monkeypatch, s["saleId"])
+    await listeners[0]("Received rupees 100 on PhonePe")
+    await listeners[0]("Received rupees 50 on PhonePe")
+    await task
+    assert notified[-2][1] == "20 rupees short, ask for 20 more."
+    assert notified[-1][1] == "30 rupees extra received, return 30."
+    assert proposals[-1]["payload"]["evidence"]["payments"] == [100, 50]
+
+
+async def test_upi_no_sale_completes_before_the_bill_is_covered(store, session, proposals, notified, monkeypatch):
+    s = await _curd_sale()
+    use_call("tc-2")
+    monkeypatch.setattr(pay, "UPI_WAIT_S", 0.2)
+    task, listeners = await _upi(monkeypatch, s["saleId"])
+    await listeners[0]("Received rupees 100 on PhonePe")
+    await listeners[0]("Received rupees 10 on PhonePe")
+    assert not task.done() and proposals == []
+    await task
+    assert (await store.get(paths.sale(SHOP, s["saleId"])))["state"] == "SALE_PENDING"
+    assert proposals[-1]["payload"]["evidence"]["type"] == "user_confirm"
+
+
+def test_billing_lines_exist_in_three_languages():
+    keys = ["k2.sale.price", "k2.sale.running", "k2.sale.change", "k2.sale.upi_short", "k2.sale.upi_over",
+            "k2.sale.upi_over_q", "k2.sale.upi_short_q", "k2.notes.one", "k2.notes.many", "k2.list.and"]
+    for key in keys:
+        texts = {lang: t(key, lang) for lang in ("en", "ta", "hi")}
+        assert all(v != key for v in texts.values()), key
+        assert len(set(texts.values())) == 3, key

@@ -46,8 +46,21 @@ async def _notify(s: Session, text: str, cue: str = "ack") -> None:
     await _speak.speak_to(s, text, cue)
 
 
-def _notes_words(notes: list[dict]) -> str:
-    return ", ".join(f"{n['count']} × ₹{n['denomination']}" for n in notes)
+_COUNT_WORDS_EN = {1: "one", 2: "two", 3: "three", 4: "four", 5: "five", 6: "six", 7: "seven", 8: "eight",
+                   9: "nine", 10: "ten"}
+
+
+def _notes_words(notes: list[dict], lang: str) -> str:
+    """Spoken, not printed: "one 50, three 10s" (en), with the count as a word where the language has one."""
+    out = []
+    for n in notes:
+        count, d = int(n["count"]), int(n["denomination"])
+        if count == 1:
+            out.append(t("k2.notes.one", lang, d=d))
+        else:
+            spoken = _COUNT_WORDS_EN.get(count, str(count)) if lang == "en" else str(count)
+            out.append(t("k2.notes.many", lang, count=spoken, d=d))
+    return ", ".join(out)
 
 
 async def _read_cash(s: Session):
@@ -95,7 +108,7 @@ async def supplier_pay(order_id: str, method: Literal["cash", "upi"]) -> dict:
     if method == "upi":
         return await confirm.propose("payment", t("k2.pay.upi_q", s.lang, amount=amount, supplier=supplier),
                                      base, "supplier_pay.upi")
-    await _notify(s, t("k2.pay.plan", s.lang, amount=amount, notes=_notes_words(money.notes_for(amount))))
+    await _notify(s, t("k2.pay.plan", s.lang, amount=amount, notes=_notes_words(money.notes_for(amount), s.lang)))
     await asyncio.sleep(CASH_PREP_S)
     read, retake = await _read_cash(s)
     if retake:
@@ -190,7 +203,7 @@ async def sale_pay(sale_id: str, method: Literal["cash", "upi"]) -> dict:
         return {"ok": False, "say": hints.say("InsufficientTender", s.lang, short=total - tendered)}
     if change > 0:
         await _notify(s, t("k2.sale.change", s.lang, tendered=tendered, change=change,
-                           notes=_notes_words(money.notes_for(change))))
+                           notes=_notes_words(money.notes_for(change), s.lang)))
         await asyncio.sleep(CASH_PREP_S)
         back, retake = await _read_cash(s)
         if retake:
@@ -207,32 +220,61 @@ async def sale_pay(sale_id: str, method: Literal["cash", "upi"]) -> dict:
 
 
 async def _await_soundbox(s: Session, sale: dict, total: int, idem: str) -> dict:
-    got: asyncio.Future = asyncio.get_running_loop().create_future()
+    """Listen for the shop's soundbox and add up what it announces (a customer may pay in two goes).
+
+    Short: tell the owner how much more to ask for and keep listening. Exact: propose completing. Over: tell
+    him what to return and propose. Quiet: ask the owner; with a partial amount heard, the question names the
+    shortfall, so only his explicit "yes" completes a sale that is not fully paid.
+    """
+    covered: asyncio.Future = asyncio.get_running_loop().create_future()
+    heard: list[tuple[soundbox.SoundboxEvent, str]] = []
+
+    def paid() -> int:
+        return sum(ev.amount for ev, _ in heard)
 
     async def on_text(text: str) -> None:
         ev = soundbox.parse(text)
-        if ev is None or got.done():
+        if ev is None or covered.done():
             return
-        if ev.amount == total:
-            got.set_result((ev, text))
+        heard.append((ev, text))
+        if paid() < total:
+            await _notify(s, t("k2.sale.upi_short", s.lang, short=total - paid()), "mismatch")
             return
-        await _notify(s, t("k2.sale.upi_wrong", s.lang, heard=ev.amount, total=total), "mismatch")
+        if paid() > total:
+            await _notify(s, t("k2.sale.upi_over", s.lang, extra=paid() - total), "mismatch")
+        covered.set_result(None)
 
     unsubscribe = _subscribe(s.session_id, on_text)
     try:
         await _notify(s, t("k2.sale.upi_wait", s.lang))
-        ev, text = await asyncio.wait_for(got, timeout=UPI_WAIT_S)
+        await asyncio.wait_for(covered, timeout=UPI_WAIT_S)
     except TimeoutError:
+        amounts = [ev.amount for ev, _ in heard]
+        if amounts:                                          # part paid: the question says what is missing
+            return await confirm.propose(
+                "sale", t("k2.sale.upi_short_q", s.lang, paid=paid(), total=total, short=total - paid()),
+                {"sale_id": sale["id"], "method": "upi", "amount": total,
+                 "evidence": {"type": "user_confirm", "heard": paid(), "payments": amounts}, "idem": idem},
+                "sale.complete")
         return await confirm.propose("sale", t("k2.sale.upi_timeout_q", s.lang, total=total),
                                      {"sale_id": sale["id"], "method": "upi", "amount": total,
                                       "evidence": {"type": "user_confirm"}, "idem": idem}, "sale.complete")
     finally:
         unsubscribe()
+    received = paid()
+    providers = {ev.provider for ev, _ in heard}
+    evidence = {"type": "soundbox", "amount": total, "heard": received, "payments": [ev.amount for ev, _ in heard],
+                "provider": providers.pop() if len(providers) == 1 else None,
+                "transcript": " | ".join(text for _, text in heard)}
+    if received > total:
+        extra = received - total
+        return await confirm.propose("sale", t("k2.sale.upi_over_q", s.lang, paid=received, extra=extra),
+                                     {"sale_id": sale["id"], "method": "upi", "amount": total,
+                                      "evidence": {**evidence, "extra": extra}, "idem": idem}, "sale.complete")
     await s.send(CueMsg(cue="match"))
-    return await confirm.propose("sale", t("k2.sale.upi_heard_q", s.lang, amount=ev.amount),
-                                 {"sale_id": sale["id"], "method": "upi", "amount": total,
-                                  "evidence": {"type": "soundbox", "amount": ev.amount, "provider": ev.provider,
-                                               "transcript": text}, "idem": idem}, "sale.complete")
+    return await confirm.propose("sale", t("k2.sale.upi_heard_q", s.lang, amount=received),
+                                 {"sale_id": sale["id"], "method": "upi", "amount": total, "evidence": evidence,
+                                  "idem": idem}, "sale.complete")
 
 
 async def _commit_sale(payload: dict, value: str | None) -> dict:
