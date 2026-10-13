@@ -19,7 +19,7 @@ EXPECTED = {
     "sale_pay": ["sale_id", "method"],
     "stock_query": ["product"], "expiry_check": [],
     "product_find": ["product", "count_needed"], "product_identify": [], "location_remember": ["product", "zone"],
-    "camera_ask": ["question"], "describe_mode": ["on"],
+    "camera_ask": ["question", "kind", "item", "product"], "describe_mode": ["on"],
     "memory_where": ["item"], "memory_forget": ["item"], "memory_remembering": ["on", "item"],
     "day_summary": [], "reorder_suggest": ["product"], "confirm_action": ["confirm_id", "answer"],
     "web_search": ["query"],  # Google Search grounding for current facts (tools/search.py)
@@ -42,6 +42,7 @@ OPTIONAL_DEFAULTS = {
     ("product_update", "supplier_id"): None, ("stock_add", "unit"): None,
     ("memory_forget", "item"): None, ("memory_remembering", "item"): None,
     ("price_query", "product"): None, ("price_query", "page"): 0,
+    ("camera_ask", "kind"): "look", ("camera_ask", "item"): "", ("camera_ask", "product"): "",
 }
 
 LITERALS = {
@@ -49,6 +50,7 @@ LITERALS = {
     ("supplier_pay", "method"): ("cash", "upi"), ("sale_pay", "method"): ("cash", "upi"),
     ("confirm_action", "answer"): ("yes", "no"),
     ("supplier_add", "channel"): ("telegram", "call", "whatsapp"),
+    ("camera_ask", "kind"): ("look", "read", "count", "path", "list"),
 }
 
 # Typed sample arguments for each stub. When an owner implements a tool, they remove it from STUBS
@@ -129,14 +131,14 @@ def test_harness_prints_server_msgs_then_result_and_loads_images(capsys, monkeyp
         frames = s.frames.latest(5, purpose="count")
         seen.update(shop=s.shop_id, lang=s.lang, frames=[(f.id, f.purpose) for f in frames])
         await s.send(CueMsg(cue="thinking"))
-        return {"say": f"Counted {sku}", "frames": len(frames)}
+        return {"say_en": f"Counted {sku}", "frames": len(frames)}
 
     monkeypatch.setitem(call_tool.TOOLS_BY_NAME, "fake_tool", fake_tool)
     call_tool.main(["fake_tool", "--args", '{"sku": "sakthi_curd_1l"}', "--image", str(img), "--image", str(img),
                     "--purpose", "count", "--shop", "test_shop", "--lang", "ta"])
     lines = capsys.readouterr().out.strip().splitlines()
     assert json.loads(lines[0]) == {"t": "cue", "cue": "thinking"}
-    assert json.loads(lines[-1]) == {"say": "Counted sakthi_curd_1l", "frames": 2}
+    assert json.loads(lines[-1]) == {"say_en": "Counted sakthi_curd_1l", "frames": 2}
     assert seen == {"shop": "test_shop", "lang": "ta", "frames": [("img0", "count"), ("img1", "count")]}
 
 
@@ -147,13 +149,13 @@ def test_harness_answers_request_frame_like_the_phone(capsys, monkeypatch, tmp_p
     async def fake_cash(amount: int) -> dict:
         """A tool that asks the phone for a burst of cash frames."""
         frames = await get_session().request_frames("cash", count=3, interval_ms=100, timeout_s=1)
-        return {"say": "ok", "frames": [f.purpose for f in frames]}
+        return {"say_en": "ok", "frames": [f.purpose for f in frames]}
 
     monkeypatch.setitem(call_tool.TOOLS_BY_NAME, "fake_cash", fake_cash)
     call_tool.main(["fake_cash", "--args", '{"amount": 60}', "--image", str(img)])
     lines = capsys.readouterr().out.strip().splitlines()
     assert json.loads(lines[0]) == {"t": "request_frame", "purpose": "cash", "burst": {"count": 3, "intervalMs": 100}}
-    assert json.loads(lines[-1]) == {"say": "ok", "frames": ["cash", "cash", "cash"]}
+    assert json.loads(lines[-1]) == {"say_en": "ok", "frames": ["cash", "cash", "cash"]}
 
 
 @pytest.mark.parametrize("bad", ["not json", "[1]"])

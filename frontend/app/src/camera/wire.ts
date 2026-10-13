@@ -99,6 +99,7 @@ export function wireCameraAndGuidance(opts: WireOptions = {}): CameraWiring {
     hint,
     sleep: defaultSleep,
     hold: holdBackground,
+    buffered: () => { try { return app.socket?.bufferedAmount?.() ?? 0; } catch { return 0; } },
   });
 
   let near = false;

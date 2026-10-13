@@ -15,46 +15,57 @@ PRODUCTS = {"sakthi_curd_1l": {"name": "Sakthi curd", "unit": "L", "reorderThres
             "aavin_milk_500ml": {"name": "Aavin milk", "unit": "L", "packSizeL": 0.5, "reorderThreshold": 10}}
 
 
-# ---------- spoken quantities always carry their selling unit ----------
+# ---------- quantities always carry their selling unit (English facts; Live phrases them) ----------
 
-def test_amount_speaks_the_selling_unit():
-    assert sm.amount(23, "L", "en") == "23 litres"
-    assert sm.amount(1, "L", "en") == "1 litre"
-    assert sm.amount(3.5, "L", "en") == "3.5 litres"
-    assert sm.amount(6.0, "pack", "en") == "6 packs"
-    assert sm.amount(1, "box", "en") == "1 box" and sm.amount(2, "box", "en") == "2 boxes"
-    assert sm.amount(2, "jar", "en") == "2 jars"
+def test_amount_carries_the_selling_unit():
+    assert sm.amount(23, "L") == "23 litres"
+    assert sm.amount(1, "L") == "1 litre"
+    assert sm.amount(3.5, "L") == "3.5 litres"
+    assert sm.amount(6.0, "pack") == "6 packs"
+    assert sm.amount(1, "box") == "1 box" and sm.amount(2, "box") == "2 boxes"
+    assert sm.amount(2, "jar") == "2 jars"
 
 
 def test_amount_without_a_unit_uses_the_ledger_default_pack_and_never_drops_an_unknown_unit():
-    assert sm.amount(2, None, "en") == "2 packs"            # business.ledger stores products with no unit as packs
-    assert sm.amount(4, "crate", "en") == "4 crate"         # spoken as stored, not guessed
+    assert sm.amount(2, None) == "2 packs"            # business.ledger stores products with no unit as packs
+    assert sm.amount(4, "crate") == "4 crate"         # written as stored, not guessed
 
 
-def test_amount_in_tamil_and_hindi():
-    assert sm.amount(23, "L", "ta") == "23 லிட்டர்" and sm.amount(6, "pack", "ta") == "6 பாக்கெட்"
-    assert sm.amount(23, "L", "hi") == "23 लीटर" and sm.amount(6, "pack", "hi") == "6 पैकेट"
+def test_item_is_amount_of_name():
+    assert sm.item(23, "L", "Aavin Milk 500 ml") == "23 litres of Aavin Milk 500 ml"
 
 
-def test_say_speaks_suggested_orders_in_litres_not_bare_numbers():
-    """23 is litres of 500 ml pouches (46 pouches): '23 Aavin Milk 500 ml' would be heard as 23 pouches."""
-    d = {"sales_count": 0, "names": {"aavin_milk_500ml": "Aavin Milk 500 ml", "aavin_ghee_200ml": "Aavin Ghee"},
+def test_facts_name_the_top_seller_and_the_suggested_orders_with_units():
+    """23 is litres of 500 ml pouches (46 pouches): a bare '23 Aavin Milk 500 ml' would be heard as 23 pouches."""
+    d = {"sales_count": 2, "revenue": 174, "top_sku": "aavin_milk_500ml",
+         "names": {"aavin_milk_500ml": "Aavin Milk 500 ml", "aavin_ghee_200ml": "Aavin Ghee"},
          "suggested_orders": [{"sku": "aavin_milk_500ml", "qty": 23, "unit": "L"},
                               {"sku": "aavin_ghee_200ml", "qty": 2, "unit": "jar"}]}
-    assert sm.say(d, "en") == ("No sales recorded today yet. "
-                               "Suggested order for tomorrow: 23 litres of Aavin Milk 500 ml, 2 jars of Aavin Ghee.")
-    assert "Aavin Milk 500 ml 23 லிட்டர்" in sm.say(d, "ta")
-    assert "23 लीटर Aavin Milk 500 ml" in sm.say(d, "hi")
+    f = sm.facts(d)
+    assert f["sales_count"] == 2 and f["revenue"] == 174 and f["top_seller"] == "Aavin Milk 500 ml"
+    assert f["suggested_orders"] == [{"sku": "aavin_milk_500ml", "qty": 23, "unit": "L", "name": "Aavin Milk 500 ml"},
+                                     {"sku": "aavin_ghee_200ml", "qty": 2, "unit": "jar", "name": "Aavin Ghee"}]
+    assert f["demo_history"] is False
+    assert f["say_en"] == ("Today: 2 sales, 174 rupees. Top seller: Aavin Milk 500 ml. "
+                           "Suggested order for tomorrow: 23 litres of Aavin Milk 500 ml, 2 jars of Aavin Ghee.")
 
 
-def test_say_marks_a_suggestion_built_on_demo_history():
+def test_facts_no_sales():
+    f = sm.facts({"sales_count": 0, "revenue": 0, "top_sku": None, "suggested_orders": [], "names": {}})
+    assert f["sales_count"] == 0 and f["top_seller"] is None and f["suggested_orders"] == []
+    assert f["say_en"] == "No sales recorded today yet."
+
+
+def test_facts_mark_a_suggestion_built_on_demo_history():
     d = {"sales_count": 0, "names": {"aavin_ghee_200ml": "Aavin Ghee"}, "demo_history": True,
          "suggested_orders": [{"sku": "aavin_ghee_200ml", "qty": 2, "unit": "jar"}]}
-    assert sm.say(d, "en") == ("No sales recorded today yet. Based on demo sales history. "
-                               "Suggested order for tomorrow: 2 jars of Aavin Ghee.")
-    assert sm.say({**d, "suggested_orders": []}, "en") == "No sales recorded today yet."  # nothing to mark
-    assert sm.say({**d, "demo_history": False}, "en") == ("No sales recorded today yet. "
-                                                          "Suggested order for tomorrow: 2 jars of Aavin Ghee.")
+    f = sm.facts(d)
+    assert f["demo_history"] is True
+    assert f["say_en"] == ("No sales recorded today yet. Based on demo sales history. "
+                           "Suggested order for tomorrow: 2 jars of Aavin Ghee.")
+    assert sm.facts({**d, "suggested_orders": []})["say_en"] == "No sales recorded today yet."  # nothing to mark
+    assert sm.facts({**d, "demo_history": False})["say_en"] == ("No sales recorded today yet. "
+                                                                "Suggested order for tomorrow: 2 jars of Aavin Ghee.")
 
 
 def test_suggest_qty_rounds_up_with_safety_and_never_negative():

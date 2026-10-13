@@ -15,7 +15,6 @@ from aira_live.business import catalog, hints, ledger, outbox, paths, seed
 from aira_live.business.store import MemoryStore, set_store
 from aira_live.contracts import CountMsg, RequestFrameMsg
 from aira_live.frames import Frame
-from aira_live.i18n import t
 from aira_live.session import Session, current_session, current_tool_call_id
 from aira_live.tools import _repo, delivery
 from aira_live.tools.delivery import OnePassCounter
@@ -110,9 +109,9 @@ def proposals(monkeypatch):
     previous = confirm._store
     confirm.set_store(confirm.MemoryProposalStore())
 
-    async def recording(kind, prompt, payload, committer):
-        out = await real(kind, prompt, payload, committer)
-        made.append({"kind": kind, "prompt": prompt, "payload": payload, "committer": committer})
+    async def recording(kind, prompt, payload, committer, facts=None):
+        out = await real(kind, prompt, payload, committer, facts=facts)
+        made.append({"kind": kind, "prompt": prompt, "payload": payload, "committer": committer, "facts": facts})
         return out
 
     monkeypatch.setattr(confirm, "propose", recording)
@@ -184,17 +183,18 @@ async def test_delivery_start_moves_to_delivery_pending(store, session, publishe
     d = await _repo.get_delivery(SHOP, r["deliveryId"])
     assert (d["items"][0]["sku"], d["items"][0]["expectedQty"], d["items"][0]["countedQty"]) == (CURD, 3.0, None)
     assert ("orders", {"shop_id": SHOP, "order_id": "o1", "state": "DELIVERY_PENDING"}) in published
-    assert r["say"] == "Delivery from Sakthi curd vendor. Show each pack to the camera, one at a time."
+    assert r["supplier"] == "Sakthi curd vendor"
+    assert r["say_en"] == "Delivery from Sakthi curd vendor. Show each pack to the camera, one at a time."
 
 
 async def test_delivery_start_without_order_says_none(store, session):
     r = await delivery.delivery_start()
-    assert r["ok"] is False and r["say"] == t("k2.order.none", "en")
+    assert r["ok"] is False and r["error"] == "NO_OPEN_ORDER" and r["say_en"]
 
 
 async def test_delivery_count_without_delivery_says_none(store, session):
     r = await delivery.delivery_count(CURD)
-    assert r["ok"] is False and r["say"] == t("k2.delivery.none", "en")
+    assert r["ok"] is False and r["error"] == "NO_DELIVERY" and r["say_en"]
 
 
 async def test_delivery_count_one_by_one_streams_and_proposes(store, session, phone, proposals, monkeypatch):
@@ -206,6 +206,7 @@ async def test_delivery_count_one_by_one_streams_and_proposes(store, session, ph
     assert any(m.stop for m in phone.of(RequestFrameMsg))
     p = proposals[0]
     assert (p["kind"], p["committer"], p["payload"]["qty"]) == ("generic", "delivery.record_count", 3.0)
+    assert (p["facts"]["product"], p["facts"]["counted"], p["facts"]["expected"]) == ("Sakthi Curd 1 L", 3, 3)
 
 
 async def test_delivery_count_resolves_spoken_name(store, session, phone, proposals, monkeypatch):
@@ -222,7 +223,8 @@ async def test_delivery_count_nothing_seen_does_not_propose(store, session, phon
     await _placed(store)
     await delivery.delivery_start()
     r = await _count_three(phone, monkeypatch, frames=[("g1", 1000)])
-    assert r["ok"] is False and proposals == []
+    assert r["ok"] is False and r["error"] == "NOTHING_SEEN" and r["product"] == "Sakthi Curd 1 L"
+    assert proposals == []
 
 
 async def test_delivery_commit_is_idempotent(store, session, phone, proposals, monkeypatch):
@@ -260,7 +262,7 @@ async def test_delivery_count_crate_retake_speaks_aim_hint(store, session, phone
 
     monkeypatch.setattr(vcount, "count_in_frame", blurry)
     r = await delivery.delivery_count(GHEE, mode="crate")
-    assert r["needs_retake"] is True and r["say"] == t("vision.aim.move_back", "en")
+    assert r["needs_retake"] is True and r["aim_hint"] == "vision.aim.move_back" and r["say_en"]
     assert proposals == []
 
 
@@ -316,7 +318,8 @@ async def test_invoice_check_match_reconciles(store, session, phone, published, 
     phone.queued["invoice"] = ["i1", "i2"]
     monkeypatch.setattr(vinv, "read_invoice", _invoice(3, 150))
     r = await delivery.invoice_check("o1")
-    assert r["state"] == "DELIVERY_RECONCILED" and r["say"] == "The bill matches. Total 150 rupees."
+    assert r["state"] == "DELIVERY_RECONCILED" and r["match"] is True and r["total"] == 150
+    assert r["say_en"] == "The bill matches. Total 150 rupees."
     assert ("orders", {"shop_id": SHOP, "order_id": "o1", "state": "DELIVERY_RECONCILED"}) in published
 
 
@@ -326,8 +329,10 @@ async def test_invoice_check_mismatch_marks_discrepancy(store, session, phone, p
     monkeypatch.setattr(vinv, "read_invoice", _invoice(4, 200))
     r = await delivery.invoice_check("o1")
     name = (await store.get(paths.product(SHOP, CURD)))["name"]
-    assert r["state"] == "DISCREPANCY"
-    assert r["say"].startswith(hints.say("INVOICE_QTY_MISMATCH", "en", product=name, expected="3", actual="4"))
+    assert r["state"] == "DISCREPANCY" and r["match"] is False
+    first = r["discrepancies"][0]
+    assert (first["kind"], first["product"], first["expected"], first["actual"]) == ("INVOICE_QTY_MISMATCH", name, 3, 4)
+    assert r["say_en"].startswith(hints.english("INVOICE_QTY_MISMATCH", product=name, expected="3", actual="4"))
     assert any(topic == "discrepancies" and p["field"] == f"INVOICE_QTY_MISMATCH:{CURD}" for topic, p in published)
 
 
@@ -336,7 +341,7 @@ async def test_invoice_unreadable_asks_retake(store, session, phone, monkeypatch
     phone.queued["invoice"] = ["i1", "i2"]
     monkeypatch.setattr(vinv, "read_invoice", _invoice(3, 150, agreed=False))
     r = await delivery.invoice_check("o1")
-    assert r["needs_retake"] is True and r["say"] == hints.say("INVOICE_UNREADABLE", "en")
+    assert r["needs_retake"] is True and r["error"] == "INVOICE_UNREADABLE" and r["say_en"]
     assert (await _repo.get_order(SHOP, "o1"))["state"] == "DELIVERY_PENDING"
 
 
@@ -373,9 +378,11 @@ async def test_a_recount_corrects_stock_instead_of_adding_it_again(store, sessio
 async def test_a_short_count_names_the_shortfall_and_offers_a_recount(store, session, phone, proposals, monkeypatch):
     await _placed(store)
     await delivery.delivery_start()
-    await _count_packs(phone, monkeypatch, 2, "tc-count-1")
+    r = await _count_packs(phone, monkeypatch, 2, "tc-count-1")
     assert proposals[-1]["prompt"] == ("I counted 2 packs of Sakthi Curd 1 L. The order was 3. "
                                        "1 may be missing. Save 2, or shall I count again?")
+    assert r["needs_confirm"] is True and r["say_en"] == proposals[-1]["prompt"]
+    assert (r["product"], r["counted"], r["expected"], r["missing"]) == ("Sakthi Curd 1 L", 2, 3, 1)
 
 
 async def test_the_same_number_again_says_still(store, session, phone, proposals, monkeypatch):
@@ -383,8 +390,8 @@ async def test_the_same_number_again_says_still(store, session, phone, proposals
     await delivery.delivery_start()
     await _count_packs(phone, monkeypatch, 2, "tc-count-1")
     await delivery._commit_count(proposals[-1]["payload"], None)
-    await _count_packs(phone, monkeypatch, 2, "tc-count-2")
-    assert proposals[-1]["prompt"].startswith("Still 2. ")
+    r = await _count_packs(phone, monkeypatch, 2, "tc-count-2")
+    assert proposals[-1]["prompt"].startswith("Still 2. ") and r["still"] is True and r["counted"] == 2
 
 
 async def test_a_confirmed_short_count_marks_the_order_and_lets_the_vendor_be_paid(store, session, phone, proposals,
@@ -394,7 +401,8 @@ async def test_a_confirmed_short_count_marks_the_order_and_lets_the_vendor_be_pa
     await delivery.delivery_start()
     await _count_packs(phone, monkeypatch, 2, "tc-count-1")
     r = await delivery._commit_count(proposals[-1]["payload"], None)
-    assert r["say"] == "Recorded: 2 packs received, 1 short."
+    assert (r["ok"], r["counted"], r["expected"], r["missing"]) == (True, 2, 3, 1)
+    assert r["say_en"] == "Recorded: 2 packs received, 1 short."
     assert (await _repo.get_order(SHOP, "o1"))["state"] == "DISCREPANCY"
     d = await _repo.get_delivery(SHOP, proposals[-1]["payload"]["delivery_id"])
     assert [(x["kind"], x["expected"], x["actual"]) for x in d["discrepancies"]] == [("SHORT_DELIVERY", 3.0, 2.0)]
@@ -406,7 +414,8 @@ async def test_a_full_count_marks_the_delivery_checked(store, session, phone, pr
     await delivery.delivery_start()
     await _count_packs(phone, monkeypatch, 3, "tc-count-1")
     r = await delivery._commit_count(proposals[-1]["payload"], None)
-    assert r["say"] == "Recorded: 3 packs of Sakthi Curd 1 L received."
+    assert (r["ok"], r["product"], r["counted"], r["expected"]) == (True, "Sakthi Curd 1 L", 3, 3)
+    assert "missing" not in r and r["say_en"] == "Recorded: 3 packs of Sakthi Curd 1 L received."
     assert (await _repo.get_order(SHOP, "o1"))["state"] == "DELIVERY_RECONCILED"
 
 
@@ -432,7 +441,8 @@ async def test_a_wrong_bill_says_its_total_and_what_it_should_be(store, session,
     phone.queued["invoice"] = ["i1", "i2"]
     monkeypatch.setattr(vinv, "read_invoice", _invoice(3, 150))
     r = await delivery.invoice_check("o1")
-    assert r["say"].endswith("The bill total is 150 rupees. It should be 100 rupees.")
+    assert (r["total"], r["payable"]) == (150, 100)
+    assert r["say_en"].endswith("The bill total is 150 rupees. It should be 100 rupees.")
 
 
 def test_one_blurry_frame_while_holding_a_pack_does_not_count_it_twice():
@@ -467,6 +477,6 @@ async def test_a_new_order_is_never_counted_against_an_old_paid_delivery(store, 
                                   "state": "ORDER_PLACED", "lang": "en", "idemKey": "k-o2", "updatedAt": "2026-10-13T09:00:00",
                                   "items": [{"sku": CURD, "name": p["name"], "qty": 6.0, "unit": "L", "agreedPrice": 50}]})
     r = await _count_packs(phone, monkeypatch, 6, "tc-count-2")              # Gemini skipped delivery_start
-    assert r["ok"] is False and r["say"] == t("k2.delivery.none", "en")
+    assert r["ok"] is False and r["error"] == "NO_DELIVERY"
     old = await _repo.get_delivery(SHOP, first["deliveryId"])
     assert old["items"][0]["countedQty"] == 3.0                               # the paid delivery is untouched

@@ -51,7 +51,7 @@ async def test_notify_drops_an_identical_notice_within_ten_seconds(mk_session, m
     spoken = []
 
     class Bridge:
-        async def speak_notice(self, text):
+        async def speak_notice(self, text, urgent=False):
             spoken.append(text)
 
     sessions.register(s, Bridge())
@@ -59,7 +59,8 @@ async def test_notify_drops_an_identical_notice_within_ten_seconds(mk_session, m
         assert await sessions.notify("dd_shop", "Sakthi vendor confirmed: delivery at 6 pm.") == 1
         assert await sessions.notify("dd_shop", "Sakthi vendor confirmed: delivery at 6 pm.") == 0
         assert await sessions.notify("dd_shop", "Sakthi vendor confirmed: delivery at 6 pm") == 0
-        assert len(rec.msgs) == 2 and spoken == ["Sakthi vendor confirmed: delivery at 6 pm."]
+        assert [m.t for m in rec.msgs] == ["cue"]  # the earcon; Live captions its own words
+        assert spoken == ["Sakthi vendor confirmed: delivery at 6 pm."]
         assert await sessions.notify("dd_shop", "Low stock: Aavin milk", cue="warn") == 1
         clock.t += NOTICE_DEDUPE_S + 0.1
         assert await sessions.notify("dd_shop", "Sakthi vendor confirmed: delivery at 6 pm.") == 1
@@ -153,4 +154,39 @@ async def test_a_notice_queued_while_reconnecting_is_dropped_once_stale(mk_sessi
     for _ in range(20):
         await asyncio.sleep(0)
     assert b2.sent_text == ["what is the stock?"]
+    await bridge.close()
+
+
+async def test_notify_marks_a_safety_line_urgent(mk_session):
+    s, rec = mk_session(shop="urg_shop")
+    spoken = []
+
+    class Bridge:
+        async def speak_notice(self, text, urgent=False):
+            spoken.append((text, urgent))
+
+    sessions.register(s, Bridge())
+    try:
+        assert await sessions.notify("urg_shop", "Stop. Step down ahead.", cue="warn", urgent=True) == 1
+        assert await sessions.notify("urg_shop", "Vendor Sakthi replied: delivery at 6 pm.") == 1
+    finally:
+        sessions.unregister(s)
+    assert spoken == [("Stop. Step down ahead.", True), ("Vendor Sakthi replied: delivery at 6 pm.", False)]
+    assert [m.cue for m in rec.msgs if m.t == "cue"] == ["warn", "ack"]  # the earcon still goes with it
+
+
+async def test_a_walk_can_repeat_a_line_by_deleting_its_notice_key(mk_session):
+    """tools/walk.py pops its own key from the bridge's ``_notices`` so a safety line can be said again."""
+    from aira_live.session import notice_key
+
+    s, _ = mk_session()
+    b = FakeBackend()
+    bridge = _bridge(s, b)
+    await bridge.start()
+    await bridge.speak_notice("Stop.", urgent=True)
+    await bridge.speak_notice("Stop.", urgent=True)
+    assert len(b.sent_text) == 1
+    bridge._notices.pop(notice_key("Stop."), None)
+    await bridge.speak_notice("Stop.", urgent=True)
+    assert len(b.sent_text) == 2
     await bridge.close()

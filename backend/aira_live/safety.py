@@ -10,7 +10,6 @@ import logging
 import re
 from dataclasses import dataclass, field
 
-from aira_live.i18n import t
 
 log = logging.getLogger(__name__)
 
@@ -187,8 +186,7 @@ async def llm_verify(spoken: str, results: list[dict]) -> SafetyVerdict:
     return SafetyVerdict(ok=consistent)
 
 
-def correction_text(unexpected: list[Num], lang: str) -> str:
-    """Instruction sent to the model (English in every catalog). Falls back if the i18n key is missing."""
+def correction_text(unexpected: list[Num], lang: str | None = None) -> str:
+    """The instruction sent to the model (always English; the model corrects itself in the owner's language)."""
     wrong = ", ".join(str(n) for n in unexpected) or "a number"
-    text = t("safety.correction", lang, wrong=wrong)
-    return CORRECTION_FALLBACK.format(wrong=wrong) if text == "safety.correction" else text
+    return CORRECTION_FALLBACK.format(wrong=wrong)

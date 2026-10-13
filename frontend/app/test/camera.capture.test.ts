@@ -5,7 +5,7 @@ const { app } = vi.hoisted(() => ({
   app: { send: vi.fn((_m: unknown) => true), speak: vi.fn(), earcon: vi.fn(), haptic: vi.fn(), settings: { lang: "en" }, socket: { bufferedAmount: vi.fn(() => 0) } },
 }));
 vi.mock("../src/core/app", () => ({ app }));
-import { captureFrame, captureFrameIf, startContinuous, fitWithin, frameSpec, CameraError, __setCaptureDeps, setQualityListener, MAX_B64, PREVIEW_MAX_SIDE, PREVIEW_QUALITY, PREVIEW_MAX_BUFFERED, socketBusy, PRIORITY_MAX_SIDE, PRIORITY_QUALITY, isPriorityPurpose, holdBackground, backgroundHeld } from "../src/camera/capture";
+import { captureFrame, captureFrameIf, startContinuous, fitWithin, frameSpec, CameraError, __setCaptureDeps, setQualityListener, MAX_B64, PREVIEW_MAX_SIDE, PREVIEW_QUALITY, PREVIEW_MAX_BUFFERED, socketBusy, PRIORITY_MAX_SIDE, PRIORITY_QUALITY, isPriorityPurpose, holdBackground, backgroundHeld, holdsBackground, COUNT_QUALITY, BACKGROUND_MAX_BUFFERED } from "../src/camera/capture";
 
 const fakeCanvas = () => ({ canvas: {} as HTMLCanvasElement, ctx: { getImageData: () => ({ data: new Uint8ClampedArray(4 * 4 * 4).fill(200) }) } as unknown as CanvasRenderingContext2D });
 
@@ -142,19 +142,45 @@ describe("startContinuous", () => {
 });
 
 describe("owner questions come first", () => {
-  it("ask / count / identify / point frames go at 1280 px and quality 0.9", async () => {
+  it("ask / identify / point frames go at 1280 px and quality 0.9", async () => {
     expect(PRIORITY_MAX_SIDE).toBe(1280);
     expect(PRIORITY_QUALITY).toBe(0.9);
-    for (const p of ["ask", "count", "identify", "point"] as const) {
+    for (const p of ["ask", "identify", "point"] as const) {
       expect(isPriorityPurpose(p)).toBe(true);
       expect(frameSpec(p)).toEqual({ maxSide: 1280, quality: 0.9 });
     }
+    expect(isPriorityPurpose("count")).toBe(true);
     expect(isPriorityPurpose("describe")).toBe(false);
+  });
+
+  it("count frames keep 1280 px but encode at quality 0.75 (about 120 KB, not 230 KB, on a congested uplink)", async () => {
+    expect(COUNT_QUALITY).toBe(0.75);
+    expect(frameSpec("count")).toEqual({ maxSide: 1280, quality: 0.75 });
     const enc = vi.fn(async (_c: HTMLCanvasElement, _q: number) => "AAAA");
-    __setCaptureDeps({ encoder: enc, source: { width: () => 1920, height: () => 1080, draw: () => {} } });
+    __setCaptureDeps({ encoder: enc, source: { width: () => 1080, height: () => 1920, draw: () => {} } });
     const f = await captureFrame("count");
-    expect(f).toMatchObject({ t: "frame", w: 1280, h: 720, purpose: "count" });
-    expect(enc).toHaveBeenLastCalledWith(expect.anything(), 0.9);
+    expect(f).toMatchObject({ t: "frame", w: 720, h: 1280, purpose: "count" });
+    expect(enc).toHaveBeenCalledTimes(1);
+    expect(enc).toHaveBeenLastCalledWith(expect.anything(), 0.75);
+  });
+
+  it("every tool frame request (ask / count / identify / point / walk) holds background frames; others do not", () => {
+    for (const p of ["ask", "count", "identify", "point", "walk"] as const) expect(holdsBackground(p)).toBe(true);
+    for (const p of ["live", "describe", "preview", "guide"] as const) expect(holdsBackground(p)).toBe(false);
+  });
+
+  it("describe frames are never queued on a congested socket (they would sit ahead of an owner frame)", async () => {
+    vi.useFakeTimers();
+    const buffered = app.socket.bufferedAmount as any;
+    const frames = () => (app.send as any).mock.calls.map((c: any[]) => c[0]).filter((m: any) => m.t === "frame" && m.purpose === "describe");
+    buffered.mockReturnValue(BACKGROUND_MAX_BUFFERED + 1);
+    const stop = startContinuous("describe", 4);
+    await vi.advanceTimersByTimeAsync(600);
+    expect(frames()).toHaveLength(0);
+    buffered.mockReturnValue(0);
+    await vi.advanceTimersByTimeAsync(300);
+    expect(frames().length).toBeGreaterThanOrEqual(1);
+    stop();
   });
 
   it("describe and preview frames pause while a priority capture holds the camera", async () => {

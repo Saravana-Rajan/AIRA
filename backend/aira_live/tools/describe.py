@@ -22,10 +22,9 @@ from typing import Any
 
 from aira_live import sessions
 from aira_live.contracts import RequestFrameMsg, TranscriptMsg
-from aira_live.i18n import t
 from aira_live.live_bridge import on_input_transcript
 from aira_live.session import Session, get_session
-from aira_live.tools.camera import MIN_CONF, dist_key, nearest_first, parse_objects, side_key
+from aira_live.tools.camera import MIN_CONF, nearest_first, parse_objects
 from aira_live.vision import listing, observers
 from aira_live.vision.gemini import VisionError, generate_json, image_part
 
@@ -41,6 +40,12 @@ MAX_CALLS = 30            # ER 2 calls per describe run (cost control, spec §3)
 PAUSE_AFTER_TALK_S = 2.0  # the owner just finished a sentence: let AIRA answer first
 MAX_OBJECTS = 4
 
+# English lines (facts / meaning): Gemini Live says them in the language the owner is speaking.
+ON_EN = "Describe mode on. I will tell you what comes into view as you move."
+OFF_EN = "Describe mode off."
+TIMEOUT_EN = "Describe mode stopped after ten minutes. Say describe as I walk to start again."
+CAP_EN = "Describe mode paused to save the camera budget. Say describe as I walk to start again."
+
 DESCRIBE_PROMPT = (
     "You are the eyes of a blind shopkeeper wearing this chest camera while he walks. List the main objects "
     "in view (at most 4, nearest and most useful first): furniture, doors, steps, crates, shelves, fridges, "
@@ -53,34 +58,22 @@ DESCRIBE_PROMPT = (
 DESCRIBE_SCHEMA = ('{"objects": [{"label": "<name>", "point": [y, x], '
                    '"distance": "near|arm|far"}], "confidence": 0.0}')
 
-_ON = re.compile(r"(describ|narrat|tell me what.?s around|keep telling|what.?s around me as i|"
-                 r"விவரி|சொல்லிக்கொண்டே|बताते रह|बताओ क्या है आसपास)", re.I)
-_OFF = re.compile(r"(stop|enough|quiet|don.?t|no more|நிறுத்து|போதும்|बंद|रुक|बस)", re.I)
 _WS = re.compile(r"\s+")
 
 _ACTIVE: dict[str, "DescribeLoop"] = {}
 
 
-def parse_describe_command(text: str) -> bool | None:
-    """True for "describe as I walk" / "keep telling me what's around", False for "stop describing", else None.
-    A sentence that mentions describing and a stop word means stop."""
-    q = _WS.sub(" ", text or "").strip()
-    if not q or not _ON.search(q):
-        return None
-    return not _OFF.search(q)
-
-
 def coarse_side(x: float) -> str:
     """"left", "ahead" or "right" from an x of 0-1000: the memory key, coarser than the spoken side."""
-    return "left" if x < 400 else "right" if x > 600 else "ahead"
+    return listing.coarse_side(x)
 
 
-def phrase(obj: dict, lang: str) -> str:
-    """One short sentence: "Milk crates to your left, a few steps away." in the session language."""
+def phrase(obj: dict, lang: str | None = None) -> str:
+    """One short English line of facts: "Milk crates to your left, a few steps away." (``lang`` is ignored:
+    Live says it in the owner's language)."""
     label = obj["label"]
     label = label[0].upper() + label[1:] if label else label
-    return t("describe.item", lang, label=label, side=t(side_key(obj["point"][1]), lang),
-             dist=t(dist_key(obj["distance"]), lang))
+    return f"{label} {listing.side_en(obj['point'][1])}, {listing.dist_en(obj['distance'])}."
 
 
 class DescribeLoop:
@@ -151,7 +144,7 @@ class DescribeLoop:
             return self.active                       # the frame is skipped: no ER 2 call while someone talks
         if self.calls >= self.max_calls:
             if await self._finish():
-                await self._say(t("describe.cap", s.lang), cue="done")
+                await self._say(CAP_EN, cue="done")
             return False
         self.calls += 1
         try:
@@ -182,7 +175,7 @@ class DescribeLoop:
         self.remember(obj, now)
         self.last_spoken_at = now
         self.spoken += 1
-        await self._say(phrase(obj, s.lang))
+        await self._say(phrase(obj))
         return self.active
 
     async def run(self) -> None:
@@ -192,7 +185,7 @@ class DescribeLoop:
         while self.active:
             if self._clock() >= deadline:
                 if await self._finish():
-                    await self._say(t("describe.timeout", self.session.lang), cue="done")
+                    await self._say(TIMEOUT_EN, cue="done")
                 return
             if not _registered(self.session):
                 await self._finish()
@@ -207,17 +200,16 @@ class DescribeLoop:
             await asyncio.sleep(self.interval_s)
 
     async def on_utterance(self, text: str) -> None:
-        """Transcript listener: the owner spoke (pause), and "stop describing" ends the mode directly."""
+        """Transcript listener: the owner spoke, so the narration pauses. Switching it off is the model's call
+        (``describe_mode(on=False)``), in any language: no stop words are matched here."""
         self.last_heard_at = self._clock()
-        if parse_describe_command(text) is False:
-            if await self._finish():
-                await self._say(t("describe.off", self.session.lang), cue="done")
 
     async def _say(self, text: str, cue: str | None = None) -> None:
-        """Caption + live voice for this session only (no earcon per object: that would be noise)."""
+        """English facts as a caption plus the live voice for this session only (Live phrases them in the
+        owner's language; no earcon per object: that would be noise). Scene lines are never urgent."""
         s = self.session
         try:
-            await s.send(TranscriptMsg(role="aira", text=text, final=True, lang=s.lang))
+            await s.send(TranscriptMsg(role="aira", text=text, final=True, lang="en"))
             bridge = _bridge_of(s)
             if bridge is not None:
                 await bridge.speak_notice(text)
@@ -317,5 +309,5 @@ async def describe_mode(on: bool) -> dict:
     from aira_live.tools import ambient  # ambient mode owns the scene loop now (and the hold-up loop)
     await ambient.set_mode(s, on)
     if on:
-        return {"say": t("describe.on", s.lang), "active": True}
-    return {"say": t("describe.off", s.lang), "active": False}
+        return {"ok": True, "active": True, "say_en": ON_EN}
+    return {"ok": True, "active": False, "say_en": OFF_EN}

@@ -1,4 +1,4 @@
-"""Server core: config, model router, db, ids, i18n, frames, session and the notify registry."""
+"""Server core: config, model router, db, ids, system lines, frames, session and the notify registry."""
 import asyncio
 import json
 from pathlib import Path
@@ -9,11 +9,10 @@ from aira_live import config, ids, models, sessions
 from aira_live import db as db_mod
 from aira_live.contracts import RequestFrameMsg
 from aira_live.frames import Frame, FrameStore
-from aira_live.i18n import t
+from aira_live import system_lines
+from aira_live.system_lines import line
 from aira_live.session import Session, current_session, get_session
 
-I18N_DIR = Path(__file__).resolve().parents[2] / "aira_live" / "i18n"
-LANGS = ("en", "ta", "hi")
 
 
 def mk(i, ts, purpose="count"):
@@ -107,59 +106,38 @@ def test_idem_key_is_deterministic_and_distinct():
     assert a != ids.idem_key("s2", "call-1")
 
 
-# ---------- i18n ----------
-def test_i18n_format_fallback_and_unknown():
-    assert t("mock.echo", "ta", text="hi").endswith("hi")
-    assert t("confirm.cancelled", "en") == "Okay, cancelled."
-    assert t("does.not.exist", "hi") == "does.not.exist"
+# ---------- system lines (the phone's own voice when Live cannot speak) ----------
+def test_system_line_format_fallback_and_unknown():
+    assert line("mock.echo", "ta", text="hi").endswith("hi")
+    assert line("error.internal", "en") == "Something went wrong. Please try again."
+    assert line("does.not.exist", "hi") == "does.not.exist"
 
 
-def test_i18n_unknown_lang_falls_back_to_english():
-    assert t("confirm.cancelled", "fr") == "Okay, cancelled."
+def test_system_line_unknown_lang_falls_back_to_english():
+    assert line("error.internal", "fr") == "Something went wrong. Please try again."
 
 
-def test_i18n_missing_placeholder_never_raises():
-    assert t("mock.echo", "en", other="x") == "(mock) you said: {text}"
+def test_system_line_missing_placeholder_never_raises():
+    assert line("mock.echo", "en", other="x") == "(mock) you said: {text}"
 
 
-HINT_KEYS = ["vision.aim.move_back", "vision.aim.spread_out", "vision.aim.show_items", "vision.aim.show_label",
-             "vision.aim.hold_closer", "vision.aim.not_visible", "cash.spread_notes"]
-BUMP_KEYS = ["bump.stop", "bump.left_right", "bump.side.left", "bump.side.right"]
-
-
-def _catalog(lang):
-    return json.loads((I18N_DIR / f"{lang}.json").read_text(encoding="utf-8"))
-
-
-def test_spoken_hint_keys_exist_in_every_language():
-    for lang in LANGS:
-        catalog = _catalog(lang)
-        missing = [k for k in HINT_KEYS + BUMP_KEYS if not catalog.get(k)]
-        assert missing == [], f"{lang} missing {missing}"
-        assert t("vision.aim.not_visible", lang) != "vision.aim.not_visible"
-
-
-def test_every_language_has_the_same_keys_and_placeholders():
+def test_system_lines_are_only_the_no_live_lines_in_three_languages():
     import string
-    en = _catalog("en")
 
-    def fields(s):
-        return sorted(f for _, f, _, _ in string.Formatter().parse(s) if f)
+    def fields(text):
+        return sorted(f for _, f, _, _ in string.Formatter().parse(text) if f)
 
-    for lang in ("ta", "hi"):
-        other = _catalog(lang)
-        assert sorted(other) == sorted(en), f"{lang} keys differ from en"
-        for k, v in en.items():
-            assert fields(other[k]) == fields(v), f"{lang}:{k} placeholders differ"
-        assert all(other[k] != en[k] for k in HINT_KEYS + BUMP_KEYS), f"{lang} has untranslated hints"
+    for key, row in system_lines.LINES.items():
+        assert key.split(".")[0] in ("auth", "live", "error", "mock", "check"), key  # never an answer
+        assert set(row) == {"en", "ta", "hi"}, key
+        assert fields(row["ta"]) == fields(row["en"]) == fields(row["hi"]), key
 
 
-def test_bump_guard_phrases():
-    assert t("bump.stop", "en") == "Stop!"
-    assert t("bump.left_right", "en", side=t("bump.side.left", "en")) == "Obstacle on your left."
-    for lang in LANGS:
-        side = t("bump.side.right", lang)
-        assert side in t("bump.left_right", lang, side=side)
+def test_the_fixed_sentence_catalogs_are_gone():
+    import aira_live.i18n as i18n
+
+    assert not hasattr(i18n, "t")
+    assert not list((Path(i18n.__file__).parent).glob("*.json"))
 
 
 # ---------- frames ----------
@@ -232,8 +210,8 @@ async def test_session_context_and_notify():
     sessions.register(s)
     try:
         n = await sessions.notify("sunrise_dairy", "Sakthi vendor confirmed: delivery at 6 pm", cue="ack")
-        assert n == 1 and sent[0].text.startswith("Sakthi vendor") and sent[1].cue == "ack"
-        assert sent[0].role == "aira" and sent[0].final is True
+        assert n == 1 and sent[0].cue == "ack" and sent[1].text.startswith("Sakthi vendor")
+        assert sent[1].role == "aira" and sent[1].final is True  # no Live bridge: the facts are the caption
         assert await sessions.notify("other-shop", "x") == 0
     finally:
         sessions.unregister(s)
@@ -250,6 +228,6 @@ async def test_notify_skips_a_broken_session():
     sessions.register(bad); sessions.register(good)
     try:
         assert await sessions.notify("sunrise_dairy", "Low stock", cue="warn") == 1
-        assert sent[-1].cue == "warn"
+        assert [m.cue for m in sent if m.t == "cue"] == ["warn"]
     finally:
         sessions.unregister(bad); sessions.unregister(good)

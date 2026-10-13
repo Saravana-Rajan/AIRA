@@ -6,8 +6,6 @@ import hashlib
 import hmac
 import json
 import re
-import string
-from pathlib import Path
 
 import httpx
 import pytest
@@ -18,24 +16,6 @@ from aira_live.messaging.webhooks import router
 from aira_live.tools import _repo
 
 SHOP = "sunrise_dairy"
-I18N_DIR = Path(__file__).resolve().parents[2] / "aira_live" / "i18n"
-# Every k2.* key the later kanish/02 tasks speak (Task 2 adds them in en, ta and hi).
-K2_KEYS = {
-    "k2.order.read_back", "k2.order.sent", "k2.order.fallback", "k2.order.call", "k2.order.mark_sent_q",
-    "k2.order.already", "k2.order.vendor_replied", "k2.order.none", "k2.order.status", "k2.order.status_reply",
-    "k2.qty.both", "k2.order.no_telegram", "k2.order.telegram_down", "k2.order.vendor_replied_old",
-    "k2.delivery.started", "k2.delivery.none", "k2.delivery.readback", "k2.delivery.saved",
-    "k2.delivery.nothing_seen", "k2.delivery.readback_short", "k2.delivery.readback_over", "k2.delivery.still",
-    "k2.delivery.saved_short", "k2.delivery.saved_over", "k2.invoice.should_be",
-    "k2.invoice.match",
-    "k2.pay.plan", "k2.pay.cash_q", "k2.pay.cash_wrong", "k2.pay.upi_q", "k2.pay.done", "k2.pay.not_ready",
-    "k2.cash.unclear",
-    "k2.sale.price", "k2.sale.none", "k2.sale.change", "k2.sale.change_wrong", "k2.sale.cash_q", "k2.sale.upi_wait",
-    "k2.sale.upi_heard_q", "k2.sale.upi_wrong", "k2.sale.upi_timeout_q", "k2.sale.done", "k2.sale.low_stock",
-    "k2.stock.one", "k2.stock.all", "k2.sale.left", "k2.stock.low", "k2.stock.out", "k2.qty.packs",
-    "k2.expiry.none", "k2.expiry.list", "k2.expiry.item",
-    "k2.when.expired", "k2.when.today", "k2.when.tomorrow",
-}
 
 app = FastAPI()
 app.include_router(router)
@@ -74,21 +54,6 @@ async def _order(oid: str, state: str, updated: str, lang: str = "en") -> None:
                                   "state": state, "lang": lang, "items": [], "updatedAt": updated})
 
 
-# ---------------------------------------------------------------- k2 speech keys
-def test_k2_keys_present_in_every_language_with_the_same_placeholders():
-    def fields(s: str) -> set[str]:
-        return {f for _, f, _, _ in string.Formatter().parse(s) if f}
-
-    cats = {lang: json.loads((I18N_DIR / f"{lang}.json").read_text(encoding="utf-8")) for lang in ("en", "ta", "hi")}
-    for lang, cat in cats.items():
-        missing = K2_KEYS - set(cat)
-        assert not missing, (lang, sorted(missing))
-        assert all(cat[k].strip() for k in K2_KEYS), lang
-    for key in K2_KEYS:
-        assert fields(cats["ta"][key]) == fields(cats["en"][key]), ("ta", key)
-        assert fields(cats["hi"][key]) == fields(cats["en"][key]), ("hi", key)
-
-
 # ---------------------------------------------------------------- WhatsApp verification handshake
 async def test_verify_ok(monkeypatch):
     monkeypatch.setenv("WHATSAPP_VERIFY_TOKEN", "v123")
@@ -122,15 +87,16 @@ async def test_vendor_reply_by_context_id_updates_order_and_notifies(store, noti
     assert r.status_code == 200 and r.json()["handled"] == 1
     reply = (await _repo.get_order(SHOP, "o1"))["vendorReply"]
     assert reply["text"] == "OK, delivery at 6 pm" and reply["channel"] == "whatsapp" and reply["at"]
-    assert notified == [(SHOP, "Sakthi curd vendor replied: OK, delivery at 6 pm", "ack")]
+    assert notified == [(SHOP, "Vendor Sakthi curd vendor replied: OK, delivery at 6 pm", "ack")]
 
 
-async def test_vendor_reply_is_spoken_in_the_order_language(store, notified):
+async def test_vendor_reply_is_english_facts_whatever_the_order_language(store, notified):
+    """The vendor's words are passed verbatim inside an English fact; Live tells the owner in his own language."""
     await _order("o1", "ORDER_PLACED", "2026-10-12T09:00:00", lang="ta")
     await _repo.index_message("whatsapp", "wamid.1", SHOP, "o1")
     async with client() as c:
         await c.post("/webhooks/whatsapp", json=wa_payload("919000000002", "சரி", "wamid.1"))
-    assert notified == [(SHOP, "Sakthi curd vendor பதில்: சரி", "ack")]
+    assert notified == [(SHOP, "Vendor Sakthi curd vendor replied: சரி", "ack")]
 
 
 async def test_vendor_reply_by_sender_phone_matches_latest_open_order(store, notified):
@@ -248,7 +214,7 @@ async def test_telegram_reply_by_reply_to_message(store, notified):
         r = await c.post("/webhooks/telegram", json=update, headers=TG)
     assert r.json()["handled"] == 1
     assert (await _repo.get_order(SHOP, "o3"))["vendorReply"]["channel"] == "telegram"
-    assert notified == [(SHOP, "Sakthi curd vendor replied: Will deliver at 5", "ack")]
+    assert notified == [(SHOP, "Vendor Sakthi curd vendor replied: Will deliver at 5", "ack")]
 
 
 async def test_telegram_reply_by_chat_matches_latest_open_order(store, notified):
@@ -446,7 +412,7 @@ async def test_a_linked_vendor_reply_reaches_the_owner_after_start(store, notifi
         r = await c.post("/webhooks/telegram", json={"message": {"chat": {"id": 777}, "text": "OK 6 pm"}}, headers=TG)
     assert r.json()["handled"] == 1
     assert (await _repo.get_order(SHOP, "o9"))["vendorReply"]["text"] == "OK 6 pm"
-    assert notified == [(SHOP, "Sakthi curd vendor replied: OK 6 pm", "ack")]
+    assert notified == [(SHOP, "Vendor Sakthi curd vendor replied: OK 6 pm", "ack")]
 
 
 # ---------------------------------------------------------------- quick fixes (bug sweep)
@@ -473,7 +439,7 @@ async def test_a_reply_to_an_old_order_says_it_is_about_an_earlier_order(store, 
     async with client() as c:
         r = await c.post("/webhooks/telegram", json=update, headers=TG)
     assert r.json()["handled"] == 1
-    assert notified == [(SHOP, "About an earlier order, Sakthi curd vendor replied: Not today, sorry", "ack")]
+    assert notified == [(SHOP, "About an earlier order, vendor Sakthi curd vendor replied: Not today, sorry", "ack")]
 
 
 async def test_a_vendors_old_phone_no_longer_speaks_for_them_after_a_relink(store, notified):

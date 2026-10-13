@@ -4,7 +4,7 @@ POST /api/device-check/camera  {"image": <jpeg base64>, "lang": "en|ta|hi", "dev
   -> {"ok": bool, "seen": "<a few words>", "problem": null | "dark" | "blurry" | "covered" | "blank" | "unclear"}
 POST /api/device-check/say     {"line": "<check line key>", "lang": "en|ta|hi", "seen": "<camOk only>", "key": ...}
   -> audio/wav in AIRA's own voice (the Live model, default voice), 204 in mock mode, 502/503 when it cannot:
-     the app then falls back to the phone's own voice. Only the check screen's own lines (i18n ``check.*``) can be
+     the app then falls back to the phone's own voice. Only the check screen's own lines (``system_lines``) can be
      read, and camOk's "seen" words only when a camera check here returned them in the last minutes: the address
      is never a free text-to-speech service in AIRA's voice.
 
@@ -38,7 +38,7 @@ from fastapi.responses import JSONResponse, Response
 
 from aira_live import config
 from aira_live.diag import diag, trunc
-from aira_live.i18n import t
+from aira_live.system_lines import line as system_line
 from aira_live.prompt import LANG_NAME
 from aira_live.models import model_for
 from aira_live.vision import gemini
@@ -73,7 +73,7 @@ _say_hits: dict[str, deque] = {}
 _model_calls: deque = deque()
 MODEL_CALLS_PER_MINUTE = 60            # camera checks + voice reads, all addresses together
 MAX_TRACKED_ADDRESSES = 5000
-# The check screen's spoken lines (i18n "check.<key>", the same words as frontend/app/src/i18n/strings.ts CHECK).
+# The check screen's spoken lines (``system_lines`` "check.<key>", the same words as frontend/app/src/i18n/strings.ts CHECK).
 SPOKEN_LINES = frozenset({
     "micSay", "micOk", "micBlocked", "micMissing", "micSilent", "micTap", "camLookLaptop", "camLookPhone", "camOk",
     "camDark", "camBlurry", "camCovered", "camBlank", "camUnclear", "camBlocked", "camOffline", "camBusy",
@@ -299,9 +299,9 @@ async def say_line(request: Request) -> Response:
         seen = body.get("seen")
         if not isinstance(seen, str) or not _seen_is_recent(seen):
             return _refuse(400, "bad_request")
-        text = t("check.camOk", lang, seen=seen)
+        text = system_line("check.camOk", lang, seen=seen)
     else:
-        text = t(f"check.{line}", lang)
+        text = system_line(f"check.{line}", lang)
     if len(text) > SAY_MAX_CHARS:
         return _refuse(400, "bad_request")
     if config.load().mock:

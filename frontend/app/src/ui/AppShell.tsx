@@ -6,6 +6,7 @@ import { Onboarding, shopName } from "./Onboarding";
 import { Screen } from "./Screen";
 import { ScreenReaderRegion } from "./ScreenReaderRegion";
 import { BoxOverlay } from "./BoxOverlay";
+import { CameraPreview, CameraToggle, usePreviewShown } from "./CameraPreview";
 import type { ScreenState } from "./screenState";
 import { statusLabel, type CountProgress } from "./view";
 import { LABELS, STRINGS } from "../i18n/strings";
@@ -123,6 +124,7 @@ export function AppShell({ wire = wireApp, wsUrl, connect, initial, languages, o
   const unmounted = useRef(false);
   const Check = deviceCheck;
   const view = useWiredView(w);
+  const [previewShown, togglePreview] = usePreviewShown();
 
   useEffect(() => () => { w?.dispose(); }, [w]);
 
@@ -227,10 +229,13 @@ export function AppShell({ wire = wireApp, wsUrl, connect, initial, languages, o
         lang={v.lang}
         progress={v.progress}
         confirmPending={v.confirmPending}
+        preview={previewShown ? <CameraPreview /> : null}
         onTalk={w.onTalk}
         onStop={w.onStop}
       />
-      {settings.showBoxes && <BoxOverlay />}
+      <CameraToggle shown={previewShown} onToggle={togglePreview} />
+      {/* The small corner preview only when the big card is hidden: never two previews at once. */}
+      {settings.showBoxes && !previewShown && <BoxOverlay />}
     </>
   );
 }

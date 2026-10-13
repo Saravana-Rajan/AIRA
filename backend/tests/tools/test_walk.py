@@ -5,7 +5,6 @@ import pytest
 
 from aira_live.contracts import RequestFrameMsg, TranscriptMsg
 from aira_live.frames import Frame
-from aira_live.i18n import t
 from aira_live.session import current_session
 from aira_live.tools import TOOLS_BY_NAME, NON_BLOCKING_TOOLS, walk
 from aira_live.vision.gemini import VisionError
@@ -85,31 +84,92 @@ async def test_arrives_and_ends(session):
     assert loop.ended == "arrived" and not loop.active and walk.active(s) is None
     said = _spoken(rec)
     assert said[0] == "fridge ahead, about 3 steps."
-    assert said[-1] == t("walk.arrived", "en", name="fridge")
+    assert said[-1] == "Stop. The fridge is right in front of you. Reach forward."
     assert _stopped_frames(rec)
 
 
-async def test_voice_stop_ends_at_once(session):
+async def test_no_transcript_keyword_stop(session, monkeypatch):
+    """Stopping by voice is the Live model's walk_stop call, in any language: the walk never reads the transcript."""
+    from aira_live import live_bridge
+
+    s, rec = session
+
+    async def no_memory(session, target):
+        return None, None
+
+    monkeypatch.setattr(walk, "remembered_place", no_memory)
+    for name in ("is_stop", "_STOP"):
+        assert not hasattr(walk, name), name
+    loop = await walk.start(s, "fridge", run=False)
+    assert not hasattr(loop, "on_utterance")
+    assert live_bridge._listeners.get(s.session_id) in (None, [])
+    await walk.stop_walk(s)
+
+
+async def test_walk_stop_tool_ends_at_once_and_is_described_for_any_language(session):
     s, rec = session
     loop = make(s, [FAR], Clock())
-    await loop.on_utterance("ok ok")
-    assert loop.active
-    await loop.on_utterance("Stop, I am here")
-    assert loop.ended == "stopped" and _spoken(rec)[-1] == "Okay, stopped." and _stopped_frames(rec)
-    await loop.on_utterance("stop")            # twice is harmless
-    assert _spoken(rec).count("Okay, stopped.") == 1
+    out = await walk.walk_stop()
+    assert out["was_active"] and out["stopped"] and not loop.active and _stopped_frames(rec)
+    assert (await walk.walk_stop())["was_active"] is False          # twice is harmless
+    doc = " ".join(walk.walk_stop.__doc__.split())
+    assert "ANY language" in doc and "in the language he is speaking" in doc
 
 
-async def test_tamil_and_hindi_stop_words():
-    assert walk.is_stop("நில்லு") and walk.is_stop("रुको") and walk.is_stop("STOP")
-    assert not walk.is_stop("take me to the fridge") and not walk.is_stop("")
+class _Notices(list):
+    urgent: list[bool]
+
+
+def _bridge(monkeypatch):
+    notices = _Notices()
+
+    class Bridge:
+        _notices: dict = {}
+
+        async def speak_notice(self, text, urgent=False):
+            notices.append(text)
+            urgents.append(urgent)
+
+    urgents: list[bool] = []
+    monkeypatch.setattr(walk, "_bridge_of", lambda s: Bridge())
+    notices.urgent = urgents
+    return notices
+
+
+async def test_instructions_go_to_live_as_facts(session, monkeypatch):
+    import json
+
+    s, rec = session
+    notices = _bridge(monkeypatch)
+    chair = WalkView((400, 500), (300, 420, 500, 580), (Obstacle("chair", (600, 300, 900, 550)),))
+    loop = make(s, [FAR, chair, THERE], Clock(), max_in_flight=1)
+    await _run(loop)
+    facts = [json.loads(n.split(" (meaning: ")[0]) for n in notices]
+    assert facts[0] == {"action": "go", "direction": "ahead", "steps_about": 3, "target": "fridge"}
+    assert facts[1] == {"action": "stop", "obstacle": "chair", "move": "right"}
+    # Stop lines cut in at once for his safety; directions wait their turn.
+    assert notices.urgent[1] is True and notices.urgent[0] is False
+    assert facts[-1]["action"] == "arrived"
+    assert notices[0].endswith("(meaning: fridge ahead, about 3 steps.)")
+
+
+def test_walk_facts_for_every_instruction():
+    from aira_live.vision import walk as vwalk
+
+    view = WalkView((400, 500), None, (Obstacle("wet floor", (600, 400, 900, 600)),))
+    ins = vwalk.Instruction("walk.hazard", "Stop.", urgent=True)
+    assert walk.walk_facts(ins, view, "fridge") == {"action": "stop", "hazard": "wet floor"}
+    assert walk.walk_facts(vwalk.Instruction("walk.left", ""), NOTHING, "door") == {
+        "action": "turn", "direction": "left", "target": "door"}
+    assert walk.walk_facts(vwalk.Instruction("walk.looking_right", ""), NOTHING, "door")["turn"] == "right"
+    assert walk.walk_facts(vwalk.Instruction("walk.not_found", ""), NOTHING, "door")["found"] is False
 
 
 async def test_auto_stop_after_90_seconds(session):
     s, rec = session
     loop = make(s, [FAR], Clock())
     await _run(loop)
-    assert loop.ended == "timeout" and _spoken(rec)[-1] == t("walk.timeout", "en")
+    assert loop.ended == "timeout" and _spoken(rec)[-1] == "I stopped guiding. Ask me again when you are ready."
     assert 80 <= len(loop.calls) <= 91
 
 
@@ -161,7 +221,7 @@ async def test_lost_target_uses_memory_then_not_found(session):
     await _run(loop)
     said = _spoken(rec)
     assert said[0] == "The fridge was last seen near the counter. Turn slowly right. I'm looking."
-    assert t("walk.not_found", "en", name="fridge") in said
+    assert "I can't find the fridge. Try turning around slowly." in said
 
 
 async def test_stale_result_is_dropped(session):
@@ -222,7 +282,7 @@ async def test_walk_to_tool_starts_the_loop_and_walk_stop_ends_it(session, monke
     monkeypatch.setattr(walk, "remembered_place", no_memory)
     assert "walk_to" in NON_BLOCKING_TOOLS and "walk_stop" in TOOLS_BY_NAME
     out = await walk.walk_to("  the fridge ")
-    assert out["active"] and out["target"] == "the fridge" and "the fridge" in out["say"]
+    assert out["active"] and out["target"] == "the fridge" and "the fridge" in out["say_en"] and "say" not in out
     loop = walk.active(s)
     assert loop is not None and loop.task is not None
     assert any(isinstance(m, RequestFrameMsg) and m.purpose == "walk" and m.continuous for m in rec.msgs)

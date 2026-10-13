@@ -11,6 +11,8 @@ The model proposes, the backend commits: ``order_create`` only saves a DRAFT and
   only. The demo reply is never stored as a vendor reply, because it is not evidence of what a vendor said.
 Quantities are stored in each product's selling unit (``catalog.to_selling_units``). A retried tool call reuses
 its draft (the doc id comes from ``ids.current_idem_key()``), and a placed order is never sent twice.
+Tools return facts (names, quantities, amounts, error codes) plus a short English ``say_en`` meaning hint;
+Gemini Live phrases them in whatever language the owner is speaking.
 """
 import asyncio
 import logging
@@ -23,7 +25,6 @@ from aira_live.business.clock import now_iso
 from aira_live.business.states import transition
 from aira_live.business.store import get_store
 from aira_live.contracts import StateMsg
-from aira_live.i18n import t
 from aira_live.messaging.clicktochat import fmt_qty, items_text
 from aira_live.session import Session, get_session
 from aira_live.tools import _repo, _speak
@@ -47,6 +48,13 @@ _UNIT_WORDS = {
     "pack": "pack", "packs": "pack", "packet": "pack", "packets": "pack", "pouch": "pack", "pouches": "pack",
     "jar": "jar", "jars": "jar", "box": "box", "boxes": "box",
 }
+# English meaning of each order state (the ``state`` code itself is the fact).
+_STATE_WORDS = {
+    "DRAFT": "not sent yet", "ORDER_PLACED": "order placed", "DELIVERY_PENDING": "delivery pending",
+    "DELIVERY_RECONCILED": "delivery checked", "DISCREPANCY": "delivery does not match",
+    "PAYMENT_PENDING": "payment pending", "PAYMENT_CONFIRMED": "paid", "CLOSED": "closed",
+}
+ORDER_NONE = {"ok": False, "error": "ORDER_NONE", "say_en": "No open order found."}
 
 
 def _canon_unit(unit) -> str:
@@ -64,11 +72,12 @@ def _packs(product: dict, qty: float, unit: str) -> float:
     return qty / size_l if size_l else qty
 
 
-def qty_phrase(product: dict, qty: float, unit: str, spoken_qty, spoken_unit: str, lang: str) -> str:
-    """The read-back of one line in its selling unit, plus the pack form when the owner said something else.
+def qty_phrase(product: dict, qty: float, unit: str, spoken_qty, spoken_unit: str, lang: str | None = None) -> str:
+    """The English read-back of one line in its selling unit, plus the pack form when the owner said something else.
 
     '30 L Sakthi Curd 1 L', '25 pack Aavin Paneer 200 g (25 × 200 g pack = 5 kg)',
     '2 L Aavin Milk 500 ml (4 × 500 ml pouch = 2 L)'. Every number comes from the converted quantity.
+    ``lang`` is accepted for compatibility and ignored.
     """
     base = f"{fmt_qty(qty)} {unit} {product['name']}"
     spoken = _canon_unit(spoken_unit)
@@ -82,17 +91,22 @@ def qty_phrase(product: dict, qty: float, unit: str, spoken_qty, spoken_unit: st
         other = f"{fmt_qty(qty)} {unit}"
     else:                                      # packs of a product sold by the pack, jar or box
         return base
-    both = t("k2.qty.both", lang, qty=fmt_qty(round(_packs(product, qty, unit), 6)),
-             pack=product.get("pack") or unit, spoken=other)
-    return f"{base} ({both})"
+    packs = fmt_qty(round(_packs(product, qty, unit), 6))
+    return f"{base} ({packs} × {product.get('pack') or unit} = {other})"
 
 
-async def resolve_lines(shop_id: str, items: list[dict], lang: str,
-                        supplier: dict | None = None) -> tuple[list[dict], list[str], str | None]:
-    """Spoken items → order lines in selling units. Returns (lines, read-back phrases, error_say).
+def line_facts(lines: list[dict]) -> list[dict]:
+    """The items of an order or sale as facts: [{"product", "qty", "unit"}, ...] in selling units."""
+    return [{"product": ln["name"], "qty": ln["qty"], "unit": ln["unit"]} for ln in lines]
 
-    Nothing is guessed: an unknown product, a product this supplier does not sell, or a quantity that is not a
-    whole number of packs returns a sentence asking again instead of a line.
+
+async def resolve_lines(shop_id: str, items: list[dict], lang: str | None = None,
+                        supplier: dict | None = None) -> tuple[list[dict], list[str], dict | None]:
+    """Spoken items → order lines in selling units. Returns (lines, English read-back phrases, error facts).
+
+    Nothing is guessed: an unknown product (PRODUCT_UNKNOWN), a product this supplier does not sell
+    (WRONG_SUPPLIER), or a quantity that is not a whole number of packs (QTY_UNCLEAR) returns a facts dict
+    (``ok`` False, ``error``, ``say_en``) instead of a line. Callers do ``if err: return err``.
     """
     lines, phrases = [], []
     for it in items:
@@ -100,39 +114,42 @@ async def resolve_lines(shop_id: str, items: list[dict], lang: str,
         spoken = str(it.get("product") or it.get("name") or "").strip()
         ref = await catalog.resolve(shop_id, spoken, lang)
         if ref is None:
-            return [], [], hints.say("PRODUCT_UNKNOWN", lang, product=spoken)
+            return [], [], hints.fact("PRODUCT_UNKNOWN", product=spoken)
         product = await product_doc(shop_id, ref.sku)
         name = product.get("name") or ref.sku
         sells = (supplier or {}).get("products") or []
         if sells and ref.sku not in sells:
-            return [], [], t("k2.order.wrong_supplier", lang, supplier=supplier["name"], product=name)
+            return [], [], {"ok": False, "error": "WRONG_SUPPLIER", "supplier": supplier["name"], "product": name,
+                            "say_en": f"{supplier['name']} does not sell {name}."}
         spoken_qty = it.get("qty")
         # A bare count is packs: "2 milk" is 2 pouches (1 L), never 2 litres. The read-back says both forms.
         spoken_unit = _canon_unit(it.get("unit") or "")
+        unclear = {"ok": False, "error": "QTY_UNCLEAR", "product": name, "qty": spoken_qty, "unit": spoken_unit,
+                   "say_en": f"Cannot order that amount of {name}. Say how many packs."}
         try:
             qty, unit = catalog.to_selling_units(product, spoken_qty, spoken_unit)
         except (TypeError, ValueError):
-            return [], [], t("k2.order.qty_unclear", lang, product=name)
+            return [], [], unclear
         if qty <= 0:
-            return [], [], t("k2.order.qty_unclear", lang, product=name)
+            return [], [], unclear
         lines.append({"sku": ref.sku, "name": name, "qty": float(qty), "unit": unit,
                       "agreedPrice": int(product["costPrice"])})
-        phrases.append(qty_phrase(product, qty, unit, spoken_qty, spoken_unit, lang))
+        phrases.append(qty_phrase(product, qty, unit, spoken_qty, spoken_unit))
     return lines, phrases, None
 
 
 def read_back_prompt(phrases: list[str], supplier_name: str, delivery_by: dict | None, note: str | None,
-                     lang: str) -> str:
+                     lang: str | None = None) -> str:
     """'Order 30 L Sakthi Curd 1 L from Sakthi vendor?' or, with extras, '…, deliver by 6 am tomorrow, note: …. Send it?'"""
     items = ", ".join(phrases)
     extras = []
     if delivery_by:
-        extras.append(t("k2.order.by_phrase", lang, time=delivery_by["text"]))
+        extras.append(f"deliver by {delivery_by['text']}")
     if note:
-        extras.append(t("k2.order.note_phrase", lang, note=note))
+        extras.append(f"note: {note}")
     if not extras:
-        return t("k2.order.read_back", lang, items=items, supplier=supplier_name)
-    return t("k2.order.read_back_extra", lang, items=items, supplier=supplier_name, extras=", ".join(extras))
+        return f"Order {items} from {supplier_name}?"
+    return f"Order {items} from {supplier_name}, {', '.join(extras)}. Send it?"
 
 
 async def order_create(supplier: str, items: list[dict], delivery_by: str | None = None,
@@ -153,12 +170,12 @@ async def order_create(supplier: str, items: list[dict], delivery_by: str | None
     s = get_session()
     sup = await catalog.resolve_supplier(s.shop_id, supplier, s.lang)
     if sup is None:
-        return {"ok": False, "say": hints.say("SUPPLIER_UNKNOWN", s.lang, supplier=supplier)}
+        return hints.fact("SUPPLIER_UNKNOWN", supplier=supplier)
     if not items:
-        return {"ok": False, "say": t("k2.order.no_items", s.lang)}
+        return {"ok": False, "error": "NO_ITEMS", "say_en": "What should I order?"}
     lines, phrases, err = await resolve_lines(s.shop_id, items, s.lang, sup)
     if err:
-        return {"ok": False, "say": err}
+        return err
     by = delivery_time.parse_delivery_by(delivery_by)
     note_text = delivery_time.clean_note(note)
     idem = ids.current_idem_key()
@@ -169,12 +186,19 @@ async def order_create(supplier: str, items: list[dict], delivery_by: str | None
             "id": oid, "supplierId": sup["id"], "supplierName": sup["name"], "channel": sup.get("channel", "whatsapp"),
             "items": lines, "deliveryBy": by, "note": note_text, "state": "DRAFT", "lang": s.lang, "idemKey": idem,
             "createdAt": now, "updatedAt": now})
-    prompt = read_back_prompt(phrases, sup["name"], by, note_text, s.lang)
-    return await confirm.propose("order", prompt, {"order_id": oid, "idem": idem}, "order.send")
+    prompt = read_back_prompt(phrases, sup["name"], by, note_text)
+    facts = {"orderId": oid, "supplier": sup["name"], "items": line_facts(lines),
+             "deliveryBy": by["text"] if by else None, "note": note_text}
+    return await confirm.propose("order", prompt, {"order_id": oid, "idem": idem}, "order.send", facts=facts)
 
 
 async def _supplier(shop_id: str, supplier_id: str) -> dict:
     return {**(await get_store().get(paths.supplier(shop_id, supplier_id)) or {}), "id": supplier_id}
+
+
+def _already_sent(order: dict) -> dict:
+    return {"ok": True, "orderId": order["id"], "state": order["state"], "supplier": order.get("supplierName"),
+            "already": True, "say_en": "That order was already sent."}
 
 
 async def _place(s: Session, order: dict, channel: str, message_id: str | None = None) -> dict:
@@ -185,8 +209,8 @@ async def _place(s: Session, order: dict, channel: str, message_id: str | None =
     await outbox.order_state(s.shop_id, order["id"], "ORDER_PLACED")
     await audit.log(s.shop_id, "owner", "order_placed", "order", order["id"], channel)
     await s.send(StateMsg(entity="order", id=order["id"], state="ORDER_PLACED", summary=items_text(order["items"])))
-    return {"ok": True, "orderId": order["id"], "state": "ORDER_PLACED",
-            "say": t("k2.order.sent", s.lang, supplier=order["supplierName"])}
+    return {"ok": True, "orderId": order["id"], "state": "ORDER_PLACED", "supplier": order["supplierName"],
+            "channel": channel, "say_en": f"Order sent to {order['supplierName']}."}
 
 
 async def _commit_send(payload: dict, value: str | None) -> dict:
@@ -194,9 +218,9 @@ async def _commit_send(payload: dict, value: str | None) -> dict:
     s = get_session()
     order = await _repo.get_order(s.shop_id, payload["order_id"])
     if order is None:
-        return {"ok": False, "say": t("k2.order.none", s.lang)}
+        return dict(ORDER_NONE)
     if order["state"] != "DRAFT":
-        return {"ok": True, "orderId": order["id"], "say": t("k2.order.already", s.lang)}
+        return _already_sent(order)
     if is_judge(s):                            # a judge's order never reaches a real vendor
         return await _place_with_demo_vendor(s, order)
     res = await messaging.send_order(s.shop_id, await _supplier(s.shop_id, order["supplierId"]), order)
@@ -205,18 +229,22 @@ async def _commit_send(payload: dict, value: str | None) -> dict:
     # No message went out: the phone opens the click-to-chat (or tel:) link and the order stays DRAFT until the
     # owner says he sent it. An order is not placed on a link alone.
     await s.send(StateMsg(entity="order", id=order["id"], state="DRAFT", summary=f"OPEN_URL {res['fallbackUrl']}"))
-    first = t("k2.order.call" if res.get("channel") == "call" else "k2.order.fallback", s.lang,
-              supplier=order["supplierName"], items=items_text(order["items"]))
+    supplier, items = order["supplierName"], items_text(order["items"])
+    if res.get("channel") == "call":
+        first = f"Calling {supplier}. Tell them: {items}."
+    else:
+        first = "The order message is ready. Double-tap Send, then tell me when it is sent."
     reason = res.get("reason")
     if reason == "telegram_not_linked":            # never silent: say why the Telegram bot did not send it
-        first = f"{t('k2.order.no_telegram', s.lang, supplier=order['supplierName'])} {first}"
+        first = f"{supplier} is not on the AIRA Telegram bot yet. {first}"
     elif reason and reason.startswith("telegram"):  # down or not set up: not the vendor's doing
-        first = f"{t('k2.order.telegram_down', s.lang)} {first}"
-    follow = await confirm.propose("generic", t("k2.order.mark_sent_q", s.lang, supplier=order["supplierName"]),
+        first = f"The Telegram bot could not send it right now. {first}"
+    follow = await confirm.propose("generic", f"Did you send the order to {supplier}?",
                                    {"order_id": order["id"], "idem": payload.get("idem") or order.get("idemKey")},
-                                   "order.mark_sent")
-    out = {**follow, "ok": True, "orderId": order["id"], "fallbackUrl": res["fallbackUrl"],
-           "say": f"{first} {follow['say']}"}
+                                   "order.mark_sent",
+                                   facts={"orderId": order["id"], "supplier": supplier, "items": line_facts(order["items"])})
+    out = {**follow, "ok": True, "orderId": order["id"], "state": "DRAFT", "channel": res.get("channel"),
+           "fallbackUrl": res["fallbackUrl"], "say_en": f"{first} {follow['say_en']}"}
     if reason:
         out["reason"] = reason
     return out
@@ -224,7 +252,8 @@ async def _commit_send(payload: dict, value: str | None) -> dict:
 
 async def _place_with_demo_vendor(s: Session, order: dict) -> dict:
     out = await _place(s, order, "demo", f"demo-{order['id']}")
-    out["say"] = t("k2.order.sent_demo", s.lang, supplier=order["supplierName"])
+    out["demo"] = True
+    out["say_en"] = f"Order sent to the demo {order['supplierName']}. The reply comes in a few seconds."
     task = asyncio.create_task(_demo_vendor_reply(s, order["id"]))
     _DEMO_REPLIES.add(task)
     task.add_done_callback(_DEMO_REPLIES.discard)
@@ -233,16 +262,16 @@ async def _place_with_demo_vendor(s: Session, order: dict) -> dict:
 
 async def _demo_vendor_reply(s: Session, order_id: str) -> None:
     """After a short pause, speak the demo vendor's reply to this judge's session only (``_speak.speak_to``, never
-    the shop-wide announcer). A judge who already left is skipped quietly."""
+    the shop-wide announcer). The line is English facts; Live says it in the judge's language. A judge who
+    already left is skipped quietly."""
     try:
         await asyncio.sleep(DEMO_REPLY_DELAY_S)
         order = await _repo.get_order(s.shop_id, order_id)
         if order is None or order["state"] != "ORDER_PLACED":
             return
         by = (order.get("deliveryBy") or {}).get("text")
-        reply = t("k2.demo_vendor.reply_by", s.lang, time=by) if by else t("k2.demo_vendor.reply", s.lang)
-        text = t("k2.order.demo_vendor_replied", s.lang, supplier=order["supplierName"], text=reply)
-        await _speak.speak_to(s, text)
+        reply = f"OK, I will deliver by {by}." if by else "OK, delivery today at 6 pm."
+        await _speak.speak_to(s, f"Demo reply from {order['supplierName']}: {reply}")
     except Exception:
         log.warning("demo vendor reply for order %s: session %s unreachable", order_id, s.session_id, exc_info=True)
 
@@ -252,16 +281,15 @@ async def _commit_mark_sent(payload: dict, value: str | None) -> dict:
     s = get_session()
     order = await _repo.get_order(s.shop_id, payload["order_id"])
     if order is None:
-        return {"ok": False, "say": t("k2.order.none", s.lang)}
+        return dict(ORDER_NONE)
     if order["state"] != "DRAFT":
-        return {"ok": True, "orderId": order["id"], "say": t("k2.order.already", s.lang)}
+        return _already_sent(order)
     return await _place(s, order, "manual")
 
 
-def _state_words(state: str, lang: str) -> str:
-    key = f"k2.order_state.{state}"
-    words = t(key, lang)
-    return state.replace("_", " ").lower() if words == key else words
+def _state_words(state: str, lang: str | None = None) -> str:
+    """English meaning of an order state code ("DELIVERY_PENDING" → "delivery pending")."""
+    return _STATE_WORDS.get(state) or state.replace("_", " ").lower()
 
 
 async def order_status(order_id: str | None = None) -> dict:
@@ -270,12 +298,14 @@ async def order_status(order_id: str | None = None) -> dict:
     order = (await _repo.get_order(s.shop_id, order_id) if order_id
              else await _repo.latest_order(s.shop_id, ACTIVE_STATES))
     if order is None:
-        return {"ok": False, "say": t("k2.order.none", s.lang)}
+        return dict(ORDER_NONE)
     reply = (order.get("vendorReply") or {}).get("text")
-    say = t("k2.order.status_reply" if reply else "k2.order.status", s.lang,
-            supplier=order.get("supplierName") or order.get("supplierId", ""),
-            state=_state_words(order["state"], s.lang), text=reply or "")
-    return {"ok": True, "orderId": order["id"], "state": order["state"], "say": say}
+    supplier = order.get("supplierName") or order.get("supplierId", "")
+    say = f"Order to {supplier}: {_state_words(order['state'])}."
+    if reply:
+        say = f"{say} They said: {reply}"
+    return {"ok": True, "orderId": order["id"], "state": order["state"], "supplier": supplier,
+            "items": line_facts(order.get("items") or []), "vendorReply": reply or None, "say_en": say}
 
 
 confirm.register_committer("order.send", _commit_send)

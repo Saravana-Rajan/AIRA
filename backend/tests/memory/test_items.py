@@ -153,17 +153,30 @@ def test_describe_within_24h_is_not_old():
     assert items.is_old(_sighting(NOW - timedelta(hours=25)), NOW)
 
 
-def test_describe_in_tamil_and_hindi_use_the_catalog():
-    for lang in ("ta", "hi"):
+def test_describe_is_english_whatever_the_language_argument():
+    for lang in ("ta", "hi", "en"):
         text = items.describe(items.speak_item("keys", lang), _sighting(NOW - timedelta(minutes=5)), lang, NOW)
-        assert items.speak_item("keys", lang) in text and "last saw" not in text
+        assert text == "I last saw your keys on top of the fridge, today at 7:05 pm. Check there first."
+    assert items.speak_item("keys", "ta") == "keys"
 
 
-def test_speak_place_renders_parts_in_the_session_language():
+def test_when_phrase_shop_time():
+    assert items.when_phrase(NOW - timedelta(seconds=90), NOW) == "just now"
+    assert items.when_phrase(NOW - timedelta(hours=1), NOW) == "today at 6:10 pm"
+    assert items.when_phrase(NOW - timedelta(hours=13), NOW) == "today at 6:10 am"
+    assert items.when_phrase(NOW - timedelta(days=1), NOW) == "yesterday at 7:10 pm"
+    assert items.when_phrase(NOW - timedelta(days=4), NOW) == "4 days ago"
+
+
+def test_speak_place_and_place_facts_from_parts():
     s = items.Sighting(item="bag", place="near the chair, to your left, at arm's length", at=NOW, confidence=0.8,
                        kind="seen", place_parts={"side": "cam.side.left", "dist": "cam.dist.arm", "landmark": "chair"})
-    assert items.speak_place(s, "en") == "near the chair, to your left, at arm's length"
-    assert items.speak_place(s, "ta").startswith("உங்கள் இடது பக்கம்")
+    assert items.speak_place(s) == items.speak_place(s, "ta") == "near the chair, to your left, at arm's length"
+    assert items.place_facts(s) == {"place": "near the chair, to your left, at arm's length", "side": "left",
+                                    "dist": "arm", "landmark": "chair", "on": False}
+    plain = items.Sighting(item="keys", place="by the door", at=NOW, confidence=0.8)
+    assert items.place_facts(plain) == {"place": "by the door", "side": None, "dist": None, "landmark": None,
+                                        "on": False}
 
 
 # --- from an ER result -----------------------------------------------------------------------------------------
@@ -237,5 +250,6 @@ async def test_observer_is_registered_with_vision_observers(fake_db, monkeypatch
 def test_personal_in_view_lines_for_describe_mode():
     objs = [{"label": "bag", "point": [500, 300], "distance": "arm"}, {"label": "chair", "point": [700, 300], "distance": "arm"},
             {"label": "milk", "point": [500, 600], "distance": "near"}]
-    lines = items.personal_in_view(objs, "en")
+    lines = items.personal_in_view(objs)
     assert lines == {"bag": "Your bag: on the chair, to your left, at arm's length."}
+    assert items.personal_in_view(objs, "ta") == lines

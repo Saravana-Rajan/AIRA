@@ -26,14 +26,12 @@ def test_normalize_zone_rejects_empty():
         normalize_zone("  the shelf ")
 
 
-def test_speak_zone_three_languages():
-    assert speak_zone("fridge2/middle/left", "en") == "fridge 2, middle shelf, left"
-    assert speak_zone("fridge2/middle/left", "ta") == "ஃப்ரிட்ஜ் 2, நடு அலமாரி, இடது"
-    assert speak_zone("fridge2/middle/left", "hi") == "फ्रिज 2, बीच की शेल्फ़, बाएँ"
-
-
-def test_speak_zone_unknown_lang_falls_back_to_english():
-    assert speak_zone("counter", "fr") == "counter"
+def test_speak_zone_is_english_for_every_language():
+    assert speak_zone("fridge2/middle/left") == "fridge 2, middle shelf, left"
+    for lang in ("en", "ta", "hi", "fr"):
+        assert speak_zone("fridge2/middle/left", lang) == "fridge 2, middle shelf, left"
+    assert speak_zone("rack1/top/center", "ta") == "rack 1, top shelf, centre"
+    assert speak_zone("counter", "hi") == "counter"
 
 
 async def test_remember_then_where_roundtrip(fake_db, monkeypatch):
@@ -104,9 +102,17 @@ def test_describe_location_none():
 
 
 @pytest.mark.parametrize("lang", ["ta", "hi"])
-def test_describe_location_localised(lang):
+def test_describe_location_ignores_the_language(lang):
     for loc in (_loc(), _loc(by="model"), None):
-        text = spatial.describe_location("Sakthi curd", loc, lang, NOW)
-        assert "Sakthi curd" in text and not text.startswith("loc.")
-        if loc is not None:
-            assert speak_zone(loc.zone, lang) in text
+        assert spatial.describe_location("Sakthi curd", loc, lang, NOW) == \
+            spatial.describe_location("Sakthi curd", loc, "en", NOW)
+
+
+def test_location_facts():
+    assert spatial.location_facts(_loc(), NOW) == {
+        "zone": "fridge2/middle/left", "zone_text": "fridge 2, middle shelf, left", "stale": False,
+        "confirmed_by": "user", "confirmed_at": (NOW - timedelta(days=1)).isoformat()}
+    assert spatial.location_facts(_loc(by="model"), NOW)["stale"] is True
+    assert spatial.location_facts(_loc(age=timedelta(days=4)), NOW)["stale"] is True
+    assert spatial.location_facts(None, NOW) == {"zone": None, "zone_text": None, "stale": True,
+                                                 "confirmed_by": None, "confirmed_at": None}

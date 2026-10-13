@@ -115,7 +115,7 @@ async def bare_store():
 
 
 async def test_resolve_ambiguous_without_default_pack(bare_store):
-    assert await catalog.resolve(SHOP, "x milk", "en") is None              # tool asks biz.product.ambiguous
+    assert await catalog.resolve(SHOP, "x milk", "en") is None              # tool returns PRODUCT_AMBIGUOUS
     assert (await catalog.resolve(SHOP, "x milk half litre", "en")).sku == "x_milk_500ml"
     assert (await catalog.resolve(SHOP, "எக்ஸ் பால் ஒரு லிட்டர்", "ta")).sku == "x_milk_1l"
     assert await catalog.resolve(SHOP, "two litres x milk", "en") is None   # a size no pack has: still ask

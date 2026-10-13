@@ -114,7 +114,10 @@ describe("wireCameraAndGuidance", () => {
     socket.emit({ t: "request_frame", purpose: "invoice" });
     await flush();
     expect(captureFrame).toHaveBeenCalledWith("invoice");
-    expect(socket.sent).toEqual([expect.objectContaining({ t: "frame", id: "fr1", purpose: "invoice" })]);
+    expect(socket.sent.filter((m: any) => m.t === "frame")).toEqual([expect.objectContaining({ t: "frame", id: "fr1", purpose: "invoice" })]);
+    // ...followed by its frame_req diagnostics line (sizes and timings only)
+    expect(socket.sent.find((m: any) => m.t === "log" && m.tag === "frame_req"))
+      .toMatchObject({ data: { purpose: "invoice", i: 0, of: 1, bytes: expect.any(Number), waitedMs: expect.any(Number) } });
   });
 
   it("a continuous describe stream gets the scene-change gate; guide frames stream ungated", async () => {

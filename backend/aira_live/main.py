@@ -60,7 +60,7 @@ from aira_live.contracts import (
 from aira_live.diag import RateLimiter, cap_json, diag, trunc
 from aira_live.frames import Frame
 from aira_live.vision import precount
-from aira_live.i18n import t
+from aira_live.system_lines import line
 from aira_live.i18n.expected import shop_languages
 from aira_live.live_bridge import AdkLiveBackend, LiveBridge
 from aira_live.prompt import build_system_prompt
@@ -252,7 +252,7 @@ async def _start_live(session: Session, resume_handle: str | None = None) -> Liv
         log.exception("live start failed for session %s", session.session_id)
         if bridge is not None:
             await bridge.close()
-        await session.send(ErrorMsg(code="network", say=t("live.unavailable", session.lang)))
+        await session.send(ErrorMsg(code="network", say=line("live.unavailable", session.lang)))
         return None
     sessions.attach_bridge(session.session_id, bridge)
     return bridge
@@ -276,7 +276,7 @@ async def _end_session(session: Session, bridge: LiveBridge | None) -> None:
 
 
 def parse(raw: str | None, max_frame_b64: int):
-    """One WebSocket message -> ``(client message, None)`` or ``(None, i18n key of the error to speak)``."""
+    """One WebSocket message -> ``(client message, None)`` or ``(None, system_lines key of the error to speak)``."""
     if not isinstance(raw, str):  # binary frames are not part of the protocol
         return None, "error.unsupported"
     try:
@@ -326,7 +326,7 @@ async def ws_endpoint(ws: WebSocket) -> None:
                 break
             msg, error_key = parse(message.get("text"), settings.max_frame_b64)
             if msg is None:
-                await send(ErrorMsg(code="unsupported", say=t(error_key, lang)))
+                await send(ErrorMsg(code="unsupported", say=line(error_key, lang)))
                 continue
 
             if isinstance(msg, HelloMsg):
@@ -334,7 +334,7 @@ async def ws_endpoint(ws: WebSocket) -> None:
                     who = await verify_hello(msg.id_token, msg.uid, msg.shop_id, settings.mock)
                 except AuthError as exc:
                     log.warning("hello refused: %s", exc)
-                    await send(ErrorMsg(code="permission", say=t("auth.denied", msg.lang)))
+                    await send(ErrorMsg(code="permission", say=line("auth.denied", msg.lang)))
                     await ws.close(code=4403)
                     return
                 if session:  # a second hello replaces the session
@@ -343,7 +343,7 @@ async def ws_endpoint(ws: WebSocket) -> None:
                 elif sessions.count() >= MAX_SESSIONS or sessions.count(ip) >= MAX_SESSIONS_PER_IP:
                     log.warning("hello refused: %d live sessions, %d from %s", sessions.count(),
                                 sessions.count(ip), ip)  # bounds Gemini spend on the public URL
-                    await send(ErrorMsg(code="permission", say=t("auth.busy", msg.lang)))
+                    await send(ErrorMsg(code="permission", say=line("auth.busy", msg.lang)))
                     await ws.close(code=4403)
                     return
                 resumed, handle = sessions.take_ended(msg.resume)
@@ -385,10 +385,10 @@ async def ws_endpoint(ws: WebSocket) -> None:
                 if bridge:
                     await bridge.send_text(msg.text)
                 else:
-                    await send(TranscriptMsg(role="aira", text=t("mock.echo", lang, text=msg.text), final=True,
+                    await send(TranscriptMsg(role="aira", text=line("mock.echo", lang, text=msg.text), final=True,
                                              lang=session.lang if session else None))
             elif session is None:  # frames, confirmations, audio and events need a hello first
-                await send(ErrorMsg(code="unsupported", say=t("error.unsupported", lang)))
+                await send(ErrorMsg(code="unsupported", say=line("error.unsupported", lang)))
             elif isinstance(msg, AudioInMsg):
                 if bridge:  # mock mode has no Live session: audio is accepted and dropped
                     await bridge.send_audio(msg.pcm16)
@@ -422,14 +422,16 @@ async def ws_endpoint(ws: WebSocket) -> None:
                     log.exception("confirm %s failed", msg.id)
                     diag("confirm", severity="ERROR", action="resolve_failed", session=session.session_id,
                          id=msg.id, answer=msg.answer, error=type(exc).__name__, message=trunc(str(exc), 200))
-                    await send(ErrorMsg(code="internal", say=t("error.internal", lang)))
+                    await send(ErrorMsg(code="internal", say=line("error.internal", lang)))
                 else:
-                    say = result.get("say", "")
-                    await send(TranscriptMsg(role="aira", text=say, final=True))
-                    if bridge:  # a tapped answer: Live must know, so it speaks the result and never re-asks
+                    if bridge:  # a tapped answer: Live must know, so it tells the result and never re-asks
+                        facts = json.dumps(result, ensure_ascii=False, default=str)
                         await bridge.send_text(
                             f"[CONFIRMATION] The owner answered '{msg.answer}' on the phone for {msg.id}. "
-                            f"Result: {say}. Do not call confirm_action for it again.")
+                            f"Result facts: {facts}. Tell him the result briefly, in the language he is "
+                            "speaking, numbers exactly as given. Do not call confirm_action for it again.")
+                    else:  # no Live voice: the English meaning is the caption
+                        await send(TranscriptMsg(role="aira", text=str(result.get("say_en", "")), final=True))
             elif isinstance(msg, EventMsg):
                 monitor.client_event(session, msg.name, msg.data)
                 await _guidance_hook("handle_client_event", session, msg.name, msg.data)

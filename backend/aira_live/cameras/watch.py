@@ -11,8 +11,9 @@ For every frame that passes the motion gate, each of the camera's modes runs:
 - ``security``  motion inside the after-hours window -> "movement in the shop after hours". No Gemini call.
 
 Outputs: an append-only ``alerts`` event (``analytics.events.publish``) and a short spoken notice to the
-owner's live sessions (``sessions.notify``) in the owner's language (the language of his live session, else
-English). Each kind repeats at most once per ``COOLDOWN_S``. Nothing here writes stock, money or state.
+owner's live sessions (``sessions.notify``) as English facts (camera name, exact counts, product name); Gemini
+Live says them in whatever language the owner is speaking. Each kind repeats at most once per ``COOLDOWN_S``.
+Nothing here writes stock, money or state.
 """
 from __future__ import annotations
 
@@ -31,9 +32,8 @@ from aira_live import remote_config, sessions
 from aira_live.analytics import events
 from aira_live.cameras.config import CameraConfig, parse_cameras
 from aira_live.cameras.motion import MotionGate
-from aira_live.cameras.sources import CameraSource, PhoneSource, RtspSource, is_camera_session
+from aira_live.cameras.sources import CameraSource, PhoneSource, RtspSource
 from aira_live.frames import Frame
-from aira_live.i18n import t
 
 log = logging.getLogger(__name__)
 
@@ -42,8 +42,13 @@ COOLDOWN_S = 120.0           # one notice per kind per camera in this window
 SHELF_MAX_PRODUCTS = 4       # catalog products counted per shelf frame (one Gemini call each)
 DELIVERY_LABEL = "milk crate, dairy product pack or carton"
 COUNTER_LABEL = "person standing at the shop counter"
-I18N = {"delivery": "camera.delivery", "shelf": "camera.low_stock", "counter": "camera.customer",
-        "security": "camera.motion"}
+# English facts per mode; every number is exact and Live keeps it when phrasing in the owner's language.
+NOTICE_EN = {
+    "delivery": "Camera {camera}: a delivery seems to have come. About {n} packs seen. Shall I count them?",
+    "shelf": "Camera {camera}: low stock, only about {left} {product} left on the shelf.",
+    "counter": "Camera {camera}: someone is waiting at the counter.",
+    "security": "Camera {camera}: movement in the shop after hours.",
+}
 
 
 def now_ist() -> datetime:
@@ -62,14 +67,6 @@ def is_after_hours(now: datetime, window: tuple[str, str]) -> bool:
     if start <= end:
         return start <= cur < end
     return cur >= start or cur < end
-
-
-def owner_lang(shop_id: str) -> str:
-    """The language of the owner's live session (the first non-camera one), else English."""
-    for s, _bridge in sessions.by_shop(shop_id):
-        if not is_camera_session(s):
-            return s.lang
-    return "en"
 
 
 async def list_products(shop_id: str) -> list[tuple[str, dict]]:
@@ -102,7 +99,6 @@ class Watcher:
                  counter: Callable | None = None,
                  publish: Callable[[str, dict], Awaitable[str]] = events.publish,
                  notify: Callable[..., Awaitable[int]] = sessions.notify,
-                 lang_for: Callable[[str], str] = owner_lang,
                  clock: Callable[[], datetime] = now_ist,
                  products: Callable[[str], Awaitable[list[tuple[str, dict]]]] = list_products):
         self.cfg = cfg
@@ -111,7 +107,6 @@ class Watcher:
         self._counter = counter
         self._publish = publish
         self._notify = notify
-        self._lang_for = lang_for
         self._clock = clock
         self._products = products
         self.now: Callable[[], float] = time.monotonic
@@ -190,8 +185,7 @@ class Watcher:
         if last is not None and now - last < COOLDOWN_S:
             return False
         self._last[key] = now
-        lang = self._lang_for(self.cfg.shop_id)
-        message = t(I18N[mode], lang, camera=self.cfg.name, **kw)
+        message = NOTICE_EN[mode].format(camera=self.cfg.name, **kw)
         try:
             await self._publish("alerts", {"shop_id": self.cfg.shop_id, "kind": f"camera.{mode}",
                                            "message": message, "camera": self.cfg.name, **kw})

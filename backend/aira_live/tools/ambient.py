@@ -12,9 +12,10 @@ asking." Ambient mode is ON by default once the session is up (the switch is per
   rate limits and ER 2 budget.
 - Priorities: nothing is said while the owner talks or AIRA answers (the Live bridge knows); a hold-up line makes
   the scene loop wait ``HOLD_AFTER_SPEECH_S``; the phone's bump guard mutes hold-up frames by itself. Every line
-  is in the language of the session, and the model is told these lines are system notices not to repeat.
-- Voice: "stop describing" / "quiet mode" turn it off, "describe again" turns it on (handled here, before the
-  model, so it is instant and never doubled); ``describe_mode`` (the Live tool) switches it as well.
+  is English facts ("Aavin Milk 500 ml, 30 rupees.") that Gemini Live says in the language the owner is
+  speaking; the model is told these lines are system notices not to repeat.
+- Voice: the Live model switches it with ``describe_mode(on)`` when the owner asks, in any language ("stop
+  describing", "quiet mode", "describe again"); no words are matched here.
 """
 from __future__ import annotations
 
@@ -28,8 +29,6 @@ from typing import Any
 from aira_live import db as dbmod
 from aira_live import sessions
 from aira_live.contracts import RequestFrameMsg, TranscriptMsg
-from aira_live.i18n import t
-from aira_live.live_bridge import on_input_transcript
 from aira_live.live_video import narrates
 from aira_live.session import Session
 from aira_live.tools import describe
@@ -51,6 +50,11 @@ START_DELAY_S = 1.5         # after hello: let the greeting go first
 SETTING_TIMEOUT_S = 2.0
 MAX_LABEL = 40
 
+# English lines (facts / meaning): Live says them in the owner's language.
+ON_EN = "Okay. I will tell you what you show me and what comes into view."
+OFF_EN = "Quiet mode. I will speak only when you ask."
+CLOSER_EN = "Hold it a little closer."
+
 FREE_PROMPT = (
     "A blind shopkeeper is holding up ONE object to this chest camera. Name the object in two or three plain "
     "words with an article, for example \"a water bottle\", \"a bunch of keys\", \"a blue plastic bag\". "
@@ -60,26 +64,9 @@ FREE_PROMPT = (
 )
 FREE_SCHEMA = '{"label": "<a short name with an article, or empty>", "confidence": 0.0}'
 
-_ON = re.compile(r"(describe again|start describ|keep describ|describe mode on|start telling|tell me again what|"
-                 r"மீண்டும் விவரி|விவரி.*தொடங்கு|फिर से बताओ|बताना शुरू|फिर बताओ)", re.I)
-_OFF = re.compile(r"(stop describing|stop telling|quiet mode|be quiet|stay quiet|don.?t describe|no more describing|"
-                  r"silent mode|அமைதி|விவரிப்பதை நிறுத்து|சொல்லாதே|शांत मोड|चुप|बताना बंद|मत बताओ)", re.I)
 _WS = re.compile(r"\s+")
 
 _ACTIVE: dict[str, "Ambient"] = {}
-_SWITCH: dict[str, Callable[[], None]] = {}   # session_id -> unsubscribe of its voice switch
-
-
-def parse_ambient_command(text: str) -> bool | None:
-    """False for "stop describing" / "quiet mode", True for "describe again" / "start describing", else None."""
-    q = _WS.sub(" ", text or "").strip()
-    if not q:
-        return None
-    if _OFF.search(q):
-        return False
-    if _ON.search(q):
-        return True
-    return None
 
 
 # --- the persisted switch (shops/{shop}/prefs/ambient) ------------------------------------------------------------
@@ -148,19 +135,18 @@ async def _price(shop_id: str, sku: str):
 
 
 async def identify_held(session: Session, frame) -> tuple[str | None, str]:
-    """``(line, kind)``: the catalog line with its price (kind "catalog"), a free-text line ("free"), or
-    ``(None, "low")`` when neither is confident. ``(None, "person")`` is silence. Raises VisionError."""
+    """``(line, kind)``: English facts for the held object: the catalog name, pack and price ("Aavin Milk 500 ml,
+    30 rupees.", kind "catalog"), a free-text label ("A water bottle.", "free"), or ``(None, "low")`` when
+    neither is confident. ``(None, "person")`` is silence. Raises VisionError."""
     s = session
     candidates = await shop_products(s.shop_id)
     if candidates:
         res = await identify_product(frame, candidates)
         ref = next((c for c in candidates if c.sku == res.sku), None)
         if ref is not None and res.confidence >= MIN_ID_CONF:
-            line = t("ambient.held", s.lang, name=ref.name, pack=ref.pack)
             price = await _price(s.shop_id, ref.sku)
-            if price is not None:
-                line = f"{line} {t('ambient.held_price', s.lang, price=price)}"
-            return line, "catalog"
+            line = f"{ref.name} {ref.pack}".strip()
+            return (f"{line}, {price} rupees." if price is not None else f"{line}."), "catalog"
     data = await generate_json("point", [image_part(frame.jpeg_b64), FREE_PROMPT], FREE_SCHEMA,
                                thinking="low", timeout_s=6.0)
     label, conf, person = parse_free_label(data)
@@ -168,7 +154,7 @@ async def identify_held(session: Session, frame) -> tuple[str | None, str]:
         return None, "person"
     if not label or conf < FREE_MIN_CONF:
         return None, "low"
-    return t("ambient.held_free", s.lang, label=label), "free"
+    return f"{label[0].upper()}{label[1:]}.", "free"
 
 
 class HoldUpLoop:
@@ -235,7 +221,7 @@ class HoldUpLoop:
         if line is None:
             if kind == "low" and now - self.last_aim_at >= self.aim_gap_s:
                 self.last_aim_at = now
-                await self._say(t("ambient.closer", s.lang))
+                await self._say(CLOSER_EN)
             return self.active
         self.spoken += 1
         self.hold_until = now + HOLD_AFTER_SPEECH_S
@@ -257,9 +243,11 @@ class HoldUpLoop:
                 await asyncio.sleep(0.5)
 
     async def _say(self, text: str) -> None:
+        """English facts as a caption plus the live voice (Live phrases them in the owner's language; never
+        urgent)."""
         s = self.session
         try:
-            await s.send(TranscriptMsg(role="aira", text=text, final=True, lang=s.lang))
+            await s.send(TranscriptMsg(role="aira", text=text, final=True, lang="en"))
             bridge = describe._bridge_of(s)
             if bridge is not None:
                 await bridge.speak_notice(text)
@@ -294,35 +282,9 @@ class Ambient:
         await describe.stop_describe(self.session)
 
 
-def _ensure_switch(session: Session) -> None:
-    """The voice switch of ``session``: registered once, kept while the session lives (also while ambient mode
-    is off, so "describe again" works), and ahead of the scene loop's own listener so "stop describing" is
-    answered once."""
-    if session.session_id in _SWITCH:
-        return
-
-    async def on_utterance(text: str) -> None:
-        want = parse_ambient_command(text)
-        if want is None:
-            return
-        if want:
-            await start(session)
-            await _say(session, t("ambient.on", session.lang))
-        elif await stop(session):
-            await _say(session, t("ambient.off", session.lang))
-
-    _SWITCH[session.session_id] = on_input_transcript(session.session_id, on_utterance)
-
-
-def _drop_switch(session: Session) -> None:
-    unsubscribe = _SWITCH.pop(session.session_id, None)
-    if unsubscribe is not None:
-        unsubscribe()
-
-
 async def _say(s: Session, text: str) -> None:
     try:
-        await s.send(TranscriptMsg(role="aira", text=text, final=True, lang=s.lang))
+        await s.send(TranscriptMsg(role="aira", text=text, final=True, lang="en"))
         bridge = describe._bridge_of(s)
         if bridge is not None:
             await bridge.speak_notice(text)
@@ -339,7 +301,7 @@ def is_on(session: Session) -> bool:
 
 
 async def start(session: Session, run: bool = True, persist: bool = True, **kw) -> Ambient:
-    """(Re)start ambient mode for ``session``: the hold-up loop, the scene loop and the voice switch."""
+    """(Re)start ambient mode for ``session``: the hold-up loop and the scene loop."""
     previous = _ACTIVE.pop(session.session_id, None)
     if previous is not None:
         await previous.close()
@@ -348,7 +310,6 @@ async def start(session: Session, run: bool = True, persist: bool = True, **kw) 
     holdup = HoldUpLoop(session, clock=clock, busy=busy, **kw)
     amb = Ambient(session, holdup)
     _ACTIVE[session.session_id] = amb
-    _ensure_switch(session)
     scene_busy = (lambda: holdup.holding() or busy()) if busy is not None else \
         (lambda: holdup.holding() or describe._bridge_busy(session))
     scene = await describe.start(session, run=run, busy=scene_busy, clock=clock)
@@ -387,7 +348,6 @@ async def _delayed_start(session: Session, delay_s: float) -> None:
             await asyncio.sleep(delay_s)
         if not describe._registered(session):
             return
-        _ensure_switch(session)
         try:
             on = await asyncio.wait_for(load_setting(session.shop_id), SETTING_TIMEOUT_S)
         except Exception:
@@ -407,6 +367,5 @@ async def on_session_start(session: Session, delay_s: float = START_DELAY_S) -> 
 
 
 async def stop_session(session: Session) -> None:
-    """main.py hook on disconnect: end the loops and the voice switch, keep the persisted setting."""
-    _drop_switch(session)
+    """main.py hook on disconnect: end the loops, keep the persisted setting."""
     await stop(session, persist=False)

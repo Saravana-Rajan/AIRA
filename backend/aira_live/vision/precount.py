@@ -9,7 +9,7 @@ Sam then asks "how many ...?", the answer is ready (or already on its way).
 - One count in flight per session. A change during a count marks the newer scene as wanted; when the running
   count ends (its result is dropped: its scene is gone) the wanted scene is counted next.
 - ``cached(session_id, product)`` -> (count, confidence, age_s) for the current scene, the objects filtered by
-  the product's label words; ``answer(session, question)`` serves a "how many" question from it, waiting for a
+  the product's label words; ``answer(session, kind, item, product)`` serves a ``kind="count"`` camera_ask from it, waiting for a
   count still in flight.
 - Diagnostics: ``precount`` lines (started / done / served / invalidated, ms). Never any picture.
 """
@@ -38,10 +38,8 @@ MIN_GAP_S = 2.0             # at most one count started per 2 s per session
 MAX_AGE_S = 120.0           # a count older than this is not served, scene or not
 GENERIC = {"packet", "packets", "pack", "packs", "item", "items", "object", "objects", "product", "products",
            "box", "boxes", "bottle", "bottles", "pouch", "pouches", "carton", "cartons", "thing", "things"}
-COUNT_WORDS = ("how many", "count", "number of", "எத்தனை", "எண்ணு", "कितन", "गिन")
-_STOP = {"how", "many", "much", "count", "the", "a", "an", "of", "are", "is", "there", "in", "on", "my", "this",
-         "that", "these", "those", "do", "i", "have", "number", "fridge", "shelf", "here", "left", "please", "can",
-         "you", "tell", "me", "what", "we", "it", "its", "and", "at", "to"}
+# Filler in the model's item / product arguments and in pack labels: never a product word.
+_STOP = {"the", "a", "an", "of", "my", "this", "that", "these", "those", "and", "fridge", "shelf"}
 _WORD = re.compile(r"[^\W\d_]{3,}", re.UNICODE)
 
 Counter = Callable[["Frame", str], Awaitable[Any]]
@@ -66,11 +64,6 @@ _STATE: dict[str, _State] = {}
 def _default_counter() -> Counter:
     from aira_live.vision.count import count_in_frame
     return count_in_frame
-
-
-def is_count_question(question: str) -> bool:
-    q = (question or "").lower()
-    return any(w in q for w in COUNT_WORDS)
 
 
 def _words(text: str) -> set[str]:
@@ -166,26 +159,30 @@ def in_flight(session_id: str) -> asyncio.Task | None:
     return st.task if st is not None and st.task_scene == st.scene else None
 
 
-async def answer(session: Session, question: str, wait_s: float = WAIT_S) -> dict | None:
-    """A camera_ask-shaped reply to a "how many" question from the pre-count of the current scene, or None
-    (not a count question, no count for this scene, or a product the count cannot tell apart)."""
-    if not is_count_question(question):
+async def answer(session: Session, kind: str, item: str = "", product: str = "",
+                 wait_s: float = WAIT_S) -> dict | None:
+    """A camera_ask-shaped reply from the pre-count of the current scene when the model asked for a count
+    (``kind`` "count"), or None (another kind, no count for this scene, or a product the count cannot tell
+    apart). ``item`` / ``product`` are the model's own arguments; the owner's words are never parsed here."""
+    if kind != "count":
         return None
     sid = session.session_id
+    want = " ".join(w for w in (product, item) if w)
     task = in_flight(sid)
-    if task is not None and cached(sid, question) is None:
+    if task is not None and cached(sid, want) is None:
         try:
             await asyncio.wait_for(asyncio.shield(task), wait_s)
         except (TimeoutError, asyncio.CancelledError, Exception):
             return None
-    hit = cached(sid, question)
+    hit = cached(sid, want)
     if hit is None:
         return None
-    from aira_live.i18n import t
     n, conf, age = hit
     diag("precount", event="served", session=sid, count=n, confidence=conf, age_ms=round(age * 1000))
-    return {"say": t("precount.count", session.lang, n=n), "answer": str(n), "kind": "count", "count": n,
-            "objects": [], "confidence": conf, "precounted": True}
+    say_en = f"I count {n} packs here."
+    return {"kind": "count", "sure": True, "count": n, "approx": False, "exact": True, "label": item,
+            "product": product, "hint": "", "say_en": say_en, "facts": say_en, "answer": str(n), "objects": [],
+            "confidence": conf, "precounted": True}
 
 
 def forget(session_id: str) -> None:

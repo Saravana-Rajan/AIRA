@@ -7,7 +7,7 @@ only half readable is still pointed at; when the owner named a product ("Hatsun 
 the points whose label names it, and unreadable labels make the count "not sure".
 
 Never invent a count: when nothing valid is seen, the reply hits the item cap or the output cap (so more packs
-may be in view), the result is ``count=None`` with ``needs_retake`` and an ``aim_hint`` i18n key (see
+may be in view), the result is ``count=None`` with ``needs_retake`` and an ``aim_hint`` code (see
 ``vision/hints.py``).
 
 Two different problems get two different hints: a pack cut off by the frame edge asks Sam to move the
@@ -41,7 +41,7 @@ class CountResult(BaseModel):
     count: int | None
     confidence: float
     needs_retake: bool
-    aim_hint: str          # i18n key, e.g. "vision.aim.move_back"; "" when the count is usable as is
+    aim_hint: str          # hint code, e.g. "vision.aim.move_back"; "" when the count is usable as is
     # The deduped packs as the monitor draws them: {"label", "point": [y, x], "box": [ymin, xmin, ymax, xmax] | None}
     objects: list[dict] = []
     model: str | None = None   # the model that answered (diagnostics)

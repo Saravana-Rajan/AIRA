@@ -10,13 +10,11 @@ from types import SimpleNamespace
 import pytest
 
 from aira_live.frames import Frame
-from aira_live.i18n import LANGS
 from aira_live.models import model_for
 from aira_live.vision import cash
 from aira_live.vision.cash_merge import COINS, NOTES, VALID_DENOMINATIONS, merge_cash
 from aira_live.vision.cash_models import CashRead
 
-I18N_DIR = Path(__file__).resolve().parents[2] / "aira_live" / "i18n"
 CASH_KEYS = ("cash.spread_notes", "cash.unsupported_note", "cash.show_again")
 
 A_1000 = {"items": [{"denomination": 500, "count": 2, "kind": "note"}], "overlapping": False, "confidence": 0.9}
@@ -289,17 +287,18 @@ def test_prompts_never_ask_for_a_genuineness_verdict():
     assert "counterfeit" not in CashRead.model_json_schema().__repr__().lower()
 
 
-def test_cash_hint_keys_exist_in_every_language():
-    for lang in LANGS:
-        data = json.loads((I18N_DIR / f"{lang}.json").read_text(encoding="utf-8"))
-        for key in CASH_KEYS:
-            assert data.get(key), f"{lang} is missing {key}"
+def test_cash_hint_keys_have_an_english_meaning():
+    from aira_live.tools.payments import CASH_HINTS_EN
+
+    for key in CASH_KEYS:
+        assert CASH_HINTS_EN.get(key), key
 
 
 def test_cash_hints_never_claim_to_detect_fake_notes():
-    en = json.loads((I18N_DIR / "en.json").read_text(encoding="utf-8"))
+    from aira_live.tools.payments import CASH_HINTS_EN
+
     for key in CASH_KEYS:
-        low = en[key].lower()
+        low = CASH_HINTS_EN[key].lower()
         for word in ("fake", "counterfeit", "genuine", "forged", "real note"):
             assert word not in low, f"{key} mentions {word!r}"
 

@@ -1,7 +1,7 @@
 """AIRA follows the speaker's language turn by turn: no default and no fixed language anywhere.
 
 - ``i18n.detect_lang`` is pure and script-based (JAPAC: Indic, Thai, CJK, Latin).
-- ``i18n.t`` gives the English line for a language without a catalog, never silence.
+- ``system_lines.line`` (the phone's no-Live lines) gives English for a language without one, never silence.
 - The system prompt tells Live to answer in the language of the last utterance and never to ask.
 - ``session.lang`` follows every user turn (Live transcripts and typed text) and the phone hears it on the
   transcript message (``lang``) so its labels can follow too.
@@ -10,7 +10,8 @@ import pytest
 from live_fakes import FakeBackend, wait_until
 
 from aira_live.contracts import TranscriptMsg, dump_server_msg
-from aira_live.i18n import LANGS, detect_lang, t
+from aira_live.i18n import detect_lang
+from aira_live.system_lines import LANGS, line
 from aira_live.live_bridge import LiveBridge, LiveEvent
 from aira_live.prompt import render_prompt
 
@@ -57,11 +58,11 @@ def test_detect_lang_never_raises_and_only_returns_lowercase_codes():
 
 
 # ---------- fixed lines in a language without a catalog ----------
-def test_i18n_gives_the_english_line_for_any_language_without_a_catalog():
+def test_a_system_line_is_english_for_any_language_without_one():
     assert LANGS == ("ta", "hi", "en")
     for lang in ("ja", "ko", "zh", "th", "vi", "id", "fil", "te", "kn", "ml", "bn", "gu", "pa"):
-        assert t("confirm.cancelled", lang) == t("confirm.cancelled", "en")
-        assert t("mock.echo", lang, text="x").endswith("x")
+        assert line("error.internal", lang) == line("error.internal", "en")
+        assert line("mock.echo", lang, text="x").endswith("x")
 
 
 # ---------- prompt ----------
@@ -76,8 +77,9 @@ def test_prompt_tells_live_to_follow_the_speaker_and_never_pin_a_language():
     assert "default language" not in low and "always speak" not in low
     # the hello language is only the hint for the first line, before anyone has spoken
     assert "until the speaker has spoken, use tamil" in low
-    # fixed English lines (tool 'say' texts, notices) are spoken in the session language, never dropped
-    assert "say it in the session language" in low
+    # tool facts, notices and corrections (usually English) are said in the session language, never dropped
+    assert "always say them in the session language" in low
+    assert "20. tools return facts" in low and "any language" in low
 
 
 def test_prompt_first_line_hint_covers_japac_and_falls_back_to_english():
@@ -123,10 +125,11 @@ async def test_notice_is_spoken_in_the_language_the_speaker_last_used(mk_session
     bridge = LiveBridge(s, lambda: b, "prompt", [])
     await bridge.start()
     try:
-        await bridge.speak_notice(t("jobs.expired_alert", s.lang, items="curd"))
+        await bridge.speak_notice("Expired: curd, 2 packs.")
         sent = b.sent_text[-1]
-        # the note names the session language, so a Japanese session hears the alert in Japanese
-        assert "Expired: curd" in sent and "in Japanese" in sent and sent.startswith("[SYSTEM NOTE] Say exactly")
+        # facts, never a fixed sentence: Live tells them in the language he is speaking (Japanese here)
+        assert sent.endswith(": Expired: curd, 2 packs.") and "in the language he is speaking" in sent
+        assert "Say exactly" not in sent
     finally:
         await bridge.close()
 

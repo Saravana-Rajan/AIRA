@@ -103,10 +103,11 @@ def test_not_found_after_8_seconds():
     assert decide(view(), "fridge", "en", Search(lost_s=3)).key == "walk.looking_left"
 
 
-def test_lines_in_tamil_and_hindi():
-    assert decide(view((400, 500), (300, 420, 500, 580)), "fridge", "ta").text != \
-        decide(view((400, 500), (300, 420, 500, 580)), "fridge", "en").text
-    assert "3" in decide(view((400, 500), (300, 420, 500, 580)), "fridge", "hi").text
+def test_lines_are_english_meanings_whatever_the_language():
+    """The key and step count are the facts; the text is only the English meaning Live says in his language."""
+    en = decide(view((400, 500), (300, 420, 500, 580)), "fridge", "en")
+    ta = decide(view((400, 500), (300, 420, 500, 580)), "fridge", "ta")
+    assert ta == en and en.key == "walk.ahead" and en.steps == 3 and en.text == "fridge ahead, about 3 steps."
 
 
 # --- change-only speaking -------------------------------------------------------------------------------------------

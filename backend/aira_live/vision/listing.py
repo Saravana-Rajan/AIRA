@@ -1,9 +1,10 @@
 """Fridge / shelf listing (spec §4): "what's in my fridge?" lists every visible item grouped by shelf or area.
 
-``camera_ask`` hands a listing question here. The ``point`` model (ER 2, Flash fallback) returns areas with
-items as [y, x] points (0-1000); the spoken line is built from i18n parts (area names, sides) in the session
-language, with the item labels as the model named them. Low confidence says "not sure" plus an aim hint and
-lists nothing; nothing visible says "show me the shelf". Never a guess.
+``camera_ask`` hands a listing question here (the Live model calls it with kind="list"). The ``point`` model
+(ER 2, Flash fallback) returns areas with items as [y, x] points (0-1000). The result is FACTS: areas (top shelf first) with their items left to right,
+each with a coarse ``side`` (left / ahead / right) and distance, plus a short English ``say_en``; Gemini Live
+phrases it in the owner's language. Low confidence returns ``unsure`` plus an aim hint and lists nothing;
+nothing visible asks for the shelf. Never a guess.
 
 After every result the optional ``aira_live.vision.observers.on_vision_objects`` hook (personal-item memory,
 spec §5) is told what was seen; it is skipped when the module does not exist.
@@ -14,10 +15,8 @@ import inspect
 import logging
 from typing import Any
 
-from aira_live.i18n import t
-from aira_live.prompt import LANG_NAME
 from aira_live.vision.gemini import generate_json, image_part
-from aira_live.vision.hints import HINT_KEYS
+from aira_live.vision.hints import HINT_KEYS, hint_text
 from aira_live.vision.point import parse_box
 
 log = logging.getLogger(__name__)
@@ -28,24 +27,23 @@ MAX_ITEMS = 4
 AREAS = ("top", "middle", "bottom", "door", "floor", "counter", "other")
 DISTANCES = ("near", "arm", "far")
 
-# A listing on their own: the owner wants every item named.
-LIST_WORDS = (
-    "what products", "which products", "what items", "which items", "list the", "list what", "list everything",
-    "each product", "every product", "each item", "every item", "what all", "என்னென்ன", "क्या-क्या", "क्या क्या",
-)
-# A container plus an "in / on" question: "what's in my fridge?", "ஃப்ரிட்ஜில் என்ன இருக்கு", "फ्रिज में क्या है".
-# "Which shelf has curd?" names a container but asks where one thing is: that stays a "look" question.
-CONTAINER_WORDS = ("fridge", "freezer", "shelf", "shelves", "rack", "cupboard", "ஃப்ரிட்ஜ", "அலமாரி", "फ्रिज", "शेल्फ")
-CONTENTS_WORDS = ("what's in", "what is in", "whats in", "what's on", "what is on", "whats on", "inside",
-                  "what do you see", "என்ன இருக்கு", "என்ன இருக்கிறது", "என்ன உள்ளது", "क्या है", "क्या रखा", "क्या दिख")
+# English names used in ``say_en`` (the meaning hint and caption fallback; Live says it in the owner's language).
+AREA_EN = {"top": "Top shelf", "middle": "Middle shelf", "bottom": "Bottom shelf", "door": "Fridge door",
+           "floor": "On the floor", "counter": "On the counter", "other": "Also"}
+SIDE_EN = {"cam.side.far_left": "to your far left", "cam.side.left": "to your left",
+           "cam.side.centre": "straight ahead", "cam.side.right": "to your right",
+           "cam.side.far_right": "to your far right"}
+DIST_EN = {"near": "within arm's reach", "arm": "at arm's length", "far": "a few steps away"}
+NONE_EN = "I can't see any products. Show me the shelf."
+NOT_SURE_EN = "Not sure."
 
 LIST_PROMPT = (
     "You are the eyes of a blind shopkeeper wearing this chest camera. The owner asks: \"{question}\". "
     "List every product or item you can see, grouped by where it is: each shelf of a fridge or rack from top to "
-    "bottom, the fridge door, the floor or the counter. area is one of {areas}; area_name is a short name for "
-    "it in {lang}. Name each item in {lang} with its point [y, x] normalized 0-1000 (x: 0 is the owner's left, "
-    "1000 the right) and distance: near "
-    "(within reach), arm (an arm's length), far (a step or more). Only items "
+    "bottom, the fridge door, the floor or the counter. area is one of {areas}; area_name is a short English "
+    "name for it. Name each item in plain English (brand and size as printed on the pack when you can read "
+    "them) with its point [y, x] normalized 0-1000 (x: 0 is the owner's left, 1000 the right) and distance: "
+    "near (within reach), arm (an arm's length), far (a step or more). Only items "
     "you actually see; never guess brands you cannot read. Never describe or identify people. If the image is "
     "dark, blurred or shows no shelf, set confidence below 0.5 and aim_hint to one of {hints}."
 )
@@ -55,12 +53,21 @@ LIST_SCHEMA = ('{"areas": [{"area": "top|middle|bottom|door|floor|counter|other"
                '"confidence": 0.0, "aim_hint": "<optional key>"}')
 
 
-def is_listing(question: str) -> bool:
-    """True for "what's in my fridge?", "list the products on this shelf", and the same in Tamil or Hindi."""
-    q = (question or "").lower()
-    if any(w in q for w in LIST_WORDS):
-        return True
-    return any(w in q for w in CONTAINER_WORDS) and any(w in q for w in CONTENTS_WORDS)
+def coarse_side(x: float) -> str:
+    """"left", "ahead" or "right" from an x of 0-1000: the fact carried per item (coarser than ``side_en``)."""
+    return "left" if x < 400 else "right" if x > 600 else "ahead"
+
+
+def side_en(x: float) -> str:
+    """English side words for an x of 0-1000: "to your left", "straight ahead", ..."""
+    from aira_live.tools.camera import side_key   # lazy: camera imports this module
+
+    return SIDE_EN.get(side_key(x), "straight ahead")
+
+
+def dist_en(distance: Any) -> str:
+    """English distance words: "within arm's reach", "at arm's length", "a few steps away"."""
+    return DIST_EN.get(str(distance or "").lower(), DIST_EN["arm"])
 
 
 def _point_ok(p: Any) -> bool:
@@ -78,7 +85,8 @@ def _items(raw: Any) -> list[dict]:
         if not label or not _point_ok(p):
             continue
         d = str(o.get("distance") or "").lower()
-        item = {"label": label, "point": [round(p[0]), round(p[1])], "distance": d if d in DISTANCES else "arm"}
+        item = {"label": label, "point": [round(p[0]), round(p[1])], "distance": d if d in DISTANCES else "arm",
+                "side": coarse_side(p[1])}
         box = parse_box(o.get("box_2d") if o.get("box_2d") is not None else o.get("box"))
         if box:
             item["box"] = list(box)
@@ -118,22 +126,16 @@ def flat_objects(areas: list[dict]) -> list[dict]:
     return [{**i, "area": a["area"]} for a in areas for i in a["items"]]
 
 
-def _side(x: float, lang: str) -> str:
-    from aira_live.tools.camera import side_key   # lazy: camera imports this module
-
-    return t(side_key(x), lang)
-
-
-def say_listing(areas: list[dict], lang: str) -> str:
-    """"Top shelf: milk to your left, curd straight ahead. Fridge door: ..." in ``lang``."""
+def say_listing(areas: list[dict], lang: str | None = None) -> str:
+    """English meaning: "Top shelf: milk to your left, curd straight ahead. Fridge door: ..." (``lang`` is
+    ignored; Live phrases it in the owner's language)."""
     if not areas:
-        return t("cam.list.none", lang)
+        return NONE_EN
     parts: list[str] = []
     for a in areas[:MAX_AREAS]:
-        title = a["area_name"] if a["area"] == "other" and a["area_name"] else t(f"cam.area.{a['area']}", lang)
-        items = ", ".join(t("cam.list.item", lang, label=i["label"], side=_side(i["point"][1], lang))
-                          for i in a["items"][:MAX_ITEMS])
-        parts.append(t("cam.list.area", lang, area=title, items=items))
+        title = a["area_name"] if a["area"] == "other" and a["area_name"] else AREA_EN[a["area"]]
+        items = ", ".join(f"{i['label']} {side_en(i['point'][1])}" for i in a["items"][:MAX_ITEMS])
+        parts.append(f"{title}: {items}.")
     return " ".join(parts)
 
 
@@ -181,10 +183,9 @@ async def publish_boxes(session, objects: list[dict], context: str, **kw) -> Non
 
 
 async def list_shelf(session, frame_b64: str, question: str) -> dict:
-    """One frame of a fridge or shelf -> {say, kind: "list", areas, objects, confidence}. Raises VisionError."""
-    lang = session.lang
-    prompt = LIST_PROMPT.format(question=question, lang=LANG_NAME.get(lang, "English"),
-                                areas="|".join(AREAS), hints=", ".join(HINT_KEYS))
+    """One frame of a fridge or shelf -> facts ``{kind: "list", areas, objects, confidence, say_en}``; when unsure
+    ``{..., unsure: True, aim_hint}`` with nothing listed. Raises VisionError."""
+    prompt = LIST_PROMPT.format(question=question, areas="|".join(AREAS), hints=", ".join(HINT_KEYS))
     data = await generate_json("point", [image_part(frame_b64), prompt], LIST_SCHEMA, thinking="low", timeout_s=8.0)
     if not isinstance(data, dict):
         data = {}
@@ -192,11 +193,11 @@ async def list_shelf(session, frame_b64: str, question: str) -> dict:
     hint = data.get("aim_hint")
     if conf < MIN_CONF or hint:
         key = hint if isinstance(hint, str) and hint in HINT_KEYS else "vision.aim.show_items"
-        return {"say": f"{t('cam.not_sure', lang)} {t(key, lang)}", "answer": "", "kind": "list",
-                "areas": [], "objects": [], "confidence": conf, "aim_hint": key}
+        return {"kind": "list", "areas": [], "objects": [], "confidence": conf, "unsure": True, "aim_hint": key,
+                "say_en": f"{NOT_SURE_EN} {hint_text(key)}"}
     areas = parse_areas(data.get("areas") if "areas" in data else data)
     objects = flat_objects(areas)
     await observe(session, objects, "camera_list")
     await publish_boxes(session, objects, "camera_list")
-    say = say_listing(areas, lang)
-    return {"say": say, "answer": say, "kind": "list", "areas": areas, "objects": objects, "confidence": conf}
+    out = {"kind": "list", "areas": areas, "objects": objects, "confidence": conf, "say_en": say_listing(areas)}
+    return out

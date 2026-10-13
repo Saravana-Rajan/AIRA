@@ -1,7 +1,8 @@
-"""The shop-watch loop: motion-gated frames are routed by mode to a notice (alerts event + spoken text).
+"""The shop-watch loop: motion-gated frames are routed by mode to a notice (alerts event + English facts).
 
 Everything is injected: a scripted counter in place of ``vision.count.count_in_frame``, recorders in place of
-``analytics.events.publish`` and ``sessions.notify``, a fixed clock and a fixed owner language.
+``analytics.events.publish`` and ``sessions.notify``, and a fixed clock. Notices are English facts with exact
+numbers; Live phrases them in the owner's language, so nothing here depends on a language.
 """
 from __future__ import annotations
 
@@ -15,7 +16,6 @@ from PIL import Image
 from aira_live.cameras import watch
 from aira_live.cameras.config import parse_cameras
 from aira_live.cameras.watch import Watcher, is_after_hours
-from aira_live.i18n import t
 from aira_live.vision.count import CountResult
 from aira_live.vision.gemini import VisionError
 
@@ -67,11 +67,10 @@ NOON = datetime(2026, 10, 11, 12, 0)
 NIGHT = datetime(2026, 10, 11, 23, 30)
 
 
-def make(cfg, counter=None, rec=None, lang="ta", clock=lambda: NOON, products=None):
+def make(cfg, counter=None, rec=None, clock=lambda: NOON, products=None):
     rec = rec or Rec()
     w = Watcher(cfg, source=None, counter=counter or counter_returning(), publish=rec.publish, notify=rec.notify,
-                lang_for=lambda shop: lang, clock=clock,
-                products=products or (lambda shop: asyncio.sleep(0, result=[])))
+                clock=clock, products=products or (lambda shop: asyncio.sleep(0, result=[])))
     return w, rec
 
 
@@ -81,11 +80,13 @@ async def test_delivery_mode_counts_and_speaks_when_packs_appear():
     w, rec = make(cam(["delivery"]), counter_returning(seen(12)))
     fired = await w.handle(jpeg(), 1.0)
     assert fired == ["delivery"]
-    assert rec.said == [("sunrise_dairy", t("camera.delivery", "ta", camera="front", n=12), "warn")]
+    shop_id, text, cue = rec.said[0]
+    assert shop_id == "sunrise_dairy" and cue == "warn" and len(rec.said) == 1
+    assert "front" in text and "12" in text and "delivery" in text.lower()   # camera name and the exact count
     topic, payload = rec.events[0]
     assert topic == "alerts"
-    assert payload["shop_id"] == "sunrise_dairy" and payload["kind"] == "camera.delivery"
-    assert payload["camera"] == "front" and payload["message"] == rec.said[0][1]
+    assert payload["shop_id"] == "sunrise_dairy" and payload["kind"] == "camera.delivery" and payload["n"] == 12
+    assert payload["camera"] == "front" and payload["message"] == text
 
 
 async def test_delivery_mode_stays_quiet_when_nothing_is_seen():
@@ -104,11 +105,14 @@ async def products(shop):
 
 async def test_shelf_mode_checks_each_catalog_product_against_its_reorder_level():
     counter = counter_returning(seen(2), seen(10))
-    w, rec = make(cam(["shelf"]), counter, products=products, lang="en")
+    w, rec = make(cam(["shelf"]), counter, products=products)
     assert await w.handle(jpeg(), 1.0) == ["shelf"]
     assert counter.calls == ["Aavin Milk 500 ml", "Sakthi Curd 200 g"]
-    assert rec.said[0][1] == t("camera.low_stock", "en", camera="front", product="Aavin Milk 500 ml", left=2)
-    assert len(rec.said) == 1 and rec.events[0][1]["kind"] == "camera.shelf"
+    text = rec.said[0][1]
+    assert "Aavin Milk 500 ml" in text and "2" in text and "Sakthi Curd" not in text   # the exact product and count
+    assert len(rec.said) == 1
+    payload = rec.events[0][1]
+    assert payload["kind"] == "camera.shelf" and payload["product"] == "Aavin Milk 500 ml" and payload["left"] == 2
 
 
 async def test_shelf_mode_never_invents_a_count():
@@ -123,10 +127,10 @@ async def test_shelf_mode_never_invents_a_count():
 async def test_counter_mode_tells_the_owner_someone_is_waiting_once_per_cooldown():
     clock = {"t": 100.0}
     counter = counter_returning(seen(1), seen(1), seen(1))
-    w, rec = make(cam(["counter"]), counter, lang="hi")
+    w, rec = make(cam(["counter"]), counter)
     w.now = lambda: clock["t"]
     assert await w.handle(jpeg(), 1.0) == ["counter"]
-    assert rec.said[0][1] == t("camera.customer", "hi", camera="front")
+    assert rec.said[0][1] == "Camera front: someone is waiting at the counter."
     assert await w.handle(jpeg(), 2.0) == []          # within the cooldown: no nagging
     clock["t"] += watch.COOLDOWN_S + 1
     assert await w.handle(jpeg(), 3.0) == ["counter"]
@@ -148,7 +152,7 @@ async def test_security_mode_alerts_on_motion_after_hours_without_calling_gemini
     w, rec = make(cam(["security"]), counter, clock=lambda: NIGHT)
     assert await w.handle(jpeg(), 1.0) == ["security"]
     assert counter.calls == []
-    assert rec.said[0] == ("sunrise_dairy", t("camera.motion", "ta", camera="front"), "warn")
+    assert rec.said[0] == ("sunrise_dairy", "Camera front: movement in the shop after hours.", "warn")
     assert rec.events[0][1]["kind"] == "camera.security"
 
 
@@ -172,7 +176,7 @@ async def test_a_notify_failure_never_stops_the_watcher():
 
     rec = Rec()
     w = Watcher(cam(["security"]), source=None, counter=counter_returning(), publish=rec.publish, notify=bad_notify,
-                lang_for=lambda s: "en", clock=lambda: NIGHT, products=products)
+                clock=lambda: NIGHT, products=products)
     assert await w.handle(jpeg(), 1.0) == ["security"]
     assert rec.events  # the event was still written
 
@@ -192,7 +196,7 @@ async def test_run_pulls_frames_through_the_gate_and_stops_with_the_source():
     src = Src()
     rec = Rec()
     w = Watcher(cam(["security"]), source=src, counter=counter_returning(), publish=rec.publish, notify=rec.notify,
-                lang_for=lambda s: "en", clock=lambda: NIGHT, products=products)
+                clock=lambda: NIGHT, products=products)
     handled = []
     original = w.handle
 
@@ -212,23 +216,9 @@ async def test_handle_never_raises_on_undecodable_frame_bytes():
     assert await w.handle(b"not a jpeg", 1.0) == ["delivery"]   # width/height unknown, the count still ran
 
 
-# ---------- owner language ----------
+# ---------- notice text ----------
 
-def test_owner_lang_follows_the_live_session_and_ignores_camera_sessions(mk_session, monkeypatch):
-    from aira_live import sessions
-    from aira_live.cameras.sources import camera_uid
-    from aira_live.session import Session
-
-    owner, rec = mk_session(lang="ta")
-    cam_s = Session(camera_uid("front"), "sunrise_dairy", "en", "short", rec)
-    monkeypatch.setattr(sessions, "by_shop", lambda shop: [(cam_s, None), (owner, None)])
-    assert watch.owner_lang("sunrise_dairy") == "ta"
-    monkeypatch.setattr(sessions, "by_shop", lambda shop: [(cam_s, None)])
-    assert watch.owner_lang("sunrise_dairy") == "en"
-
-
-def test_i18n_keys_exist_in_all_three_languages():
-    for key in ("camera.delivery", "camera.low_stock", "camera.customer", "camera.motion"):
-        for lang in ("ta", "hi", "en"):
-            text = t(key, lang, camera="front", n=1, product="x", left=1)
-            assert text != key and "{" not in text, (key, lang, text)
+def test_every_mode_has_an_english_fact_template_with_the_camera_name():
+    for mode in ("delivery", "shelf", "counter", "security"):
+        text = watch.NOTICE_EN[mode].format(camera="front", n=1, product="x", left=1)
+        assert text.startswith("Camera front:") and "{" not in text, (mode, text)

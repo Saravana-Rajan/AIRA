@@ -5,8 +5,10 @@ external cron, or by the app at startup (the "morning check"). Every route needs
 equal to env ``AIRA_JOB_TOKEN``, compared in constant time. When that env is unset or empty the routes are
 disabled (503, fail closed). The check is a router dependency, so a rejected call does no work at all.
 
-Alerts are spoken in the owner's live session via ``sessions.notify``. The spoken text is also returned in
-``messages``, so a caller with no live session (the app's morning check) can speak it itself.
+Alerts are English facts (exact quantities, units, product names, days left) handed to the owner's live
+session via ``sessions.notify``; Gemini Live says them in whatever language the owner is speaking. The same
+facts are returned in ``messages`` (with the English meaning in ``say_en``), so a caller with no live session
+(the app's morning check) can show or speak them itself.
 Jobs only read and speak. They never write stock, money or state; the one write is an append-only
 ``alerts`` analytics event, and a failure there never blocks the spoken alert.
 """
@@ -15,7 +17,7 @@ from __future__ import annotations
 import hmac
 import logging
 from datetime import date, datetime
-from typing import Annotated, Literal
+from typing import Annotated
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
@@ -23,21 +25,14 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from aira_live import config, sessions
 from aira_live.analytics import events, forecast, summary
 from aira_live.db import db
-from aira_live.i18n import t
 
 log = logging.getLogger(__name__)
 
 IST = ZoneInfo("Asia/Kolkata")
 TOKEN_HEADER = "X-AIRA-Job-Token"
-LANGS = ("ta", "hi", "en")
-# The catalog for an alert's fixed line when no live session says what the owner last spoke. AIRA still
-# speaks the alert in the language he last used: sessions.notify hands the line to Live with that instruction.
-DEFAULT_LANG = "en"
-Lang = Literal["ta", "hi", "en"]
 SHOP_ID = r"^[A-Za-z0-9_-]{1,64}$"  # a Firestore doc id with no "/" (no path injection)
 JobToken = Annotated[str | None, Header(alias=TOKEN_HEADER)]
 ShopIdParam = Annotated[str | None, Query(pattern=SHOP_ID)]
-LangParam = Annotated[Lang | None, Query()]
 
 
 def require_job_token(token: JobToken = None) -> None:
@@ -65,53 +60,24 @@ async def _scan(shop_id: str, today: date) -> list[dict]:
     return await expiry.scan(shop_id, today)
 
 
-def _known_lang(value) -> str | None:
-    return value if value in LANGS else None
-
-
-async def _shop_lang(client, data: dict) -> str:
-    """The catalog for the alert's fixed line: ``users/{ownerUid}.lang``, then the shop doc's ``lang``, then
-    English. Only the wording of the line: a live session speaks it in whatever language the owner last used."""
-    owner = data.get("ownerUid")
-    if owner:
-        user = await client.collection("users").document(owner).get()
-        if user.exists:
-            lang = _known_lang((user.to_dict() or {}).get("lang"))
-            if lang:
-                return lang
-    return _known_lang(data.get("lang")) or DEFAULT_LANG
-
-
-async def _shops() -> list[tuple[str, str]]:
-    """(shop_id, language) for every shop. Mock mode has only the demo shop and reads no Firestore."""
+async def _shops() -> list[str]:
+    """Every shop id. Mock mode has only the demo shop and reads no Firestore."""
     settings = config.load()
     if settings.mock:
-        return [(settings.demo_shop_id, DEFAULT_LANG)]
-    client = db()
-    return [(snap.id, await _shop_lang(client, snap.to_dict() or {}))
-            async for snap in client.collection("shops").stream()]
+        return [settings.demo_shop_id]
+    return [snap.id async for snap in db().collection("shops").stream()]
 
 
-async def _lang_of(shop_id: str) -> str:
-    if config.load().mock:
-        return DEFAULT_LANG
-    client = db()
-    snap = await client.collection("shops").document(shop_id).get()
-    return await _shop_lang(client, snap.to_dict() or {}) if snap.exists else DEFAULT_LANG
+async def _targets(shop_id: str | None) -> list[str]:
+    return [shop_id] if shop_id else await _shops()
 
 
-async def _targets(shop_id: str | None, lang: str | None) -> list[tuple[str, str]]:
-    if shop_id:
-        return [(shop_id, lang or await _lang_of(shop_id))]
-    return [(sid, lang or shop_lang) for sid, shop_lang in await _shops()]
-
-
-def _item(alert: dict, lang: str) -> str:
+def _item(alert: dict) -> str:
     """'6 litres of Sakthi curd' (the qty is in the alert's selling unit), or just the name when the scan gave no
     quantity (never invent one)."""
     name = alert.get("name") or alert["sku"]
     qty = alert.get("qty")
-    return name if qty is None or qty == "" else summary.item(qty, alert.get("unit"), name, lang)
+    return name if qty is None or qty == "" else summary.item(qty, alert.get("unit"), name)
 
 
 def _status(alert: dict) -> str:
@@ -119,14 +85,24 @@ def _status(alert: dict) -> str:
     return "expired" if isinstance(days, (int, float)) and days < 0 else "expiring"
 
 
-def _expiry_text(alerts: list[dict], lang: str) -> str:
-    """Expired items first (take them off the shelf), then items expiring soon."""
+def _alert_fact(alert: dict) -> dict:
+    qty = alert.get("qty")
+    return {"sku": alert.get("sku"), "name": alert.get("name") or alert.get("sku"),
+            "qty": None if qty == "" else qty, "unit": alert.get("unit"), "days_left": alert.get("daysLeft")}
+
+
+def _expiry_facts(alerts: list[dict]) -> dict:
+    """Expired items first (take them off the shelf), then items expiring soon, with the English meaning."""
+    expired = [a for a in alerts if _status(a) == "expired"]
+    expiring = [a for a in alerts if _status(a) == "expiring"]
     parts = []
-    for status, key in (("expired", "jobs.expired_alert"), ("expiring", "jobs.expiry_alert")):
-        items = [_item(a, lang) for a in alerts if _status(a) == status]
-        if items:
-            parts.append(t(key, lang, items=", ".join(items)))
-    return " ".join(parts)
+    if expired:
+        parts.append(f"Expired: {', '.join(_item(a) for a in expired)}. Take them off the shelf.")
+    if expiring:
+        parts.append(f"Expiring soon: {', '.join(_item(a) for a in expiring)}. "
+                     "Sell them first or return them to the vendor.")
+    return {"expired": [_alert_fact(a) for a in expired], "expiring": [_alert_fact(a) for a in expiring],
+            "say_en": " ".join(parts)}
 
 
 async def _publish_alerts(shop_id: str, alerts: list[dict], text: str) -> None:
@@ -141,45 +117,45 @@ async def _publish_alerts(shop_id: str, alerts: list[dict], text: str) -> None:
 
 
 @router.post("/expiry")
-async def job_expiry(shop_id: ShopIdParam = None, lang: LangParam = None) -> dict:
+async def job_expiry(shop_id: ShopIdParam = None) -> dict:
     """Scan every shop (or one) for expired or soon-expiring stock and speak one alert per shop."""
     today = _today()
     shops = total = notified = errors = 0
     messages: list[dict] = []
-    for sid, lng in await _targets(shop_id, lang):
+    for sid in await _targets(shop_id):
         shops += 1
         try:
             alerts = await _scan(sid, today)
             if not alerts:
                 continue
-            text = _expiry_text(alerts, lng)
-            notified += await sessions.notify(sid, text, cue="warn")
+            facts = _expiry_facts(alerts)
+            notified += await sessions.notify(sid, facts["say_en"], cue="warn")
         except Exception:
             log.exception("expiry job failed for shop %s", sid)
             errors += 1
             continue
         total += len(alerts)
-        messages.append({"shop_id": sid, "say": text})
-        await _publish_alerts(sid, alerts, text)
+        messages.append({"shop_id": sid, **facts})
+        await _publish_alerts(sid, alerts, facts["say_en"])
     return {"shops": shops, "alerts": total, "notified_sessions": notified, "errors": errors,
             "messages": messages}
 
 
 @router.post("/day-summary")
-async def job_day_summary(shop_id: ShopIdParam = None, lang: LangParam = None) -> dict:
-    """Speak today's sales, revenue, top seller and tomorrow's suggested order (same words as day_summary)."""
+async def job_day_summary(shop_id: ShopIdParam = None) -> dict:
+    """Speak today's sales, revenue, top seller and tomorrow's suggested order (same facts as day_summary)."""
     shops = notified = errors = 0
     messages: list[dict] = []
-    for sid, lng in await _targets(shop_id, lang):
+    for sid in await _targets(shop_id):
         shops += 1
         try:
-            text = summary.say(await summary.today(sid), lng)
-            notified += await sessions.notify(sid, text, cue="done")
+            facts = summary.facts(await summary.today(sid))
+            notified += await sessions.notify(sid, facts["say_en"], cue="done")
         except Exception:  # no numbers when the records can't be read
             log.exception("day-summary job failed for shop %s", sid)
             errors += 1
             continue
-        messages.append({"shop_id": sid, "say": text})
+        messages.append({"shop_id": sid, **facts})
     return {"shops": shops, "notified_sessions": notified, "errors": errors, "messages": messages}
 
 

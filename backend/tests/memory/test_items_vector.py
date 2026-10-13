@@ -53,7 +53,8 @@ async def test_memory_where_speaks_the_synonym_match(fake_db, session, embedder,
     await items.record_sighting("demo", "key bunch", "on the fridge", 0.8, at=NOW - timedelta(minutes=30))
     out = await memtools.memory_where("where are my keys")
     assert out["found"] and out["place"] == "on the fridge"
-    assert out["say"] == "I last saw your keys on the fridge, today at 6:40 pm. Check there first."
+    assert out["item"] == "keys" and out["when"] == "today at 6:40 pm" and out["old"] is False
+    assert out["say_en"] == "I last saw your keys on the fridge, today at 6:40 pm. Check there first."
 
 
 async def test_expired_synonym_sightings_are_ignored(fake_db, embedder):
