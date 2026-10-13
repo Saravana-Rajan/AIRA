@@ -9,7 +9,7 @@ const { app } = vi.hoisted(() => ({
 }));
 vi.mock("../src/core/app", () => ({ app }));
 import {
-  __setCaptureDeps, backgroundHeld, captureFrame, captureFrameIf, holdBackground, liveCaptureBusy, startContinuous, toolCaptureBusy, toolCaptureCount,
+  __setCaptureDeps, backgroundHeld, captureFrame, captureFrameIf, holdBackground, liveCaptureBusy, LIVE_QUALITY, startContinuous, toolCaptureBusy, toolCaptureCount,
 } from "../src/camera/capture";
 import { startLiveVideo } from "../src/camera/liveVideo";
 import { createFrameRequestHandler, defaultSleep } from "../src/camera/requests";
@@ -17,7 +17,8 @@ import { createFrameRequestHandler, defaultSleep } from "../src/camera/requests"
 const fakeCanvas = () => ({ canvas: {} as HTMLCanvasElement, ctx: { getImageData: () => ({ data: new Uint8ClampedArray(4 * 4 * 4).fill(200) }) } as unknown as CanvasRenderingContext2D });
 
 interface Enc { q: number; side: number; at: number; resolve: (s: string) => void }
-/** The count frame's long side (a 720x1280 camera scaled to 1024): live frames are 768, describe 640. */
+/** The count frame's long side (a 720x1280 camera scaled to 1024). Live and describe frames are both 640 px, so
+ *  the live frame is told apart by its JPEG quality (LIVE_QUALITY). */
 const COUNT_SIDE = 1024;
 type Frame = Extract<ClientMsg, { t: "frame" }>;
 const isFrame = (m: ClientMsg): m is Frame => m.t === "frame";
@@ -80,7 +81,7 @@ describe("a tool frame request beats live / describe work and socket backpressur
   it("captures the count frame within 300 ms with a live encode in flight and 170 KB queued", async () => {
     const r = rig();
     await vi.advanceTimersByTimeAsync(10);
-    const liveEnc = encodes.find((e) => e.side === 768);
+    const liveEnc = encodes.find((e) => e.q === LIVE_QUALITY);
     expect(liveEnc).toBeDefined();               // a live frame is mid-encode and does not finish on its own
     buffered = 170_000;                          // the uplink is congested (mic_drop said 168-173 KB)
 
@@ -131,8 +132,8 @@ describe("a tool frame request beats live / describe work and socket backpressur
   it("preview and describe yield to a live frame being captured: the live frame goes first", async () => {
     let releaseLive: ((s: string) => void) | null = null;
     __setCaptureDeps({
-      encoder: (c) => new Promise<string>((resolve) => {
-        if (Math.max(c.width, c.height) === 768) releaseLive = resolve;   // the live frame: slow encode
+      encoder: (_c, q) => new Promise<string>((resolve) => {
+        if (q === LIVE_QUALITY) releaseLive = resolve;                   // the live frame: slow encode
         else resolve("P".repeat(500));                                  // preview / describe: instant
       }),
     });

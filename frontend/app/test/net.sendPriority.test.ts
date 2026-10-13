@@ -140,3 +140,30 @@ describe("tool frames wait (bounded) for the socket to drain", () => {
     stop();
   });
 });
+
+// Production (iPhone, 2026-10-13): ~93 KB live frames filled the socket and the owner's speech queued behind
+// them (a mic chunk was dropped at 129 KB buffered). Speech now goes first, and video stops queuing early.
+describe("the owner's speech goes before video", () => {
+  it("video yields while the owner is speaking and for a short hold after", async () => {
+    const sp = await import("../src/net/sendPriority");
+    sp.__resetSendPriority();
+    expect(sp.videoYields(10_000)).toBe(false);
+    sp.noteSpeech(10_000);
+    expect(sp.videoYields(10_000)).toBe(true);
+    expect(sp.videoYields(10_000 + sp.SPEECH_HOLD_MS - 1)).toBe(true);
+    expect(sp.videoYields(10_000 + sp.SPEECH_HOLD_MS + 1)).toBe(false);
+  });
+
+  it("a mic backlog still makes video yield", async () => {
+    const sp = await import("../src/net/sendPriority");
+    sp.__resetSendPriority();
+    sp.micMaySend(sp.MIC_PRESSURE_BYTES + 1, 5_000);
+    expect(sp.videoYields(5_000)).toBe(true);
+  });
+
+  it("video stops queuing well before the mic: one live frame can't bury the owner's speech", async () => {
+    const sp = await import("../src/net/sendPriority");
+    expect(sp.LIVE_MAX_BUFFERED).toBeLessThanOrEqual(24_000);
+    expect(sp.LIVE_MAX_BUFFERED).toBeGreaterThanOrEqual(sp.BACKGROUND_MAX_BUFFERED * 2);
+  });
+});

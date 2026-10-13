@@ -21,7 +21,7 @@ import { startTiltHints } from "./tilt";
 import { createGuidanceSession } from "../guidance/session";
 import { freshHand, trackFingertip } from "../guidance/hands";
 import { clientLog } from "../core/clientLog";
-import { micBackedUp } from "../net/sendPriority";
+import { videoYields } from "../net/sendPriority";
 import { guideTo, stopTone } from "../guidance/tones";
 import { boxStore } from "../walk/boxes";
 import { parseWalkingModeCommand, walkingMode } from "../walk/mode";
@@ -144,7 +144,7 @@ export function wireCameraAndGuidance(opts: WireOptions = {}): CameraWiring {
     hidden: () => typeof document !== "undefined" && document.hidden,
     buffered: () => { try { return app.socket?.bufferedAmount?.() ?? 0; } catch { return 0; } },
     toolBusy: () => toolCaptureBusy() || backgroundHeld(),
-    micBusy: () => micBackedUp(),
+    micBusy: () => videoYields(), // the owner speaking (or his audio backed up): his words go first
     toolCount: toolCaptureCount,
     objects: () => { try { return freshObjects(); } catch { return []; } },
     hand: () => freshHand(),

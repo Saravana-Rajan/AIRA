@@ -76,6 +76,12 @@ class LiveBackend(Protocol):
     async def close(self) -> None: ...
 
 
+def _session_gone(exc: BaseException) -> bool:
+    """True when Live closed because the server no longer has this session (its resumption handle is dead)."""
+    text = str(exc).lower()
+    return "not found or expired" in text or ("1008" in text and "session" in text and "not found" in text)
+
+
 class LiveConnectionLost(Exception):
     pass
 
@@ -347,6 +353,7 @@ class LiveBridge:
                 log.warning("live connection lost (session %s): %s", self.session.session_id, exc)
                 diag("live", severity="WARNING", event="lost", session=self.session.session_id,
                      error=type(exc).__name__, message=trunc(str(exc), 200))
+                self._forget_dead_session(exc)
             finally:
                 await _aclose(stream)
             self._connected = False
@@ -373,6 +380,15 @@ class LiveBridge:
                     break
                 except Exception as exc:
                     log.warning("live reconnect %d failed: %s", failures, exc)
+                    self._forget_dead_session(exc)
+
+    def _forget_dead_session(self, exc: BaseException) -> None:
+        """Gemini said the Live session is gone (1008 'session not found or expired'): resuming it with the
+        saved handle can only fail the same way (seen in production: 6 failed resumes, then silence). Drop the
+        handle so the next connect opens a fresh session; the earlier conversation is lost, AIRA keeps going."""
+        if self._handle and _session_gone(exc):
+            diag("live", severity="WARNING", event="resume_reset", session=self.session.session_id)
+            self._handle = None
 
     async def _dispatch(self, ev: LiveEvent) -> None:
         """Handle one event. A failure here (closed socket, bad listener, ...) never drops the Live connection."""

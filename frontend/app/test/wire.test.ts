@@ -151,6 +151,18 @@ describe("wireApp: mic stays available through a hands-free conversation", () =>
     expect(a.mic.stop).not.toHaveBeenCalled(); // current code FAILS here: mic idle-closes 30 s after the last transcript
   });
 
+  it("audible speech on the mic makes the camera video yield (speech is never queued behind a frame)", async () => {
+    const sp = await import("../src/net/sendPriority");
+    sp.__resetSendPriority();
+    const a = setup();
+    await a.w.startListening();
+    await flush();
+    a.level(0.001); // room noise: no speech
+    expect(sp.videoYields()).toBe(false);
+    a.level(0.2); // the owner speaks
+    expect(sp.videoYields()).toBe(true);
+  });
+
   it("reopens the mic if it ever closes while a listening session is live (watchdog)", async () => {
     vi.useFakeTimers();
     const a = setup();
