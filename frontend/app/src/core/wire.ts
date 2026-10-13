@@ -3,7 +3,7 @@
 // `WireEnv`, so every rule here is tested with fakes.
 import type { ClientMsg, CueName, Lang, ServerMsg } from "@aira/contracts";
 import { AiraSocket } from "../net/socket";
-import { micDropCount, micMaySend } from "../net/sendPriority";
+import { micDropCount, micMaySend, noteSpeech } from "../net/sendPriority";
 import { OfflineQueue, defaultStore, type QueueStore } from "../net/offline-queue";
 import { initApp } from "./app";
 import { clientLog, loadBuildInfo, shortText, type BuildInfo } from "./clientLog";
@@ -525,7 +525,10 @@ export function wireApp(opts: WireOpts): WiredApp {
           if (api.send({ t: "audio", pcm16: b64 })) lastMicChunkAt = Date.now();
         },
         onLevel: (lv) => {
-          if (lv >= MIC_VOICE_LEVEL) armMicIdle(); // the owner is audibly speaking: keep the mic open
+          if (lv >= MIC_VOICE_LEVEL) {
+            armMicIdle(); // the owner is audibly speaking: keep the mic open
+            noteSpeech(); // ...and hold the camera video back so his words reach Gemini first
+          }
           if (Math.abs(lv - lastLevel) < 0.03 && lv !== 0) return; // ~30 chunks/s: redraw only on change
           lastLevel = lv;
           setView({ level: lv });

@@ -11,11 +11,15 @@
 /** Mic chunks are dropped only above this many unsent bytes: room for a count photo (~110 KB) still leaving the
  *  phone plus a little speech. A 32 ms chunk is ~1.4 KB of JSON (~44 KB/s), so this is ~3 s on a dead link. */
 export const MIC_MAX_BUFFERED_BYTES = 128_000;
-/** A live video tick is skipped (and a finished live frame dropped) above this. A live frame (~60 KB) sent at
- *  this level still leaves the buffer under the mic's cap. */
-export const LIVE_MAX_BUFFERED = 48_000;
-/** Preview and describe frames are skipped above this: below the live video's cap so they never starve it. */
-export const BACKGROUND_MAX_BUFFERED = 16_000;
+/** A live video tick is skipped (and a finished live frame dropped) above this. Kept low so video never piles up
+ *  in front of speech: on an iPhone, 768 px live frames were ~93 KB and the owner's speech queued behind them
+ *  (production 2026-10-13: a mic chunk dropped at 129 KB buffered). */
+export const LIVE_MAX_BUFFERED = 24_000;
+/** Preview and describe frames are skipped above this: low enough that this cap plus one preview frame
+ *  (~15 KB) stays under the live video's cap, so they never starve it. */
+export const BACKGROUND_MAX_BUFFERED = 8_000;
+/** While the owner is speaking, and this long after the mic last heard speech, video sends nothing at all. */
+export const SPEECH_HOLD_MS = 1_200;
 /** A tool frame (ask, count, identify, walk...) is handed to the socket once the buffer is below this... */
 export const TOOL_SEND_BUFFERED = 32_000;
 /** ...or after waiting this long for it, whichever comes first (the server's tool call is waiting). */
@@ -28,6 +32,7 @@ export const MIC_BACKLOG_MS = 1_500;
 
 let micPressureAt = -Infinity;
 let micDrops = 0;
+let speechAt = -Infinity;
 
 const clock = (): number => Date.now();
 
@@ -46,6 +51,16 @@ export function micBackedUp(now: number = clock()): boolean {
   return now - micPressureAt < MIC_BACKLOG_MS;
 }
 
+/** The mic heard the owner speaking (audible level): video holds off so his words go out first. */
+export function noteSpeech(now: number = clock()): void {
+  speechAt = now;
+}
+
+/** True while the owner is speaking (or just stopped), or his mic audio is backed up: camera video waits. */
+export function videoYields(now: number = clock()): boolean {
+  return now - speechAt < SPEECH_HOLD_MS || micBackedUp(now);
+}
+
 /** Total mic chunks dropped since load (the mic_drop diagnostics line). */
 export function micDropCount(): number {
   return micDrops;
@@ -55,6 +70,7 @@ export function micDropCount(): number {
 export function __resetSendPriority(): void {
   micPressureAt = -Infinity;
   micDrops = 0;
+  speechAt = -Infinity;
 }
 
 export interface DrainOpts {

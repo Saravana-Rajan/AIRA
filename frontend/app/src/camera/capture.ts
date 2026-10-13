@@ -9,7 +9,7 @@ import { overrideSource } from "./source";
 import { ensureBackCamera, type BackCameraResult, type CameraFacing } from "./backCamera";
 import { beginLooking } from "./looking";
 import { ENCODE_TIMEOUT_MS, EncodeFailure, sharedWorkerEncoder, type GrabbedFrame, type WorkerEncoder } from "./encode";
-import { BACKGROUND_MAX_BUFFERED as BG_CAP, micBackedUp, waitForDrain } from "../net/sendPriority";
+import { BACKGROUND_MAX_BUFFERED as BG_CAP, videoYields, waitForDrain } from "../net/sendPriority";
 
 export type FrameMsg = Extract<ClientMsg, { t: "frame" }>;
 export type CameraErrorCode = "permission" | "no_frame" | "no_canvas" | "too_large";
@@ -50,9 +50,11 @@ export function isPriorityPurpose(purpose: FramePurpose): boolean {
 export function holdsBackground(purpose: FramePurpose): boolean {
   return HOLDS.has(purpose);
 }
-/** Gemini Live video (purpose `live`): one frame a second, 768 px long side, quality 0.7 (Live API guidance). */
-export const LIVE_MAX_SIDE = 768;
-export const LIVE_QUALITY = 0.7;
+/** Gemini Live video (purpose `live`): one frame a second, 640 px long side, quality 0.5. At 768 px / 0.7 an
+ *  iPhone sent ~93 KB frames (up to 129 KB) and the owner's speech queued behind them on the uplink; Live only
+ *  needs a scene-level view (exact reading and counting use their own sharper tool frames). */
+export const LIVE_MAX_SIDE = 640;
+export const LIVE_QUALITY = 0.5;
 
 /** How big and how good a frame of this purpose is. */
 export function frameSpec(purpose: FramePurpose): { maxSide: number; quality: number } {
@@ -476,10 +478,10 @@ const socketBuffered = (): number => {
 };
 
 /** True while the socket still holds more than BACKGROUND_MAX_BUFFERED bytes it could not hand to the network,
- *  or while the owner's mic audio is backed up on it (background frames yield to speech). */
+ *  or while the owner is speaking or his mic audio is backed up on it (background frames yield to speech). */
 export function socketBusy(): boolean {
   try {
-    if (micBackedUp()) return true;
+    if (videoYields()) return true;
     return socketBuffered() > BACKGROUND_MAX_BUFFERED;
   } catch {
     return false;
