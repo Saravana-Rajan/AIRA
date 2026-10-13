@@ -10,7 +10,8 @@ export interface DispatchDeps {
   thinking: { disarm(): void };
   earcon(n: CueName): void;
   haptic(n: HapticName): void;
-  speak(text: string): void;
+  /** `kind` is the server message type the line came from: an "error" line must not be lost behind Live audio. */
+  speak(text: string, kind?: "confirm" | "error" | "state"): void;
   /** Cancels client speech (speechSynthesis) on barge-in. Optional. */
   stopSpeech?(): void;
   confirm: ConfirmState;
@@ -70,7 +71,7 @@ export function createDispatcher(d: DispatchDeps): (m: ServerMsg) => void {
     }
     if (shouldClientSpeak(m, d.ctx())) {
       const t = textFor(m);
-      if (t) d.speak(t);
+      if (t) d.speak(t, m.t as "confirm" | "error" | "state");
     }
     d.ui?.(m);
   };

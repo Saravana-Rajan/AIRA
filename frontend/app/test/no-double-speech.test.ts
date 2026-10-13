@@ -71,6 +71,87 @@ function setup(over: { settings?: Partial<Settings>; msSinceAudio?: () => number
   };
 }
 
+describe("server error lines: deferred behind Live audio, never dropped for it", () => {
+  const ERR: ServerMsg = { t: "error", code: "internal", say: "Sorry, the sale did not save." };
+  const real = (a: ReturnType<typeof setup>) => a.socket.emit({ t: "ready", sessionId: "s", resume: "s", mock: false });
+
+  it("an error arriving while Live audio plays waits, never overlaps it, and is spoken once when playback is idle", () => {
+    vi.useFakeTimers();
+    let since = 0; // Live audio playing
+    const a = setup({ msSinceAudio: () => since });
+    real(a);
+    a.socket.emit(ERR);
+    expect(a.spoken()).toEqual([]);
+    vi.advanceTimersByTime(2000);
+    expect(a.spoken()).toEqual([]); // still playing: nothing over Live audio
+    since = SPEAK_WAIT_GAP_MS + 1;
+    vi.advanceTimersByTime(300);
+    expect(a.spoken()).toEqual(["Sorry, the sale did not save."]);
+    vi.advanceTimersByTime(5000);
+    expect(a.spoken()).toHaveLength(1);
+  });
+
+  it("an error that arrived just after Live audio ended (the old 1 s grace) is spoken", () => {
+    vi.useFakeTimers();
+    let since = 200;
+    const a = setup({ msSinceAudio: () => since });
+    real(a);
+    a.socket.emit(ERR);
+    since = 900;
+    vi.advanceTimersByTime(300);
+    expect(a.spoken()).toEqual(["Sorry, the sale did not save."]);
+  });
+
+  it("the same error repeated within 10 s is spoken once (no loops)", () => {
+    vi.useFakeTimers();
+    let since = 0;
+    const a = setup({ msSinceAudio: () => since });
+    real(a);
+    a.socket.emit(ERR);
+    a.socket.emit(ERR);
+    since = Infinity;
+    vi.advanceTimersByTime(300);
+    a.socket.emit(ERR);
+    vi.advanceTimersByTime(SPEAK_DEDUPE_MS - 1000);
+    a.socket.emit(ERR);
+    expect(a.spoken()).toEqual(["Sorry, the sale did not save."]);
+  });
+
+  it("a waiting error is not displaced by a lesser local line", () => {
+    vi.useFakeTimers();
+    let since = 0;
+    const a = setup({ msSinceAudio: () => since });
+    real(a);
+    a.socket.emit(ERR);
+    app.speak("Hold the phone steady");
+    since = Infinity;
+    vi.advanceTimersByTime(300);
+    expect(a.spoken()).toEqual(["Sorry, the sale did not save."]);
+  });
+
+  it("the wait is bounded: an error still blocked by Live audio after SPEAK_STALE_MS is dropped, never spoken over it", () => {
+    vi.useFakeTimers();
+    const a = setup({ msSinceAudio: () => 0 });
+    real(a);
+    a.socket.emit(ERR);
+    vi.advanceTimersByTime(SPEAK_STALE_MS + 1000);
+    expect(a.spoken()).toEqual([]);
+  });
+
+  it("screen-reader mode: the deferred error goes to the aria-live region, never to speechSynthesis", () => {
+    vi.useFakeTimers();
+    let since = 0;
+    const a = setup({ msSinceAudio: () => since, settings: { screenReaderMode: true } });
+    real(a);
+    a.socket.emit(ERR);
+    expect(a.announced()).toEqual([]);
+    since = Infinity;
+    vi.advanceTimersByTime(300);
+    expect(a.announced()).toEqual(["Sorry, the sale did not save."]);
+    expect(a.spoken()).toEqual([]);
+  });
+});
+
 describe("no double speech: Live audio is the voice", () => {
   it("while AIRA's audio plays or is queued, a local line waits and is spoken once the audio is idle", () => {
     vi.useFakeTimers();

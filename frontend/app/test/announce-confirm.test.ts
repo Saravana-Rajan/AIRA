@@ -7,9 +7,10 @@ import { STRINGS, LABELS } from "../src/i18n/strings";
 const live = { mock: false, msSinceLiveAudio: 200, screenReaderMode: false };
 
 describe("announcer", () => {
-  it("does not speak confirm/error when Live audio just played (no double speech)", () => {
+  it("does not speak a confirm when Live audio just played (no double speech), but never drops an error", () => {
     expect(shouldClientSpeak({ t: "confirm", id: "c1", kind: "order", prompt: "Order 30 L?" }, live)).toBe(false);
-    expect(shouldClientSpeak({ t: "error", code: "network", say: "Network lost" }, live)).toBe(false);
+    // Live does not relay errors: the speaker defers the line until playback is idle (core/wire.ts) instead.
+    expect(shouldClientSpeak({ t: "error", code: "network", say: "Network lost" }, live)).toBe(true);
   });
   it("speaks an error when no Live audio for >1 s, never a confirm (Live asks it), and everything in mock sessions", () => {
     const quiet = { ...live, msSinceLiveAudio: 1500 };
@@ -37,10 +38,9 @@ describe("announcer", () => {
     expect(textFor(m)).toBeNull();
     expect(shouldClientSpeak(m, { ...live, mock: true })).toBe(false);
   });
-  it("is silent at exactly 1000 ms since Live audio and speaks after it", () => {
+  it("speaks an error whatever the time since Live audio (timing is the speaker's job)", () => {
     const m = { t: "error", code: "internal", say: "Sorry" } as const;
-    expect(shouldClientSpeak(m, { ...live, msSinceLiveAudio: 1000 })).toBe(false);
-    expect(shouldClientSpeak(m, { ...live, msSinceLiveAudio: 1001 })).toBe(true);
+    for (const ms of [0, 200, 1000, 1001, Infinity]) expect(shouldClientSpeak(m, { ...live, msSinceLiveAudio: ms })).toBe(true);
   });
   it("leaves state narration to Live in real sessions", () => {
     const m = { t: "state", entity: "sale", id: "s1", state: "SALE_COMPLETED", summary: "Sale done" } as const;
@@ -133,7 +133,12 @@ describe("dispatcher", () => {
     expect(d.speak).not.toHaveBeenCalled(); // Live asks the question itself (prompt rule 1)
     const m = { ...deps(), ctx: () => ({ mock: true, msSinceLiveAudio: Infinity, screenReaderMode: false }) };
     createDispatcher(m as any)({ t: "confirm", id: "c2", kind: "order", prompt: "Order 30 litres Sakthi curd?" });
-    expect(m.speak).toHaveBeenCalledWith("Order 30 litres Sakthi curd?");
+    expect(m.speak).toHaveBeenCalledWith("Order 30 litres Sakthi curd?", "confirm");
+  });
+  it("hands an error line to the speaker marked as an error, even right after Live audio", () => {
+    const d = { ...deps(), ctx: () => ({ mock: false, msSinceLiveAudio: 50, screenReaderMode: false }) };
+    createDispatcher(d as any)({ t: "error", code: "internal", say: "Sorry, that failed" });
+    expect(d.speak).toHaveBeenCalledWith("Sorry, that failed", "error");
   });
   it("match/mismatch cues also fire matching haptics", () => {
     const d = deps(); const dispatch = createDispatcher(d as any);

@@ -7,7 +7,7 @@ import type { ServerMsg } from "@aira/contracts";
 import { app } from "../core/app";
 import type { WiredApp } from "../core/wire";
 import {
-  backgroundHeld, captureFrame, captureFrameIf, getVideo, holdBackground, probeGrid, setQualityListener, startCamera, startContinuous,
+  backgroundHeld, captureFrameIf, captureToolFrame, getVideo, holdBackground, probeGrid, setQualityListener, startCamera, startContinuous,
   stopCamera, toolCaptureBusy, toolCaptureCount, encodedInWorker, type FrameKeep,
 } from "./capture";
 import { createWorkingCue } from "./working";
@@ -21,6 +21,7 @@ import { startTiltHints } from "./tilt";
 import { createGuidanceSession } from "../guidance/session";
 import { freshHand, trackFingertip } from "../guidance/hands";
 import { clientLog } from "../core/clientLog";
+import { micBackedUp } from "../net/sendPriority";
 import { guideTo, stopTone } from "../guidance/tones";
 import { boxStore } from "../walk/boxes";
 import { parseWalkingModeCommand, walkingMode } from "../walk/mode";
@@ -95,7 +96,7 @@ export function wireCameraAndGuidance(opts: WireOptions = {}): CameraWiring {
   const stopTilt = startTiltHints((h) => hint(h));
 
   const handleFrame = createFrameRequestHandler({
-    capture: captureFrame,
+    capture: captureToolFrame, // waits (bounded) for the socket to drain: mic audio goes first
     startContinuous: continuousStarter(opts.isWalking),
     send: (m) => app.send(m),
     hint,
@@ -143,6 +144,7 @@ export function wireCameraAndGuidance(opts: WireOptions = {}): CameraWiring {
     hidden: () => typeof document !== "undefined" && document.hidden,
     buffered: () => { try { return app.socket?.bufferedAmount?.() ?? 0; } catch { return 0; } },
     toolBusy: () => toolCaptureBusy() || backgroundHeld(),
+    micBusy: () => micBackedUp(),
     toolCount: toolCaptureCount,
     objects: () => { try { return freshObjects(); } catch { return []; } },
     hand: () => freshHand(),
