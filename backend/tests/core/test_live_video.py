@@ -140,34 +140,95 @@ async def test_a_settled_change_nudges_live_in_the_session_language(mk_session):
     await bridge.video.offer(bridge, JPEG, changed=True, labels=["Bottle", "cup"])
     [text] = _nudges(b)
     assert "Tamil" in text and "bottle, cup" in text and "stay silent" in text
+    assert "one short sentence" in text.lower() and "being shown" in text
+    assert "tools" in text and "never invent" in text  # price / stock only via tools
+    await bridge.close()
+
+
+async def test_a_shown_frame_is_forwarded_and_nudged_in_the_same_call_even_right_after_a_tick(mk_session):
+    s, _ = mk_session()
+    bridge, b, clock = await _bridge(s)
+    order = []
+    send_video, send_text = b.send_video, b.send_text
+
+    async def video(jpeg):
+        order.append("video")
+        await send_video(jpeg)
+
+    async def text(t):
+        order.append("nudge" if t.startswith(NUDGE_PREFIX) else "text")
+        await send_text(t)
+
+    b.send_video, b.send_text = video, text
+    assert await bridge.video.offer(bridge, JPEG)          # the regular 1 fps frame
+    clock.t += 0.3                                         # the phone's fast path, 300 ms later
+    assert await bridge.video.offer(bridge, JPEG, changed=True, labels=["bottle"])
+    assert order == ["video", "video", "nudge"]
+    clock.t += 0.3
+    assert not await bridge.video.offer(bridge, JPEG)      # a plain frame still keeps ~1 fps
     await bridge.close()
 
 
 async def test_nudge_rate_limit_and_same_labels_dedupe(mk_session):
+    assert (NUDGE_GAP_S, NUDGE_DEDUPE_S) == (3.0, 10.0)
     s, _ = mk_session()
     bridge, b, clock = await _bridge(s)
     await bridge.video.offer(bridge, JPEG, changed=True, labels=["bottle"])
     clock.t += 1.0
-    await bridge.video.offer(bridge, JPEG, changed=True, labels=["cup"])        # < 4 s: rate limited
+    await bridge.video.offer(bridge, JPEG, changed=True, labels=["cup"])        # < 3 s: rate limited
     assert len(_nudges(b)) == 1
     clock.t += NUDGE_GAP_S
-    await bridge.video.offer(bridge, JPEG, changed=True, labels=["bottle"])     # same labels within 15 s
+    await bridge.video.offer(bridge, JPEG, changed=True, labels=["bottle"])     # same labels within 10 s
     assert len(_nudges(b)) == 1
-    await bridge.video.offer(bridge, JPEG, changed=True, labels=["cup"])        # throttled frame: no nudge
     clock.t += 1.0
     await bridge.video.offer(bridge, JPEG, changed=True, labels=["cup"])
     assert len(_nudges(b)) == 2
     clock.t += NUDGE_DEDUPE_S
     await bridge.video.offer(bridge, JPEG, changed=True, labels=["bottle"])
     assert len(_nudges(b)) == 3
+    clock.t += 1.0
     await bridge.video.offer(bridge, JPEG)  # unchanged frames never nudge
     assert len(_nudges(b)) == 3
     await bridge.close()
 
 
+async def test_every_nudge_decision_is_logged_with_its_reason(mk_session, monkeypatch):
+    lines = []
+    monkeypatch.setattr(live_video, "diag", lambda kind, **kw: lines.append((kind, kw)))
+    s, _ = mk_session()
+    bridge, b, clock = await _bridge(s)
+    await bridge.video.offer(bridge, JPEG, changed=True, labels=["bottle"])     # sent
+    clock.t += 1.0
+    await bridge.video.offer(bridge, JPEG, changed=True, labels=["cup"])        # gap
+    clock.t += NUDGE_GAP_S
+    await bridge.video.offer(bridge, JPEG, changed=True, labels=["bottle"])     # dedup
+    clock.t += 1.0
+    bridge._answering = True
+    await bridge.video.offer(bridge, JPEG, changed=True, labels=["milk"])       # aira
+    bridge._answering = False
+    bridge._in_partial = "how much"
+    clock.t += 1.0
+    await bridge.video.offer(bridge, JPEG, changed=True, labels=["milk"])       # speaking
+    bridge._in_partial = ""
+    monkeypatch.setitem(tool_runtime._RUNNING, s.session_id, 1)
+    clock.t += 1.0
+    await bridge.video.offer(bridge, JPEG, changed=True, labels=["milk"])       # tool
+    decisions = [(kw["decision"], kw["labels"]) for kind, kw in lines if kind == "live_nudge"]
+    assert decisions == [("sent", "bottle"), ("skipped:gap", "cup"), ("skipped:dedup", "bottle"),
+                         ("skipped:aira", "milk"), ("skipped:speaking", "milk"), ("skipped:tool", "milk")]
+    clock.t += 61
+    monkeypatch.setitem(tool_runtime._RUNNING, s.session_id, 0)
+    await bridge.video.offer(bridge, JPEG)
+    [summary] = [kw for kind, kw in lines if kind == "live_video"]
+    assert summary["nudged"] == 1 and summary["nudge_skipped"] == 5
+    assert summary["skip_reasons"] == {"skipped:gap": 1, "skipped:dedup": 1, "skipped:aira": 1,
+                                       "skipped:speaking": 1, "skipped:tool": 1}
+    await bridge.close()
+
+
 @pytest.mark.parametrize("state, reason", [
-    ("answering", "aira_speaking"), ("partial", "user_speaking"), ("just_spoke", "just_spoke"),
-    ("tool", "tool_running"), ("ambient", "other_voice"), ("off", "off")])
+    ("answering", "skipped:aira"), ("partial", "skipped:speaking"), ("just_spoke", "skipped:speaking"),
+    ("tool", "skipped:tool"), ("ambient", "skipped:busy"), ("off", "skipped:off")])
 async def test_no_nudge_while_anyone_speaks_or_a_tool_runs(mk_session, monkeypatch, state, reason):
     s, _ = mk_session()
     bridge, b, clock = await _bridge(s, nudge=state != "off")
@@ -227,7 +288,7 @@ async def test_a_walk_silences_nudges_precounts_and_scene_lines(mk_session, monk
     bridge, b, clock = await _bridge(s)
     monkeypatch.setitem(walk._ACTIVE, s.session_id, object())
     assert s.walking and describe._bridge_busy(s)
-    assert bridge.video.nudge_block(bridge, ["bottle"], clock.t) == "other_voice"
+    assert bridge.video.nudge_block(bridge, ["bottle"], clock.t) == "skipped:busy"
     started = []
     monkeypatch.setattr(precount, "scene_changed", lambda *a, **k: started.append(a))
     await main.live_frame(s, bridge, _frame(), video=True, changed=True, precount_on=True)
