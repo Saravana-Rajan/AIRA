@@ -82,6 +82,10 @@ describe("startLiveVideo", () => {
     stop();
   });
 
+  it("never lets more than about one live frame wait on the socket (an owner frame would queue behind them)", () => {
+    expect(LIVE_MAX_BUFFERED).toBeLessThanOrEqual(32_000);
+  });
+
   it("skips a tick while the socket is backpressured", async () => {
     const { sent, st, deps } = harness();
     st.buffered = LIVE_MAX_BUFFERED + 1;

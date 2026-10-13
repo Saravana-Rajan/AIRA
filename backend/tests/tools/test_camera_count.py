@@ -101,7 +101,7 @@ async def test_two_frames_that_agree_speak_the_number(session, monkeypatch):
     s, _ = session
     seen = _counter(monkeypatch, _res(4), _res(4))
     out = await camera.camera_ask("how many Hatsun Curd packets are visible?")
-    assert s.frame_calls == [{"purpose": "count", "count": 2, "interval_ms": 400, "timeout_s": camera.FRAME_TIMEOUT_S}]
+    assert s.frame_calls == [{"purpose": "count", "count": 2, "interval_ms": 400, "timeout_s": camera.COUNT_FRAME_TIMEOUT_S}]
     assert [c["frame"] for c in seen] == ["c1.0", "c2.0"]
     assert all(c["label"] == "curd packet" and c["product"] == "Hatsun Curd" for c in seen)
     assert out["kind"] == "count" and out["count"] == 4 and out["agreed"] is True
@@ -197,6 +197,11 @@ def test_count_keys_exist_in_every_language():
 
 def test_ask_frame_wait_is_six_seconds():
     assert camera.FRAME_TIMEOUT_S == 6.0
+
+
+def test_count_frame_wait_is_ten_seconds():
+    # two 1280 px count frames over a congested phone uplink can take longer than an ask's single frame
+    assert camera.COUNT_FRAME_TIMEOUT_S == 10.0
 
 
 async def test_count_diag_has_counts_and_no_user_words(session, monkeypatch):

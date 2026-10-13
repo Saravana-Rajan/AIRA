@@ -182,6 +182,31 @@ describe("request_frame handler", () => {
     expect(log).toEqual(["send:invoice"]);
   });
 
+  it("a walk burst also holds background capture", async () => {
+    const hold = vi.fn(() => () => {});
+    const s = setup({ hold });
+    await s.handle({ t: "request_frame", purpose: "walk", burst: { count: 1, intervalMs: 0 } });
+    expect(hold).toHaveBeenCalledTimes(1);
+  });
+
+  it("logs frame_req per frame: purpose, waitedMs (request to capture start), encodeMs, bytes", async () => {
+    let t = 1000;
+    const logs: Array<[string, any]> = [];
+    const s = setup({
+      now: () => t,
+      log: (tag: string, data: any) => { logs.push([tag, data]); },
+      buffered: () => 5000,
+      capture: vi.fn(async (purpose: any) => { t += 120; return { t: "frame", id: "x", jpeg: "A".repeat(500), w: 720, h: 1280, ts: 0, purpose } as any; }),
+      sleep: vi.fn(async (ms: number) => { t += ms; }),
+    });
+    t = 1000;
+    await s.handle({ t: "request_frame", purpose: "count", burst: { count: 2, intervalMs: 400 } });
+    const reqs = logs.filter(([tag]) => tag === "frame_req").map(([, d]) => d);
+    expect(reqs).toHaveLength(2);
+    expect(reqs[0]).toMatchObject({ purpose: "count", i: 0, of: 2, waitedMs: 0, encodeMs: 120, bytes: 500, buffered: 5000, sent: true });
+    expect(reqs[1]).toMatchObject({ purpose: "count", i: 1, waitedMs: 520, encodeMs: 120, bytes: 500 });
+  });
+
   it("the hold is released even when the camera fails", async () => {
     const release = vi.fn();
     const s = setup({ hold: vi.fn(() => release), capture: vi.fn(async () => { throw new CameraError("no_frame"); }) });

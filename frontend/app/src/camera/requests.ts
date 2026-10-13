@@ -2,7 +2,7 @@
 // Handles server `request_frame` messages: single, burst, continuous and stop.
 // Camera problems become one spoken hint (through the throttled hint speaker), never a throw or a retry loop.
 import type { ClientMsg, FramePurpose, ServerMsg } from "@aira/contracts";
-import { CameraError, isPriorityPurpose, type FrameMsg } from "./capture";
+import { CameraError, holdsBackground, type FrameMsg } from "./capture";
 import type { HintKey } from "../i18n/camera";
 import { clientLog } from "../core/clientLog";
 
@@ -34,10 +34,19 @@ export interface RequestDeps {
   send: (m: ClientMsg) => boolean;
   hint: (k: HintKey) => boolean;
   sleep: (ms: number) => Promise<void>;
-  /** Owner questions (ask / count / identify / point) pre-empt background capture: describe and preview frames
-   *  pause until the returned release fn runs. Optional: without it frames simply go at once. */
+  /** Tool frame requests (ask / count / identify / point / walk) pre-empt background capture: live, describe and
+   *  preview frames pause until the returned release fn runs. Optional: without it frames simply go at once. */
   hold?: () => () => void;
+  /** Clock for the frame_req diagnostics (ms). Default performance.now / Date.now. */
+  now?: () => number;
+  /** Diagnostics sink. Default clientLog. */
+  log?: (tag: string, data: Record<string, unknown>) => void;
+  /** Bytes waiting on the socket, reported with each frame_req line. */
+  buffered?: () => number;
 }
+
+const defaultNow = (): number =>
+  typeof performance !== "undefined" && typeof performance.now === "function" ? performance.now() : Date.now();
 
 /** An oversize frame means "hold still" (too much detail/noise); anything else means no camera. */
 function hintFor(e: unknown): HintKey {
@@ -49,6 +58,11 @@ function clamp(v: number | undefined, lo: number, hi: number, fallback: number):
 }
 
 export function createFrameRequestHandler(deps: RequestDeps): (m: FrameRequest) => Promise<void> {
+  const now = deps.now ?? defaultNow;
+  const log = deps.log ?? ((tag: string, data: Record<string, unknown>) => { clientLog(tag, data); });
+  const buffered = (): number | null => {
+    try { return deps.buffered ? deps.buffered() : null; } catch { return null; }
+  };
   // One continuous stream per purpose: guidance (`guide`) and a one-by-one delivery count (`identify`) can run
   // at the same time, and a stop for one never ends the other.
   const running = new Map<FramePurpose, () => void>();
@@ -65,14 +79,26 @@ export function createFrameRequestHandler(deps: RequestDeps): (m: FrameRequest) 
       running.set(m.purpose, deps.startContinuous(m.purpose, continuousFps(m.purpose)));
       return;
     }
+    const received = now();
     const count = clamp(m.burst?.count, 1, MAX_BURST, 1);
     const interval = clamp(m.burst?.intervalMs, 0, MAX_INTERVAL_MS, 0);
-    // An owner question never waits behind a describe frame: background capture pauses until it is sent.
-    const release = isPriorityPurpose(m.purpose) ? deps.hold?.() : undefined;
+    // A tool request never waits behind live or describe work: background capture pauses (and a background frame
+    // mid-encode is dropped) from this moment until its last frame is handed to the socket. Capture starts at once:
+    // there is no lock, steadiness gate or socket wait in front of it.
+    const release = holdsBackground(m.purpose) ? deps.hold?.() : undefined;
     try {
       for (let i = 0; i < count; i++) {
         try {
-          deps.send(await deps.capture(m.purpose));
+          const start = now();
+          const f = await deps.capture(m.purpose);
+          const encoded = now();
+          const sent = deps.send(f);
+          // Diagnostics: request -> capture start, encode time, size, socket backlog, and the phone's own clock (the
+          // server stamps log lines on arrival, so a late line alone cannot tell a slow phone from a slow uplink).
+          log("frame_req", {
+            purpose: m.purpose, i, of: count, waitedMs: Math.round(start - received), encodeMs: Math.round(encoded - start),
+            bytes: f.jpeg.length, buffered: buffered(), sent, clientTs: Date.now(),
+          });
         } catch (e) {
           clientLog("frame", { purpose: m.purpose, error: e instanceof CameraError ? e.code : "unknown" });
           deps.hint(hintFor(e));
