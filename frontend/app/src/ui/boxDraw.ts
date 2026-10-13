@@ -56,7 +56,7 @@ export function tagText(b: Pick<DrawBox, "label" | "kind" | "score">): string {
 }
 
 /** Clears the canvas and draws every box: MediaPipe first (thin), then ER 2 on top (thick, tagged). */
-export function drawBoxes(ctx: Ctx2D, w: number, h: number, boxes: readonly DrawBox[]): void {
+export function drawBoxes(ctx: Ctx2D, w: number, h: number, boxes: readonly DrawBox[], opts: { tagAll?: boolean } = {}): void {
   ctx.clearRect(0, 0, w, h);
   const ordered = [...boxes].sort((a, b) => (a.source === "er2" ? 1 : 0) - (b.source === "er2" ? 1 : 0));
   for (const b of ordered) {
@@ -65,7 +65,8 @@ export function drawBoxes(ctx: Ctx2D, w: number, h: number, boxes: readonly Draw
     ctx.strokeStyle = colour;
     ctx.lineWidth = b.kind === "found" ? FOUND_STROKE : b.source === "er2" ? THICK_STROKE : THIN_STROKE;
     ctx.strokeRect(r.x, r.y, r.w, r.h);
-    if (b.source !== "er2" && b.kind !== "danger") continue;   // thin boxes stay quiet unless they are a danger
+    // thin boxes stay quiet unless they are a danger (or the big phone preview asks for every label)
+    if (!opts.tagAll && b.source !== "er2" && b.kind !== "danger") continue;
     const text = tagText(b);
     ctx.font = TAG_FONT;
     ctx.textBaseline = "top";

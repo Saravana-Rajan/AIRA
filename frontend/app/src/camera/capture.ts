@@ -7,6 +7,7 @@ import { clientLog, shortText, type LogData } from "../core/clientLog";
 import { toGray, qualityHint, noteFrameQuality } from "./quality";
 import { overrideSource } from "./source";
 import { ensureBackCamera, type BackCameraResult, type CameraFacing } from "./backCamera";
+import { beginLooking } from "./looking";
 
 export type FrameMsg = Extract<ClientMsg, { t: "frame" }>;
 export type CameraErrorCode = "permission" | "no_frame" | "no_canvas" | "too_large";
@@ -150,6 +151,12 @@ let qualityListener: ((h: "dark" | "blurry") => void) | null = null;
 let qualityCounter = 0;
 let seq = 0;
 let facing: CameraFacing = "unknown";
+let denied = false;
+
+/** True once opening the camera failed (permission refused or no camera); cleared when it opens. */
+export function cameraDenied(): boolean {
+  return denied;
+}
 
 /** Which side the open camera faces. "user" means no back camera was found (callers may say so once). */
 export function cameraFacing(): CameraFacing {
@@ -212,6 +219,7 @@ async function openCamera(): Promise<HTMLVideoElement> {
   } catch (e) {
     const err = e as { name?: string; message?: string } | undefined;
     clientLog("camera", { error: shortText(String(err?.name ?? "Error")), message: shortText(String(err?.message ?? "")) });
+    denied = true;
     throw new CameraError("permission");
   }
   const v = document.createElement("video");
@@ -225,6 +233,7 @@ async function openCamera(): Promise<HTMLVideoElement> {
   }
   stream = s;
   video = v;
+  denied = false;
   deps.source = { width: () => v.videoWidth, height: () => v.videoHeight, draw: (ctx, w, h) => ctx.drawImage(v, 0, 0, w, h) };
   return v;
 }
@@ -260,10 +269,12 @@ export async function captureFrameIf(purpose: FramePurpose, keep?: FrameKeep): P
   if (!isToolPurpose(purpose)) return captureFrameRaw(purpose, keep);
   toolCaptures++;
   toolCaptureSeq++;
+  const endLooking = beginLooking(purpose); // the preview's "AIRA is looking" badge (display only)
   try {
     return await captureFrameRaw(purpose, keep);
   } finally {
     toolCaptures--;
+    endLooking();
   }
 }
 

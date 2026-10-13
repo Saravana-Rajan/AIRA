@@ -77,9 +77,12 @@ describe("AppShell", () => {
     expect(wire).toHaveBeenCalledTimes(1);
     expect(wire.mock.calls[0][0]).toMatchObject({ wsUrl: "ws://x/ws", settings: { lang: "auto", shopId: "sunrise_dairy", onboarded: true } });
     expect(onWired).toHaveBeenCalledWith(f.w);
+    // ONE gesture surface; the only other button is the helper's "Hide camera" toggle, outside it
     const buttons = root.querySelectorAll("button");
-    expect(buttons).toHaveLength(1);
+    expect(buttons).toHaveLength(2);
     expect(buttons[0].getAttribute("aria-label")).toBe(SURFACE_LABEL);
+    expect(buttons[1].classList.contains("cam-toggle")).toBe(true);
+    expect(buttons[0].contains(buttons[1])).toBe(false);
     // the aria-live region sits outside the button
     const region = root.querySelector('[aria-live="polite"]')!;
     expect(region).not.toBeNull();
