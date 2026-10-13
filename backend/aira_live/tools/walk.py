@@ -266,7 +266,9 @@ class WalkLoop:
             if bridge is not None:
                 if fresh:
                     getattr(bridge, "_notices", {}).pop(notice_key(notice), None)
-                await bridge.speak_notice(notice)
+                # A hazard or obstacle ("warn" cue, or an action of stop) cuts in at once for his safety.
+                urgent = cue == "warn" or (facts or {}).get("action") == "stop"
+                await bridge.speak_notice(notice, urgent=urgent)
         except Exception:
             log.warning("walk: session %s unreachable", s.session_id, exc_info=True)
 

@@ -116,16 +116,23 @@ async def test_walk_stop_tool_ends_at_once_and_is_described_for_any_language(ses
     assert "ANY language" in doc and "in the language he is speaking" in doc
 
 
+class _Notices(list):
+    urgent: list[bool]
+
+
 def _bridge(monkeypatch):
-    notices: list[str] = []
+    notices = _Notices()
 
     class Bridge:
         _notices: dict = {}
 
-        async def speak_notice(self, text):
+        async def speak_notice(self, text, urgent=False):
             notices.append(text)
+            urgents.append(urgent)
 
+    urgents: list[bool] = []
     monkeypatch.setattr(walk, "_bridge_of", lambda s: Bridge())
+    notices.urgent = urgents
     return notices
 
 
@@ -140,6 +147,8 @@ async def test_instructions_go_to_live_as_facts(session, monkeypatch):
     facts = [json.loads(n.split(" (meaning: ")[0]) for n in notices]
     assert facts[0] == {"action": "go", "direction": "ahead", "steps_about": 3, "target": "fridge"}
     assert facts[1] == {"action": "stop", "obstacle": "chair", "move": "right"}
+    # Stop lines cut in at once for his safety; directions wait their turn.
+    assert notices.urgent[1] is True and notices.urgent[0] is False
     assert facts[-1]["action"] == "arrived"
     assert notices[0].endswith("(meaning: fridge ahead, about 3 steps.)")
 
