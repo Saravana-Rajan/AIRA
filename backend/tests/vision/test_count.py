@@ -230,3 +230,26 @@ async def test_count_in_frame_raises_when_every_model_fails(fake_genai, frame):
     fake_genai("x", "y", "z")
     with pytest.raises(VisionError):
         await count_in_frame(frame, "Aavin milk 1 L pouch")
+
+
+# --- evidence counts exposed on the result (unknown / hidden / edge) ------------------------------------------
+
+
+def test_result_exposes_unknown_hidden_and_edge_counts():
+    items = grid(4) + [{"point": [10, 500], "label": "pack", "edge": True},
+                       {"point": [600, 600], "label": "pack", "hidden": True}]
+    r = assess(items)
+    assert r.count == 6 and r.edge == 1 and r.hidden == 1 and r.unknown == 0
+
+
+def test_unknown_labels_are_counted_separately_with_a_named_product():
+    items = [{"point": [200, 200], "label": "Hatsun Curd"}, {"point": [200, 500], "label": "unknown"},
+             {"point": [500, 500], "label": ""}]
+    r = assess(items, product="Hatsun Curd")
+    assert r.count == 1 and r.unknown == 2 and r.confidence < 0.5
+
+
+def test_unknown_labels_without_a_product_are_counted_and_reported():
+    items = [{"point": [200, 200], "label": "Hatsun Curd"}, {"point": [200, 500], "label": "unknown"}]
+    r = assess(items)
+    assert r.count == 2 and r.unknown == 1

@@ -222,6 +222,8 @@ async def live_frame(session: Session, bridge: LiveBridge | None, frame: Frame, 
     own preview stream, so the same picture is never relayed twice. With ``precount_on`` (AIRA_PRECOUNT) a
     settled scene change also starts a background count (``vision.precount``). True when it reached Live."""
     session.frames.remember_recent(frame)  # look_frame / latest_frame reuse it (768 px)
+    if changed:  # a new scene: earlier counts no longer describe the view (aira_live.scene_facts)
+        session.scene_facts.camera_moved(frame.ts)
     if not video or bridge is None:
         return False
     if precount_on and not session.walking:  # a walk guidance owns the camera: no background count
