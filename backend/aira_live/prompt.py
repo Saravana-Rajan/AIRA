@@ -252,7 +252,17 @@ RULES = (
 )
 
 
-def render_prompt(shop: dict, products: list[dict], suppliers: list[dict], lang: str, verbosity: str) -> str:
+LIVE_ONLY_CAMERA_RULE = (
+    "CAMERA, LIVE-ONLY MODE: the camera tools (camera_ask, product_identify, walk_to, walk_stop, describe_mode, "
+    "delivery_count) are switched off. Ignore every rule above that says to call them. Answer every camera "
+    "question yourself from the live video: what is shown, where things are, how to move, and counts. Count "
+    "carefully and say a count as 'about N'; if you cannot see well, say you are not sure and ask Sam to hold "
+    "still or step back. Never read money amounts or prices off the video; prices come from the PRODUCTS list."
+)
+
+
+def render_prompt(shop: dict, products: list[dict], suppliers: list[dict], lang: str, verbosity: str,
+                  er2: bool = True) -> str:
     length = "One short sentence unless the owner asks for more." if verbosity == "short" else "At most three short sentences."
     intro = (
         f"You are AIRA, a helpful general assistant in the ear of the blind owner of {shop.get('name', 'the shop')}, "
@@ -264,6 +274,7 @@ def render_prompt(shop: dict, products: list[dict], suppliers: list[dict], lang:
         f"{language_rule(lang, expected_languages(shop))} {length}",
         "RULES:",
         *RULES,
+        *([] if er2 else [LIVE_ONLY_CAMERA_RULE]),
         "PRODUCTS (sku: name, pack, price):",
         *[_product_line(p, lang) for p in products],
         "SUPPLIERS:",
@@ -335,7 +346,7 @@ def last_vocabulary(shop_id: str) -> list[str]:
     return list(_LAST_VOCAB.get(shop_id) or FIXED_VOCABULARY)
 
 
-async def build_system_prompt(shop_id: str, lang: str, verbosity: str) -> str:
+async def build_system_prompt(shop_id: str, lang: str, verbosity: str, er2: bool = True) -> str:
     shop_ref = db().collection("shops").document(shop_id)
     snap = await shop_ref.get()
     shop = (snap.to_dict() or {}) if snap.exists else {"name": shop_id}
@@ -345,4 +356,4 @@ async def build_system_prompt(shop_id: str, lang: str, verbosity: str) -> str:
                  if (d.to_dict() or {}).get("active") is not False]
     _LAST_FACTS[shop_id] = catalog_facts(products)
     _LAST_VOCAB[shop_id] = catalog_vocabulary(shop, products, suppliers)
-    return render_prompt(shop, products, suppliers, lang, verbosity)
+    return render_prompt(shop, products, suppliers, lang, verbosity, er2=er2)
