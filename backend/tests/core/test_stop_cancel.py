@@ -305,6 +305,15 @@ def test_ws_stop_cancels_tools_and_proposals_of_that_session(monkeypatch, fake_d
     assert ("tools", sid) in calls and ("proposals", sid) in calls
 
 
+def test_the_phones_talk_event_is_a_valid_client_message():
+    """The phone sends {t:"event", name:"talk"} on a talk tap: the contract must accept it, or the server
+    would refuse it and a long-press Stop could only be lifted by a two-word question."""
+    from aira_live.contracts import EventMsg, parse_client_msg
+
+    msg = parse_client_msg('{"t": "event", "name": "talk", "data": {}}')
+    assert isinstance(msg, EventMsg) and msg.name == "talk"
+
+
 # ---------- every function response carries status / retryable / message ----------
 async def test_results_get_status_retryable_and_message_added_never_replaced(mk_session):
     from aira_live.tool_runtime import with_status

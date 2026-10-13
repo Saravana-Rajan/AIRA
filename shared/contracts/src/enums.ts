@@ -28,7 +28,8 @@ export type ConfirmKind = (typeof CONFIRM_KINDS)[number];
 export const CONFIRM_ANSWERS = Object.freeze(["yes", "no"] as const);
 export type ConfirmAnswer = (typeof CONFIRM_ANSWERS)[number];
 
-export const CLIENT_EVENT_NAMES = Object.freeze(["visibility", "network", "fingertip_in_target"] as const);
+// "talk": the owner tapped to talk (his next turn); after a long-press Stop it lets AIRA speak again.
+export const CLIENT_EVENT_NAMES = Object.freeze(["visibility", "network", "fingertip_in_target", "talk"] as const);
 export type ClientEventName = (typeof CLIENT_EVENT_NAMES)[number];
 
 export const TRANSCRIPT_ROLES = Object.freeze(["user", "aira"] as const);

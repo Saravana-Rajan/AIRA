@@ -12,6 +12,7 @@
   {"t":"frame","id":"f8","jpeg":"/9j/4AAQ","w":1024,"h":768,"ts":1760000007120,"purpose":"count","requestId":"r1a2b3","captureTs":1760000007000},
   {"t":"text","text":"order 30 litres sakthi curd"},
   {"t":"event","name":"fingertip_in_target","data":{"frameId":"f1","dwellMs":500}},
+  {"t":"event","name":"talk","data":{}},
   {"t":"event","name":"visibility","data":{"state":"hidden"}},
   {"t":"event","name":"network","data":{"online":false}},
   {"t":"confirm","id":"c1","answer":"yes"},

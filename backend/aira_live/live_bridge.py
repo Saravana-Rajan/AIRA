@@ -683,11 +683,22 @@ def input_transcription_config(types, session):
                                 vocabulary=last_vocabulary(str(getattr(session, "shop_id", "") or "")))
 
 
-def live_extras(types) -> dict:
-    """Extra Live RunConfig fields. Proactive audio (on unless AIRA_PROACTIVE_AUDIO=0): the model may stay
-    silent when speech is not meant for it, e.g. Sam chatting with a customer, and answers only when needed."""
+def live_extras(types, model: str | None = None) -> dict:
+    """Extra Live RunConfig fields: proactive audio, so the model may stay silent when speech is not meant for
+    it (Sam chatting with a customer) and answers only when needed.
+
+    Gemini 3.8 Live has proactive audio and affective dialogue on by default, and its developer guide says not
+    to pass the legacy ``proactivity`` / ``enable_affective_dialog`` fields, so nothing is added for a 3.8 Live
+    model. An older Live model (an AIRA_MODEL_LIVE override) still gets proactivity asked for explicitly, unless
+    AIRA_PROACTIVE_AUDIO=0."""
     import os
 
+    if model is None:
+        from aira_live.models import model_for
+
+        model = model_for("live")
+    if model.startswith("gemini-3.8-live"):
+        return {}
     if os.environ.get("AIRA_PROACTIVE_AUDIO", "1") == "0" or not hasattr(types, "ProactivityConfig"):
         return {}
     return {"proactivity": types.ProactivityConfig(proactive_audio=True)}

@@ -249,6 +249,12 @@ describe("wireApp: gestures", () => {
     expect(a.socket.sent).toContainEqual({ t: "audio", pcm16: "AAAA" });
   });
 
+  it("a talk tap tells the server it is the owner's turn (lifts a long-press Stop there)", () => {
+    const a = setup();
+    a.w.onTalk();
+    expect(a.socket.sent).toContainEqual({ t: "event", name: "talk", data: {} });
+  });
+
   it("double-tap while AIRA speaks cuts her off so the owner can talk", () => {
     const a = setup();
     a.w.onTalk();

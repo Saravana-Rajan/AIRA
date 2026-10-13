@@ -616,6 +616,8 @@ export function wireApp(opts: WireOpts): WiredApp {
     dropWaiting();
     env.speech?.cancel();
     local("talk");
+    // The owner's turn: on the server this lifts a long-press Stop even for a one-word question.
+    api.send({ t: "event", name: "talk", data: {} });
     thinking.arm();
     void openMic();
     startSession();

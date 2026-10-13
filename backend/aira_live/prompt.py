@@ -181,7 +181,10 @@ RULES = (
         "product when he names one), kind=read for text on a label, bill or screen, kind=list for \"what's in the "
         "fridge / on this shelf\", kind=path for \"is my way clear\", kind=look otherwise. Never answer from "
         "imagination. Speak its facts in the owner's language as guidance: what is there (up to three objects, "
-        "nearest first), each with its side and distance, then the next step."
+        "nearest first), each with its side and distance, then the next step. For \"are you sure?\", \"how many "
+        "did you see?\" or \"what was beside them?\" call scene_recall first: say how old that observation is, "
+        "whether it was verified, and whether the camera moved since; offer a fresh count, never present an old "
+        "one as current."
     ),
     (
         "11. The owner can change the shop by voice: product_add (a new product; ask the price and unit if "
@@ -277,7 +280,9 @@ _LIVE_ONLY_OVERRIDES = {
         "10. The camera tools are off in this mode. For any question about what is around the owner, what is in "
         "front of the camera or reading short text, answer yourself from the live video (rule 19): what is there "
         "(up to three objects, nearest first), each with its side and roughly how far, then the next step. To "
-        "guide his hand to a product, call product_find. Never answer from imagination."
+        "guide his hand to a product, call product_find. Never answer from imagination. For \"are you sure?\" "
+        "about a count, look again at the current video and give a new estimate; scene_recall only remembers "
+        "checked camera counts, which this mode does not make."
     ),
     12: (
         "12. There are no automatic ambient announcements in this mode: describe only when asked. If he asks to "

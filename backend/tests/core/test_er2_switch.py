@@ -27,3 +27,10 @@ def test_the_live_only_rules_replace_the_camera_rules_only_when_er2_is_off():
     assert all(r in on for r in RULES) and not any(r in on for r in set(RULES_LIVE_ONLY) - set(RULES))
     assert all(r in off for r in RULES_LIVE_ONLY) and not any(r in off for r in set(RULES) - set(RULES_LIVE_ONLY))
     assert "about N, in the current view" in off and "never read money amounts or prices off the video" in off.lower()
+
+
+def test_both_prompts_tell_live_how_to_answer_are_you_sure_about_a_count():
+    on = render_prompt(SHOP, [], [], "en", "short")
+    off = render_prompt(SHOP, [], [], "en", "short", er2=False)
+    assert "scene_recall" in on and "never present an old one as current" in on
+    assert "look again at the current video" in off

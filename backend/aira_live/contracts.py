@@ -44,7 +44,7 @@ CueName = Literal["ack", "thinking", "done", "warn", "match", "mismatch", "unsur
 Entity = Literal["order", "delivery", "sale", "payment", "inventory"]
 ConfirmKind = Literal["order", "payment", "sale", "discrepancy", "generic"]
 ConfirmAnswer = Literal["yes", "no"]
-ClientEventName = Literal["visibility", "network", "fingertip_in_target"]
+ClientEventName = Literal["visibility", "network", "fingertip_in_target", "talk"]
 TranscriptRole = Literal["user", "aira"]
 ErrorCode = Literal["network", "model_timeout", "camera", "permission", "unsupported", "internal"]
 # Who drew a box: the phone's on-device MediaPipe detector, Gemini Robotics-ER 2, or the phone's bump guard.
