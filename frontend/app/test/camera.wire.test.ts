@@ -20,6 +20,7 @@ vi.mock("../src/camera/capture", async (importOriginal) => ({
 }));
 vi.mock("../src/camera/tilt", () => ({ startTiltHints: vi.fn(() => h.stopTilt) }));
 vi.mock("../src/guidance/hands", () => ({
+  freshHand: vi.fn(() => null),
   trackFingertip: vi.fn(async (onTip: (tip: { x1000: number; y1000: number } | null) => void) => {
     h.onTip = onTip;
     return h.stopTrack;

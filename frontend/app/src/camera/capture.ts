@@ -78,6 +78,13 @@ export function toolCaptureCount(): number {
 }
 
 let backgroundHolds = 0;
+let liveCaptures = 0;
+
+/** True while a Gemini Live video frame is being captured: preview and describe frames yield to it (they skip
+ *  their tick, and one finished meanwhile is dropped), so the live frame is the next thing on the socket. */
+export function liveCaptureBusy(): boolean {
+  return liveCaptures > 0;
+}
 
 /** An owner question is capturing: describe and preview frames pause (and one mid-encode is dropped) until
  *  the returned release fn is called. Holds nest; releasing twice is harmless. */
@@ -177,6 +184,7 @@ export async function grabVideoFrame(v: HTMLVideoElement): Promise<GrabbedFrame>
 /** Tests only: swap the frame source, encoder or canvas factory. */
 export function __setCaptureDeps(p: Partial<CaptureDeps>): void {
   Object.assign(deps, p);
+  probeCanvas = null;
 }
 
 let stream: MediaStream | null = null;
@@ -306,6 +314,14 @@ export async function captureFrame(purpose: FramePurpose): Promise<FrameMsg> {
 
 /** Like captureFrame, but returns null (without encoding) when `keep` says the frame is not worth sending. */
 export async function captureFrameIf(purpose: FramePurpose, keep?: FrameKeep): Promise<FrameMsg | null> {
+  if (purpose === "live") {
+    liveCaptures++;
+    try {
+      return await captureFrameRaw(purpose, keep);
+    } finally {
+      liveCaptures--;
+    }
+  }
   if (!isToolPurpose(purpose)) return captureFrameRaw(purpose, keep);
   const held = HOLDS.has(purpose);
   toolCaptures++;
@@ -388,6 +404,28 @@ function finish(purpose: FramePurpose, jpeg: string, w: number, h: number, quali
   return f;
 }
 
+let probeCanvas: { canvas: HTMLCanvasElement; ctx: CanvasRenderingContext2D | null; w: number; h: number } | null = null;
+
+/**
+ * A cheap gray grid (gw x gh, default 32x24) of the camera right now: one tiny canvas draw, no encode. The live
+ * video's show detector samples it a few times a second. null while the camera is not ready, while an owner
+ * tool photo has the CPU, or on any canvas trouble. Never opens the camera.
+ */
+export function probeGrid(gw = 32, gh = 24): Float32Array | null {
+  try {
+    if (detectionPaused()) return null;
+    const src: FrameSource | null = overrideSource() ?? deps.source;
+    if (!src || !src.width() || !src.height()) return null;
+    if (!probeCanvas || probeCanvas.w !== gw || probeCanvas.h !== gh) probeCanvas = { ...deps.makeCanvas(gw, gh), w: gw, h: gh };
+    const ctx = probeCanvas.ctx;
+    if (!ctx) return null;
+    src.draw(ctx, gw, gh);
+    return toGray(ctx.getImageData(0, 0, gw, gh).data, gw, gh);
+  } catch {
+    return null;
+  }
+}
+
 /** True while the socket still holds more than BACKGROUND_MAX_BUFFERED bytes it could not hand to the network. */
 export function socketBusy(): boolean {
   try {
@@ -411,10 +449,11 @@ export function startContinuous(purpose: FramePurpose, fps: number, keep?: Frame
     if (stopped || busy) return;
     if (pausable && detectionPaused()) return; // the owner's question has the camera and the socket
     if (dropWhenBusy && socketBusy()) return; // the last picture is still on its way: this one is not worth encoding
+    if (pausable && liveCaptureBusy()) return; // a live video frame goes first: Gemini sees it, the dashboard can wait
     busy = true;
     try {
       const f = await captureFrameIf(purpose, keep);
-      if (f && !stopped && !(pausable && detectionPaused()) && !(dropWhenBusy && socketBusy())) app.send(f);
+      if (f && !stopped && !(pausable && (detectionPaused() || liveCaptureBusy())) && !(dropWhenBusy && socketBusy())) app.send(f);
     } catch {
       // Camera errors are surfaced by the request handler and the hint speaker.
     } finally {

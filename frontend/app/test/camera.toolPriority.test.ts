@@ -9,7 +9,7 @@ const { app } = vi.hoisted(() => ({
 }));
 vi.mock("../src/core/app", () => ({ app }));
 import {
-  __setCaptureDeps, backgroundHeld, captureFrame, captureFrameIf, holdBackground, startContinuous, toolCaptureBusy, toolCaptureCount,
+  __setCaptureDeps, backgroundHeld, captureFrame, captureFrameIf, holdBackground, liveCaptureBusy, startContinuous, toolCaptureBusy, toolCaptureCount,
 } from "../src/camera/capture";
 import { startLiveVideo } from "../src/camera/liveVideo";
 import { createFrameRequestHandler, defaultSleep } from "../src/camera/requests";
@@ -59,7 +59,7 @@ describe("a tool frame request beats live / describe work and socket backpressur
       buffered: () => buffered,
       toolBusy: () => toolCaptureBusy() || backgroundHeld(),
       toolCount: toolCaptureCount,
-      labels: () => [],
+      objects: () => [],
     });
     const stopDescribe = startContinuous("describe", 1);
     const handle = createFrameRequestHandler({
@@ -126,5 +126,33 @@ describe("a tool frame request beats live / describe work and socket backpressur
     await vi.advanceTimersByTimeAsync(1100);
     expect(wire.some((m) => isFrame(m) && (m.purpose === "live" || m.purpose === "describe"))).toBe(true);
     r.stop();
+  });
+
+  it("preview and describe yield to a live frame being captured: the live frame goes first", async () => {
+    let releaseLive: ((s: string) => void) | null = null;
+    __setCaptureDeps({
+      encoder: (c) => new Promise<string>((resolve) => {
+        if (Math.max(c.width, c.height) === 768) releaseLive = resolve;   // the live frame: slow encode
+        else resolve("P".repeat(500));                                  // preview / describe: instant
+      }),
+    });
+    const stopLive = startLiveVideo({
+      capture: (keep) => captureFrameIf("live", keep),
+      send: (m) => app.send(m),
+      active: () => true, cameraOn: () => true, hidden: () => false, buffered: () => buffered,
+      toolBusy: () => toolCaptureBusy() || backgroundHeld(), toolCount: toolCaptureCount, objects: () => [],
+    });
+    const stopPreview = startContinuous("preview", 8);
+    await vi.advanceTimersByTimeAsync(10);
+    expect(liveCaptureBusy()).toBe(true);
+    await vi.advanceTimersByTimeAsync(500);                  // 4 preview ticks while the live frame encodes
+    expect(wire.filter((m) => isFrame(m) && m.purpose === "preview")).toHaveLength(0);
+    releaseLive!("L".repeat(60_000));
+    await vi.advanceTimersByTimeAsync(300);
+    const order = wire.filter(isFrame).map((f) => f.purpose);
+    expect(order[0]).toBe("live");
+    expect(order.filter((p) => p === "preview").length).toBeGreaterThan(0);
+    stopLive();
+    stopPreview();
   });
 });

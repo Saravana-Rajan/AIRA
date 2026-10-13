@@ -80,6 +80,21 @@ export function handBoxFrom(res: Landmarks): Box | null {
 
 export type Hand = { tip: Tip; box: Box };
 
+/** The latest hand any tracking loop saw (ambient hold-up watch, hand guidance), for readers that must not start
+ *  a landmarker of their own (the live video's show detector). */
+let latestHand: { box: Box | null; at: number } = { box: null, at: -Infinity };
+export const HAND_TTL_MS = 500;
+
+/** The hand box seen within the last HAND_TTL_MS by a running tracker, or null (no hand, or no tracker running). */
+export function freshHand(now: number = performance.now()): Box | null {
+  return now - latestHand.at <= HAND_TTL_MS ? latestHand.box : null;
+}
+
+/** Tests / the tracker loop: record what the landmarker saw now. */
+export function noteHand(box: Box | null, at: number = performance.now()): void {
+  latestHand = { box, at };
+}
+
 type VideoWithRvfc = HTMLVideoElement & {
   requestVideoFrameCallback?: (cb: () => void) => number;
   cancelVideoFrameCallback?: (id: number) => void;
@@ -132,6 +147,7 @@ export async function trackHand(onHand: (hand: Hand | null) => void): Promise<()
       } catch {
         hand = null;   // a lost GL context or a bad frame reads as "no hand"; the loop goes on
       }
+      noteHand(hand ? hand.box : null, ts);
       onHand(hand);
     }
     next();

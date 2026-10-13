@@ -1,4 +1,4 @@
-"""The phone camera as Gemini Live video, and the "speak up when the view changes" nudge.
+"""The phone camera as Gemini Live video, and the "say what is being shown" nudge.
 
 While a Live session runs and the camera is on, the phone sends one ``live`` frame a second (JPEG, <= 768 px:
 the official Live API guidance). ``LiveVideo.offer`` forwards it into the Live session as realtime video
@@ -6,12 +6,15 @@ the official Live API guidance). ``LiveVideo.offer`` forwards it into the Live s
 work (counts, label prices, money, expiry dates) stays on the tools; the system prompt says so.
 
 - Throttle: at most one frame per ``MIN_GAP_S`` per session; a frame is dropped while the Live request queue
-  is already ``MAX_BACKLOG`` items behind (stale video is worse than none).
-- Nudge: a frame the phone marked ``changed`` (the view settled on something new) may inject one short user
-  turn asking Live to say what it sees and guide Sam, or stay silent. Gated: never while Sam or a customer
-  speaks, while AIRA answers or a tool runs; at most one per ``NUDGE_GAP_S``; the same labels at most once per
-  ``NUDGE_DEDUPE_S``. Proactive audio lets Live choose silence.
-- Diagnostics: forwarded / dropped / nudged counts, once a minute per session (never any picture).
+  is already ``MAX_BACKLOG`` items behind (stale video is worse than none). A ``changed`` frame (the phone's
+  "something is being shown" fast path) only needs ``CHANGED_MIN_GAP_S``: it never loses to the 1 fps tick.
+- Nudge: right after a ``changed`` frame is forwarded (same call, so Live already has that picture) one short
+  user turn asks Live to say in ONE sentence what is being shown, in the owner's language; price and stock only
+  through the tools. Gated: never while Sam or a customer speaks, while AIRA is mid-sentence or a tool runs; at
+  most one per ``NUDGE_GAP_S``; the same labels at most once per ``NUDGE_DEDUPE_S``. Every decision is logged
+  (``diag("live_nudge", decision=...)``): ``sent`` or ``skipped:speaking|aira|tool|busy|gap|dedup|off``.
+- Diagnostics: forwarded / dropped / nudged counts and the skip reasons, once a minute per session (never any
+  picture).
 - Flags: ``AIRA_LIVE_VIDEO`` (default on) and ``AIRA_LIVE_NUDGE`` (default on), read in ``aira_live.config``.
 """
 from __future__ import annotations
@@ -32,9 +35,10 @@ log = logging.getLogger(__name__)
 
 PURPOSE = "live"
 MIN_GAP_S = 0.9          # ~1 fps per session (a little slack for the phone's timer jitter)
+CHANGED_MIN_GAP_S = 0.25  # a "shown" frame from the phone's fast path goes even right after a regular one
 MAX_BACKLOG = 6          # Live request queue items waiting: more than this and the frame is dropped
-NUDGE_GAP_S = 4.0        # at most one nudge every 4 s
-NUDGE_DEDUPE_S = 15.0    # the same labels nudge at most once per 15 s
+NUDGE_GAP_S = 3.0        # at most one nudge every 3 s
+NUDGE_DEDUPE_S = 10.0    # the same labels nudge at most once per 10 s
 QUIET_AFTER_SPEECH_S = 1.5  # no nudge this soon after the last words heard or spoken
 DIAG_EVERY_S = 60.0
 
@@ -48,11 +52,11 @@ def labels_key(labels: Iterable[str] | None) -> str:
 
 def nudge_text(labels: Iterable[str] | None, lang_name: str) -> str:
     seen = labels_key(labels)
-    hint = f" (the phone's detector sees: {seen.replace(',', ', ')})" if seen else ""
-    return (f"{NUDGE_PREFIX}: the view just changed{hint}. If something new is shown, tell Sam in one short "
-            f"sentence, in {lang_name}, what it is and guide him (for example move left, right, closer); never "
-            "state a count, a price from a label, money or an expiry date from the video. If nothing useful "
-            "changed, stay silent.")
+    hint = f" (the phone's detector guesses: {seen.replace(',', ', ')})" if seen else ""
+    return (f"{NUDGE_PREFIX}: something is being shown to the camera right now{hint}. Look at the latest video "
+            f"frame and say in ONE short sentence, in {lang_name}, what is being shown. Price or stock only from "
+            "your tools: never read a count, a price, money or an expiry date off the video and never invent "
+            "one. If nothing new is being shown, stay silent.")
 
 
 def narrates(bridge: object | None) -> bool:
@@ -84,15 +88,18 @@ class LiveVideo:
         self.last_nudge_at = float("-inf")
         self._nudged: dict[str, float] = {}  # labels key -> when it last nudged
         self.forwarded = self.dropped = self.nudged = self.nudge_skipped = 0
+        self.skip_reasons: dict[str, int] = {}
         self._window_at = clock()
 
     # ---------- forwarding ----------
     async def offer(self, bridge: LiveBridge, jpeg_b64: str, changed: bool = False,
                     labels: Iterable[str] | None = None) -> bool:
-        """Forward one live frame into ``bridge`` (True), or drop it (False). Never raises."""
+        """Forward one live frame into ``bridge`` (True), or drop it (False). A ``changed`` frame is followed at
+        once by the nudge (when the gate allows). Never raises."""
         now = self._clock()
         try:
-            if now - self.last_sent_at < MIN_GAP_S or bridge.video_backlog() > MAX_BACKLOG:
+            gap = CHANGED_MIN_GAP_S if changed else MIN_GAP_S
+            if now - self.last_sent_at < gap or bridge.video_backlog() > MAX_BACKLOG:
                 self.dropped += 1
                 return False
             try:
@@ -113,32 +120,38 @@ class LiveVideo:
 
     # ---------- the nudge ----------
     def nudge_block(self, bridge: LiveBridge, labels: Iterable[str] | None, now: float) -> str | None:
-        """Why a nudge may not go now (a short reason), or None when it may."""
+        """Why a nudge may not go now (``skipped:<reason>``), or None when it may."""
         if not self.nudge_on:
-            return "off"
+            return "skipped:off"
         if bridge.answering:
-            return "aira_speaking"
+            return "skipped:aira"      # AIRA is mid-sentence
         if bridge.user_speaking:
-            return "user_speaking"
+            return "skipped:speaking"  # Sam or a customer is talking
         if now - bridge.last_speech_at < QUIET_AFTER_SPEECH_S:
-            return "just_spoke"
+            return "skipped:speaking"  # words were just heard or spoken
         if self._tools_running() > 0:
-            return "tool_running"
+            return "skipped:tool"
         try:
             if self._other_busy():
-                return "other_voice"  # a walk guidance or an ambient hold-up line owns the voice
+                return "skipped:busy"  # a walk guidance or an ambient hold-up line owns the voice
         except Exception:
             log.debug("live video: busy check failed", exc_info=True)
         if now - self.last_nudge_at < NUDGE_GAP_S:
-            return "rate"
+            return "skipped:gap"
         key = labels_key(labels)
         if key and now - self._nudged.get(key, float("-inf")) < NUDGE_DEDUPE_S:
-            return "same_labels"
+            return "skipped:dedup"
         return None
 
+    def _decided(self, decision: str, labels: Iterable[str] | None) -> None:
+        diag("live_nudge", session=self.session_id, decision=decision, labels=labels_key(labels)[:120])
+
     async def _maybe_nudge(self, bridge: LiveBridge, labels: Iterable[str] | None, now: float) -> bool:
-        if self.nudge_block(bridge, labels, now) is not None:
+        block = self.nudge_block(bridge, labels, now)
+        if block is not None:
             self.nudge_skipped += 1
+            self.skip_reasons[block] = self.skip_reasons.get(block, 0) + 1
+            self._decided(block, labels)
             return False
         self.last_nudge_at = now
         key = labels_key(labels)
@@ -146,6 +159,7 @@ class LiveVideo:
             self._nudged = {k: at for k, at in self._nudged.items() if now - at < NUDGE_DEDUPE_S}
             self._nudged[key] = now
         self.nudged += 1
+        self._decided("sent", labels)
         await bridge.send_text(nudge_text(labels, bridge.lang_name()))
         return True
 
@@ -157,6 +171,8 @@ class LiveVideo:
             return
         if self.forwarded or self.dropped or self.nudged or self.nudge_skipped:
             diag("live_video", session=self.session_id, forwarded=self.forwarded, dropped=self.dropped,
-                 nudged=self.nudged, nudge_skipped=self.nudge_skipped, window_s=round(now - self._window_at))
+                 nudged=self.nudged, nudge_skipped=self.nudge_skipped, skip_reasons=dict(self.skip_reasons),
+                 window_s=round(now - self._window_at))
         self.forwarded = self.dropped = self.nudged = self.nudge_skipped = 0
+        self.skip_reasons = {}
         self._window_at = now

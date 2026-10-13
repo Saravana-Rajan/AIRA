@@ -7,7 +7,7 @@ import type { ServerMsg } from "@aira/contracts";
 import { app } from "../core/app";
 import type { WiredApp } from "../core/wire";
 import {
-  backgroundHeld, captureFrame, captureFrameIf, getVideo, holdBackground, setQualityListener, startCamera, startContinuous,
+  backgroundHeld, captureFrame, captureFrameIf, getVideo, holdBackground, probeGrid, setQualityListener, startCamera, startContinuous,
   stopCamera, toolCaptureBusy, toolCaptureCount, encodedInWorker, type FrameKeep,
 } from "./capture";
 import { createWorkingCue } from "./working";
@@ -19,7 +19,8 @@ import { createRtcSender } from "./rtcSender";
 import { createHintSpeaker } from "./hints";
 import { startTiltHints } from "./tilt";
 import { createGuidanceSession } from "../guidance/session";
-import { trackFingertip } from "../guidance/hands";
+import { freshHand, trackFingertip } from "../guidance/hands";
+import { clientLog } from "../core/clientLog";
 import { guideTo, stopTone } from "../guidance/tones";
 import { boxStore } from "../walk/boxes";
 import { parseWalkingModeCommand, walkingMode } from "../walk/mode";
@@ -131,7 +132,8 @@ export function wireCameraAndGuidance(opts: WireOptions = {}): CameraWiring {
     getStream: async () => ((getVideo() ?? (await startCamera())).srcObject as MediaStream | null),
   });
 
-  // The camera as Gemini Live video, 1 fps, while the Live session is up (`ready`, not mock) and the camera is on.
+  // The camera as Gemini Live video, 1 fps, while the Live session is up (`ready`, not mock) and the camera is on;
+  // showing something (a new object in the centre, a held item, a big settled change) sends one frame at once.
   let liveReady = false;
   const stopLive = startLiveVideo({
     capture: (keep) => captureFrameIf("live", keep),
@@ -142,7 +144,10 @@ export function wireCameraAndGuidance(opts: WireOptions = {}): CameraWiring {
     buffered: () => { try { return app.socket?.bufferedAmount?.() ?? 0; } catch { return 0; } },
     toolBusy: () => toolCaptureBusy() || backgroundHeld(),
     toolCount: toolCaptureCount,
-    labels: () => { try { return freshObjects().map((o) => o.label); } catch { return []; } },
+    objects: () => { try { return freshObjects(); } catch { return []; } },
+    hand: () => freshHand(),
+    probe: () => probeGrid(),
+    log: (tag, data) => { clientLog(tag, data); },
   });
   const onReady = (m: ServerMsg) => { if (m.t === "ready") liveReady = !m.mock; };
 
