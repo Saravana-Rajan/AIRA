@@ -27,7 +27,6 @@ from aira_live import config
 from aira_live.business import paths
 from aira_live.business.clock import now_iso
 from aira_live.business.store import get_store
-from aira_live.i18n import t
 from aira_live.messaging import telegram
 from aira_live.messaging.clicktochat import normalize_in_phone
 from aira_live.tools import _repo
@@ -268,6 +267,10 @@ async def _apply_reply(channel: str, msg_key: str | None, contact: str, text: st
                                      "updatedAt": now})
     supplier = order.get("supplierName") or order.get("supplierId", "")
     # A reply to an order that is no longer open (last week's, already paid) must not sound like news about today's.
-    key = "k2.order.vendor_replied" if order.get("state") in OPEN_STATES else "k2.order.vendor_replied_old"
-    await _notify(shop_id, t(key, order.get("lang") or "en", supplier=supplier, text=text))
+    # English facts: Live tells the owner in whatever language he is speaking, the vendor's words verbatim.
+    if order.get("state") in OPEN_STATES:
+        line = f"Vendor {supplier} replied: {text}"
+    else:
+        line = f"About an earlier order, vendor {supplier} replied: {text}"
+    await _notify(shop_id, line)
     return True

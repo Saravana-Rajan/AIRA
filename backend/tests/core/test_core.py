@@ -110,12 +110,12 @@ def test_idem_key_is_deterministic_and_distinct():
 # ---------- i18n ----------
 def test_i18n_format_fallback_and_unknown():
     assert t("mock.echo", "ta", text="hi").endswith("hi")
-    assert t("confirm.cancelled", "en") == "Okay, cancelled."
+    assert t("error.internal", "en") == "Something went wrong. Please try again."
     assert t("does.not.exist", "hi") == "does.not.exist"
 
 
 def test_i18n_unknown_lang_falls_back_to_english():
-    assert t("confirm.cancelled", "fr") == "Okay, cancelled."
+    assert t("error.internal", "fr") == "Something went wrong. Please try again."
 
 
 def test_i18n_missing_placeholder_never_raises():
@@ -232,8 +232,8 @@ async def test_session_context_and_notify():
     sessions.register(s)
     try:
         n = await sessions.notify("sunrise_dairy", "Sakthi vendor confirmed: delivery at 6 pm", cue="ack")
-        assert n == 1 and sent[0].text.startswith("Sakthi vendor") and sent[1].cue == "ack"
-        assert sent[0].role == "aira" and sent[0].final is True
+        assert n == 1 and sent[0].cue == "ack" and sent[1].text.startswith("Sakthi vendor")
+        assert sent[1].role == "aira" and sent[1].final is True  # no Live bridge: the facts are the caption
         assert await sessions.notify("other-shop", "x") == 0
     finally:
         sessions.unregister(s)
@@ -250,6 +250,6 @@ async def test_notify_skips_a_broken_session():
     sessions.register(bad); sessions.register(good)
     try:
         assert await sessions.notify("sunrise_dairy", "Low stock", cue="warn") == 1
-        assert sent[-1].cue == "warn"
+        assert [m.cue for m in sent if m.t == "cue"] == ["warn"]
     finally:
         sessions.unregister(bad); sessions.unregister(good)

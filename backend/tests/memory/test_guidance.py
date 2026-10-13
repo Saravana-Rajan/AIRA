@@ -23,10 +23,17 @@ NOW = datetime(2026, 10, 14, 9, 0, tzinfo=UTC)
 
 @pytest.fixture
 def spoken(monkeypatch):
-    said = []
+    """Records ``(text, cue)`` of every notify; ``spoken.urgent`` the texts that were urgent."""
+    class Said(list):
+        urgent: list = []
 
-    async def notify(shop_id, text, cue="ack"):
+    said = Said()
+    said.urgent = []
+
+    async def notify(shop_id, text, cue="ack", urgent=False):
         said.append((text, cue))
+        if urgent:
+            said.urgent.append(text)
         return 1
 
     monkeypatch.setattr(guidance, "notify", notify)
@@ -153,7 +160,7 @@ async def test_step_announces_lost_once(session, fake_db, spoken, monkeypatch):
         await loop.step()
     lost = [s for s in spoken if s[0] == "I can't see the Sakthi curd. Turn slowly to the left."]
     assert len(lost) == 1 and lost[0][1] == "unsure"
-    assert len(spoken) == 1
+    assert len(spoken) == 1 and spoken.urgent == [lost[0][0]]   # a can't-see line cuts in
 
 
 async def test_lost_is_announced_again_after_a_hit(session, fake_db, spoken, monkeypatch):
@@ -272,6 +279,7 @@ async def test_guidance_stops_itself_after_max_time(session, fake_db, spoken, mo
     await asyncio.wait_for(loop.task, 1.0)
     assert loop.active is False and guidance.active(session) is None
     assert spoken[-1] == ("I stopped guiding. Ask me again when you are ready.", "warn")
+    assert spoken[-1][0] not in spoken.urgent   # stopping is not a safety line
     assert session.sent[-1].t == "request_frame" and session.sent[-1].stop is True
 
 
@@ -303,12 +311,16 @@ async def test_touch_correct_then_done(session, fake_db, spoken, monkeypatch):
         return IdentifyResult(sku="sakthi_curd_1l", confidence=0.9, alternatives=[])
 
     monkeypatch.setattr(guidance, "identify_product", ident)
-    await guidance.start(session, CURD, 2, CANDS, run=False)
+    loop = await guidance.start(session, CURD, 2, CANDS, run=False)
     session.frames.add(_frame("f1", 10.0))
-    await guidance.handle_client_event(session, "fingertip_in_target", {})
+    out = await loop.on_touch()
     assert spoken[-1] == ("Sakthi curd 1 L ✓. Take 1 more.", "match")
-    await guidance.handle_client_event(session, "fingertip_in_target", {})
+    assert out == {"verdict": "match", "item": "Sakthi curd 1 L", "sku": "sakthi_curd_1l", "picked": 1, "needed": 2,
+                   "remaining": 1, "say_en": "Sakthi curd 1 L ✓. Take 1 more."}
+    out = await loop.on_touch()
     assert spoken[-1] == ("Sakthi curd 1 L ✓. That's all 2.", "match")
+    assert out["verdict"] == "match" and out["picked"] == 2 and out["remaining"] == 0 and out["done"] is True
+    assert "say" not in out and spoken.urgent == []
     assert guidance.active(session) is None
     stop = session.sent[-1]
     assert stop.t == "request_frame" and stop.purpose == "guide" and stop.stop is True
@@ -323,8 +335,10 @@ async def test_touch_wrong_product_is_not_counted(session, fake_db, spoken, monk
     monkeypatch.setattr(guidance, "identify_product", ident)
     loop = await guidance.start(session, CURD, 1, CANDS, run=False)
     session.frames.add(_frame("f1", 10.0))
-    await guidance.handle_client_event(session, "fingertip_in_target", {})
+    out = await loop.on_touch()
     assert spoken[-1] == ("This is Aavin milk 500 ml, not Sakthi curd 1 L.", "mismatch")
+    assert out["verdict"] == "mismatch" and out["got"] == "Aavin milk 500 ml" and out["got_sku"] == "aavin_milk_500ml"
+    assert out["item"] == "Sakthi curd 1 L" and out["picked"] == 0 and out["confidence"] == 0.95
     assert loop.picked == 0 and guidance.active(session) is loop
 
 
@@ -335,9 +349,10 @@ async def test_touch_low_confidence_says_not_sure(session, fake_db, spoken, monk
     monkeypatch.setattr(guidance, "identify_product", ident)
     loop = await guidance.start(session, CURD, 1, CANDS, run=False)
     session.frames.add(_frame("f1", 10.0))
-    await guidance.handle_client_event(session, "fingertip_in_target", {})
+    out = await loop.on_touch()
     assert spoken[-1] == ("Not sure. Hold it closer to the camera.", "unsure")
-    assert loop.picked == 0
+    assert out["verdict"] == "unsure" and out["aim_hint"] == "hold_closer" and out["confidence"] == 0.4
+    assert loop.picked == 0 and out["picked"] == 0
 
 
 async def test_touch_look_alike_unsure_asks_for_the_label(session, fake_db, spoken, monkeypatch):
@@ -349,8 +364,9 @@ async def test_touch_look_alike_unsure_asks_for_the_label(session, fake_db, spok
     monkeypatch.setattr(guidance, "identify_product", ident)
     loop = await guidance.start(session, CURD, 1, [CURD, curd_small, MILK], run=False)
     session.frames.add(_frame("f1", 10.0))
-    await guidance.handle_client_event(session, "fingertip_in_target", {})
+    out = await loop.on_touch()
     assert spoken[-1] == ("Not sure. Turn the pack so the label faces the camera.", "unsure")
+    assert out["verdict"] == "unsure" and out["aim_hint"] == "show_label"
     assert loop.picked == 0
 
 
@@ -373,16 +389,17 @@ async def test_touch_vision_down_is_honest_and_not_counted(session, fake_db, spo
     monkeypatch.setattr(guidance, "identify_product", ident)
     loop = await guidance.start(session, CURD, 1, CANDS, run=False)
     session.frames.add(_frame("f1", 10.0))
-    await guidance.handle_client_event(session, "fingertip_in_target", {})
+    out = await loop.on_touch()
     assert spoken[-1] == ("I can't reach the AI right now. Please try again in a minute.", "warn")
+    assert out["verdict"] == "warn" and out["error"] == "live.unavailable"
     assert loop.picked == 0 and guidance.active(session) is loop
 
 
 async def test_touch_without_frame_warns(session, fake_db, spoken):
     loop = await guidance.start(session, CURD, 1, CANDS, run=False)
-    await guidance.handle_client_event(session, "fingertip_in_target", {})
+    out = await loop.on_touch()
     assert spoken[-1] == ("I can't see a camera picture. Please check the camera.", "warn")
-    assert loop.picked == 0
+    assert out["verdict"] == "warn" and out["error"] == "camera.none" and loop.picked == 0
 
 
 async def test_touch_uses_newest_guide_frame(session, fake_db, spoken, monkeypatch):
@@ -536,9 +553,7 @@ def test_item_label_does_not_repeat_the_pack_size():
 async def test_product_find_fresh_location_starts_guidance(find, fake_db):
     _location(fake_db, "sakthi_curd_1l")
     out = await products.product_find("curd", count_needed=2)
-    assert out == {"say": "Sakthi curd: last recorded on fridge 2, middle shelf, left. "
-                          "Hold your hand out and follow the beeps.",
-                   "found": True, "sku": "sakthi_curd_1l", "stale": False}
+    assert out["found"] is True and out["sku"] == "sakthi_curd_1l" and out["stale"] is False
     loop = guidance.active(find)
     assert loop.needed == 2 and loop.ref == CURD and {c.sku for c in loop.candidates} == {c.sku for c in CANDS}
     assert find.sent[-1].t == "request_frame" and find.sent[-1].continuous is True
@@ -550,22 +565,18 @@ async def test_product_find_fresh_location_starts_guidance(find, fake_db):
 async def test_product_find_model_location_is_never_fact(find, fake_db):
     _location(fake_db, "sakthi_curd_1l", confirmed_by="model")
     out = await products.product_find("curd")
-    assert out["stale"] is True and "may have moved" in out["say"]
-    assert out["say"].endswith("Hold your hand out and follow the beeps.")
+    assert out["found"] is True and out["stale"] is True and guidance.active(find).ref == CURD
 
 
 async def test_product_find_old_location_is_stale(find, fake_db):
     _location(fake_db, "sakthi_curd_1l", at=NOW - timedelta(days=4))
     out = await products.product_find("curd")
-    assert out["stale"] is True and out["say"].startswith(
-        "Sakthi curd was last recorded on fridge 2, middle shelf, left, but it may have moved.")
+    assert out["found"] is True and out["stale"] is True
 
 
 async def test_product_find_without_location_is_stale(find):
     out = await products.product_find("curd")
     assert out["found"] is True and out["stale"] is True
-    assert out["say"] == ("I don't have a saved place for Sakthi curd. Let me look with the camera. "
-                          "Hold your hand out and follow the beeps.")
     assert guidance.active(find).needed == 1
 
 
@@ -574,7 +585,6 @@ async def test_product_find_unknown_product_without_a_frame_starts_nothing(find,
     with no frame nothing starts and nothing is logged."""
     out = await products.product_find("paneer")
     assert out["found"] is False and out["free_text"] is True
-    assert out["say"] == "I can't see a camera picture. Please check the camera."
     assert find.requested == ["ask"] and guidance.active(find) is None
     assert not any(k[2] == "memoryEvents" for k in fake_db.store)
 
@@ -589,12 +599,6 @@ async def test_product_find_adds_ref_missing_from_shop_products(find, fake_db):
     del fake_db.store[("shops", "demo", "products", "sakthi_curd_1l")]
     await products.product_find("curd")
     assert "sakthi_curd_1l" in {c.sku for c in guidance.active(find).candidates}
-
-
-async def test_product_find_tamil(find):
-    find.lang = "ta"
-    out = await products.product_find("curd")
-    assert out["say"].endswith("கையை நீட்டி பீப் ஒலியைப் பின்தொடருங்கள்.")
 
 
 async def test_product_find_twice_replaces_the_first_guidance(find):
@@ -626,7 +630,6 @@ async def test_find_and_pick_two_curd_real_catalog(sunrise, fake_db, spoken, mon
     _location(fake_db, "sakthi_curd_1l", shop="sunrise_dairy")
     out = await products.product_find("Sakthi curd 1 litre", count_needed=2)
     assert out["found"] is True and out["sku"] == "sakthi_curd_1l" and out["stale"] is False
-    assert out["say"].startswith("Sakthi Curd 1 L: last recorded on fridge 2, middle shelf, left.")
     loop = guidance.active(sunrise)
     assert len(loop.candidates) == 10
 
@@ -653,7 +656,7 @@ async def test_find_and_pick_two_curd_real_catalog(sunrise, fake_db, spoken, mon
         ("Sakthi Curd 1 L ✓. Take 1 more.", "match"),
         ("Sakthi Curd 1 L ✓. That's all 2.", "match"),
     ]
-    assert guidance.active(sunrise) is None
+    assert spoken.urgent == [] and guidance.active(sunrise) is None
 
 
 # --- registry -------------------------------------------------------------------------------------------------------

@@ -4,8 +4,11 @@
 2. Each tick points ER 2 at the target on the newest frame and sends a ``target`` message; the app plays tones.
 3. The app reports ``fingertip_in_target``; AIRA identifies the touched pack and speaks the verdict.
 
-The loop only guides and verifies a pick; it never writes stock or money. Below the confidence thresholds AIRA
-says "Not sure" and never counts a guess. ``main.py`` calls ``handle_client_event`` for every client ``event``
+Every spoken line goes through ``sessions.notify`` as English FACTS (the bridge has Live say it in the owner's
+language); "I can't see …" is urgent. Verdicts are returned as facts too (``verdict``, ``picked``, ``needed``).
+
+The loop only guides and verifies a pick; it never writes stock or money. Below the confidence thresholds the
+verdict is "unsure" and never counts a guess. ``main.py`` calls ``handle_client_event`` for every client ``event``
 and ``stop_guidance`` on a ``stop`` message and on disconnect.
 """
 import asyncio
@@ -15,7 +18,6 @@ import time
 
 from aira_live import monitor
 from aira_live.contracts import RequestFrameMsg, TargetMsg
-from aira_live.i18n import t
 from aira_live.memory import episodic
 from aira_live.sessions import notify
 from aira_live.vision.gemini import VisionError
@@ -29,6 +31,14 @@ MIN_ID_CONF = 0.6      # count a pick only at or above this
 LOST_AFTER = 3         # ticks without a target before "I can't see …" (spoken once per loss)
 MAX_GUIDE_S = 120.0    # an unattended loop stops itself: no endless ER 2 calls
 FREE_PREFIX = "free:"  # sku of a free-text item ("water bottle"): not a catalog product, verified by its words
+
+# English meaning hints (never translated here: Live phrases them)
+START_HINT = "Hold your hand out and follow the beeps."
+TIMEOUT_HINT = "I stopped guiding. Ask me again when you are ready."
+NO_CAMERA = "I can't see a camera picture. Please check the camera."
+UNAVAILABLE = "I can't reach the AI right now. Please try again in a minute."
+UNSURE = "Not sure. Hold it closer to the camera."
+UNSURE_LABEL = "Not sure. Turn the pack so the label faces the camera."
 
 _ACTIVE: dict[str, "GuidanceLoop"] = {}
 _SIZE = re.compile(r"^\s*(\d+(?:\.\d+)?)\s*(ml|l|kg|g)\b", re.IGNORECASE)
@@ -101,7 +111,8 @@ class GuidanceLoop:
             self.misses += 1
             if self.misses == LOST_AFTER:
                 monitor.guidance_lost(s, self.ref.name)
-                await notify(s.shop_id, t("guide.lost", s.lang, name=self.ref.name), cue="unsure")
+                await notify(s.shop_id, f"I can't see the {self.ref.name}. Turn slowly to the left.", cue="unsure",
+                             urgent=True)
         return self.active
 
     def _found(self) -> None:
@@ -115,7 +126,7 @@ class GuidanceLoop:
             if time.monotonic() >= deadline:
                 if await self._finish():
                     s = self.session
-                    await notify(s.shop_id, t("guide.timeout", s.lang), cue="warn")
+                    await notify(s.shop_id, TIMEOUT_HINT, cue="warn")
                 return
             try:
                 if not await self.step():
@@ -143,30 +154,32 @@ class GuidanceLoop:
         s = self.session
         frames = s.frames.latest(1, purpose="guide")
         if not frames:
-            return await self._say(t("camera.none", s.lang), "warn")
+            return await self._say(NO_CAMERA, "warn", error="camera.none")
         if self.free_text:
             return await self._verify_free_text(frames[-1])
         try:
             res = await identify_product(frames[-1], self.candidates)
         except VisionError as exc:
             log.warning("guidance: identify failed for %s: %s", self.ref.sku, exc)
-            return await self._say(t("live.unavailable", s.lang), "warn") if self.active else None
+            return await self._say(UNAVAILABLE, "warn", error="live.unavailable") if self.active else None
         if not self.active:
             return None
         got = next((c for c in self.candidates if c.sku == res.sku), None)
         if got is None or res.confidence < MIN_ID_CONF:
-            key = "pick.unsure_label" if next_hint(res, self.candidates) == "vision.aim.show_label" else "pick.unsure"
-            return await self._say(t(key, s.lang), "unsure")
+            show_label = next_hint(res, self.candidates) == "vision.aim.show_label"
+            return await self._say(UNSURE_LABEL if show_label else UNSURE, "unsure", confidence=res.confidence,
+                                   aim_hint="show_label" if show_label else "hold_closer")
         if got.sku != self.ref.sku:
-            return await self._say(t("pick.wrong", s.lang, got=_item(got), want=_item(self.ref)), "mismatch")
+            return await self._say(f"This is {_item(got)}, not {_item(self.ref)}.", "mismatch",
+                                   got=_item(got), got_sku=got.sku, confidence=res.confidence)
         self.picked += 1
         self._found()
         remaining = self.needed - self.picked
         if remaining > 0:
-            return await self._say(t("pick.ok_more", s.lang, item=_item(self.ref), n=remaining), "match")
+            return await self._say(f"{_item(self.ref)} ✓. Take {remaining} more.", "match", remaining=remaining)
         await self._finish()
         await episodic.log(s.shop_id, "pick", f"Picked {self.needed} x {_item(self.ref)}", "product", self.ref.sku)
-        return await self._say(t("pick.ok_done", s.lang, item=_item(self.ref), n=self.needed), "match")
+        return await self._say(f"{_item(self.ref)} ✓. That's all {self.needed}.", "match", remaining=0, done=True)
 
     async def _verify_free_text(self, frame) -> dict | None:
         """Free-text item (spec §4): ask ER 2 whether the touched object is what the owner named.
@@ -179,25 +192,28 @@ class GuidanceLoop:
             res = await identify_free_text(frame, item)
         except VisionError as exc:
             log.warning("guidance: free-text identify failed for %r: %s", item, exc)
-            return await self._say(t("live.unavailable", s.lang), "warn") if self.active else None
+            return await self._say(UNAVAILABLE, "warn", error="live.unavailable") if self.active else None
         if not self.active:
             return None
         if not res.match:
             if res.seen and res.confidence >= MIN_ID_CONF:
-                return await self._say(t("pick.free_wrong", s.lang, seen=res.seen, item=item), "mismatch")
-            return await self._say(t("pick.unsure", s.lang), "unsure")
+                return await self._say(f"That looks like {res.seen}, not the {item}.", "mismatch", got=res.seen,
+                                       confidence=res.confidence)
+            return await self._say(UNSURE, "unsure", confidence=res.confidence, aim_hint="hold_closer")
         self.picked += 1
         self._found()
         remaining = self.needed - self.picked
         if remaining > 0:
-            return await self._say(t("pick.ok_more", s.lang, item=item, n=remaining), "match")
+            return await self._say(f"{item} ✓. Take {remaining} more.", "match", remaining=remaining)
         await self._finish()
         await episodic.log(s.shop_id, "pick", f"Picked {self.needed} x {item}", "free_text", item)
-        return await self._say(t("pick.free_ok", s.lang, item=item), "match")
+        return await self._say(f"That's the {item}.", "match", remaining=0, done=True)
 
-    async def _say(self, text: str, cue: str) -> dict:
+    async def _say(self, text: str, cue: str, **facts) -> dict:
+        """Speak the English verdict through the notify path and return it as facts (``verdict`` is the cue)."""
         await notify(self.session.shop_id, text, cue=cue)
-        return {"say": text, "picked": self.picked, "needed": self.needed}
+        return {"verdict": cue, "item": _item(self.ref), "sku": self.ref.sku, "picked": self.picked,
+                "needed": self.needed, **facts, "say_en": text}
 
     async def _finish(self) -> bool:
         """Stop this loop and unregister it, unless a newer loop already replaced it. True if it was running."""

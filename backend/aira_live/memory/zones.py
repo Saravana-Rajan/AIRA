@@ -1,27 +1,16 @@
-"""Canonical shop zones: 'fridge two, middle shelf, left' <-> 'fridge2/middle/left' <-> speech.
+"""Canonical shop zones: 'fridge two, middle shelf, left' <-> 'fridge2/middle/left' <-> English words.
 
-``normalize_zone`` reads English words (the Live tool asks the model to pass the place in English).
+``normalize_zone`` reads English words (the Live tool asks the model to pass the place in English);
+``speak_zone`` gives the English reading that Live phrases in the owner's language.
 """
 import re
-
-from aira_live.contracts import Lang
 
 _NUM = {"one": "1", "two": "2", "three": "3", "four": "4", "five": "5",
         "six": "6", "seven": "7", "eight": "8", "nine": "9", "ten": "10"}
 _ALIAS = {"centre": "center", "mid": "middle", "upper": "top", "lower": "bottom", "fridges": "fridge"}
 _SKIP = {"shelf", "shelves", "the", "on", "in", "of", "side", "at", "number", "no"}
 _CONTAINERS = {"fridge", "freezer", "rack", "counter", "cupboard", "box"}
-_WORDS: dict[str, dict[str, str]] = {
-    "en": {"fridge": "fridge", "freezer": "freezer", "rack": "rack", "counter": "counter",
-           "cupboard": "cupboard", "box": "box", "top": "top shelf", "middle": "middle shelf",
-           "bottom": "bottom shelf", "left": "left", "right": "right", "center": "centre"},
-    "ta": {"fridge": "ஃப்ரிட்ஜ்", "freezer": "ஃப்ரீசர்", "rack": "ரேக்", "counter": "கவுண்டர்",
-           "cupboard": "அலமாரி", "box": "பெட்டி", "top": "மேல் அலமாரி", "middle": "நடு அலமாரி",
-           "bottom": "கீழ் அலமாரி", "left": "இடது", "right": "வலது", "center": "நடுவில்"},
-    "hi": {"fridge": "फ्रिज", "freezer": "फ्रीज़र", "rack": "रैक", "counter": "काउंटर",
-           "cupboard": "अलमारी", "box": "डिब्बा", "top": "ऊपर की शेल्फ़", "middle": "बीच की शेल्फ़",
-           "bottom": "नीचे की शेल्फ़", "left": "बाएँ", "right": "दाएँ", "center": "बीच में"},
-}
+_WORDS = {"top": "top shelf", "middle": "middle shelf", "bottom": "bottom shelf", "center": "centre"}
 
 
 def normalize_zone(text: str) -> str:
@@ -42,15 +31,14 @@ def normalize_zone(text: str) -> str:
     return "/".join(out)
 
 
-def speak_zone(zone: str, lang: Lang) -> str:
-    """'fridge2/middle/left' -> 'fridge 2, middle shelf, left' in ta/hi/en (unknown languages use English)."""
-    words = _WORDS.get(lang, _WORDS["en"])
+def speak_zone(zone: str, lang: str = "en") -> str:
+    """'fridge2/middle/left' -> 'fridge 2, middle shelf, left' (English; ``lang`` is ignored, Live translates)."""
     parts = []
     for part in zone.split("/"):
         m = re.fullmatch(r"([a-z]+)(\d+)", part)
         if m:
             base, num = m.groups()
-            parts.append(f"{words.get(base, base)} {num}")
+            parts.append(f"{base} {num}")
         else:
-            parts.append(words.get(part, part))
+            parts.append(_WORDS.get(part, part))
     return ", ".join(parts)

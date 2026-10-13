@@ -1,7 +1,7 @@
 """Spatial memory: where each product was last recorded (spec §5 shops/{shopId}/locations/{sku}).
 
 A saved location is not proof the product is still there: a location the model observed, or one the owner
-confirmed more than 3 days ago, is stale and is only ever spoken as "may have moved".
+confirmed more than 3 days ago, is stale and is only ever reported as "may have moved" (``stale`` fact).
 """
 import logging
 from datetime import datetime, timedelta, timezone
@@ -10,8 +10,6 @@ from typing import Literal
 from pydantic import BaseModel, Field, ValidationError, field_validator
 
 from aira_live import db as dbmod
-from aira_live.contracts import Lang
-from aira_live.i18n import t
 from aira_live.memory.zones import speak_zone
 
 log = logging.getLogger(__name__)
@@ -69,9 +67,22 @@ def is_stale(loc: Location, now: datetime) -> bool:
     return loc.confirmed_by != "user" or (now - loc.confirmed_at) > STALE_AFTER
 
 
-def describe_location(name: str, loc: Location | None, lang: Lang, now: datetime) -> str:
-    """One spoken sentence: fresh place, stale place ("may have moved"), or no saved place."""
+def location_facts(loc: Location | None, now: datetime) -> dict:
+    """Facts for a tool result: {"zone", "zone_text", "stale", "confirmed_by", "confirmed_at"} (all None but
+    ``stale`` True when there is no saved place)."""
     if loc is None:
-        return t("loc.none", lang, name=name)
-    key = "loc.stale" if is_stale(loc, now) else "loc.fresh"
-    return t(key, lang, name=name, zone=speak_zone(loc.zone, lang))
+        return {"zone": None, "zone_text": None, "stale": True, "confirmed_by": None, "confirmed_at": None}
+    return {"zone": loc.zone, "zone_text": speak_zone(loc.zone), "stale": is_stale(loc, now),
+            "confirmed_by": loc.confirmed_by, "confirmed_at": loc.confirmed_at.isoformat()}
+
+
+def describe_location(name: str, loc: Location | None, lang: str = "en", now: datetime | None = None) -> str:
+    """One English line (a ``say_en`` hint): fresh place, stale place ("may have moved"), or no saved place.
+    ``lang`` is ignored: Live phrases it."""
+    now = now or _utcnow()
+    if loc is None:
+        return f"I don't have a saved place for {name}. Let me look with the camera."
+    zone = speak_zone(loc.zone)
+    if is_stale(loc, now):
+        return f"{name} was last recorded on {zone}, but it may have moved. I'll check with the camera."
+    return f"{name}: last recorded on {zone}."

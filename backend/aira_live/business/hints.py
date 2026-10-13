@@ -1,36 +1,42 @@
-"""Engine outcome code -> i18n key. Tools speak hints.say(code, lang, **kw); the engine never builds sentences.
+"""Engine outcome code -> facts for the Live model. The engine never builds sentences, and neither do tools.
 
-The keys live in aira_live/i18n/{en,ta,hi}.json. Extra keyword arguments are allowed and ignored by sentences
-that do not use them, so a tool can pass everything it knows (product, name, expected, actual, ...).
+``fact(code, **kw)`` is what a tool returns for an engine outcome: ``{"ok": False, "error": code, **kw,
+"say_en": <short English meaning>}``. Gemini Live phrases it to the owner in whatever language he is speaking;
+``say_en`` is only a meaning hint (and the caption when no Live session is attached). Extra keyword arguments
+are kept as facts and ignored by meanings that do not use them, so a tool can pass everything it knows.
 """
-from aira_live import i18n
 
 HINTS: dict[str, str] = {
-    "InsufficientStock": "biz.stock.insufficient",             # product, have
-    "InsufficientTender": "biz.cash.short",                    # short
-    "PaymentMismatch": "biz.payment.mismatch",
-    "InvalidTransition": "biz.state.invalid",
-    "SHORT_DELIVERY": "biz.delivery.short",                    # product, expected, actual
-    "OVER_DELIVERY": "biz.delivery.over",                      # product, expected, actual
-    "UNORDERED_ITEM": "biz.delivery.unordered",                # product
-    "INVOICE_UNREADABLE": "biz.invoice.unreadable",
-    "UNKNOWN_INVOICE_LINE": "biz.invoice.unknown_line",        # name
-    "INVOICE_QTY_MISMATCH": "biz.invoice.qty_mismatch",        # product, expected, actual
-    "PRICE_MISMATCH": "biz.invoice.price_mismatch",            # product, expected, actual
-    "LINE_TOTAL_MISMATCH": "biz.invoice.line_total_mismatch",  # product
-    "TOTAL_MISMATCH": "biz.invoice.total_mismatch",            # expected, actual
-    "PRODUCT_AMBIGUOUS": "biz.product.ambiguous",              # options
-    "PRODUCT_UNKNOWN": "biz.product.unknown",
-    "SUPPLIER_UNKNOWN": "biz.supplier.unknown",
-    "SOUNDBOX_UNSURE": "biz.upi.unsure",
+    "InsufficientStock": "Only {have} of {product} in stock.",
+    "InsufficientTender": "That is {short} rupees short.",
+    "PaymentMismatch": "The payment does not match. Please check again.",
+    "InvalidTransition": "That step cannot be done now.",
+    "SHORT_DELIVERY": "{product}: ordered {expected}, counted {actual}. Short delivery.",
+    "OVER_DELIVERY": "{product}: ordered {expected}, counted {actual}. Extra items.",
+    "UNORDERED_ITEM": "{product} was not in the order.",
+    "INVOICE_UNREADABLE": "Could not read the bill clearly; ask the owner to show it again.",
+    "UNKNOWN_INVOICE_LINE": "The bill has an item that was not ordered: {name}.",
+    "INVOICE_QTY_MISMATCH": "Bill says {actual} {product}, but {expected} arrived.",
+    "PRICE_MISMATCH": "Bill price for {product} is {actual} rupees, agreed price is {expected}.",
+    "LINE_TOTAL_MISMATCH": "The line total for {product} is wrong on the bill.",
+    "TOTAL_MISMATCH": "Bill total is {actual} rupees, but the items add up to {expected}.",
+    "PRODUCT_AMBIGUOUS": "Which one: {options}?",
+    "PRODUCT_UNKNOWN": "That product is not in the shop's catalog.",
+    "SUPPLIER_UNKNOWN": "That vendor is not known.",
+    "SOUNDBOX_UNSURE": "The payment confirmation was not heard clearly.",
 }
 
 
-def key_for(code: str) -> str:
-    """The i18n key for an engine code. Raises KeyError for an unknown code."""
-    return HINTS[code]
+def english(code: str, **kw) -> str:
+    """The short English meaning of an engine code. Raises KeyError for an unknown code."""
+    text = HINTS[code]
+    try:
+        return text.format(**kw)
+    except (KeyError, IndexError, ValueError):
+        return text
 
 
-def say(code: str, lang: str, **kw) -> str:
-    """The spoken sentence for an engine code: exactly aira_live.i18n.t(key_for(code), lang, **kw)."""
-    return i18n.t(HINTS[code], lang, **kw)
+def fact(code: str, **kw) -> dict:
+    """The tool result for an engine outcome: ``ok`` False, the code, every fact given, and the English meaning.
+    Raises KeyError for an unknown code."""
+    return {"ok": False, "error": code, **kw, "say_en": english(code, **kw)}

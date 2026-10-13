@@ -132,7 +132,7 @@ class RateLimiter:
 
 # Free-form user content (what the owner said or typed, prompts, spoken replies). Logged only when
 # AIRA_DIAG_CONTENT=1 (turn it on briefly to debug); otherwise only its length is kept.
-CONTENT_KEYS = frozenset({"text", "prompt", "say", "answer", "value", "message_text"})
+CONTENT_KEYS = frozenset({"text", "prompt", "say", "say_en", "answer", "value", "message_text"})
 
 
 def content_enabled() -> bool:

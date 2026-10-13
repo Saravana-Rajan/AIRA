@@ -6,7 +6,7 @@ lines may use other units (packets of a litre product, kg of a pack product); th
 size (from packSizeL/packSizeG, else from the size in the item name). Bill-side discrepancies are reported in the
 bill's own units so a tool can read them back as printed.
 
-compare() returns codes only; tools speak them with business.hints.say(kind, lang, ...).
+compare() returns codes only; tools return them as facts with business.hints.fact(kind, ...).
 A bill line is booked against an order line only when its name and size match one item clearly; otherwise it is
 reported as UNKNOWN_INVOICE_LINE and never guessed. An invoice whose two reads disagree is never used.
 """

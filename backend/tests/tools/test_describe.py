@@ -6,7 +6,6 @@ import pytest
 from aira_live import prompt, sessions
 from aira_live.contracts import RequestFrameMsg, TranscriptMsg
 from aira_live.frames import Frame
-from aira_live.i18n import t
 from aira_live.session import current_session
 from aira_live.tools import TOOLS_BY_NAME, describe
 from aira_live.vision import observers
@@ -42,7 +41,6 @@ def session(mk_session):
     describe._ACTIVE.clear()
     from aira_live.tools import ambient
     ambient._ACTIVE.clear()
-    ambient._SWITCH.clear()
 
 
 @pytest.fixture
@@ -90,33 +88,6 @@ def test_registered_as_a_live_tool_with_a_prompt_rule():
     assert TOOLS_BY_NAME["describe_mode"] is describe.describe_mode
     text = prompt.render_prompt({"name": "Sunrise Dairy"}, [], [], "en", "short")
     assert "describe_mode" in text and "Stop describing" in text
-
-
-@pytest.mark.parametrize("text, want", [
-    ("describe as I walk", True), ("keep telling me what's around", True), ("Describe what is around me", True),
-    ("stop describing", False), ("enough describing", False), ("please stop, don't describe", False),
-    ("what is in front of me", None), ("", None), ("நடக்கும்போது விவரி", True), ("விவரிப்பதை நிறுத்து", False),
-    ("चलते हुए बताते रहो", True),
-])
-def test_voice_trigger_parsing(text, want):
-    assert describe.parse_describe_command(text) is want
-
-
-def test_i18n_keys_exist_in_all_three_languages():
-    for lang in ("en", "ta", "hi"):
-        for key in ("describe.on", "describe.off", "describe.item", "describe.timeout", "describe.cap"):
-            assert t(key, lang) != key, (key, lang)
-
-
-# --- phrasing: direction and distance ------------------------------------------------------------------------
-
-
-def test_phrase_side_and_distance_in_the_session_language():
-    assert describe.phrase(_obj("milk crates", x=150, distance="far"), "en") == "Milk crates to your far left, a few steps away."
-    assert describe.phrase(_obj("table", x=500, distance="arm"), "en") == "Table straight ahead, at arm's length."
-    assert describe.phrase(_obj("fridge", x=850, distance="near"), "en") == "Fridge to your far right, within arm's reach."
-    ta = describe.phrase(_obj("fridge", x=850, distance="near"), "ta")
-    assert t("cam.side.far_right", "ta") in ta and t("cam.dist.near", "ta") in ta
 
 
 def test_coarse_side_is_left_ahead_right():
@@ -250,7 +221,7 @@ async def test_low_confidence_people_and_safe_words_are_never_spoken(session, er
     s.frames.add(_frame(2))
     await loop.step()
     assert _spoken(rec) == []
-    assert "safe" not in " ".join(t(k, "en") for k in ("describe.on", "describe.off", "describe.item")).lower()
+    assert "safe" not in " ".join((describe.ON_EN, describe.OFF_EN, describe.phrase(_obj("table")))).lower()
 
 
 async def test_vision_failure_is_logged_and_the_loop_goes_on(session, er2):
@@ -284,17 +255,17 @@ async def test_every_er2_result_reaches_the_vision_observers(session, er2, monke
 async def test_describe_mode_tool_starts_continuous_frames_and_stop_ends_them(session, fake_db):
     s, rec = session
     out = await describe.describe_mode(True)
-    assert out == {"say": t("describe.on", "en"), "active": True}
+    assert out == {"ok": True, "active": True, "say_en": describe.ON_EN}
     loop = describe.active(s)
     assert loop is not None and loop.active and loop.task is not None
     assert _frame_requests(rec) == [("describe", True, None)]
     out = await describe.describe_mode(False)
-    assert out == {"say": t("describe.off", "en"), "active": False}
+    assert out == {"ok": True, "active": False, "say_en": describe.OFF_EN}
     assert describe.active(s) is None and not loop.active
     assert _frame_requests(rec)[-1] == ("describe", None, True)
     await asyncio.sleep(0)
     assert loop.task.cancelled() or loop.task.done()
-    assert await describe.describe_mode(False) == {"say": t("describe.off", "en"), "active": False}  # idempotent
+    assert await describe.describe_mode(False) == {"ok": True, "active": False, "say_en": describe.OFF_EN}  # idempotent
 
 
 async def test_a_second_start_replaces_the_first(session):
@@ -305,15 +276,17 @@ async def test_a_second_start_replaces_the_first(session):
     await describe.stop_describe(s)
 
 
-async def test_stop_describing_by_voice_ends_the_loop(session):
+async def test_words_never_stop_the_loop_only_the_model_does(session):
+    """No stop-word matching: "stop describing" in any language is the model's describe_mode(on=False)."""
     s, rec = session
     loop = await describe.start(s, run=False, busy=lambda: False)
     from aira_live.live_bridge import _listeners
-    assert loop.on_utterance in _listeners[s.session_id]
+    assert loop.on_utterance in _listeners[s.session_id]                 # kept only to pause while he talks
     await loop.on_utterance("stop describing now")
-    assert not loop.active and describe.active(s) is None
-    assert _spoken(rec)[-1] == t("describe.off", "en")
-    assert s.session_id not in _listeners                                # unsubscribed
+    assert loop.active and describe.active(s) is loop
+    assert not hasattr(describe, "parse_describe_command")
+    await describe.stop_describe(s)
+    assert not loop.active and s.session_id not in _listeners            # unsubscribed
 
 
 async def test_auto_stop_after_the_time_limit(session):
@@ -324,7 +297,7 @@ async def test_auto_stop_after_the_time_limit(session):
     clock.t += 600.1
     await loop.run()
     assert not loop.active and describe.active(s) is None
-    assert _spoken(rec) == [t("describe.timeout", "en")]
+    assert _spoken(rec) == [describe.TIMEOUT_EN]
     assert _frame_requests(rec)[-1] == ("describe", None, True)
 
 
@@ -340,7 +313,7 @@ async def test_cap_on_er2_calls_stops_the_mode(session, er2):
     s.frames.add(_frame(3))
     assert await loop.step() is False
     assert loop.calls == 2 and not loop.active and describe.active(s) is None
-    assert _spoken(rec) == [t("describe.cap", "en")]
+    assert _spoken(rec) == [describe.CAP_EN]
 
 
 async def test_loop_stops_itself_when_the_session_is_gone(session):
@@ -360,7 +333,8 @@ async def test_no_frame_means_no_call_and_no_speech(session, er2):
     assert loop.calls == 0 and _spoken(rec) == []
 
 
-async def test_language_follows_the_session(mk_session, er2):
+async def test_lines_are_english_facts_whatever_the_session_language(mk_session, er2):
+    """A Tamil session gets the same English facts; Live says them in Tamil. The caption is tagged English."""
     s, rec = mk_session(lang="ta")
     sessions.register(s)
     try:
@@ -368,11 +342,32 @@ async def test_language_follows_the_session(mk_session, er2):
         er2.feed({"objects": [_obj("table", x=500, distance="arm")], "confidence": 0.9})
         s.frames.add(_frame(1))
         await loop.step()
-        assert _spoken(rec) == [t("describe.item", "ta", label="Table", side=t("cam.side.centre", "ta"),
-                                  dist=t("cam.dist.arm", "ta"))]
-        assert rec.msgs[0].lang == "ta"
+        assert _spoken(rec) == ["Table straight ahead, at arm's length."]
+        assert rec.msgs[0].lang == "en"
     finally:
         sessions.unregister(s)
+
+
+async def test_lines_reach_the_live_bridge_as_a_non_urgent_notice(session, er2):
+    s, rec = session
+
+    class Bridge:
+        _answering = False
+        _in_partial = ""
+
+        def __init__(self):
+            self.notices = []
+
+        async def speak_notice(self, text, **kw):
+            self.notices.append((text, kw.get("urgent", False)))
+
+    b = Bridge()
+    sessions.attach_bridge(s.session_id, b)
+    loop = _loop(s, Clock())
+    er2.feed({"objects": [_obj("keyboard", x=700, distance="near")], "confidence": 0.9})
+    s.frames.add(_frame(1))
+    await loop.step()
+    assert b.notices == [("Keyboard to your right, within arm's reach.", False)]
 
 
 @pytest.mark.parametrize("error", [RuntimeError('Cannot call "send" once a close message has been sent'),

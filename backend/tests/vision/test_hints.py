@@ -1,31 +1,5 @@
-import json
-from pathlib import Path
-
-from aira_live.i18n import t
+"""Aim hints: a fixed key set with a short English meaning each (Live phrases it in the owner's language)."""
 from aira_live.vision.hints import HINT_KEYS, HINTS, hint_text
-
-LANGS = ("en", "ta", "hi")
-I18N_DIR = Path(__file__).resolve().parents[2] / "aira_live" / "i18n"
-
-
-def test_every_hint_has_three_languages():
-    assert set(HINTS) == set(HINT_KEYS)
-    for key, entry in HINTS.items():
-        for lang in LANGS:
-            assert entry.get(lang), f"{key} missing {lang}"
-
-
-def test_hint_text_fallbacks():
-    assert hint_text("", "ta") == ""
-    assert hint_text("vision.aim.unknown", "en") == ""
-    assert hint_text("vision.aim.move_back", "fr") == HINTS["vision.aim.move_back"]["en"]
-    assert hint_text("vision.aim.move_back", "ta") == HINTS["vision.aim.move_back"]["ta"]
-
-
-def test_hint_text_is_a_thin_wrapper_over_i18n():
-    for key in HINT_KEYS:
-        for lang in LANGS:
-            assert hint_text(key, lang) == t(key, lang)
 
 
 def test_hint_keys_match_the_interface_list():
@@ -35,14 +9,15 @@ def test_hint_keys_match_the_interface_list():
     }
 
 
-def test_hint_keys_are_in_every_shipped_catalog():
-    for lang in LANGS:
-        catalog = json.loads((I18N_DIR / f"{lang}.json").read_text(encoding="utf-8"))
-        missing = [k for k in HINT_KEYS if not catalog.get(k)]
-        assert missing == [], f"{lang}.json missing {missing}"
-
-
-def test_languages_are_really_translated():
+def test_every_key_has_a_short_english_meaning():
+    assert set(HINTS) == set(HINT_KEYS)
     for key in HINT_KEYS:
-        assert HINTS[key]["ta"] != HINTS[key]["en"]
-        assert HINTS[key]["hi"] != HINTS[key]["en"]
+        text = hint_text(key)
+        assert text and text == HINTS[key] and text.endswith(".") and text.isascii(), key
+
+
+def test_hint_text_ignores_the_language_and_handles_unknown_keys():
+    assert hint_text("") == "" and hint_text("", "ta") == ""
+    assert hint_text("vision.aim.unknown") == "" and hint_text("vision.aim.unknown", "en") == ""
+    assert hint_text("vision.aim.move_back", "ta") == hint_text("vision.aim.move_back", "fr") == \
+        hint_text("vision.aim.move_back") == "Move the phone back a little."

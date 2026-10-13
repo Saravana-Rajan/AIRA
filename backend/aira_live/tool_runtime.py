@@ -30,7 +30,7 @@ def tools_running(session_id: str) -> int:
     """How many wrapped tool calls of ``session_id`` are running now."""
     return _RUNNING.get(session_id, 0)
 # Result keys worth a log line (never the whole result: a count may carry frames or long lists).
-_LOGGED_RESULT_KEYS = ("say", "aim_hint", "confidence", "kind", "needs_confirm", "confirm_id", "error", "ok")
+_LOGGED_RESULT_KEYS = ("say", "say_en", "approx", "aim_hint", "confidence", "kind", "needs_confirm", "confirm_id", "error", "ok")
 
 
 def _args_summary(sig: inspect.Signature, args: tuple, kwargs: dict) -> Any:

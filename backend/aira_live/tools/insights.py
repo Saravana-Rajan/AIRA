@@ -2,6 +2,8 @@
 
 Both only read and suggest. Ordering goes through Kanish's order_create, which runs its own read-back
 confirmation, so there is no double confirm here. No forecast means no number: AIRA says it lacks history.
+Results are facts (exact counts, rupees, product and supplier names) plus a short English ``say_en``; Gemini
+Live phrases them in whatever language the owner is speaking.
 """
 from __future__ import annotations
 
@@ -10,10 +12,11 @@ import logging
 
 from aira_live.analytics import forecast, summary
 from aira_live.db import db
-from aira_live.i18n import t
 from aira_live.session import get_session
 
 log = logging.getLogger(__name__)
+
+UNAVAILABLE = "I can't read the shop records right now. Please try again."
 
 
 # business.catalog / business.ledger (Kanish) are imported at call time so the tool registry still loads
@@ -47,18 +50,26 @@ def _fmt(n: float) -> str:
 
 
 async def day_summary() -> dict:
-    """Say today's sales, top sellers and suggested orders."""
+    """Today's sales count, revenue in rupees, top seller and suggested orders, as facts."""
     s = get_session()
     try:
         d = await summary.today(s.shop_id)
     except Exception as exc:  # never invent numbers when the records can't be read
         log.warning("day_summary: read failed for %s: %s", s.shop_id, exc)
-        return {"say": t("insights.unavailable", s.lang), "error": "unavailable"}
-    return {"say": summary.say(d, s.lang), **d}
+        return {"ok": False, "error": "unavailable", "say_en": UNAVAILABLE}
+    return {"ok": True, **d, **summary.facts(d)}
 
 
-def _none(say: str) -> dict:
-    return {"say": say, "suggestions": [], "next_tool": None}
+def _none(say_en: str, **facts) -> dict:
+    return {"ok": True, **facts, "suggestions": [], "next_tool": None, "say_en": say_en}
+
+
+def _suggestion_en(x: dict) -> str:
+    on_hand = summary.amount(x["on_hand"], x["unit"], _fmt)
+    forecast_amt = summary.amount(x["forecast"], x["unit"], _fmt)
+    qty = summary.amount(x["qty"], x["unit"], _fmt)
+    line = f"{x['name']}: {on_hand} left, you sell about {forecast_amt} a day. Order {qty}"
+    return f"{line} from {x['supplier']}?" if x["supplier"] else f"{line}?"
 
 
 async def reorder_suggest(product: str | None = None) -> dict:
@@ -69,7 +80,8 @@ async def reorder_suggest(product: str | None = None) -> dict:
         if product:
             ref = await _resolve(s.shop_id, product, s.lang)
             if ref is None:
-                return _none(t("insights.unknown_product", s.lang, name=product))
+                return {**_none(f"{product} is not in the shop's catalog.", product=product), "ok": False,
+                        "error": "unknown_product"}
             skus = [ref.sku]
             products.setdefault(ref.sku, {"name": getattr(ref, "name", ref.sku)})
         else:
@@ -80,7 +92,7 @@ async def reorder_suggest(product: str | None = None) -> dict:
         )
     except Exception as exc:  # never invent numbers when the records can't be read
         log.warning("reorder_suggest: read failed for %s: %s", s.shop_id, exc)
-        return {**_none(t("insights.unavailable", s.lang)), "error": "unavailable"}
+        return {**_none(UNAVAILABLE), "ok": False, "error": "unavailable"}
 
     suggestions, any_history = [], False
     for sku, fc, on in zip(skus, forecasts, stocks):
@@ -95,18 +107,13 @@ async def reorder_suggest(product: str | None = None) -> dict:
                                 "unit": product.get("unit") or summary.DEFAULT_UNIT,
                                 "supplier": suppliers.get(sku), "forecast": fc, "on_hand": on})
     if not any_history:
-        return _none(t("insights.not_enough_data", s.lang))
+        return _none("Not enough sales history yet to suggest an order.", reason="not_enough_data")
     if not suggestions:
-        return _none(t("insights.nothing_to_order", s.lang))
+        return _none("Stock looks fine. Nothing to order now.", reason="nothing_to_order")
 
-    def amount(x: dict, field: str) -> str:
-        return summary.amount(x[field], x["unit"], s.lang, _fmt)
-
-    lines = [
-        t("insights.reorder_item" if x["supplier"] else "insights.reorder_item_no_supplier", s.lang,
-          name=x["name"], on_hand=amount(x, "on_hand"), forecast=amount(x, "forecast"), qty=amount(x, "qty"),
-          supplier=x["supplier"] or "")
-        for x in suggestions]
-    if await forecast.demo_history(s.shop_id):  # backfilled demo rows feed the number: say so, never as real
-        lines.insert(0, t("insights.demo_history", s.lang))
-    return {"say": " ".join(lines), "suggestions": suggestions, "next_tool": "order_create"}
+    lines = [_suggestion_en(x) for x in suggestions]
+    demo = await forecast.demo_history(s.shop_id)  # backfilled demo rows feed the number: say so, never as real
+    if demo:
+        lines.insert(0, "Based on demo sales history.")
+    return {"ok": True, "suggestions": suggestions, "demo_history": demo, "next_tool": "order_create",
+            "say_en": " ".join(lines)}

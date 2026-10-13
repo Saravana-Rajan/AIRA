@@ -319,7 +319,7 @@ async def test_sale_start_names_the_customer_as_speaker(mk_session, monkeypatch)
     from aira_live.tools import sales
 
     async def no_such_product(shop_id, items, lang):
-        return [], [], "no such product"
+        return [], [], {"ok": False, "error": "PRODUCT_UNKNOWN", "product": "unobtainium"}
 
     s, _ = mk_session()
     current_session.set(s)
@@ -544,7 +544,7 @@ async def test_confirm_propose_and_resolve_publish_events(mk_session, mem_store)
     sub = monitor.subscribe(SHOP)
 
     async def commit(payload, value):
-        return {"say": "Order sent"}
+        return {"say_en": "Order sent"}
 
     confirm.register_committer("test.commit", commit)
     res = await confirm.propose("order", "Order 30 L?", {"n": 30}, "test.commit")
@@ -553,7 +553,7 @@ async def test_confirm_propose_and_resolve_publish_events(mk_session, mem_store)
     assert [m["name"] for m in events] == ["confirm_proposed", "confirm_resolved"]
     assert events[0]["detail"] == {"id": res["confirm_id"], "kind": "order", "prompt": "Order 30 L?"}
     assert events[1]["detail"]["id"] == res["confirm_id"] and events[1]["detail"]["answer"] == "yes"
-    assert events[1]["detail"]["status"] == "committed" and events[1]["detail"]["say"] == "Order sent"
+    assert events[1]["detail"]["status"] == "committed" and events[1]["detail"]["say"] == "Order sent"  # the English meaning
 
 
 async def test_notify_publishes_an_event(mk_session):

@@ -32,10 +32,13 @@ if TYPE_CHECKING:
 
 log = logging.getLogger(__name__)
 
-# A notice (vendor reply, alert, ambient line) goes to Live as a system note to say word for word; the server has
-# already captioned it, so the model's re-speak is heard but not captioned a second time (``_echo_of``).
-NOTICE_PREFIX = "[SYSTEM NOTE] Say exactly, word for word"
-NOTICE_ECHO_S = 20.0      # a notice waits this long for the model's re-speak before it is forgotten
+# A notice (vendor reply, alert, ambient line, walk step) is FACTS, usually in English: Live tells the owner in the
+# language he is speaking now. Live's own words are the caption; the server never captions a notice itself.
+NOTICE_PREFIX = ("[SYSTEM NOTE] Tell the owner now, in the language he is speaking, briefly, keeping every number "
+                 "exactly as given")
+# A safety notice (stop, obstacle, cannot see) cuts in: the rest of the answer being spoken is dropped.
+URGENT_PREFIX = ("[SYSTEM NOTE] URGENT, for his safety: stop what you are saying and tell the owner at once, in the "
+                 "language he is speaking, in a few words, keeping every number exactly as given")
 # Reply-language lock: an answer outside the session language and the shop's languages is corrected at once,
 # and its caption is hidden; one correction per LANG_LOCK_GAP_S so a wordy model never gets a flood of notes.
 LANG_LOCK_GAP_S = 5.0
@@ -132,12 +135,9 @@ class LiveBridge:
         self._in_partial = ""
         self._out_final: list[str] = []
         self._out_partial = ""
-        # Captions of the answer being spoken: "hold" (a few words are not judged yet, or a notice echo is
-        # pending), "stream" (judged fine: partials go out as they come) or "hide" (wrong language, or the
-        # re-speak of a notice the server already captioned).
+        # Captions of the answer being spoken: "hold" (a few words are not judged yet), "stream" (judged fine:
+        # partials go out as they come) or "hide" (wrong language).
         self._caption: Literal["hold", "stream", "hide"] = "hold"
-        self._echo: deque[tuple[str, float]] = deque()  # notices told to Live, awaiting the model's re-speak
-        self._echo_hit = False  # a pending notice was recognised in the turn being spoken
         self._last_lock_at = float("-inf")
         self._recent_results: deque[list[dict]] = deque(maxlen=self.RECENT_RESULT_TURNS)
         self._listener_tasks: set[asyncio.Task] = set()
@@ -255,12 +255,14 @@ class LiveBridge:
             log.warning("text send failed, retrying after reconnect: %s", exc)
             self._queue_text(text, _notice)
 
-    async def speak_notice(self, text: str) -> None:
-        """Have AIRA speak a vendor reply or an alert in the live audio (used by ``sessions.notify``).
+    async def speak_notice(self, text: str, urgent: bool = False) -> None:
+        """Have AIRA tell the owner a vendor reply, an alert or a guidance step (used by ``sessions.notify``).
 
-        The text is a fixed line (English for a language without a catalog): Live says it in the language the
-        shopkeeper last spoke, so a notice is never dropped for want of a translation. The same notice within
-        ``NOTICE_DEDUPE_S`` seconds is told once: AIRA never says one line twice because a loop raised it twice.
+        ``text`` is the facts (or their English meaning): Live phrases them in the language the owner is speaking
+        now, numbers exactly as given. ``urgent`` (stop, obstacle, cannot see) mutes the rest of the answer being
+        spoken and asks Live to cut in at once. The same notice within ``NOTICE_DEDUPE_S`` seconds is told once:
+        AIRA never says one line twice because a loop raised it twice (a caller that wants a repeat deletes its
+        key from ``_notices`` first).
         """
         key = notice_key(text)
         if not key:
@@ -273,10 +275,10 @@ class LiveBridge:
             diag("notice", session=self.session.session_id, text=trunc(text), deduped=True)
             return
         self._notices[key] = now
-        diag("notice", session=self.session.session_id, text=trunc(text), deduped=False)
-        self._echo.append((key, now))
-        self._caption = "hold"  # the re-speak is captioned by the server already: hold until it is recognised
-        await self.send_text(f"{NOTICE_PREFIX}, in {self._lang_name()}: «{text}»", _notice=True)
+        diag("notice", session=self.session.session_id, text=trunc(text), deduped=False, urgent=urgent)
+        if urgent and self._answering:
+            self._muted = True  # drop the rest of the current answer; lifts when Live cuts or ends it
+        await self.send_text(f"{URGENT_PREFIX if urgent else NOTICE_PREFIX}: {text}", _notice=True)
 
     def _lang_name(self) -> str:
         return LANG_NAME.get(str(self.session.lang or "en"), "English")
@@ -405,9 +407,6 @@ class LiveBridge:
             self._muted = self._answering = False
             self.last_speech_at = _monotonic()
             self._caption = "hold"
-            if self._echo_hit:  # the notice was said in this turn: nothing later is its echo
-                self._echo.clear()
-                self._echo_hit = False
             monitor.count_turn(s.session_id)
             await self._end_turn()
         elif ev.kind == "resumption_handle":
@@ -424,12 +423,11 @@ class LiveBridge:
              ms=round((now - self._heard_at) * 1000), ms_after_final=final_ms)
         self._heard_at = self._final_at = None
 
-    # ---------- aira captions: one line per notice, reply-language lock ----------
+    # ---------- aira captions: reply-language lock ----------
     async def _output_caption(self, ev: LiveEvent) -> None:
         """Live streams fragments, then the whole sentence with final=True. Captions are held until a few words
-        can be judged (or until the final while a notice echo is pending), hidden for an answer in the wrong
-        language (with a correction to Live) or for the re-speak of a notice the server captioned already, and
-        streamed otherwise."""
+        can be judged, hidden for an answer in the wrong language (with a correction to Live), and streamed
+        otherwise. A notice is captioned here too: Live's words are the only caption of it."""
         s = self.session
         if ev.final:
             text = ev.text or self._out_partial
@@ -443,9 +441,6 @@ class LiveBridge:
             if await self._lang_lock(text):
                 self._caption = "hide"
                 return
-            if self._echo_of(text) is not None:
-                diag("notice_echo", session=s.session_id, text=trunc(text))
-                return
             await s.send(TranscriptMsg(role="aira", text=text, final=True))
             return
         self._out_partial += ev.text
@@ -454,38 +449,13 @@ class LiveBridge:
         if self._caption == "stream":
             await s.send(TranscriptMsg(role="aira", text=ev.text, final=False))
             return
-        if self._echo_pending() or len(self._out_partial.split()) < CAPTION_HOLD_WORDS:
-            return  # keep holding: a notice echo may be coming, or too few words to judge
+        if len(self._out_partial.split()) < CAPTION_HOLD_WORDS:
+            return  # keep holding: too few words to judge
         if await self._lang_lock(self._out_partial):
             self._caption = "hide"
             return
         self._caption = "stream"
         await s.send(TranscriptMsg(role="aira", text=self._out_partial, final=False))
-
-    def _echo_pending(self) -> bool:
-        now = _monotonic()
-        while self._echo and now - self._echo[0][1] > NOTICE_ECHO_S:
-            self._echo.popleft()
-        return bool(self._echo)
-
-    def _echo_of(self, text: str) -> str | None:
-        """The pending notice ``text`` is the model's re-speak of, or None. The model may split a notice into
-        sentences or reword it a little, so a sentence contained in the notice or sharing most of its words
-        counts. Matched notices stay pending until the turn ends or they expire."""
-        if not self._echo_pending():
-            return None
-        key = notice_key(text)
-        words = set(key.split())
-        if not words:
-            return None
-        for notice, _at in self._echo:
-            n_words = set(notice.split())
-            shared = len(words & n_words)
-            if key == notice or key in notice or notice in key or \
-                    (shared >= 2 and shared / max(1, min(len(words), len(n_words))) >= 0.5):
-                self._echo_hit = True  # the notice was said: forgotten once this turn ends
-                return notice
-        return None
 
     def _reply_lang(self, text: str) -> str:
         lang = detect_lang(text, str(self.session.lang or "en"))

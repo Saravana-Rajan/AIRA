@@ -123,9 +123,10 @@ def proposals(monkeypatch):
     previous = confirm._store
     confirm.set_store(confirm.MemoryProposalStore())
 
-    async def recording(kind, prompt, payload, committer):
-        out = await real(kind, prompt, payload, committer)
-        made.append({"kind": kind, "prompt": prompt, "payload": payload, "committer": committer})
+    async def recording(kind, prompt, payload, committer, facts=None):
+        out = await real(kind, prompt, payload, committer, facts=facts)
+        made.append({"kind": kind, "prompt": prompt, "payload": payload, "committer": committer,
+                     "facts": facts or {}})
         return out
 
     monkeypatch.setattr(confirm, "propose", recording)
@@ -137,14 +138,14 @@ def proposals(monkeypatch):
 def notified(monkeypatch):
     said: list[tuple[str, str, str]] = []
 
-    async def fake_notify(shop_id: str, text: str, cue: str = "ack") -> int:
+    async def fake_notify(shop_id: str, text: str, cue: str = "ack", urgent: bool = False) -> int:
         said.append((shop_id, text, cue))
         return 1
 
     monkeypatch.setattr(sessions, "notify", fake_notify)
     from aira_live.tools import _speak
 
-    async def fake_speak_to(sess, text: str, cue: str = "ack") -> bool:
+    async def fake_speak_to(sess, text: str, cue: str = "ack", urgent: bool = False) -> bool:
         await fake_notify(sess.shop_id, text, cue)
         return True
 
@@ -170,6 +171,7 @@ async def test_sunrise_full_loop(store, session, phone, proposals, notified, pub
     use_call("c1")
     r = await orders.order_create("sakthi vendor", [{"product": "sakthi curd", "qty": 3, "unit": "L"}])
     assert r["needs_confirm"] is True and proposals[-1]["committer"] == "order.send"
+    assert r["items"] == [{"product": product["name"], "qty": 3.0, "unit": "L"}] and r["supplier"]
     oid = proposals[-1]["payload"]["order_id"]
     assert (await _repo.get_order(SHOP, oid))["state"] == "DRAFT"
     assert sent_orders == []                                   # nothing goes out before the owner's yes
@@ -262,8 +264,10 @@ async def test_sunrise_full_loop(store, session, phone, proposals, notified, pub
     assert again["ok"] is True
     assert [p["state"] for topic, p in published if topic == "orders"] == [
         "ORDER_PLACED", "DELIVERY_PENDING", "DELIVERY_RECONCILED", "PAYMENT_PENDING", "PAYMENT_CONFIRMED"]
-    assert done["say"].startswith("Sale complete.")
-    assert ("Order more?" in done["say"]) == (left <= float(product["reorderThreshold"]))
+    assert done["say_en"].startswith("Sale complete.") and done["total"] == sale["total"]
+    assert done["stock"] == [{"sku": CURD, "product": product["name"], "left": left, "unit": "L"}]
+    assert (done["lowStock"] == done["stock"]) == (left <= float(product["reorderThreshold"]))
+    assert ("Order more?" in done["say_en"]) == bool(done["lowStock"])
 
     # 7. "How much curd is left?" says the ledger value
     use_call("c12")

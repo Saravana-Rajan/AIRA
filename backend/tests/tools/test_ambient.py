@@ -17,7 +17,6 @@ from fastapi.testclient import TestClient
 from aira_live import prompt, sessions
 from aira_live.contracts import RequestFrameMsg, TranscriptMsg
 from aira_live.frames import Frame
-from aira_live.i18n import t
 from aira_live.live_bridge import _listeners
 from aira_live.session import current_session
 from aira_live.tools import ambient, describe
@@ -50,7 +49,6 @@ def session(mk_session, fake_db):
     current_session.reset(token)
     sessions.unregister(s)
     ambient._ACTIVE.clear()
-    ambient._SWITCH.clear()
     describe._ACTIVE.clear()
     _listeners.pop(s.session_id, None)
 
@@ -103,24 +101,12 @@ def _price(fake_db, sku: str, price):
     fake_db.store[f"shops/sunrise_dairy/products/{sku}"] = {"name": "x", "price": price, "active": True}
 
 
-# --- voice trigger, i18n, prompt ---------------------------------------------------------------------------------
+# --- voice trigger, lines, prompt --------------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("text, want", [
-    ("stop describing", False), ("quiet mode", False), ("be quiet", False), ("please stop telling me things", False),
-    ("describe again", True), ("start describing", True), ("keep describing", True), ("describe mode on", True),
-    ("அமைதி முறை", False), ("மீண்டும் விவரி", True), ("शांत मोड", False), ("फिर से बताओ", True),
-    ("how much is curd", None), ("", None), ("describe what is in front of me", None),
-])
-def test_voice_trigger_parsing(text, want):
-    assert ambient.parse_ambient_command(text) is want
-
-
-def test_i18n_keys_exist_in_all_three_languages():
-    for lang in ("en", "ta", "hi"):
-        for key in ("ambient.on", "ambient.off", "ambient.held", "ambient.held_price", "ambient.held_free",
-                    "ambient.closer"):
-            assert t(key, lang) != key, (key, lang)
+def test_mode_lines_are_plain_english_facts():
+    for line in (ambient.ON_EN, ambient.OFF_EN, ambient.CLOSER_EN):
+        assert line and line.isascii() and line.endswith(".")
 
 
 def test_prompt_tells_the_model_ambient_lines_are_notices_it_must_not_repeat():
@@ -139,9 +125,25 @@ async def test_catalog_product_is_named_with_pack_and_price(session, vision, fak
     vision.catalog.append(IdentifyResult(sku=MILK.sku, confidence=0.9, alternatives=[]))
     s.frames.add(_frame(1))
     assert await loop.step() is True
-    assert _spoken(rec) == ["That's Aavin Milk, 500 ml. 30 rupees."]
+    assert _spoken(rec) == ["Aavin Milk 500 ml, 30 rupees."]
     assert vision.calls == {"catalog": 1, "free": 0}
     assert rec.msgs[0].lang == "en"
+
+
+async def test_catalog_line_is_english_facts_whatever_the_session_language(mk_session, vision, fake_db):
+    """A Tamil session gets the same English facts (Live says them in Tamil); the price stays exact."""
+    s, rec = mk_session(lang="ta")
+    sessions.register(s)
+    try:
+        _price(fake_db, MILK.sku, 32.5)
+        loop = _loop(s, Clock())
+        vision.catalog.append(IdentifyResult(sku=MILK.sku, confidence=0.9, alternatives=[]))
+        s.frames.add(_frame(1))
+        await loop.step()
+        assert _spoken(rec) == ["Aavin Milk 500 ml, 32.5 rupees."]
+        assert rec.msgs[0].lang == "en"
+    finally:
+        sessions.unregister(s)
 
 
 async def test_catalog_product_without_a_price_is_named_without_one(session, vision):
@@ -150,7 +152,30 @@ async def test_catalog_product_without_a_price_is_named_without_one(session, vis
     vision.catalog.append(IdentifyResult(sku=CURD.sku, confidence=0.8, alternatives=[]))
     s.frames.add(_frame(1))
     await loop.step()
-    assert _spoken(rec) == ["That's Sakthi Curd, 1 L."]
+    assert _spoken(rec) == ["Sakthi Curd 1 L."]
+
+
+async def test_hold_up_line_reaches_the_live_bridge_as_a_non_urgent_notice(session, vision, fake_db):
+    s, rec = session
+
+    class Bridge:
+        _answering = False
+        _in_partial = ""
+
+        def __init__(self):
+            self.notices = []
+
+        async def speak_notice(self, text, **kw):
+            self.notices.append((text, kw.get("urgent", False)))
+
+    b = Bridge()
+    sessions.attach_bridge(s.session_id, b)
+    _price(fake_db, MILK.sku, 30)
+    loop = _loop(s, Clock())
+    vision.catalog.append(IdentifyResult(sku=MILK.sku, confidence=0.9, alternatives=[]))
+    s.frames.add(_frame(1))
+    await loop.step()
+    assert b.notices == [("Aavin Milk 500 ml, 30 rupees.", False)]
 
 
 async def test_free_text_label_when_it_is_not_a_catalog_product(session, vision):
@@ -160,7 +185,7 @@ async def test_free_text_label_when_it_is_not_a_catalog_product(session, vision)
     vision.free.append({"label": "a water bottle", "confidence": 0.8})
     s.frames.add(_frame(1))
     await loop.step()
-    assert _spoken(rec) == ["That's a water bottle."]
+    assert _spoken(rec) == ["A water bottle."]
     assert vision.calls == {"catalog": 1, "free": 1}
 
 
@@ -171,7 +196,7 @@ async def test_low_confidence_gives_the_aim_hint_at_most_once_per_eight_seconds(
     vision.free.append({"label": "something", "confidence": 0.3})
     s.frames.add(_frame(1))
     await loop.step()
-    assert _spoken(rec) == [t("ambient.closer", "en")]
+    assert _spoken(rec) == ["Hold it a little closer."]
     clock.t += 4
     vision.free.append({"label": "", "confidence": 0.0})
     s.frames.add(_frame(2))
@@ -181,7 +206,7 @@ async def test_low_confidence_gives_the_aim_hint_at_most_once_per_eight_seconds(
     vision.free.append({"label": "", "confidence": 0.0})
     s.frames.add(_frame(3))
     await loop.step()
-    assert _spoken(rec) == [t("ambient.closer", "en")] * 2
+    assert _spoken(rec) == ["Hold it a little closer."] * 2
 
 
 async def test_people_are_never_described_and_get_no_hint(session, vision):
@@ -221,7 +246,7 @@ async def test_no_speech_and_no_model_call_while_the_owner_talks_or_aira_answers
     busy["v"] = False
     s.frames.add(_frame(2))
     await loop.step()
-    assert _spoken(rec) == ["That's Aavin Milk, 500 ml."]
+    assert _spoken(rec) == ["Aavin Milk 500 ml."]
 
 
 async def test_a_line_is_dropped_when_someone_started_talking_during_the_model_call(session, vision, monkeypatch):
@@ -297,18 +322,19 @@ async def test_scene_loop_waits_while_a_hold_up_line_is_fresh(session):
     await ambient.stop(s)
 
 
-async def test_quiet_mode_by_voice_turns_everything_off_once_and_persists(session, fake_db):
+async def test_quiet_mode_is_the_models_describe_mode_call_and_persists(session, fake_db):
+    """No words are matched here: the model hears "quiet mode" in any language and calls describe_mode."""
     s, rec = session
     amb = await ambient.start(s, run=False, busy=lambda: False)
     for cb in list(_listeners[s.session_id]):                        # what the bridge does on a final transcript
         await cb("stop describing, quiet mode")
+    assert ambient.active(s) is amb                                  # a transcript alone switches nothing
+    assert not hasattr(ambient, "parse_ambient_command")
+    await ambient.set_mode(s, False)                                 # describe_mode(on=False)
     assert ambient.active(s) is None and describe.active(s) is None and not amb.holdup.active
-    assert _spoken(rec) == [t("ambient.off", "en")]                 # one line, not describe.off as well
     assert await ambient.load_setting(s.shop_id) is False
-    for cb in list(_listeners.get(s.session_id, [])):
-        await cb("describe again")
+    await ambient.set_mode(s, True)                                  # describe_mode(on=True)
     assert ambient.active(s) is not None and describe.active(s) is not None
-    assert _spoken(rec)[-1] == t("ambient.on", "en")
     assert await ambient.load_setting(s.shop_id) is True
     await ambient.stop(s)
 
@@ -344,9 +370,9 @@ async def test_stop_session_ends_the_loops_without_touching_the_setting(session,
 
 async def test_describe_mode_tool_switches_ambient_too(session):
     s, rec = session
-    assert await describe.describe_mode(True) == {"say": t("describe.on", "en"), "active": True}
+    assert await describe.describe_mode(True) == {"ok": True, "active": True, "say_en": describe.ON_EN}
     assert ambient.active(s) is not None and ambient.active(s).holdup.active
-    assert await describe.describe_mode(False) == {"say": t("describe.off", "en"), "active": False}
+    assert await describe.describe_mode(False) == {"ok": True, "active": False, "say_en": describe.OFF_EN}
     assert ambient.active(s) is None and describe.active(s) is None
 
 

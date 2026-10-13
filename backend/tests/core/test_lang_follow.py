@@ -60,7 +60,7 @@ def test_detect_lang_never_raises_and_only_returns_lowercase_codes():
 def test_i18n_gives_the_english_line_for_any_language_without_a_catalog():
     assert LANGS == ("ta", "hi", "en")
     for lang in ("ja", "ko", "zh", "th", "vi", "id", "fil", "te", "kn", "ml", "bn", "gu", "pa"):
-        assert t("confirm.cancelled", lang) == t("confirm.cancelled", "en")
+        assert t("error.internal", lang) == t("error.internal", "en")
         assert t("mock.echo", lang, text="x").endswith("x")
 
 
@@ -76,8 +76,9 @@ def test_prompt_tells_live_to_follow_the_speaker_and_never_pin_a_language():
     assert "default language" not in low and "always speak" not in low
     # the hello language is only the hint for the first line, before anyone has spoken
     assert "until the speaker has spoken, use tamil" in low
-    # fixed English lines (tool 'say' texts, notices) are spoken in the session language, never dropped
-    assert "say it in the session language" in low
+    # tool facts, notices and corrections (usually English) are said in the session language, never dropped
+    assert "always say them in the session language" in low
+    assert "20. tools return facts" in low and "any language" in low
 
 
 def test_prompt_first_line_hint_covers_japac_and_falls_back_to_english():
@@ -123,10 +124,11 @@ async def test_notice_is_spoken_in_the_language_the_speaker_last_used(mk_session
     bridge = LiveBridge(s, lambda: b, "prompt", [])
     await bridge.start()
     try:
-        await bridge.speak_notice(t("jobs.expired_alert", s.lang, items="curd"))
+        await bridge.speak_notice("Expired: curd, 2 packs.")
         sent = b.sent_text[-1]
-        # the note names the session language, so a Japanese session hears the alert in Japanese
-        assert "Expired: curd" in sent and "in Japanese" in sent and sent.startswith("[SYSTEM NOTE] Say exactly")
+        # facts, never a fixed sentence: Live tells them in the language he is speaking (Japanese here)
+        assert sent.endswith(": Expired: curd, 2 packs.") and "in the language he is speaking" in sent
+        assert "Say exactly" not in sent
     finally:
         await bridge.close()
 

@@ -114,7 +114,7 @@ def test_oversized_frame_rejected_not_stored(monkeypatch):
 
 def test_confirm_message_resolves_proposal(store):
     async def commit(payload, value):
-        return {"say": "Order sent to Sakthi vendor."}
+        return {"say_en": "Order sent to Sakthi vendor."}
 
     confirm.register_committer("test.ws", commit)
     with TestClient(app).websocket_connect("/ws", headers=ORIGIN) as ws:
@@ -132,7 +132,7 @@ def test_confirm_for_unknown_id_is_spoken_not_fatal(store):
         ws.send_json(HELLO); ws.receive_json()
         ws.send_json({"t": "confirm", "id": "missing", "answer": "yes"})
         reply = ws.receive_json()
-        assert reply["t"] == "transcript" and reply["text"] == "I couldn't find that request."
+        assert reply["t"] == "transcript" and reply["text"] == "That request was not found."
 
 
 def test_another_phone_cannot_confirm_a_proposal_of_this_session(store):
@@ -140,7 +140,7 @@ def test_another_phone_cannot_confirm_a_proposal_of_this_session(store):
 
     async def commit(payload, value):
         calls.append(payload)
-        return {"say": "Paid."}
+        return {"say_en": "Paid."}
 
     confirm.register_committer("test.ws.other", commit)
     client = TestClient(app)
@@ -149,7 +149,7 @@ def test_another_phone_cannot_confirm_a_proposal_of_this_session(store):
         put_pending(store, "c3", "test.ws.other", owner.receive_json()["sessionId"])
         other.send_json(HELLO); other.receive_json()  # same demo shop, different session
         other.send_json({"t": "confirm", "id": "c3", "answer": "yes"})
-        assert other.receive_json()["text"] == "I couldn't find that request."
+        assert other.receive_json()["text"] == "That request was not found."
         assert calls == [] and asyncio.run(store.get("sunrise_dairy", "c3"))["status"] == "pending"
         owner.send_json({"t": "confirm", "id": "c3", "answer": "yes"})
         assert owner.receive_json()["text"] == "Paid."
@@ -196,7 +196,7 @@ def test_session_is_registered_for_notify_and_removed_on_disconnect():
     with TestClient(app).websocket_connect("/ws", headers=ORIGIN) as ws:
         ws.send_json(HELLO); ws.receive_json()
         assert ws.portal.call(notify) == 1
+        assert ws.receive_json() == {"t": "cue", "cue": "warn"}  # the earcon first
         assert ws.receive_json() == {"t": "transcript", "role": "aira", "text": "Low stock: Sakthi curd",
-                                     "final": True, "lang": "en"}
-        assert ws.receive_json() == {"t": "cue", "cue": "warn"}
+                                     "final": True, "lang": "en"}  # mock mode: no Live voice, the facts are the caption
     assert asyncio.run(notify()) == 0

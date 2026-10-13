@@ -1,7 +1,8 @@
 """One line per notice, the reply-language lock and the transcription config (live_bridge).
 
 Evidence from the owner's dashboard: "Hello" was transcribed as "Hola", AIRA answered in Spanish, and every
-ambient line appeared twice (our English caption, then the model's Spanish re-speak). No network here: the
+ambient line appeared twice (our English caption, then the model's Spanish re-speak). A notice is now facts
+that Live says in the owner's language, and Live's words are its only caption. No network here: the
 in-memory ``FakeBackend`` plays Live.
 """
 import asyncio
@@ -36,64 +37,53 @@ def diag_log(monkeypatch):
     return lines
 
 
-# ---------- 1. one line per notice ----------
-async def test_a_notice_is_a_say_exactly_note_and_the_models_re_speak_is_not_captioned_again(mk_session, diag_log):
-    s, rec = mk_session(lang="en")
+# ---------- 1. a notice is facts; Live says them and captions them once ----------
+async def test_a_notice_is_facts_for_live_to_say_in_the_owners_language(mk_session, diag_log):
+    s, rec = mk_session(lang="ta")
     b = FakeBackend()
     bridge = _bridge(s, b)
     await bridge.start()
-    await bridge.speak_notice("Keyboard to your right, within arm's reach.")
-    assert b.sent_text == [f"{NOTICE_PREFIX}, in English: «Keyboard to your right, within arm's reach.»"]
-    # The model says it: the audio plays, the caption (already shown by the server) is not shown a second time.
+    await bridge.speak_notice("Aavin Milk 500 ml, 30 rupees.")
+    assert b.sent_text == [f"{NOTICE_PREFIX}: Aavin Milk 500 ml, 30 rupees."]
+    assert "in the language he is speaking" in NOTICE_PREFIX and "every number exactly" in NOTICE_PREFIX
+    assert "Say exactly" not in b.sent_text[0] and "Tamil" not in b.sent_text[0]  # no fixed sentence, no pinned language
+    # The server never captions the facts itself: Live's own words are the one caption.
     b.push(LiveEvent("audio", audio=b"\x01"))
-    b.push(LiveEvent("output_transcript", text="Keyboard to your", final=False))
-    b.push(LiveEvent("output_transcript", text=" right, within arm's reach.", final=False))
-    b.push(LiveEvent("output_transcript", text="Keyboard to your right, within arm's reach.", final=True))
+    b.push(LiveEvent("output_transcript", text="ஆவின் பால் 500 ml, முப்பது ரூபாய்.", final=True))
     b.push(LiveEvent("turn_complete"))
+    await wait_until(lambda: _captions(rec))
+    assert _captions(rec) == [("ஆவின் பால் 500 ml, முப்பது ரூபாய்.", True)]
+    await bridge.close()
+
+
+async def test_an_urgent_notice_cuts_into_the_answer_being_spoken(mk_session):
+    s, rec = mk_session(lang="en")
+    b = FakeBackend()
+    bridge = _bridge(s, b)
+    await bridge.start()
+    b.push(LiveEvent("audio", audio=b"\x01"))  # AIRA is mid-answer
     await wait_until(lambda: any(m.t == "audio" for m in rec.msgs))
+    await bridge.speak_notice("Stop. Chair ahead, 1 step.", urgent=True)
+    assert b.sent_text == [f"{live_bridge.URGENT_PREFIX}: Stop. Chair ahead, 1 step."]
+    assert "URGENT" in b.sent_text[0] and "at once" in b.sent_text[0]
+    b.push(LiveEvent("audio", audio=b"\x02"))  # the rest of the old answer is dropped
+    b.push(LiveEvent("interrupted"))
+    b.push(LiveEvent("audio", audio=b"\x03"))  # the urgent line plays
+    await wait_until(lambda: sum(m.t == "audio" for m in rec.msgs) == 2)
     await settle()
-    assert _captions(rec) == []
-    assert any(e == "notice_echo" for e, _ in diag_log)
-    # The next, ordinary answer is captioned as before.
-    b.push(LiveEvent("output_transcript", text="Yes, we have", final=False))
-    b.push(LiveEvent("output_transcript", text="Yes, we have curd.", final=True))
-    b.push(LiveEvent("turn_complete"))
-    await wait_until(lambda: ("Yes, we have curd.", True) in _captions(rec))
-    assert _captions(rec) == [("Yes, we have curd.", True)]
+    assert [m.pcm24 for m in rec.msgs if m.t == "audio"] == ["AQ==", "Aw=="]
     await bridge.close()
 
 
-async def test_a_notice_said_in_two_sentences_or_slightly_reworded_is_still_one_caption(mk_session):
+async def test_an_urgent_notice_while_idle_is_sent_and_nothing_is_muted(mk_session):
     s, rec = mk_session(lang="en")
     b = FakeBackend()
     bridge = _bridge(s, b)
     await bridge.start()
-    await bridge.speak_notice("That's Aavin Milk, 500 ml. 30 rupees.")
-    b.push(LiveEvent("output_transcript", text="That's Aavin Milk, 500 ml.", final=True))
-    b.push(LiveEvent("output_transcript", text="It is 30 rupees.", final=True))
-    b.push(LiveEvent("turn_complete"))
-    await settle()
-    await settle()
-    assert _captions(rec) == []
-    # An unrelated answer in the same window is still captioned.
-    b.push(LiveEvent("output_transcript", text="The shop opens at seven in the morning.", final=True))
-    await wait_until(lambda: _captions(rec))
-    assert _captions(rec) == [("The shop opens at seven in the morning.", True)]
-    await bridge.close()
-
-
-async def test_a_pending_notice_expires_so_later_answers_are_captioned(mk_session, monkeypatch):
-    now = [100.0]
-    monkeypatch.setattr(live_bridge, "_monotonic", lambda: now[0])
-    s, rec = mk_session(lang="en")
-    b = FakeBackend()
-    bridge = _bridge(s, b)
-    await bridge.start()
-    await bridge.speak_notice("Hold it a little closer.")
-    now[0] += live_bridge.NOTICE_ECHO_S + 1
-    b.push(LiveEvent("output_transcript", text="Hold it a little closer.", final=True))
-    await wait_until(lambda: _captions(rec))
-    assert _captions(rec) == [("Hold it a little closer.", True)]
+    await bridge.speak_notice("I can't see the way. Stop.", urgent=True)
+    b.push(LiveEvent("audio", audio=b"\x01"))
+    await wait_until(lambda: any(m.t == "audio" for m in rec.msgs))
+    assert b.sent_text[0].startswith(live_bridge.URGENT_PREFIX)
     await bridge.close()
 
 
@@ -188,7 +178,8 @@ def test_the_prompt_keeps_the_session_language_and_never_switches_on_a_short_wor
     ta = prompt.language_rule("ta", ["ta", "en"])
     assert "Stay in Tamil" in ta
     text = prompt.render_prompt({"name": "Sunrise Dairy"}, [], [], "en", "short")
-    assert "[SYSTEM NOTE] Say exactly" in text  # rule 6 and 12 name the new notice form
+    assert "[SYSTEM NOTE] Tell the owner now" in text and "Say exactly" not in text  # rules 6, 12, 18
+    assert "[SYSTEM NOTE] URGENT" in text
 
 
 # ---------- 3. transcription config ----------

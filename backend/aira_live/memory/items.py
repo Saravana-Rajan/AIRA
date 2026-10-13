@@ -7,7 +7,9 @@ fridge, to your far left, at arm's length"). A placing event (a hand put the key
 and beats a later passive sighting unless that one is confident.
 
 A memory is always spoken as "I last saw", never "it is": a sighting is not proof the item is still there.
-Older than 24 h says "that was a while ago". Privacy: text only (no image ever reaches this module),
+Older than 24 h is flagged ``old`` ("that was a while ago"). Tools return these sightings as FACTS (place,
+side, when) with an English ``say_en`` hint; Gemini Live phrases them in the owner's language.
+Privacy: text only (no image ever reaches this module),
 every sighting expires after 7 days, and "forget everything" / "stop remembering" are honoured here.
 Stored under shops/{shopId}/memory/{id} (server-only in the Firestore rules); the owner's switches live in
 shops/{shopId}/memory/settings.
@@ -25,7 +27,6 @@ from pydantic import BaseModel, Field, ValidationError, field_validator
 
 from aira_live import db as dbmod
 from aira_live import embeddings
-from aira_live.i18n import t
 from aira_live.vision import observers
 
 log = logging.getLogger(__name__)
@@ -42,6 +43,13 @@ LANDMARK_RADIUS = 300      # a landmark counts only within this many normalised 
 ON_DX = 150                # item above a surface and this close in x: "on the <surface>"
 SETTINGS_DOC = "settings"
 IST = ZoneInfo("Asia/Kolkata")
+
+# stored side/dist keys -> (short fact word, English phrase)
+SIDES = {"cam.side.far_left": ("far left", "to your far left"), "cam.side.left": ("left", "to your left"),
+         "cam.side.centre": ("centre", "straight ahead"), "cam.side.right": ("right", "to your right"),
+         "cam.side.far_right": ("far right", "to your far right")}
+DISTS = {"cam.dist.near": ("near", "within arm's reach"), "cam.dist.arm": ("arm", "at arm's length"),
+         "cam.dist.far": ("far", "a few steps away")}
 
 # canonical item -> words the model or the owner may use for it (English, Tamil, Hindi)
 PERSONAL_ITEMS: dict[str, tuple[str, ...]] = {
@@ -68,7 +76,7 @@ class Sighting(BaseModel):
     at: datetime
     confidence: float = Field(ge=0.0, le=1.0)
     kind: Literal["seen", "placed"] = "seen"
-    place_parts: dict | None = None     # {side, dist, landmark, on}: i18n keys, rendered in the session language
+    place_parts: dict | None = None     # {side, dist, landmark, on}: side/dist are cam.side.* / cam.dist.* keys
 
     @field_validator("at")
     @classmethod
@@ -123,11 +131,9 @@ def canonical_item(text: str | None, custom: list[str] | tuple[str, ...] = ()) -
     return None
 
 
-def speak_item(item: str, lang: str) -> str:
-    """The item's name in ``lang`` (an owner-named item is spoken as the owner said it)."""
-    key = f"mem.item.{item}"
-    spoken = t(key, lang)
-    return item if spoken == key else spoken
+def speak_item(item: str, lang: str = "en") -> str:
+    """The item's English name (Live translates it); ``lang`` is kept for callers and never picks wording."""
+    return item
 
 
 # --- settings -----------------------------------------------------------------------------------------------------
@@ -266,45 +272,57 @@ def is_old(s: Sighting, now: datetime) -> bool:
     return now - s.at > OLD_AFTER
 
 
-def _time(at: datetime, lang: str) -> str:
+def _time(at: datetime) -> str:
     local = at.astimezone(IST)
     h = local.hour % 12 or 12
-    return t("mem.time", lang, h=h, m=f"{local.minute:02d}", ampm=t("mem.pm" if local.hour >= 12 else "mem.am", lang))
+    return f"{h}:{local.minute:02d} {'pm' if local.hour >= 12 else 'am'}"
 
 
-def when_phrase(at: datetime, now: datetime, lang: str) -> str:
-    """"just now", "today at 7:10 pm", "yesterday at 6:10 pm" or "3 days ago" (shop time, Asia/Kolkata)."""
+def when_phrase(at: datetime, now: datetime, lang: str = "en") -> str:
+    """"just now", "today at 7:10 pm", "yesterday at 6:10 pm" or "3 days ago" (shop time, Asia/Kolkata), in
+    English; ``lang`` is ignored (Live phrases it)."""
     if now - at < timedelta(minutes=2):
-        return t("mem.when.now", lang)
+        return "just now"
     days = (now.astimezone(IST).date() - at.astimezone(IST).date()).days
     if days <= 0:
-        return t("mem.when.today", lang, time=_time(at, lang))
+        return f"today at {_time(at)}"
     if days == 1:
-        return t("mem.when.yesterday", lang, time=_time(at, lang))
-    return t("mem.when.days", lang, days=days)
+        return f"yesterday at {_time(at)}"
+    return f"{days} days ago"
 
 
-def speak_place(s: Sighting, lang: str) -> str:
-    """The place in ``lang`` from its parts; the stored English text when there are none."""
+def speak_place(s: Sighting, lang: str = "en") -> str:
+    """The English place from its parts; the stored text when there are none. ``lang`` is ignored."""
     p = s.place_parts
     if not p or not p.get("side"):
         return s.place
-    return _render_place(p, lang)
+    return _render_place(p)
 
 
-def _render_place(p: dict, lang: str) -> str:
-    side, dist = t(p["side"], lang), t(p["dist"], lang)
+def _render_place(p: dict, lang: str = "en") -> str:
+    side, dist = SIDES.get(p["side"], ("", p["side"]))[1], DISTS.get(p["dist"], ("", p["dist"]))[1]
     landmark = p.get("landmark")
     if landmark:
-        key = "mem.place.on" if p.get("on") else "mem.place.near"
-        return t(key, lang, landmark=landmark, side=side, dist=dist)
-    return t("mem.place.plain", lang, side=side, dist=dist)
+        return f"{'on' if p.get('on') else 'near'} the {landmark}, {side}, {dist}"
+    return f"{side}, {dist}"
 
 
-def describe(item_spoken: str, s: Sighting, lang: str, now: datetime) -> str:
-    """"I last saw your keys on the fridge, today at 7:10 pm. Check there first." Never "is"."""
-    key = "mem.last_seen_old" if is_old(s, now) else "mem.last_seen"
-    return t(key, lang, item=item_spoken, place=speak_place(s, lang), when=when_phrase(s.at, now, lang))
+def place_facts(s: Sighting) -> dict:
+    """{"place", "side", "dist", "landmark", "on"} of a sighting: short words for Live, never a sentence."""
+    p = s.place_parts or {}
+    side = SIDES.get(str(p.get("side") or ""), (None,))[0]
+    dist = DISTS.get(str(p.get("dist") or ""), (None,))[0]
+    return {"place": speak_place(s), "side": side, "dist": dist, "landmark": p.get("landmark"),
+            "on": bool(p.get("on"))}
+
+
+def describe(item_spoken: str, s: Sighting, lang: str = "en", now: datetime | None = None) -> str:
+    """"I last saw your keys on the fridge, today at 7:10 pm. Check there first." Never "is". English only."""
+    now = now or _utcnow()
+    head = f"I last saw your {item_spoken} {speak_place(s)}, {when_phrase(s.at, now)}."
+    if is_old(s, now):
+        return f"{head} That was a while ago, it may have moved. Check there first."
+    return f"{head} Check there first."
 
 
 # --- from an ER result --------------------------------------------------------------------------------------------
@@ -358,17 +376,18 @@ def place_from_objects(obj: dict, objects: list[dict], custom: list[str] | tuple
             label = str(other["label"]).strip().casefold()
             surface = any(w in SURFACES for w in label.split())
             parts.update(landmark=label, on=surface and op[0] > pt[0] and abs(op[1] - pt[1]) <= ON_DX)
-    return _render_place(parts, "en"), parts
+    return _render_place(parts), parts
 
 
-def personal_in_view(objects: list[dict], lang: str, custom: list[str] | tuple[str, ...] = ()) -> dict[str, str]:
-    """Describe mode helper: one short line per personal item in view, keyed by item ("Your bag: on the chair...")."""
+def personal_in_view(objects: list[dict], lang: str = "en", custom: list[str] | tuple[str, ...] = ()) -> dict[str, str]:
+    """Describe mode helper: one short English line per personal item in view, keyed by item
+    ("Your bag: on the chair, to your left, at arm's length.")."""
     out: dict[str, str] = {}
     for obj in objects:
         item = canonical_item(obj.get("label"), custom)
         if item and item not in out:
-            _, parts = place_from_objects(obj, objects, custom)
-            out[item] = t("mem.in_view", lang, item=speak_item(item, lang), place=_render_place(parts, lang))
+            place, _ = place_from_objects(obj, objects, custom)
+            out[item] = f"Your {item}: {place}."
     return out
 
 

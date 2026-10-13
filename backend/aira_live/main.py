@@ -424,12 +424,14 @@ async def ws_endpoint(ws: WebSocket) -> None:
                          id=msg.id, answer=msg.answer, error=type(exc).__name__, message=trunc(str(exc), 200))
                     await send(ErrorMsg(code="internal", say=t("error.internal", lang)))
                 else:
-                    say = result.get("say", "")
-                    await send(TranscriptMsg(role="aira", text=say, final=True))
-                    if bridge:  # a tapped answer: Live must know, so it speaks the result and never re-asks
+                    if bridge:  # a tapped answer: Live must know, so it tells the result and never re-asks
+                        facts = json.dumps(result, ensure_ascii=False, default=str)
                         await bridge.send_text(
                             f"[CONFIRMATION] The owner answered '{msg.answer}' on the phone for {msg.id}. "
-                            f"Result: {say}. Do not call confirm_action for it again.")
+                            f"Result facts: {facts}. Tell him the result briefly, in the language he is "
+                            "speaking, numbers exactly as given. Do not call confirm_action for it again.")
+                    else:  # no Live voice: the English meaning is the caption
+                        await send(TranscriptMsg(role="aira", text=str(result.get("say_en", "")), final=True))
             elif isinstance(msg, EventMsg):
                 monitor.client_event(session, msg.name, msg.data)
                 await _guidance_hook("handle_client_event", session, msg.name, msg.data)

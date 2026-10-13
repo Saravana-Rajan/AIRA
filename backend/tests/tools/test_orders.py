@@ -15,7 +15,6 @@ from aira_live import confirm, sessions
 from aira_live.business import hints, outbox, paths, seed
 from aira_live.business.store import MemoryStore, set_store
 from aira_live.contracts import ConfirmMsg, CueMsg, StateMsg, TranscriptMsg
-from aira_live.i18n import t
 from aira_live.session import Session, current_session, current_tool_call_id
 from aira_live.tools import _repo, orders
 
@@ -108,10 +107,10 @@ def proposals(monkeypatch):
     previous = confirm._store
     confirm.set_store(confirm.MemoryProposalStore())
 
-    async def recording(kind, prompt, payload, committer):
-        out = await real(kind, prompt, payload, committer)
+    async def recording(kind, prompt, payload, committer, facts=None):
+        out = await real(kind, prompt, payload, committer, facts=facts)
         made.append({"kind": kind, "prompt": prompt, "payload": payload, "committer": committer,
-                     "confirm_id": out["confirm_id"]})
+                     "confirm_id": out["confirm_id"], "facts": facts or {}})
         return out
 
     monkeypatch.setattr(confirm, "propose", recording)
@@ -144,9 +143,13 @@ async def _orders(store) -> list:
 
 async def test_order_create_resolves_and_proposes(store, session, proposals, phone):
     r = await orders.order_create("sakthi vendor", CURD_30L)
-    assert r["needs_confirm"] is True and r["say"] == proposals[0]["prompt"]
+    assert r["needs_confirm"] is True and r["say_en"] == proposals[0]["prompt"]
     p = proposals[0]
     assert (p["kind"], p["committer"]) == ("order", "order.send")
+    # the facts Live reads back in the owner's language: exact names, quantities and units
+    assert r["supplier"] == "Sakthi curd vendor" and r["orderId"] == p["payload"]["order_id"]
+    assert r["items"] == [{"product": await _name(store, "sakthi_curd_1l"), "qty": 30.0, "unit": "L"}]
+    assert r["deliveryBy"] is None and r["note"] is None and "say" not in r
     o = await _repo.get_order(SHOP, p["payload"]["order_id"])
     assert (o["state"], o["supplierId"], o["supplierName"], o["lang"]) == ("DRAFT", "sakthi_vendor",
                                                                           "Sakthi curd vendor", "en")
@@ -221,6 +224,8 @@ async def test_order_create_stores_delivery_time_and_note_and_reads_them_back(st
     name = await _name(store, "sakthi_curd_1l")
     assert proposals[0]["prompt"] == (f"Order 30 L {name} from Sakthi curd vendor, deliver by 6 am tomorrow, "
                                       "note: send fresh stock. Send it?")
+    facts = proposals[0]["facts"]
+    assert (facts["deliveryBy"], facts["note"]) == ("6 am tomorrow", "send fresh stock")
 
 
 async def test_order_create_without_extras_stores_none_and_keeps_short_read_back(store, session, proposals):
@@ -237,20 +242,21 @@ async def test_order_create_unparseable_time_keeps_the_words(store, session, pro
     assert ", deliver by before the festival. Send it?" in proposals[0]["prompt"]
 
 
-async def test_order_create_read_back_extras_in_tamil(store, phone, proposals):
+async def test_order_create_read_back_is_facts_whatever_the_session_language(store, phone, proposals):
+    """A Tamil session gets the same English facts (Live phrases them in Tamil); the owner's words are kept as is."""
     s = Session("owner1", SHOP, "ta", "short", phone)
     tok_s, tok_c = current_session.set(s), current_tool_call_id.set("tc-ta")
     try:
-        await orders.order_create("sakthi vendor", CURD_30L, delivery_by="நாளை காலை 6 மணிக்கு", note="fresh")
+        r = await orders.order_create("sakthi vendor", CURD_30L, delivery_by="நாளை காலை 6 மணிக்கு", note="fresh")
     finally:
         current_tool_call_id.reset(tok_c)
         current_session.reset(tok_s)
-    prompt = proposals[0]["prompt"]
-    assert prompt == t("k2.order.read_back_extra", "ta", items=f"30 L {await _name(store, 'sakthi_curd_1l')}",
-                       supplier="Sakthi curd vendor",
-                       extras=f"{t('k2.order.by_phrase', 'ta', time='நாளை காலை 6 மணிக்கு')}, "
-                              f"{t('k2.order.note_phrase', 'ta', note='fresh')}")
-    assert "k2." not in prompt
+    name = await _name(store, "sakthi_curd_1l")
+    assert proposals[0]["prompt"] == (f"Order 30 L {name} from Sakthi curd vendor, deliver by நாளை காலை 6 மணிக்கு, "
+                                      "note: fresh. Send it?")
+    assert (r["deliveryBy"], r["note"], r["supplier"]) == ("நாளை காலை 6 மணிக்கு", "fresh", "Sakthi curd vendor")
+    assert r["items"] == [{"product": name, "qty": 30.0, "unit": "L"}]
+    assert (await _repo.get_order(SHOP, proposals[0]["payload"]["order_id"]))["lang"] == "ta"
 
 
 async def test_commit_send_passes_delivery_time_to_the_vendor_message(store, session, proposals, monkeypatch):
@@ -268,32 +274,33 @@ async def test_commit_send_passes_delivery_time_to_the_vendor_message(store, ses
     assert o["state"] == "ORDER_PLACED" and o["deliveryBy"]["text"] == "6 am tomorrow"
 
 
-async def test_order_create_speaks_the_owners_language(store, session, proposals):
+async def test_order_create_stores_the_session_language_but_reads_back_the_same_facts(store, session, proposals):
     session.lang = "ta"
     await orders.order_create("sakthi vendor", CURD_30L)
     o = await _repo.get_order(SHOP, proposals[0]["payload"]["order_id"])
     assert o["lang"] == "ta"
-    items = f"30 L {await _name(store, 'sakthi_curd_1l')}"
-    assert proposals[0]["prompt"] == t("k2.order.read_back", "ta", items=items, supplier="Sakthi curd vendor")
+    assert proposals[0]["prompt"] == f"Order 30 L {await _name(store, 'sakthi_curd_1l')} from Sakthi curd vendor?"
 
 
-async def test_order_create_unknown_supplier_says_hint(store, session, proposals):
+async def test_order_create_unknown_supplier_returns_the_code(store, session, proposals):
     r = await orders.order_create("xyz traders", [{"product": "milk", "qty": 10, "unit": "L"}])
-    assert r["ok"] is False and r["say"] == hints.say("SUPPLIER_UNKNOWN", "en", supplier="xyz traders")
+    assert r == hints.fact("SUPPLIER_UNKNOWN", supplier="xyz traders")
+    assert (r["ok"], r["error"], r["supplier"]) == (False, "SUPPLIER_UNKNOWN", "xyz traders")
     assert proposals == [] and await _orders(store) == []
 
 
-async def test_order_create_unknown_product_says_hint_and_saves_nothing(store, session, proposals):
+async def test_order_create_unknown_product_returns_the_code_and_saves_nothing(store, session, proposals):
     r = await orders.order_create("sakthi vendor", [{"product": "bread", "qty": 3, "unit": "pack"}])
-    assert r["ok"] is False and r["say"] == hints.say("PRODUCT_UNKNOWN", "en", product="bread")
+    assert (r["ok"], r["error"], r["product"]) == (False, "PRODUCT_UNKNOWN", "bread")
+    assert r["say_en"] == hints.english("PRODUCT_UNKNOWN", product="bread")
     assert proposals == [] and await _orders(store) == []
 
 
 async def test_order_create_product_the_supplier_does_not_sell_is_refused(store, session, proposals):
     r = await orders.order_create("sakthi vendor", [{"product": "paneer", "qty": 5, "unit": "pack"}])
-    assert r["ok"] is False
-    assert r["say"] == t("k2.order.wrong_supplier", "en", supplier="Sakthi curd vendor",
-                         product=await _name(store, "aavin_paneer_200g"))
+    paneer = await _name(store, "aavin_paneer_200g")
+    assert (r["ok"], r["error"], r["supplier"], r["product"]) == (False, "WRONG_SUPPLIER", "Sakthi curd vendor", paneer)
+    assert r["say_en"] == f"Sakthi curd vendor does not sell {paneer}."
     assert proposals == [] and await _orders(store) == []
 
 
@@ -308,14 +315,16 @@ async def test_order_create_product_the_supplier_does_not_sell_is_refused(store,
 async def test_order_create_unusable_quantity_asks_again_and_saves_nothing(store, session, proposals, item):
     supplier = "aavin vendor" if "milk" in item["product"] else "sakthi vendor"
     r = await orders.order_create(supplier, [item])
-    assert r["ok"] is False and r["say"].startswith("I can't order ")
+    assert r["ok"] is False and r["error"] == "QTY_UNCLEAR"
+    assert r["product"] in (await _name(store, "sakthi_curd_1l"), await _name(store, "aavin_milk_500ml"))
+    assert r["qty"] == item.get("qty") and "packs" in r["say_en"]
     assert proposals == [] and await _orders(store) == []
 
 
 async def test_order_create_without_items_proposes_nothing(store, session, proposals):
     for items in ([], None):
         r = await orders.order_create("sakthi vendor", items)
-        assert r["ok"] is False and r["say"] == t("k2.order.no_items", "en")
+        assert r["ok"] is False and r["error"] == "NO_ITEMS" and r["say_en"]
     assert proposals == [] and await _orders(store) == []
 
 
@@ -343,7 +352,8 @@ async def test_owners_yes_sends_the_order_through_the_registered_committer(store
     assert calls == []                                           # nothing is sent before the owner's yes
     use_call("tc-confirm")
     done = await confirm.resolve(r["confirm_id"], "yes")
-    assert (done["status"], done["say"]) == ("committed", "Order sent to Sakthi curd vendor.")
+    assert (done["status"], done["say_en"]) == ("committed", "Order sent to Sakthi curd vendor.")
+    assert (done["supplier"], done["state"], done["channel"]) == ("Sakthi curd vendor", "ORDER_PLACED", "telegram")
     o = await _repo.get_order(SHOP, proposals[0]["payload"]["order_id"])
     assert (o["state"], o["channel"], o["channelMsgId"]) == ("ORDER_PLACED", "telegram", "77:12")
     again = await confirm.resolve(r["confirm_id"], "yes")
@@ -370,7 +380,8 @@ async def test_commit_send_places_order_and_publishes(store, session, proposals,
     assert (o["state"], o["channel"], o["channelMsgId"]) == ("ORDER_PLACED", "whatsapp", "wamid.9")
     assert o["placedAt"] and o["updatedAt"] >= o["createdAt"]
     assert ("orders", {"shop_id": SHOP, "order_id": o["id"], "state": "ORDER_PLACED"}) in published
-    assert r == {"ok": True, "orderId": o["id"], "state": "ORDER_PLACED", "say": "Order sent to Sakthi curd vendor."}
+    assert r == {"ok": True, "orderId": o["id"], "state": "ORDER_PLACED", "supplier": "Sakthi curd vendor",
+                 "channel": "whatsapp", "say_en": "Order sent to Sakthi curd vendor."}
     msg = phone.of(StateMsg)[-1]
     assert (msg.entity, msg.id, msg.state) == ("order", o["id"], "ORDER_PLACED")
     assert msg.summary == f"30 L {await _name(store, 'sakthi_curd_1l')}"
@@ -398,7 +409,8 @@ async def test_commit_send_twice_is_idempotent(store, session, proposals, publis
     monkeypatch.setattr(messaging, "send_order", fake_send({"channel": "whatsapp", "messageId": "wamid.9"}, calls))
     await orders._commit_send(payload, None)
     again = await orders._commit_send(payload, None)
-    assert len(calls) == 1 and again["say"] == "That order was already sent."
+    assert len(calls) == 1 and again["already"] is True and again["state"] == "ORDER_PLACED"
+    assert again["say_en"] == "That order was already sent."
     assert sum(1 for topic, _ in published if topic == "orders") == 1
 
 
@@ -416,15 +428,17 @@ async def test_commit_send_fallback_keeps_draft_and_opens_url(store, session, pr
     assert (follow["kind"], follow["committer"]) == ("generic", "order.mark_sent")
     assert follow["payload"] == {"order_id": payload["order_id"], "idem": payload["idem"]}
     assert r["confirm_id"] == follow["confirm_id"]
-    assert r["say"] == ("The order message is ready. Double-tap Send, then tell me when it is sent. "
-                        "Did you send the order to Sakthi curd vendor?")
+    assert r["say_en"] == ("The order message is ready. Double-tap Send, then tell me when it is sent. "
+                           "Did you send the order to Sakthi curd vendor?")
+    assert (r["state"], r["supplier"], r["channel"]) == ("DRAFT", "Sakthi curd vendor", "whatsapp_link")
+    assert follow["facts"]["items"] == [{"product": await _name(store, "sakthi_curd_1l"), "qty": 30.0, "unit": "L"}]
     done = await orders._commit_mark_sent(follow["payload"], None)
     o = await _repo.get_order(SHOP, payload["order_id"])
     assert (o["state"], o["channel"]) == ("ORDER_PLACED", "manual")
-    assert done["say"] == "Order sent to Sakthi curd vendor."
+    assert done["say_en"] == "Order sent to Sakthi curd vendor." and done["channel"] == "manual"
     assert ("orders", {"shop_id": SHOP, "order_id": o["id"], "state": "ORDER_PLACED"}) in published
     again = await orders._commit_mark_sent(follow["payload"], None)
-    assert again["say"] == "That order was already sent."
+    assert again["already"] is True and again["say_en"] == "That order was already sent."
 
 
 async def test_commit_send_without_tokens_uses_the_real_click_to_chat_fallback(store, session, proposals, phone,
@@ -445,16 +459,17 @@ async def test_commit_send_call_channel_says_items_and_keeps_draft(store, sessio
     assert (await _repo.get_order(SHOP, payload["order_id"]))["state"] == "DRAFT"
     assert phone.of(StateMsg)[-1].summary == "OPEN_URL tel:+919000000003"
     box = await _name(store, "arun_icecream_box")
-    assert r["say"] == (f"Calling Arun ice cream distributor. Tell them: 4 box {box}. "
-                        "Did you send the order to Arun ice cream distributor?")
+    assert r["say_en"] == (f"Calling Arun ice cream distributor. Tell them: 4 box {box}. "
+                           "Did you send the order to Arun ice cream distributor?")
+    assert r["channel"] == "call" and r["items"] == [{"product": box, "qty": 4.0, "unit": "box"}]
     assert proposals[-1]["committer"] == "order.mark_sent"
 
 
 async def test_commit_send_missing_order_says_none(store, session):
     r = await orders._commit_send({"order_id": "o_missing", "idem": "x"}, None)
-    assert r["ok"] is False and r["say"] == "No open order found."
+    assert r == {"ok": False, "error": "ORDER_NONE", "say_en": "No open order found."}
     r = await orders._commit_mark_sent({"order_id": "o_missing", "idem": "x"}, None)
-    assert r["ok"] is False and r["say"] == "No open order found."
+    assert r["ok"] is False and r["error"] == "ORDER_NONE"
 
 
 # ---------------------------------------------------------------------------------------------------- order_status
@@ -464,8 +479,9 @@ async def test_order_status_reports_vendor_reply(store, session):
                                   "state": "ORDER_PLACED", "items": [], "lang": "en",
                                   "vendorReply": {"text": "OK, 6 pm"}, "updatedAt": "2026-10-12T09:00:00"})
     r = await orders.order_status()
-    assert r["say"] == "Order to Sakthi curd vendor: order placed. They said: OK, 6 pm"
+    assert r["say_en"] == "Order to Sakthi curd vendor: order placed. They said: OK, 6 pm"
     assert (r["ok"], r["orderId"], r["state"]) == (True, "o9", "ORDER_PLACED")
+    assert (r["supplier"], r["vendorReply"], r["items"]) == ("Sakthi curd vendor", "OK, 6 pm", [])
 
 
 async def test_order_status_latest_active_and_by_id(store, session):
@@ -476,12 +492,14 @@ async def test_order_status_latest_active_and_by_id(store, session):
     await _repo.save_order(SHOP, {"id": "o3", "supplierId": "aavin_vendor", "supplierName": "Aavin vendor",
                                   "state": "CLOSED", "items": [], "updatedAt": "2026-10-12T11:00:00"})
     latest = await orders.order_status()
-    assert latest["orderId"] == "o1" and latest["say"] == "Order to Aavin vendor: delivery pending."
+    assert latest["orderId"] == "o1" and latest["say_en"] == "Order to Aavin vendor: delivery pending."
+    assert latest["vendorReply"] is None
     by_id = await orders.order_status("o2")
-    assert by_id["say"] == "Order to Sakthi curd vendor: not sent yet."
+    assert by_id["say_en"] == "Order to Sakthi curd vendor: not sent yet." and by_id["state"] == "DRAFT"
 
 
-async def test_order_status_speaks_every_state_in_every_language(store, session):
+async def test_order_status_returns_the_state_code_whatever_the_language(store, session):
+    """The state code is the fact; the English words are only a hint and never change with the session language."""
     for lang in ("en", "ta", "hi"):
         session.lang = lang
         for state in ("DRAFT", "ORDER_PLACED", "DELIVERY_PENDING", "DELIVERY_RECONCILED", "DISCREPANCY",
@@ -489,16 +507,16 @@ async def test_order_status_speaks_every_state_in_every_language(store, session)
             await _repo.save_order(SHOP, {"id": "o1", "supplierId": "aavin_vendor", "supplierName": "Aavin vendor",
                                           "state": state, "items": [], "updatedAt": "2026-10-12T08:00:00"})
             r = await orders.order_status("o1")
-            words = t(f"k2.order_state.{state}", lang)
-            assert words != f"k2.order_state.{state}", (lang, state)
-            assert r["say"] == t("k2.order.status", lang, supplier="Aavin vendor", state=words)
+            assert (r["state"], r["supplier"]) == (state, "Aavin vendor")
+            assert r["say_en"] == f"Order to Aavin vendor: {orders._STATE_WORDS[state]}."
+            assert "_" not in orders._STATE_WORDS[state]
 
 
 async def test_order_status_none(store, session):
     r = await orders.order_status()
-    assert r["ok"] is False and r["say"] == "No open order found."
+    assert r["ok"] is False and r["error"] == "ORDER_NONE" and r["say_en"] == "No open order found."
     missing = await orders.order_status("nope")
-    assert missing["ok"] is False and missing["say"] == "No open order found."
+    assert missing["ok"] is False and missing["error"] == "ORDER_NONE"
 
 
 async def test_commit_send_telegram_fallback_says_the_bot_is_not_linked(store, session, proposals, phone, monkeypatch):
@@ -510,9 +528,9 @@ async def test_commit_send_telegram_fallback_says_the_bot_is_not_linked(store, s
     r = await orders._commit_send(payload, None)
     assert (await _repo.get_order(SHOP, payload["order_id"]))["state"] == "DRAFT"
     assert phone.of(StateMsg)[-1].summary == f"OPEN_URL {url}"
-    assert r["say"] == ("Sakthi curd vendor is not on the AIRA Telegram bot yet. "
-                        "The order message is ready. Double-tap Send, then tell me when it is sent. "
-                        "Did you send the order to Sakthi curd vendor?")
+    assert r["say_en"] == ("Sakthi curd vendor is not on the AIRA Telegram bot yet. "
+                           "The order message is ready. Double-tap Send, then tell me when it is sent. "
+                           "Did you send the order to Sakthi curd vendor?")
     assert r["reason"] == "telegram_not_linked"
 
 
@@ -549,7 +567,8 @@ async def test_judge_order_goes_to_the_demo_vendor_not_the_real_one(store, judge
     assert calls == []                                       # a judge's order never reaches a real vendor
     o = await _repo.get_order(SHOP, payload["order_id"])
     assert (o["state"], o["channel"], o["channelMsgId"]) == ("ORDER_PLACED", "demo", f"demo-{o['id']}")
-    assert r["say"] == "Order sent to the demo Sakthi curd vendor. The reply comes in a few seconds."
+    assert r["say_en"] == "Order sent to the demo Sakthi curd vendor. The reply comes in a few seconds."
+    assert (r["demo"], r["channel"], r["supplier"]) == (True, "demo", "Sakthi curd vendor")
     assert ("orders", {"shop_id": SHOP, "order_id": o["id"], "state": "ORDER_PLACED"}) in published
     logs = [d for _, d in await store.list(f"shops/{SHOP}/auditLogs")]
     assert [(a["action"], a["outcome"]) for a in logs] == [("order_placed", "demo")]
@@ -587,15 +606,15 @@ async def test_demo_reply_echoes_the_delivery_time_the_judge_asked_for(store, ju
     assert phone.of(TranscriptMsg)[-1].text == "Demo reply from Sakthi curd vendor: OK, I will deliver by 6 am tomorrow."
 
 
-async def test_demo_reply_speaks_the_judges_language(store, judge, proposals, phone, instant_demo_reply):
+async def test_demo_reply_is_english_facts_whatever_the_judges_language(store, judge, proposals, phone,
+                                                                        instant_demo_reply):
+    """Live says the notice in the judge's language; the backend only hands it the facts, in English."""
     judge.lang = "ta"
     payload = await _drafted(proposals)
     r = await orders._commit_send(payload, None)
     await _demo_replies_done()
-    assert r["say"] == t("k2.order.sent_demo", "ta", supplier="Sakthi curd vendor")
-    reply = t("k2.demo_vendor.reply", "ta")
-    assert phone.of(TranscriptMsg)[-1].text == t("k2.order.demo_vendor_replied", "ta", supplier="Sakthi curd vendor",
-                                                 text=reply)
+    assert r["say_en"] == "Order sent to the demo Sakthi curd vendor. The reply comes in a few seconds."
+    assert phone.of(TranscriptMsg)[-1].text == "Demo reply from Sakthi curd vendor: OK, delivery today at 6 pm."
 
 
 async def test_demo_reply_after_the_judge_left_is_dropped_quietly(store, judge, proposals, phone, instant_demo_reply):
@@ -616,8 +635,9 @@ async def test_a_telegram_outage_is_not_called_vendor_not_on_the_bot(store, sess
                         fake_send({"channel": "whatsapp_link", "fallbackUrl": "https://wa.me/1?text=x",
                                    "reason": "telegram_failed"}))
     r = await orders._commit_send(payload, None)
-    assert "not on the AIRA Telegram bot" not in r["say"]
-    assert r["say"].startswith("The Telegram bot could not send it right now.")
+    assert "not on the AIRA Telegram bot" not in r["say_en"]
+    assert r["say_en"].startswith("The Telegram bot could not send it right now.")
+    assert r["reason"] == "telegram_failed"
 
 
 def test_tools_that_take_an_order_id_say_an_empty_one_means_the_latest():

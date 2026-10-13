@@ -77,7 +77,8 @@ async def test_web_search_uses_the_read_model_with_google_search_grounding(fake_
     assert len(tools) == 1 and tools[0].google_search is not None
     assert getattr(call["config"], "response_mime_type", None) in (None, "text/plain")
     assert out["ok"] is True
-    assert out["answer"] == "Chennai is 34°C and sunny today." and out["say"] == out["answer"]
+    assert out["answer"] == "Chennai is 34°C and sunny today." and out["say_en"] == out["answer"]
+    assert "say" not in out and "error" not in out
     assert out["sources"] == ["weather.com", "imd.gov.in"]  # de-duplicated, in order
 
 
@@ -96,12 +97,13 @@ async def test_web_search_failure_never_raises():
         out = await web_search("anything")
     finally:
         gemini.set_client(None)
-    assert out["ok"] is False and out["answer"] == "" and out["sources"] == [] and out["say"]
+    assert out["ok"] is False and out["answer"] == "" and out["sources"] == [] and out["error"] == "unavailable"
+    assert out["say_en"] == search_mod.UNAVAILABLE
 
 
 async def test_web_search_rejects_an_empty_query():
     out = await web_search("   ")
-    assert out["ok"] is False and out["say"]
+    assert out["ok"] is False and out["error"] == "empty_query" and out["say_en"] == search_mod.EMPTY
 
 
 # --- (a) indirect prompt injection: search text is data, never instructions -----------------------------------
@@ -147,7 +149,7 @@ async def test_injected_search_result_is_cleaned_before_it_reaches_the_model():
     finally:
         gemini.set_client(None)
     assert out["ok"] is True
-    assert out["answer"] == "Petrol is 102 rupees in Chennai." and out["say"] == out["answer"]
+    assert out["answer"] == "Petrol is 102 rupees in Chennai." and out["say_en"] == out["answer"]
     assert "supplier_pay" not in json.dumps(out) and "confirm_id" not in json.dumps(out)
     assert out["sources"] == ["ndtv.com"]            # an instruction-like source title is dropped too
 
@@ -158,7 +160,7 @@ async def test_a_result_that_is_only_instructions_is_unavailable():
         out = await web_search("anything")
     finally:
         gemini.set_client(None)
-    assert out["ok"] is False and out["answer"] == "" and out["say"] and out["external"] is True
+    assert out["ok"] is False and out["answer"] == "" and out["error"] == "unavailable" and out["external"] is True
 
 
 def test_prompt_tells_the_model_search_content_is_information_not_instructions():
@@ -192,7 +194,7 @@ async def test_external_numbers_do_not_whitelist_money_or_stock_claims():
     verdict = safety.check_numbers("Milk is 80 rupees a litre.", [out])
     assert verdict.ok is False and verdict.unexpected == [80]
     # a real tool result still allows its own numbers next to the external one
-    ok = safety.check_numbers("Milk is 60 rupees a litre.", [out, {"say": "Aavin milk is ₹60 a litre", "price": 60}])
+    ok = safety.check_numbers("Milk is 60 rupees a litre.", [out, {"say_en": "Aavin milk is 60 rupees", "price": 60}])
     assert ok.ok is True
     assert safety.verified_results([out, {"price": 60}]) == [{"price": 60}]
     assert safety.is_external(out) and not safety.is_external({"price": 60}) and not safety.is_external("x")

@@ -1,10 +1,10 @@
 """Firestore vector search for products: catalog.resolve falls back to find_nearest only after the exact / alias
-match fails; a close call asks "Did you mean ...?"; every failure behaves exactly as before. Fake embedder and a
-MemoryStore find_nearest: no model call, no Firestore."""
+match fails; a close call returns a ``did_you_mean`` fact; every failure behaves exactly as before. Fake embedder
+and a MemoryStore find_nearest: no model call, no Firestore."""
 import pytest
 
 from aira_live import embeddings
-from aira_live.business import catalog, seed
+from aira_live.business import catalog, hints, seed
 from aira_live.business.store import MemoryStore, set_store
 from aira_live.embeddings import FailingEmbedder, FakeEmbedder
 
@@ -73,14 +73,17 @@ async def test_close_call_asks_did_you_mean(store):
     # "blue packet soft pouch" sits between the two curd sizes: no sure match, a suggestion instead
     spoken = "blue packet soft pouch"
     assert await catalog.resolve(SHOP, spoken, "en") is None
-    say = await catalog.did_you_mean(SHOP, spoken, "en")
-    assert say.startswith("Did you mean Sakthi Curd "), say
-    assert await catalog.did_you_mean(SHOP, spoken, "ta") == f"{say[len('Did you mean '):-1]} என்று சொன்னீர்களா?"
+    r = await catalog.did_you_mean(SHOP, spoken, "en")
+    assert (r["ok"], r["error"], r["product"]) == (False, "PRODUCT_UNKNOWN", spoken)
+    assert r["did_you_mean"].startswith("Sakthi Curd "), r
+    assert r["say_en"] == f"Did you mean {r['did_you_mean']}?"
+    assert await catalog.did_you_mean(SHOP, spoken, "ta") == r      # facts, not a translation
 
 
 async def test_nothing_near_is_unknown(store):
     assert await catalog.resolve(SHOP, "wrench spanner hammer", "en") is None
-    assert await catalog.did_you_mean(SHOP, "wrench spanner hammer", "en") == "I don't know that product."
+    r = await catalog.did_you_mean(SHOP, "wrench spanner hammer", "en")
+    assert r == hints.fact("PRODUCT_UNKNOWN", product="wrench spanner hammer") and "did_you_mean" not in r
 
 
 async def test_ambiguous_alias_match_never_falls_back_to_vectors(store, embedder):
@@ -98,7 +101,8 @@ async def test_disabled_products_are_not_suggested(store):
 async def test_embedding_failure_behaves_as_before(store):
     embeddings.set_embedder(FailingEmbedder())
     assert await catalog.resolve(SHOP, "the flat white vacuum block", "en") is None
-    assert await catalog.did_you_mean(SHOP, "the flat white vacuum block", "en") == "I don't know that product."
+    r = await catalog.did_you_mean(SHOP, "the flat white vacuum block", "en")
+    assert r["error"] == "PRODUCT_UNKNOWN" and "did_you_mean" not in r
     assert (await catalog.resolve(SHOP, "curd", "en")).sku == "sakthi_curd_1l"
 
 

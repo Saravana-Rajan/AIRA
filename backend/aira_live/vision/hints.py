@@ -1,14 +1,10 @@
-"""Aim/retake hints spoken to Sam.
+"""Aim/retake hints: a key per situation, with a short English meaning.
 
-The sentences live in the shared i18n catalog (``aira_live/i18n/{en,ta,hi}.json``, keys ``vision.aim.*``).
-Vision results carry only the key (``aim_hint``); tools speak ``hint_text(result.aim_hint, session.lang)``,
-which is the same as ``i18n.t(key, lang)``.
+Vision results carry only the key (``aim_hint``); tools pass it on as a fact and Gemini Live tells the owner,
+in whatever language he is speaking, what to do with the phone. ``hint_text(key)`` gives the English meaning
+for ``say_en`` and the caption. Nothing here is translated.
 """
 from __future__ import annotations
-
-from aira_live.i18n import t
-
-LANGS: tuple[str, ...] = ("en", "ta", "hi")
 
 HINT_KEYS: tuple[str, ...] = (
     "vision.aim.move_back",     # packs cut off at the frame edge
@@ -19,14 +15,20 @@ HINT_KEYS: tuple[str, ...] = (
     "vision.aim.not_visible",   # pointing target not in view
 )
 
+# The English meaning per key: what the owner should do with the phone.
+HINTS: dict[str, str] = {
+    "vision.aim.move_back": "Move the phone back a little.",
+    "vision.aim.spread_out": "Spread the items apart so I can count them.",
+    "vision.aim.show_items": "Show me the items in front of the camera.",
+    "vision.aim.show_label": "Turn the pack so the label faces the camera.",
+    "vision.aim.hold_closer": "Hold it closer to the camera.",
+    "vision.aim.not_visible": "I can't see it right now.",
+}
 
-def hint_text(key: str, lang: str) -> str:
-    """Thin wrapper over ``i18n.t``: "" for an empty or unknown key; an unknown language falls back to English."""
+
+def hint_text(key: str, lang: str | None = None) -> str:
+    """The short English aim hint for ``key``; "" for an empty or unknown key. ``lang`` is ignored (kept for
+    callers that still pass it): Live phrases the hint in the owner's language."""
     if not key:
         return ""
-    text = t(key, lang)
-    return "" if text == key else text
-
-
-# Read-only view of the catalog sentences per key and language. i18n stays the single source of truth.
-HINTS: dict[str, dict[str, str]] = {key: {lang: hint_text(key, lang) for lang in LANGS} for key in HINT_KEYS}
+    return HINTS.get(key, "")

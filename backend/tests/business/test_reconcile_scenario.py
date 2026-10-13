@@ -218,8 +218,10 @@ async def test_full_scenario_order_30_count_28(store):
     assert r.status == "discrepancy"
     state = transition("order", state, "DISCREPANCY")
     short = by_kind(r, "SHORT_DELIVERY")[0]
-    assert hints.say("SHORT_DELIVERY", "en", product="Sakthi Curd 1 L", expected=int(short["expected"]),
-                     actual=int(short["actual"])) == "Sakthi Curd 1 L: ordered 30, counted 28. Short delivery."
+    fact = hints.fact("SHORT_DELIVERY", product="Sakthi Curd 1 L", expected=int(short["expected"]),
+                      actual=int(short["actual"]))
+    assert (fact["error"], fact["expected"], fact["actual"]) == ("SHORT_DELIVERY", 30, 28)
+    assert fact["say_en"] == "Sakthi Curd 1 L: ordered 30, counted 28. Short delivery."
 
     # Only the verified 28 go into stock.
     await ledger.apply(SHOP, "sakthi_curd_1l", 28, "DELIVERY", "delivery", "d1", "k-deliv", today=d0)

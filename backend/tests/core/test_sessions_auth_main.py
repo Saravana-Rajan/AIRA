@@ -87,7 +87,7 @@ async def test_notify_reaches_every_live_session_of_that_shop_only(mk_session):
     spoken = []
 
     class Bridge:
-        async def speak_notice(self, text):
+        async def speak_notice(self, text, urgent=False):
             spoken.append(text)
 
     sessions.register(s1, Bridge())
@@ -96,8 +96,8 @@ async def test_notify_reaches_every_live_session_of_that_shop_only(mk_session):
     try:
         n = await sessions.notify("sunrise", "Sakthi vendor confirmed: delivery at 6 pm.")
         assert n == 2 and spoken == ["Sakthi vendor confirmed: delivery at 6 pm."]
-        assert [m.t for m in r1.msgs] == ["transcript", "cue"] and r1.msgs[0].text.startswith("Sakthi vendor")
-        assert r1.msgs[1].cue == "ack" and [m.t for m in r2.msgs] == ["transcript", "cue"]
+        assert [m.t for m in r1.msgs] == ["cue"] and r1.msgs[0].cue == "ack"  # Live says and captions it
+        assert [m.t for m in r2.msgs] == ["cue", "transcript"] and r2.msgs[1].text.startswith("Sakthi vendor")
         assert r3.msgs == []
     finally:
         for s in (s1, s2, s3):
@@ -125,14 +125,14 @@ async def test_notify_survives_a_failing_bridge(mk_session):
     good, r_good = mk_session(shop="nb_shop")
 
     class Broken:
-        async def speak_notice(self, text):
+        async def speak_notice(self, text, urgent=False):
             raise RuntimeError("live gone")
 
     sessions.register(bad, Broken())
     sessions.register(good)
     try:
         assert await sessions.notify("nb_shop", "Low stock: Aavin milk", cue="warn") == 1
-        assert r_good.msgs[-1].cue == "warn"
+        assert [m.cue for m in r_good.msgs if m.t == "cue"] == ["warn"]
     finally:
         sessions.unregister(bad)
         sessions.unregister(good)
@@ -349,9 +349,7 @@ def test_notify_speaks_into_the_live_session(real_mode):
         ws.receive_json()
         fb = real_mode[0]
         assert ws.portal.call(sessions.notify, DEMO, "Sakthi vendor confirmed: delivery at 6 pm.") >= 1
-        assert ws.receive_json() == {"t": "transcript", "role": "aira",
-                                     "text": "Sakthi vendor confirmed: delivery at 6 pm.", "final": True, "lang": "en"}
-        assert ws.receive_json() == {"t": "cue", "cue": "ack"}
+        assert ws.receive_json() == {"t": "cue", "cue": "ack"}  # Live says the facts and captions its words
         assert len(fb.sent_text) == 1 and fb.sent_text[0].startswith(NOTICE_PREFIX)
         assert "Sakthi vendor confirmed" in fb.sent_text[0]
 
@@ -380,7 +378,7 @@ def test_live_start_failure_reports_network_error_and_keeps_the_socket(real_mode
 
 def test_confirm_reply_in_real_mode_tells_the_model(real_mode, mem_store):
     async def commit(payload, value):
-        return {"say": "Order sent to Sakthi vendor."}
+        return {"say_en": "Order sent to Sakthi vendor.", "supplier": "Sakthi vendor", "total": 1500}
 
     confirm.register_committer("test.real.ws", commit)
     with TestClient(main_mod.app).websocket_connect("/ws", headers=ORIGIN) as ws:
@@ -390,11 +388,11 @@ def test_confirm_reply_in_real_mode_tells_the_model(real_mode, mem_store):
                                                  "committer": "test.real.ws", "status": "pending",
                                                  "sessionId": sid}))
         ws.send_json({"t": "confirm", "id": "cf_1", "answer": "yes"})
-        assert ws.receive_json()["text"] == "Order sent to Sakthi vendor."
         fb = real_mode[0]
-        _wait(lambda: fb.sent_text)
-        assert fb.sent_text[0].startswith("[CONFIRMATION]") and "cf_1" in fb.sent_text[0]
-        assert "Order sent to Sakthi vendor." in fb.sent_text[0]
+        _wait(lambda: fb.sent_text)  # no server caption: Live tells the result in the owner's language
+        note = fb.sent_text[0]
+        assert note.startswith("[CONFIRMATION]") and "cf_1" in note and "in the language he is speaking" in note
+        assert '"total": 1500' in note and '"supplier": "Sakthi vendor"' in note and '"status": "committed"' in note
 
 
 # ---------- tokenless mode guards: browser Origin allowlist + per-IP session cap (shared/docs/ops/security.md) ----------

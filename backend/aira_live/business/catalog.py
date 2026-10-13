@@ -2,16 +2,17 @@
 
 The model proposes a name; this module decides what it means. resolve() and resolve_supplier() return None
 when they are not sure: an unknown name, two different products in one name, or size variants with no
-default pack and no size hint. The tool then asks, with
-hints.say("PRODUCT_AMBIGUOUS" | "PRODUCT_UNKNOWN" | "SUPPLIER_UNKNOWN", lang).
+default pack and no size hint. The tool then returns the facts of
+hints.fact("PRODUCT_AMBIGUOUS" | "PRODUCT_UNKNOWN" | "SUPPLIER_UNKNOWN", ...) and Live asks in the owner's language.
 
 Every language's aliases count, whatever `lang` is, because owners mix Tamil, Hindi and English.
 Sizes ("half litre", "ஒரு லிட்டர்", "500 ml", "दो सौ एमएल") only choose between size variants of one product.
 
 Vector fallback: when the exact / alias match finds nothing, "the blue packet curd" or "the round tub" is
 embedded (aira_live.embeddings) and matched with Firestore ``find_nearest`` (COSINE, limit 3) over the shop's
-products. A clear nearest neighbour resolves; a close call is a suggestion, which ``did_you_mean`` turns into
-"Did you mean Sakthi Curd 500 ml?". No key, no index or any error: the result is exactly the old one (None).
+products. A clear nearest neighbour resolves; a close call is a suggestion, which ``did_you_mean`` returns as the
+``did_you_mean`` fact ("Did you mean Sakthi Curd 500 ml?"). No key, no index or any error: the result is exactly
+the old one (None).
 """
 from __future__ import annotations
 
@@ -27,7 +28,6 @@ from aira_live.business import hints, paths
 from aira_live.business.numwords import word_amounts
 from aira_live.business.store import get_store
 from aira_live.business.text import tokens
-from aira_live.i18n import t
 from aira_live.vision.identify import ProductRef
 
 log = logging.getLogger(__name__)
@@ -256,16 +256,20 @@ async def resolve(shop_id: str, spoken: str, lang: str) -> ProductRef | None:
     return sure
 
 
-async def did_you_mean(shop_id: str, spoken: str, lang: str) -> str:
-    """What to say for an unresolved product: "Did you mean Sakthi Curd 500 ml?" when the vector search found a
-    close product, else the plain PRODUCT_UNKNOWN hint. Uses the suggestions ``resolve`` just found."""
+async def did_you_mean(shop_id: str, spoken: str, lang: str | None = None) -> dict:
+    """The PRODUCT_UNKNOWN facts for an unresolved product: ``{"ok": False, "error": "PRODUCT_UNKNOWN",
+    "product": spoken, "say_en": ...}`` plus ``"did_you_mean": <catalog name>`` when the vector search found a close
+    product (then ``say_en`` is "Did you mean Sakthi Curd 500 ml?"). Uses the suggestions ``resolve`` just found.
+    ``lang`` is accepted for compatibility and ignored."""
     key = (shop_id, (spoken or "").strip().casefold())
     refs = _suggestions.get(key)
     if refs is None:
         _, refs = await resolve_vector(shop_id, spoken or "")
     if not refs:
-        return hints.say("PRODUCT_UNKNOWN", lang, product=spoken)
-    return t("biz.product.did_you_mean", lang, name=refs[0].name)
+        return hints.fact("PRODUCT_UNKNOWN", product=spoken)
+    name = refs[0].name
+    return {"ok": False, "error": "PRODUCT_UNKNOWN", "product": spoken, "did_you_mean": name,
+            "say_en": f"Did you mean {name}?"}
 
 
 # ---------- suppliers ----------

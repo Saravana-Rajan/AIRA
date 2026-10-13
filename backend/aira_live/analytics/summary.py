@@ -1,7 +1,7 @@
 """Day summary for one shop (IST business day). Pure aggregation in summarize(); Firestore reads in today().
 
 Reads `shops/{shop}/{products,inventory,sales,orders}` in database "aira" (spec §5). It only reads: nothing
-here writes stock, money or state.
+here writes stock, money or state. Spoken text is English facts only: Live phrases them in the owner's language.
 """
 from __future__ import annotations
 
@@ -13,55 +13,65 @@ from zoneinfo import ZoneInfo
 
 from aira_live.analytics import forecast
 from aira_live.db import db
-from aira_live.i18n import t
 
 IST = ZoneInfo("Asia/Kolkata")
 SAFETY = 1.15
-UNITS = ("L", "pack", "jar", "box")  # catalog selling units with spoken labels (i18n keys units.<unit>[.one])
-DEFAULT_UNIT = "pack"                # what business.ledger and business.expiry use for a product with no unit
+UNIT_WORDS = {"L": ("litre", "litres"), "pack": ("pack", "packs"), "jar": ("jar", "jars"), "box": ("box", "boxes")}
+UNITS = tuple(UNIT_WORDS)         # catalog selling units with an English word
+DEFAULT_UNIT = "pack"             # what business.ledger and business.expiry use for a product with no unit
 
 
 def _num(x) -> str:
     return str(int(x)) if isinstance(x, float) and x.is_integer() else str(x)
 
 
-def amount(qty, unit: str | None, lang: str, fmt: Callable[[object], str] = _num) -> str:
-    """A quantity in the product's selling unit, spoken with that unit: "23 litres", "1 pack", "3 jars".
+def amount(qty, unit: str | None, fmt: Callable[[object], str] = _num) -> str:
+    """A quantity in the product's selling unit, in English: "23 litres", "1 pack", "3 jars".
 
     Stock, ledger, expiry and forecast numbers are in selling units (litres for milk and curd), so a bare
-    "23 Aavin Milk 500 ml" would be heard as 23 pouches when it is 46. An unknown unit is spoken as stored.
+    "23 Aavin Milk 500 ml" would be heard as 23 pouches when it is 46. An unknown unit is written as stored.
     """
     n = fmt(qty)
     unit = unit or DEFAULT_UNIT
-    if unit not in UNITS:
+    words = UNIT_WORDS.get(unit)
+    if words is None:
         return f"{n} {unit}"
-    return t(f"units.{unit}.one" if n == "1" else f"units.{unit}", lang, qty=n)
+    return f"{n} {words[0] if n == '1' else words[1]}"
 
 
-def item(qty, unit: str | None, name: str, lang: str, fmt: Callable[[object], str] = _num) -> str:
-    """A quantity with its unit and the product name ("23 litres of Aavin Milk 500 ml"), in each language's
-    word order."""
-    return t("units.item", lang, amount=amount(qty, unit, lang, fmt), name=name)
+def item(qty, unit: str | None, name: str, fmt: Callable[[object], str] = _num) -> str:
+    """A quantity with its unit and the product name: "23 litres of Aavin Milk 500 ml"."""
+    return f"{amount(qty, unit, fmt)} of {name}"
 
 
-def say(d: dict, lang: str) -> str:
-    """The spoken day summary for a `today()` result. Shared by the day_summary tool and /jobs/day-summary."""
+def facts(d: dict) -> dict:
+    """The day's facts for Live from a `today()` result: exact sales count and revenue (rupees), the top
+    seller's name, the suggested orders (each with its product name) and the English meaning in ``say_en``."""
     names = d.get("names") or {}
-    if not d.get("sales_count"):
-        text = t("insights.no_sales", lang)
+    top = d.get("top_sku")
+    orders = [{**o, "name": names.get(o["sku"], o["sku"])} for o in d.get("suggested_orders") or []]
+    out = {"sales_count": int(d.get("sales_count") or 0), "revenue": d.get("revenue", 0),
+           "top_seller": names.get(top, top) if top else None, "suggested_orders": orders,
+           "demo_history": bool(d.get("demo_history"))}
+    out["say_en"] = say_en(out)
+    return out
+
+
+def say_en(f: dict) -> str:
+    """The English meaning of `facts()`. Shared by the day_summary tool and /jobs/day-summary."""
+    if not f.get("sales_count"):
+        text = "No sales recorded today yet."
     else:
-        top = d.get("top_sku")
-        text = t("insights.day_summary", lang, count=d["sales_count"], revenue=_num(d.get("revenue", 0)),
-                 top=names.get(top, top) or "")
-    orders = d.get("suggested_orders") or []
+        text = f"Today: {f['sales_count']} sales, {_num(f.get('revenue', 0))} rupees."
+        if f.get("top_seller"):
+            text += f" Top seller: {f['top_seller']}."
+    orders = f.get("suggested_orders") or []
     if orders:
-        items = ", ".join(item(o["qty"], o.get("unit"), names.get(o["sku"], o["sku"]), lang) for o in orders)
-        if d.get("demo_history"):  # the forecast includes backfilled demo rows: never present it as real data
-            text = f"{text} {t('insights.demo_history', lang)}"
-        text = f"{text} {t('insights.tomorrow_order', lang, items=items)}"
+        items = ", ".join(item(o["qty"], o.get("unit"), o.get("name") or o["sku"]) for o in orders)
+        if f.get("demo_history"):  # the forecast includes backfilled demo rows: never present it as real data
+            text = f"{text} Based on demo sales history."
+        text = f"{text} Suggested order for tomorrow: {items}."
     return text
-
-
 def suggest_qty(forecast_value: float | None, on_hand: float, safety: float = SAFETY) -> int:
     """Units to order so one day of forecast demand plus a safety margin is covered. 0 without a forecast."""
     if forecast_value is None:

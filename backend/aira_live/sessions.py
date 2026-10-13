@@ -83,12 +83,25 @@ def by_shop(shop_id: str) -> list[tuple[Session, object | None]]:
     return [(s, b) for s, b in list(_REG.values()) if s.shop_id == shop_id]
 
 
-async def notify(shop_id: str, text: str, cue: str = "ack") -> int:
-    """Speak ``text`` to every live session of a shop; returns how many got it.
+async def deliver(s: Session, bridge: object | None, text: str, cue: str = "ack", urgent: bool = False) -> None:
+    """One notice to one session: the earcon, then the facts to Live, which tells the owner in the language he
+    is speaking (Live's words are the caption). Without a Live bridge (mock mode, still connecting) the facts
+    themselves are the caption. Raises when the session is unreachable."""
+    await s.send(CueMsg(cue=cue))
+    if bridge is None:
+        await s.send(TranscriptMsg(role="aira", text=text, final=True, lang=s.lang))
+    elif urgent:
+        await bridge.speak_notice(text, urgent=True)
+    else:
+        await bridge.speak_notice(text)
 
-    Each session gets the text as a caption plus an earcon. When it has a Live bridge, AIRA also says it in the
-    live audio, in the language the owner last spoke. A session that fails (closed socket, dead bridge) is
-    logged, skipped and not counted. A session that already got the same notice within
+
+async def notify(shop_id: str, text: str, cue: str = "ack", urgent: bool = False) -> int:
+    """Tell every live session of a shop ``text`` (facts, usually English); returns how many got it.
+
+    Each session gets an earcon, and Live says the facts in the language the owner is speaking (``deliver``).
+    ``urgent`` (a safety line) cuts into the answer being spoken. A session that fails (closed socket, dead
+    bridge) is logged, skipped and not counted. A session that already got the same notice within
     ``session.NOTICE_DEDUPE_S`` seconds is skipped too: a loop may raise the same line again, the owner hears
     it once.
     """
@@ -98,10 +111,7 @@ async def notify(shop_id: str, text: str, cue: str = "ack") -> int:
         if s.notice_is_repeat(text):
             continue
         try:
-            await s.send(TranscriptMsg(role="aira", text=text, final=True, lang=s.lang))
-            await s.send(CueMsg(cue=cue))
-            if bridge is not None:
-                await bridge.speak_notice(text)
+            await deliver(s, bridge, text, cue, urgent)
         except Exception:
             log.warning("notify: session %s unreachable", s.session_id, exc_info=True)
             continue

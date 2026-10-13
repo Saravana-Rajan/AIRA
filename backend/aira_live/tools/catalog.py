@@ -5,6 +5,9 @@ through ``confirm.propose`` and writes only in its committer, after the owner's 
 transaction with an idempotency doc (``ids.current_idem_key()``) and an audit entry. A repeated "yes" or a
 retried call finds the idempotency doc and changes nothing.
 
+Tools return FACTS (names, numbers, ids, error codes) plus a short English ``say_en`` meaning hint; Gemini Live
+phrases them in whatever language the owner is speaking.
+
 - ``product_add``: asks for the price and the unit before proposing; "add buttermilk" for a product the shop
   already has asks "add as stock, or a new product?" instead of making a duplicate.
 - ``product_disable``: ``active=false``. The doc, its inventory and its ledger stay; ``catalog.resolve`` and the
@@ -24,7 +27,6 @@ from aira_live import confirm, embeddings, ids
 from aira_live.business import audit, catalog, hints, ledger, paths
 from aira_live.business.clock import now_iso
 from aira_live.business.store import Txn, get_store
-from aira_live.i18n import t
 from aira_live.messaging.clicktochat import fmt_qty
 from aira_live.session import get_session
 from aira_live.tools.orders import _canon_unit, product_doc, qty_phrase
@@ -115,6 +117,20 @@ def _title(s: str) -> str:
     return " ".join(w if not w.isascii() else w[:1].upper() + w[1:] for w in s.split())
 
 
+def _duplicate_sku(sku: str, label: str) -> dict:
+    return {"ok": False, "error": "duplicate_sku", "sku": sku, "product": label,
+            "say_en": f"{label} is already in the shop. Say a different name or size."}
+
+
+def _duplicate_supplier(name: str) -> dict:
+    return {"ok": False, "error": "duplicate_supplier", "supplier": name, "say_en": f"{name} is already a vendor."}
+
+
+def _price_q(name: str) -> dict:
+    return {"ok": False, "missing": "price_rupees", "product": name,
+            "say_en": f"What is the selling price of {name}, in rupees?"}
+
+
 # ---------------------------------------------------------------------------------------------------- product_add
 
 async def product_add(name: str, brand: str | None = None, unit: str | None = None, pack_size: str | None = None,
@@ -129,35 +145,38 @@ async def product_add(name: str, brand: str | None = None, unit: str | None = No
     s = get_session()
     name, brand, size = _clean(name), _clean(brand), _clean(pack_size)
     if not name:
-        return {"ok": False, "missing": "name", "say": t("k3.product.name_q", s.lang)}
+        return {"ok": False, "missing": "name", "say_en": "Which product should I add?"}
     price, u = _price(price_rupees), _unit(unit)
     if price is None or u is None:
         # "add buttermilk" with no details, for a product the shop already has: stock, or a new product?
         ref = await catalog.resolve(s.shop_id, name, s.lang)
         if ref is not None:
-            return {"ok": False, "exists": ref.sku, "say": t("k3.product.exists_q", s.lang, product=ref.name)}
+            return {"ok": False, "exists": ref.sku, "product": ref.name,
+                    "say_en": f"{ref.name} is already in the shop. Add stock, or a new product?"}
     if price is None:
-        return {"ok": False, "missing": "price_rupees", "say": t("k3.product.price_q", s.lang, product=name)}
+        return _price_q(name)
     if u is None:
-        return {"ok": False, "missing": "unit", "say": t("k3.product.unit_q", s.lang, product=name)}
+        return {"ok": False, "missing": "unit", "product": name, "units": list(UNITS),
+                "say_en": f"Is {name} sold by the litre, pack, jar or box?"}
     sku = slug(brand, name, size)
     label = _label(_title(brand), _title(name), size)
     if await get_store().get(paths.product(s.shop_id, sku)) is not None:
-        return {"ok": False, "error": "duplicate_sku", "sku": sku,
-                "say": t("k3.product.duplicate", s.lang, product=label)}
+        return _duplicate_sku(sku, label)
     sup_id = _clean(supplier_id)
     if sup_id:
         sup = await catalog.resolve_supplier(s.shop_id, sup_id, s.lang)
         if sup is None:
-            return {"ok": False, "say": hints.say("SUPPLIER_UNKNOWN", s.lang, supplier=sup_id)}
+            return hints.fact("SUPPLIER_UNKNOWN", supplier=sup_id)
         sup_id = sup["id"]
     doc = {"sku": sku, "name": label, "brand": _title(brand), "unit": u, "pack": size or u,
            **_pack_size(size), "defaultPack": True, "price": price, "costPrice": price,
            "reorderThreshold": DEFAULT_REORDER, "shelfLifeDays": DEFAULT_SHELF_DAYS,
            "aliases": _aliases(name, brand, label), "active": True}
-    prompt = t("k3.product.add_q", s.lang, product=label, price=price, unit=u)
+    prompt = f"Add {label} at {price} rupees per {u}?"
     return await confirm.propose("generic", prompt, {"sku": sku, "doc": doc, "supplier_id": sup_id or None,
-                                                     "idem": ids.current_idem_key()}, "catalog.product_add")
+                                                     "idem": ids.current_idem_key()}, "catalog.product_add",
+                                 facts={"sku": sku, "product": label, "price": price, "unit": u,
+                                        "supplier": sup_id or None})
 
 
 async def _commit_product_add(payload: dict, value: str | None) -> dict:
@@ -173,15 +192,14 @@ async def _commit_product_add(payload: dict, value: str | None) -> dict:
         if seen is not None:
             return seen["result"]
         if await txn.get(paths.product(s.shop_id, sku)) is not None:
-            return {"ok": False, "error": "duplicate_sku", "sku": sku,
-                    "say": t("k3.product.duplicate", s.lang, product=label)}
+            return _duplicate_sku(sku, label)
         sup = await txn.get(paths.supplier(s.shop_id, sup_id)) if sup_id else None
         now = now_iso()
         txn.set(paths.product(s.shop_id, sku), {**doc, "createdAt": now, "updatedAt": now})
         if sup is not None and sku not in (sup.get("products") or []):
             txn.set(paths.supplier(s.shop_id, sup_id), {**sup, "products": [*(sup.get("products") or []), sku]})
         audit.log_in_txn(txn, s.shop_id, "owner", "product_added", "product", sku, "added")
-        result = {"ok": True, "sku": sku, "say": t("k3.product.added", s.lang, product=label)}
+        result = {"ok": True, "sku": sku, "product": label, "say_en": f"{label} added."}
         txn.set(paths.idem(idem), {"key": idem, "result": result, "at": now})
         return result
 
@@ -196,32 +214,35 @@ async def product_update(product: str, price_rupees: float | None = None, name: 
     s = get_session()
     ref = await catalog.resolve(s.shop_id, product, s.lang)
     if ref is None:
-        return {"ok": False, "say": await catalog.did_you_mean(s.shop_id, product, s.lang)}
+        return await catalog.did_you_mean(s.shop_id, product)
     changes: dict = {}
     words: list[str] = []
     price = _price(price_rupees)
     if price_rupees is not None and price is None:
-        return {"ok": False, "missing": "price_rupees", "say": t("k3.product.price_q", s.lang, product=ref.name)}
+        return _price_q(ref.name)
     if price is not None:
         changes["price"] = price
-        words.append(t("k3.change.price", s.lang, price=price))
+        words.append(f"price {price} rupees")
     new_name = _clean(name)
     if new_name:
         changes["name"] = _title(new_name)
-        words.append(t("k3.change.name", s.lang, name=changes["name"]))
-    sup_id = _clean(supplier_id)
+        words.append(f"name {changes['name']}")
+    sup_id, supplier_name = _clean(supplier_id), None
     if sup_id:
         sup = await catalog.resolve_supplier(s.shop_id, sup_id, s.lang)
         if sup is None:
-            return {"ok": False, "say": hints.say("SUPPLIER_UNKNOWN", s.lang, supplier=sup_id)}
-        sup_id = sup["id"]
-        words.append(t("k3.change.supplier", s.lang, supplier=sup["name"]))
+            return hints.fact("SUPPLIER_UNKNOWN", supplier=sup_id)
+        sup_id, supplier_name = sup["id"], sup["name"]
+        words.append(f"vendor {supplier_name}")
     if not changes and not sup_id:
-        return {"ok": False, "say": t("k3.product.nothing", s.lang, product=ref.name)}
-    prompt = t("k3.product.update_q", s.lang, product=ref.name, changes=", ".join(words))
+        return {"ok": False, "error": "nothing_to_change", "product": ref.name,
+                "say_en": f"Nothing to change for {ref.name}."}
+    prompt = f"Change {ref.name}: {', '.join(words)}?"
     return await confirm.propose("generic", prompt, {"sku": ref.sku, "changes": changes,
                                                      "supplier_id": sup_id or None, "idem": ids.current_idem_key()},
-                                 "catalog.product_update")
+                                 "catalog.product_update",
+                                 facts={"sku": ref.sku, "product": ref.name, "changes": changes,
+                                        "supplier": supplier_name})
 
 
 async def _commit_product_update(payload: dict, value: str | None) -> dict:
@@ -238,7 +259,7 @@ async def _commit_product_update(payload: dict, value: str | None) -> dict:
             return seen["result"]
         doc = await txn.get(paths.product(s.shop_id, sku))
         if doc is None:
-            return {"ok": False, "say": hints.say("PRODUCT_UNKNOWN", s.lang, product=sku)}
+            return hints.fact("PRODUCT_UNKNOWN", product=sku)
         sup = await txn.get(paths.supplier(s.shop_id, sup_id)) if sup_id else None
         now = now_iso()
         new_doc = {**doc, **changes, "updatedAt": now}
@@ -260,7 +281,8 @@ async def _commit_product_update(payload: dict, value: str | None) -> dict:
             txn.set(paths.supplier(s.shop_id, sup_id), {**sup, "products": [*(sup.get("products") or []), sku]})
         audit.log_in_txn(txn, s.shop_id, "owner", "product_updated", "product", sku,
                          ",".join(sorted([*changes, *(["supplier"] if sup_id else [])])))
-        result = {"ok": True, "sku": sku, "say": t("k3.product.updated", s.lang, product=new_doc.get("name", sku))}
+        label = new_doc.get("name", sku)
+        result = {"ok": True, "sku": sku, "product": label, "changes": changes, "say_en": f"{label} updated."}
         txn.set(paths.idem(idem), {"key": idem, "result": result, "at": now})
         return result
 
@@ -274,9 +296,10 @@ async def product_disable(product: str) -> dict:
     s = get_session()
     ref = await catalog.resolve(s.shop_id, product, s.lang)
     if ref is None:
-        return {"ok": False, "say": await catalog.did_you_mean(s.shop_id, product, s.lang)}
-    return await confirm.propose("generic", t("k3.product.disable_q", s.lang, product=ref.name),
-                                 {"sku": ref.sku, "idem": ids.current_idem_key()}, "catalog.product_disable")
+        return await catalog.did_you_mean(s.shop_id, product)
+    return await confirm.propose("generic", f"Remove {ref.name} from the shop?",
+                                 {"sku": ref.sku, "idem": ids.current_idem_key()}, "catalog.product_disable",
+                                 facts={"sku": ref.sku, "product": ref.name})
 
 
 async def _commit_product_disable(payload: dict, value: str | None) -> dict:
@@ -289,11 +312,12 @@ async def _commit_product_disable(payload: dict, value: str | None) -> dict:
             return seen["result"]
         doc = await txn.get(paths.product(s.shop_id, sku))
         if doc is None:
-            return {"ok": False, "say": hints.say("PRODUCT_UNKNOWN", s.lang, product=sku)}
+            return hints.fact("PRODUCT_UNKNOWN", product=sku)
         now = now_iso()
         txn.set(paths.product(s.shop_id, sku), {**doc, "active": False, "disabledAt": now, "updatedAt": now})
         audit.log_in_txn(txn, s.shop_id, "owner", "product_disabled", "product", sku, "disabled")
-        result = {"ok": True, "sku": sku, "say": t("k3.product.disabled", s.lang, product=doc.get("name", sku))}
+        label = doc.get("name", sku)
+        result = {"ok": True, "sku": sku, "product": label, "say_en": f"{label} removed. Its history is kept."}
         txn.set(paths.idem(idem), {"key": idem, "result": result, "at": now})
         return result
 
@@ -309,19 +333,22 @@ async def stock_add(product: str, quantity: float, unit: str | None = None) -> d
     s = get_session()
     ref = await catalog.resolve(s.shop_id, product, s.lang)
     if ref is None:
-        return {"ok": False, "unknown": product, "say": t("k3.stock.unknown_q", s.lang, product=product)}
+        return {"ok": False, "error": "PRODUCT_UNKNOWN", "unknown": product, "product": product,
+                "say_en": f"I don't know {product}. Add it as a new product?"}
     doc = await product_doc(s.shop_id, ref.sku)
     spoken_unit = _canon_unit(unit or "")      # a bare count is packs, as for orders and sales
+    qty_q = {"ok": False, "missing": "quantity", "product": ref.name, "say_en": f"How much {ref.name} came in?"}
     try:
         qty, sell_unit = catalog.to_selling_units(doc, quantity, spoken_unit)
     except (TypeError, ValueError):
-        return {"ok": False, "say": t("k3.stock.qty_q", s.lang, product=ref.name)}
+        return qty_q
     if qty <= 0:
-        return {"ok": False, "say": t("k3.stock.qty_q", s.lang, product=ref.name)}
-    phrase = qty_phrase(doc, qty, sell_unit, quantity, spoken_unit, s.lang)
-    prompt = t("k3.stock.add_q", s.lang, qty=phrase.replace(f" {doc['name']}", "", 1), product=doc["name"])
+        return qty_q
+    phrase = qty_phrase(doc, qty, sell_unit, quantity, spoken_unit).replace(f" {doc['name']}", "", 1)
+    prompt = f"Add {phrase} of {doc['name']} to stock?"
     return await confirm.propose("generic", prompt, {"sku": ref.sku, "qty": qty, "unit": sell_unit,
-                                                     "idem": ids.current_idem_key()}, "catalog.stock_add")
+                                                     "idem": ids.current_idem_key()}, "catalog.stock_add",
+                                 facts={"sku": ref.sku, "product": doc["name"], "qty": qty, "unit": sell_unit})
 
 
 async def _commit_stock_add(payload: dict, value: str | None) -> dict:
@@ -340,9 +367,9 @@ async def _commit_stock_add(payload: dict, value: str | None) -> dict:
     await ledger.publish_movement(prep)
     doc = await product_doc(s.shop_id, sku)
     on_hand = float(inv.get("onHand") or 0)
-    return {"ok": True, "sku": sku, "qty": qty, "onHand": on_hand,
-            "say": t("k3.stock.added", s.lang, product=doc.get("name", sku),
-                     qty=f"{fmt_qty(on_hand)} {doc.get('unit', '')}".strip())}
+    name, unit = doc.get("name", sku), doc.get("unit", "")
+    return {"ok": True, "sku": sku, "product": name, "qty": qty, "unit": unit, "onHand": on_hand,
+            "say_en": f"Added. {name}: {f'{fmt_qty(on_hand)} {unit}'.strip()} in stock."}
 
 
 # ---------------------------------------------------------------------------------------------------- supplier_add
@@ -353,19 +380,20 @@ async def supplier_add(name: str, channel: Literal["telegram", "call", "whatsapp
     s = get_session()
     name = _clean(name)
     if not name:
-        return {"ok": False, "missing": "name", "say": t("k3.supplier.name_q", s.lang)}
+        return {"ok": False, "missing": "name", "say_en": "Which vendor should I add?"}
     ch = _clean(channel).lower()
     if ch not in CHANNELS:
-        return {"ok": False, "missing": "channel", "say": t("k3.supplier.channel_q", s.lang, supplier=name)}
+        return {"ok": False, "missing": "channel", "supplier": name, "channels": list(CHANNELS),
+                "say_en": f"How do you reach {name}: Telegram, WhatsApp or a call?"}
     sid = slug(name)
     if (await get_store().get(paths.supplier(s.shop_id, sid)) is not None
             or await catalog.resolve_supplier(s.shop_id, name, s.lang) is not None):
-        return {"ok": False, "error": "duplicate_supplier", "say": t("k3.supplier.duplicate", s.lang, supplier=name)}
+        return _duplicate_supplier(name)
     doc = {"id": sid, "name": name, "phone": "", "channel": ch, "products": [],
            "aliases": {"ta": [], "hi": [], "en": [name.lower()]}, "active": True}
-    return await confirm.propose("generic", t("k3.supplier.add_q", s.lang, supplier=name, channel=ch),
+    return await confirm.propose("generic", f"Add vendor {name} on {ch}?",
                                  {"supplier_id": sid, "doc": doc, "idem": ids.current_idem_key()},
-                                 "catalog.supplier_add")
+                                 "catalog.supplier_add", facts={"supplierId": sid, "supplier": name, "channel": ch})
 
 
 def _telegram_link(supplier_id: str) -> tuple[str | None, str | None]:
@@ -387,19 +415,19 @@ async def _commit_supplier_add(payload: dict, value: str | None) -> dict:
         if seen is not None:
             return seen["result"]
         if await txn.get(paths.supplier(s.shop_id, sid)) is not None:
-            return {"ok": False, "error": "duplicate_supplier",
-                    "say": t("k3.supplier.duplicate", s.lang, supplier=doc["name"])}
+            return _duplicate_supplier(doc["name"])
         now = now_iso()
         txn.set(paths.supplier(s.shop_id, sid), {**doc, "createdAt": now})
         audit.log_in_txn(txn, s.shop_id, "owner", "supplier_added", "supplier", sid, doc["channel"])
-        result = {"ok": True, "supplierId": sid, "say": t("k3.supplier.added", s.lang, supplier=doc["name"])}
+        result = {"ok": True, "supplierId": sid, "supplier": doc["name"], "channel": doc["channel"],
+                  "say_en": f"Vendor {doc['name']} added."}
         if doc["channel"] == "telegram":
             param, link = _telegram_link(sid)
             result["startParam"], result["link"] = param, link
             if link or param:
-                result["say"] += " " + t("k3.supplier.telegram_link", s.lang, supplier=doc["name"], link=link or param)
+                result["say_en"] += f" Send this Telegram link to {doc['name']}: {link or param}"
             else:
-                result["say"] += " " + t("k3.supplier.no_link", s.lang)
+                result["say_en"] += " The Telegram secret is not set, so the vendor link cannot be made yet."
         txn.set(paths.idem(idem), {"key": idem, "result": result, "at": now})
         return result
 

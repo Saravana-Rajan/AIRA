@@ -7,6 +7,9 @@ Open → count (verified quantity only) → invoice check.
   only after the owner's "yes" does the committer ``delivery.record_count`` put the counted quantity into stock.
   An order is not a delivery, and an invoice is not proof of receipt: only the confirmed count enters stock.
 - ``invoice_check`` reads the paper bill twice and reconciles it with the order and the counts.
+
+Tools return facts (names, counts, rupees as numbers) plus a short English ``say_en`` hint; Gemini Live phrases
+them in whatever language the owner is speaking.
 """
 import asyncio
 from dataclasses import dataclass, field
@@ -19,7 +22,6 @@ from aira_live.business.clock import now_iso
 from aira_live.business.states import transition
 from aira_live.business.store import get_store
 from aira_live.contracts import CountMsg, CueMsg, RequestFrameMsg, StateMsg
-from aira_live.i18n import t
 from aira_live.messaging.clicktochat import fmt_qty
 from aira_live.session import Session, get_session
 from aira_live.tools import _repo
@@ -33,6 +35,13 @@ COUNT_KINDS = {"SHORT_DELIVERY", "OVER_DELIVERY", "UNORDERED_ITEM"}   # publishe
 OPEN_STATES = ["DELIVERY_PENDING", "DISCREPANCY"]
 # A bill can be checked until the vendor is paid, also after a matching count or an earlier matching bill.
 INVOICE_STATES = [*OPEN_STATES, "DELIVERY_RECONCILED"]
+AIM_EN = {                   # vision aim hint -> English meaning (Live says it in the owner's language)
+    "vision.aim.move_back": "Move the phone back a little.",
+    "vision.aim.spread_out": "Spread the items apart so I can count them.",
+    "vision.aim.show_items": "Show me the items in front of the camera.",
+    "vision.aim.show_label": "Turn the pack so the label faces the camera.",
+    "vision.aim.not_visible": "I can't see it right now.",
+}
 _active: dict[str, str] = {}  # session_id → delivery_id
 
 
@@ -78,6 +87,19 @@ class OnePassCounter:
         return min(self.confidences) if self.confidences else 0.0
 
 
+def _retake(aim_hint: str) -> dict:
+    return {"ok": False, "needs_retake": True, "aim_hint": aim_hint,
+            "say_en": AIM_EN.get(aim_hint, "Show it to the camera again.")}
+
+
+def _no_order() -> dict:
+    return {"ok": False, "error": "NO_OPEN_ORDER", "say_en": "No open order found."}
+
+
+def _no_delivery() -> dict:
+    return {"ok": False, "error": "NO_DELIVERY", "say_en": "No delivery is open. Say: start the delivery."}
+
+
 async def _product(shop_id: str, sku: str) -> dict:
     return {**(await get_store().get(paths.product(shop_id, sku)) or {}), "sku": sku}
 
@@ -106,7 +128,7 @@ async def delivery_start(order_id: str | None = None) -> dict:
     order = (await _repo.get_order(s.shop_id, order_id) if order_id
              else await _repo.latest_order(s.shop_id, ["ORDER_PLACED", *OPEN_STATES]))
     if order is None or order["state"] not in ("ORDER_PLACED", *OPEN_STATES):
-        return {"ok": False, "say": t("k2.order.none", s.lang)}
+        return _no_order()
     if order["state"] == "ORDER_PLACED":
         order = {**order, "state": transition("order", "ORDER_PLACED", "DELIVERY_PENDING"), "updatedAt": now_iso()}
         await _repo.save_order(s.shop_id, order)
@@ -124,7 +146,8 @@ async def delivery_start(order_id: str | None = None) -> dict:
     supplier = order.get("supplierName") or order.get("supplierId", "")
     await s.send(StateMsg(entity="delivery", id=d["id"], state="DELIVERY_PENDING", summary=supplier))
     return {"ok": True, "deliveryId": d["id"], "orderId": order["id"], "skus": [i["sku"] for i in d["items"]],
-            "say": t("k2.delivery.started", s.lang, supplier=supplier)}
+            "supplier": supplier,
+            "say_en": f"Delivery from {supplier}. Show each pack to the camera, one at a time."}
 
 
 async def _count_one_by_one(s: Session, product: dict, expected_packs: int | None) -> tuple[int, float]:
@@ -163,10 +186,10 @@ async def delivery_count(sku: str, mode: Literal["one_by_one", "crate"] = "one_b
     s = get_session()
     d = await _current_delivery(s)
     if d is None:
-        return {"ok": False, "say": t("k2.delivery.none", s.lang)}
+        return _no_delivery()
     real_sku = await _resolve_sku(s, sku, d)
     if real_sku is None:
-        return {"ok": False, "say": hints.say("PRODUCT_UNKNOWN", s.lang, product=sku)}
+        return hints.fact("PRODUCT_UNKNOWN", product=sku)
     product = await _product(s.shop_id, real_sku)
     name = product.get("name") or real_sku
     per_pack, unit = catalog.to_selling_units(product, 1, "pack")
@@ -177,46 +200,60 @@ async def delivery_count(sku: str, mode: Literal["one_by_one", "crate"] = "one_b
     if mode == "crate":
         frames = await s.request_frames("count", count=2, interval_ms=700)
         if len(frames) < 2:
-            return {"ok": False, "needs_retake": True, "say": t("vision.aim.not_visible", s.lang)}
+            return _retake("vision.aim.not_visible")
         reads = [await vcount.count_in_frame(f, name) for f in frames]
         for r in reads:
             if r.needs_retake or r.aim_hint:
-                return {"ok": False, "needs_retake": True, "say": t(r.aim_hint or "vision.aim.show_items", s.lang)}
+                return _retake(r.aim_hint or "vision.aim.show_items")
         if reads[0].count is None or reads[0].count != reads[1].count:      # two reads disagree: not sure
-            return {"ok": False, "needs_retake": True, "say": t("vision.aim.spread_out", s.lang)}
+            return _retake("vision.aim.spread_out")
         packs, conf = reads[0].count, min(r.confidence for r in reads)
     else:
         packs, conf = await _count_one_by_one(s, product, expected_packs)
 
     if packs == 0:
-        return {"ok": False, "say": t("k2.delivery.nothing_seen", s.lang, product=name)}
+        return {"ok": False, "error": "NOTHING_SEEN", "product": name,
+                "say_en": f"I did not see any {name}. Show each pack to the camera."}
     qty = catalog.to_selling_units(product, packs, "pack")[0]
     await s.send(CountMsg(sku=real_sku, counted=packs, expected=expected_packs, final=True, confidence=conf))
+    facts = {"product": name, "sku": real_sku, "counted": packs, "expected": expected_packs, "qty": float(qty),
+             "unit": unit}
     if expected_packs is not None and packs != expected_packs:      # the video: "28 packs ... Two may be missing"
-        key = "k2.delivery.readback_short" if packs < expected_packs else "k2.delivery.readback_over"
-        prompt = t(key, s.lang, counted=packs, product=name, expected=expected_packs,
-                   missing=expected_packs - packs, extra=packs - expected_packs)
+        if packs < expected_packs:
+            facts["missing"] = expected_packs - packs
+            prompt = (f"I counted {packs} packs of {name}. The order was {expected_packs}. "
+                      f"{expected_packs - packs} may be missing. Save {packs}, or shall I count again?")
+        else:
+            facts["extra"] = packs - expected_packs
+            prompt = (f"I counted {packs} packs of {name}. The order was {expected_packs}. "
+                      f"That is {packs - expected_packs} extra. Save {packs}, or shall I count again?")
     else:
-        prompt = t("k2.delivery.readback", s.lang, counted=f"{fmt_qty(qty)} {unit}", product=name,
-                   expected=f"{fmt_qty(expected)} {unit}" if expected is not None else "0")
+        counted_txt = f"{fmt_qty(qty)} {unit}"
+        expected_txt = f"{fmt_qty(expected)} {unit}" if expected is not None else "0"
+        prompt = f"I counted {counted_txt} for {name}. Ordered {expected_txt}. Save {counted_txt}?"
     if line and line.get("countedQty") is not None and abs(float(line["countedQty"]) - qty) < 1e-9:
-        prompt = f"{t('k2.delivery.still', s.lang, counted=packs)} {prompt}"   # "Count again." -> "Still 28."
+        facts["still"] = True                                       # "Count again." -> "Still 28."
+        prompt = f"Still {packs}. {prompt}"
     kind = "discrepancy" if expected is None or abs(qty - expected) > 1e-9 else "generic"
     payload = {"delivery_id": d["id"], "sku": real_sku, "qty": float(qty), "packs": packs,
                "expected_packs": expected_packs, "method": mode, "confidence": conf, "idem": ids.current_idem_key()}
-    return await confirm.propose(kind, prompt, payload, "delivery.record_count")
+    return await confirm.propose(kind, prompt, payload, "delivery.record_count", facts=facts)
 
 
-def _saved_line(payload: dict, name: str, lang: str) -> str:
+def _saved(payload: dict, name: str) -> dict:
     """"Recorded: 28 packs received, 2 short." The packs are what the owner handled; litres stay in the ledger."""
     packs, expected = payload.get("packs"), payload.get("expected_packs")
+    out = {"ok": True, "product": name, "sku": payload["sku"], "qty": float(payload["qty"]), "counted": packs,
+           "expected": expected}
     if packs is None:
-        return t("k2.delivery.saved", lang, counted=fmt_qty(payload["qty"]), product=name)
+        return {**out, "counted": payload["qty"],
+                "say_en": f"Recorded: {fmt_qty(payload['qty'])} packs of {name} received."}
     if expected is None or packs == expected:
-        return t("k2.delivery.saved", lang, counted=packs, product=name)
+        return {**out, "say_en": f"Recorded: {packs} packs of {name} received."}
     if packs < expected:
-        return t("k2.delivery.saved_short", lang, counted=packs, missing=expected - packs)
-    return t("k2.delivery.saved_over", lang, counted=packs, extra=packs - expected)
+        return {**out, "missing": expected - packs,
+                "say_en": f"Recorded: {packs} packs received, {expected - packs} short."}
+    return {**out, "extra": packs - expected, "say_en": f"Recorded: {packs} packs received, {packs - expected} extra."}
 
 
 async def _mark_order(s: Session, d: dict) -> dict:
@@ -246,10 +283,10 @@ async def _commit_count(payload: dict, value: str | None) -> dict:
     s = get_session()
     d = await _repo.get_delivery(s.shop_id, payload["delivery_id"])
     if d is None:
-        return {"ok": False, "say": t("k2.delivery.none", s.lang)}
+        return _no_delivery()
     product = await _product(s.shop_id, payload["sku"])
     name = product.get("name") or payload["sku"]
-    saved = {"ok": True, "say": _saved_line(payload, name, s.lang)}
+    saved = _saved(payload, name)
     line = next((i for i in d["items"] if i["sku"] == payload["sku"]), None)
     if line and line.get("countIdem") == payload["idem"]:       # retried confirm: nothing new
         return saved
@@ -276,16 +313,24 @@ async def _commit_count(payload: dict, value: str | None) -> dict:
     return saved
 
 
-async def _say_discrepancies(s: Session, items: list[dict]) -> str:
+async def _discrepancy_facts(s: Session, items: list[dict]) -> list[dict]:
+    """Reconcile codes as facts: kind, product name from the catalog, expected/actual numbers, English meaning."""
     out = []
-    for item in items[:2]:                                      # keep it short: the first two problems
+    for item in items:
         name = item.get("name", "")
         if item.get("sku"):
             name = (await _product(s.shop_id, item["sku"])).get("name") or name
-        out.append(hints.say(item["kind"], s.lang, product=name, name=name,
-                             expected=fmt_qty(item["expected"]) if item.get("expected") is not None else "",
-                             actual=fmt_qty(item["actual"]) if item.get("actual") is not None else ""))
-    return " ".join(out)
+        fact = {"kind": item["kind"], "product": name}
+        if item.get("sku"):
+            fact["sku"] = item["sku"]
+        for k in ("expected", "actual"):
+            if item.get(k) is not None:
+                fact[k] = item[k]
+        fact["say_en"] = hints.english(item["kind"], product=name, name=name,
+                                       expected=fmt_qty(item["expected"]) if item.get("expected") is not None else "",
+                                       actual=fmt_qty(item["actual"]) if item.get("actual") is not None else "")
+        out.append(fact)
+    return out
 
 
 async def invoice_check(order_id: str) -> dict:
@@ -298,16 +343,16 @@ async def invoice_check(order_id: str) -> dict:
     order = (await _repo.get_order(s.shop_id, order_id) if order_id
              else await _repo.latest_order(s.shop_id, INVOICE_STATES))
     if order is None:
-        return {"ok": False, "say": t("k2.order.none", s.lang)}
+        return _no_order()
     d = await _repo.delivery_for_order(s.shop_id, order["id"])
     if d is None or order["state"] not in INVOICE_STATES:
-        return {"ok": False, "say": t("k2.delivery.none", s.lang)}
+        return _no_delivery()
     frames = await s.request_frames("invoice", count=2, interval_ms=600)
     if not frames:
-        return {"ok": False, "needs_retake": True, "say": t("vision.aim.show_label", s.lang)}
+        return _retake("vision.aim.show_label")
     inv = await vinv.read_invoice(frames)
     if not inv.agreed:                                          # two reads disagree: never use the bill
-        return {"ok": False, "needs_retake": True, "say": hints.say("INVOICE_UNREADABLE", s.lang)}
+        return {**hints.fact("INVOICE_UNREADABLE"), "needs_retake": True}
     counted = {i["sku"]: float(i["countedQty"]) for i in d["items"] if i.get("countedQty") is not None}
     result = reconcile.compare(order["items"], counted, inv)
     target = "DELIVERY_RECONCILED" if result.status == "match" else "DISCREPANCY"
@@ -326,17 +371,20 @@ async def invoice_check(order_id: str) -> dict:
                                    reconcile.ReconcileResult(status="discrepancy", discrepancies=invoice_only))
     await audit.log(s.shop_id, "aira", "invoice_checked", "delivery", d["id"], target)
     await s.send(StateMsg(entity="delivery", id=d["id"], state=target, summary=order.get("supplierName", "")))
+    out = {"ok": True, "orderId": order["id"], "state": target, "supplier": order.get("supplierName", ""),
+           "total": inv.total}
     if result.status == "match":
         await s.send(CueMsg(cue="match"))
-        say = t("k2.invoice.match", s.lang, total=inv.total)
-    else:
-        await s.send(CueMsg(cue="mismatch"))
-        # What the bill got wrong first; the count's own shortfall was already said when it was counted.
-        say = await _say_discrepancies(s, invoice_only + [x for x in result.discrepancies if x["kind"] in COUNT_KINDS])
-        due = reconcile.payable(order["items"], counted)
-        if inv.total is not None and due and int(inv.total) != int(due):   # "The bill should be ₹980."
-            say = f"{say} {t('k2.invoice.should_be', s.lang, total=inv.total, payable=due)}"
-    return {"ok": True, "orderId": order["id"], "state": target, "discrepancies": result.discrepancies, "say": say}
+        return {**out, "match": True, "discrepancies": [], "say_en": f"The bill matches. Total {inv.total} rupees."}
+    await s.send(CueMsg(cue="mismatch"))
+    # What the bill got wrong first; the count's own shortfall was already said when it was counted.
+    facts = await _discrepancy_facts(s, invoice_only + [x for x in result.discrepancies if x["kind"] in COUNT_KINDS])
+    say_en = " ".join(f["say_en"] for f in facts[:2])           # keep it short: the first two problems
+    due = reconcile.payable(order["items"], counted)
+    out.update(match=False, discrepancies=facts, payable=due)
+    if inv.total is not None and due and int(inv.total) != int(due):   # "The bill should be ₹980."
+        say_en = f"{say_en} The bill total is {inv.total} rupees. It should be {due} rupees."
+    return {**out, "say_en": say_en}
 
 
 confirm.register_committer("delivery.record_count", _commit_count)

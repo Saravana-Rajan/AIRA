@@ -55,7 +55,7 @@ async def _commit(payload: dict, value: str | None) -> dict:
     entity = payload.get("entity") or "sale"
     await s.send(StateMsg(entity=entity, id=payload.get("id", "e2e"), state="COMPLETED",
                           summary=payload.get("summary", "")))
-    return {"say": "Done. " + payload.get("summary", "")}
+    return {"say_en": "Done. " + payload.get("summary", "")}
 
 
 confirm.register_committer(COMMITTER, _commit)
