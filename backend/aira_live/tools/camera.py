@@ -41,7 +41,6 @@ FRAME_TIMEOUT_S = 6.0     # the phone may be busy with ambient frames; an owner 
 COUNT_FRAME_TIMEOUT_S = 15.0  # count only: a slow phone may need several seconds to encode the count photo
 COUNT_FRAMES = 2          # a count is TWO fresh frames ~400 ms apart, each read once (two independent reads)
 COUNT_INTERVAL_MS = 400
-LATE_ONE_FRAME_S = 0.05   # the burst came back short: a single count frame that did arrive is still used
 LOOK_TIMEOUT_S = 4.0      # per-attempt model timeout for a look / path answer (one retry)
 READ_MIN_SIDE = 1280      # a reused frame for reading text must be a full-size owner frame
 DIST_ORDER = ("near", "arm", "far")
@@ -419,14 +418,10 @@ def _distinct(frames: list) -> list:
 
 
 async def _count_frames(s: Session) -> list:
-    """Two fresh count frames ~COUNT_INTERVAL_MS apart. When the burst came back short, a single fresh count frame
-    that did arrive is still used (as one unverified read)."""
-    since = s.frames.last_ts("count")
-    frames = await s.request_frames("count", count=COUNT_FRAMES, interval_ms=COUNT_INTERVAL_MS,
-                                    timeout_s=COUNT_FRAME_TIMEOUT_S)
-    if not frames:
-        frames = await s.frames.wait_for(count=1, purpose="count", after_ts=since, timeout_s=LATE_ONE_FRAME_S)
-    return frames
+    """Two fresh count frames ~COUNT_INTERVAL_MS apart. When the burst came back short, the one frame of THIS
+    request that did arrive is still used (as one unverified read); another request's frame never is."""
+    return await s.request_frames("count", count=COUNT_FRAMES, interval_ms=COUNT_INTERVAL_MS,
+                                  timeout_s=COUNT_FRAME_TIMEOUT_S, partial=True)
 
 
 def _fact_item(item: str, product: str) -> str:

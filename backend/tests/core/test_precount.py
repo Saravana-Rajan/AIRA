@@ -43,7 +43,7 @@ def _session(mk_session):
     s, _ = mk_session()
     n = {"i": 0}
 
-    async def request_frames(purpose, count=1, interval_ms=0, timeout_s=4.0):
+    async def request_frames(purpose, count=1, interval_ms=0, timeout_s=4.0, partial=False):
         n["i"] += 1
         assert purpose == "count"
         return [Frame(id=f"c{n['i']}", jpeg_b64="x", w=1280, h=720, ts=float(n["i"]), purpose="count")]
@@ -264,7 +264,7 @@ async def test_camera_ask_says_the_precount_once_then_counts_fresh(mk_session, c
     async def fresh(frame, label, product=None):
         return CountResult(count=6, confidence=0.9, needs_retake=False, aim_hint="", objects=[])
 
-    async def two(purpose, count=1, interval_ms=0, timeout_s=4.0):
+    async def two(purpose, count=1, interval_ms=0, timeout_s=4.0, partial=False):
         return [Frame(id=f"f{i}", jpeg_b64=f"x{i}", w=1024, h=768, ts=float(20 + i), purpose="count")
                 for i in range(count)]
 

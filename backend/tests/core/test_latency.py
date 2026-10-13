@@ -182,7 +182,7 @@ async def test_camera_count_never_reuses_a_frame(mk_session, monkeypatch):
     s.frames.add(_frame(1, 1280))
     asked = []
 
-    async def fake_frames(purpose, count=1, interval_ms=0, timeout_s=4.0):
+    async def fake_frames(purpose, count=1, interval_ms=0, timeout_s=4.0, partial=False):
         asked.append((purpose, count))
         return []
 

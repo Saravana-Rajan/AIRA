@@ -134,8 +134,9 @@ class Session:
         return sf
 
     async def request_frames(self, purpose: str, count: int = 1, interval_ms: int = 0,
-                             timeout_s: float = 4.0) -> list[Frame]:
-        """Ask the phone for ``count`` fresh frames and wait for them ([] on timeout).
+                             timeout_s: float = 4.0, partial: bool = False) -> list[Frame]:
+        """Ask the phone for ``count`` fresh frames and wait for them ([] on timeout; with ``partial`` the
+        frames of THIS request that did arrive, possibly fewer than ``count``, never another request's).
 
         Each call has its own request id: the phone echoes it on the frames it captures for this request, and
         only those frames satisfy it (``FrameStore.open_request``), so a late frame of an earlier timed-out
@@ -156,6 +157,8 @@ class Session:
             await self.send(RequestFrameMsg(purpose=purpose, burst=burst, request_id=rid,
                                             ttl_ms=max(1, round(timeout_s * 1000))))
             frames = await self.frames.wait_request(rid, timeout_s)
+            if partial and len(frames) < count:
+                frames = self.frames.own_frames(rid)
         finally:
             got = self.frames.got(rid)
             on_late = (self._late_logger(purpose, rid, count, started, timeout_s)

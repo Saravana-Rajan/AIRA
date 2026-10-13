@@ -222,6 +222,11 @@ class FrameStore:
             return []
         return sorted(req.frames, key=_order_key)[:req.count]
 
+    def own_frames(self, rid: str) -> list[Frame]:
+        """The frames that reached this open request so far, in capture order (never another request's)."""
+        req = self._open.get(rid)
+        return sorted(req.frames, key=_order_key)[:req.count] if req else []
+
     def got(self, rid: str) -> int:
         req = self._open.get(rid) or (self._expired.get(rid) or (None,))[0]
         return len(req.frames) if req else 0

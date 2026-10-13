@@ -204,3 +204,11 @@ async def test_a_cancelled_request_is_closed():
     except asyncio.CancelledError:
         pass
     assert s.frames.open_requests() == 0
+
+
+async def test_partial_returns_only_this_requests_own_frames_on_timeout():
+    s, sent = mk_session(lambda m: [fr(1, m.purpose, m.request_id)])  # the burst wanted 2; only 1 arrives
+    s.frames.add(fr(7, "count"))  # an untagged frame (e.g. another reader's) must never be handed over
+    got = await s.request_frames("count", count=2, timeout_s=0.1, partial=True)
+    assert [f.id for f in got] == ["f1"] and got[0].request_id == sent[0].request_id
+    assert await s.request_frames("count", count=2, timeout_s=0.05) == []  # default: all-or-nothing as before

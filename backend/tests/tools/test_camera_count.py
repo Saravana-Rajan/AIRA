@@ -27,9 +27,11 @@ def session(mk_session, monkeypatch):
     s, rec = mk_session(lang="en")
     calls: list[dict] = []
     s.n_frames = 2
+    s.partial_asks = []
 
-    async def fake_frames(purpose, count=1, interval_ms=0, timeout_s=4.0):
+    async def fake_frames(purpose, count=1, interval_ms=0, timeout_s=4.0, partial=False):
         calls.append({"purpose": purpose, "count": count, "interval_ms": interval_ms, "timeout_s": timeout_s})
+        s.partial_asks.append(partial)
         return [_frame(float(i + 1)) for i in range(min(count, s.n_frames))]
 
     monkeypatch.setattr(s, "request_frames", fake_frames)
@@ -197,13 +199,15 @@ async def test_one_frame_is_read_once_and_never_verified(session, monkeypatch):
     assert out["count"] == 2 and out["verified"] is False and out["exact"] is False and out["approx"] is True
     assert out["evidence"]["frames"] == 1 and out["evidence"]["reads"] == 1
     assert "one look" in out["say_en"]
+    # The short burst is taken from THIS request's own frames (partial), never from the shared buffer.
+    assert s.partial_asks == [True]
 
 
 async def test_two_copies_of_the_same_picture_are_one_frame(session, monkeypatch):
     """The phone sending the same picture twice (same bytes) is not two frames: one read, unverified."""
     s, _ = session
 
-    async def same_twice(purpose, count=1, interval_ms=0, timeout_s=4.0):
+    async def same_twice(purpose, count=1, interval_ms=0, timeout_s=4.0, partial=False):
         f = _frame(1.0)
         return [f, Frame(id="c-dup", jpeg_b64=f.jpeg_b64, w=f.w, h=f.h, ts=2.0, purpose="count")]
 
