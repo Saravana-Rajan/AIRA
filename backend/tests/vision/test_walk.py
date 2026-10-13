@@ -184,3 +184,43 @@ async def test_look_failure_is_a_vision_error_without_fallback(fake_genai, frame
     fake_genai(0.2)
     with pytest.raises(VisionError):
         await w.look(frame, "fridge", timeout_s=0.05)
+
+
+# --- freshness: how old a look may be when its line is said ------------------------------------------------------
+
+def test_freshness_policy_per_instruction():
+    far = decide(view((400, 500), (300, 420, 500, 580)), "fridge")
+    assert far.key == "walk.ahead" and far.steps == 3
+    assert w.gate(far, 1.0, "fridge") is far                         # fresh: the step count is said
+    slow = w.gate(far, 2.5, "fridge")                                # aging: the direction only, no count
+    assert slow.key == "walk.ahead_slow" and slow.steps is None and "steps" not in slow.text
+    assert w.gate(far, 3.5, "fridge") is None                        # expired: never said as current
+    left = decide(view((400, 100)), "fridge")
+    assert w.gate(left, 2.9, "fridge") is left and w.gate(left, 3.1, "fridge") is None
+    looking = decide(view(), "fridge")
+    assert w.gate(looking, 2.0, "fridge") is looking and w.gate(looking, 4.0, "fridge") is None
+
+
+def test_stop_lines_are_said_however_old():
+    chair = decide(view(obstacles=[Obstacle("chair", (600, 300, 900, 550))]), "fridge")
+    wet = decide(view(obstacles=[Obstacle("wet floor", (600, 300, 900, 550))]), "fridge")
+    for ins in (chair, wet):
+        assert ins.urgent
+        for age in (0.1, 10.0, None, float("nan")):
+            assert w.gate(ins, age, "fridge") is ins
+
+
+def test_arrival_needs_a_fresh_look_else_hold_still():
+    there = decide(view((500, 500), (200, 300, 700, 700)), "fridge")
+    assert there.arrived and w.gate(there, 1.0, "fridge") is there
+    for age in (2.0, None):
+        held = w.gate(there, age, "fridge")
+        assert held.key == "walk.hold" and held.urgent and not held.arrived and "fridge" in held.text
+
+
+def test_missing_or_invalid_age_is_stale():
+    far = decide(view((400, 500), (300, 420, 500, 580)), "fridge")
+    for age in (None, float("nan"), float("inf"), -0.5):
+        assert w.gate(far, age, "fridge") is None and w.expired(age)
+    assert not w.expired(w.WALK_DIRECTION_MAX_AGE_S) and w.expired(w.WALK_DIRECTION_MAX_AGE_S + 0.01)
+    assert w.WALK_MAX_AGE_S == 1.5
