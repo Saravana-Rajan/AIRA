@@ -72,6 +72,22 @@ class _Request:
     frames: list[Frame] = field(default_factory=list)
 
 
+def _rid(frame) -> str | None:
+    """The frame's request id; frames built without the field (tests, other sources) have none."""
+    return getattr(frame, "request_id", None)
+
+
+def phone_age_ms(frame) -> float:
+    """Grab -> send on the phone (same clock, skew-free); 0 when the frame does not say."""
+    cap = getattr(frame, "capture_ts", None)
+    return max(0.0, frame.ts - cap) if cap is not None else 0.0
+
+
+def _order_key(frame) -> float:
+    cap = getattr(frame, "capture_ts", None)
+    return cap if cap is not None else frame.ts
+
+
 LateFn = Callable[[Frame, int], None]  # (the late frame, frames that had arrived in time)
 
 
@@ -109,20 +125,20 @@ class FrameStore:
         """Store one frame from the phone. Returns what happened: "stored", "request" (given to an open
         request), "duplicate", "stale" (unknown/expired request id) or "too_old" (over the request's age limit)."""
         if self._duplicate(frame):
-            diag("stale_frame", reason="duplicate", purpose=frame.purpose, id=frame.id, request_id=frame.request_id)
+            diag("stale_frame", reason="duplicate", purpose=frame.purpose, id=frame.id, request_id=_rid(frame))
             return "duplicate"
         self._prune_expired()
         outcome = "stored"
-        if frame.request_id is not None or frame.capture_ts is not None:
+        if _rid(frame) is not None or getattr(frame, "capture_ts", None) is not None:
             self.phone_tags = True  # a phone that sends either field echoes request ids on its request frames
-        if frame.request_id is not None:
-            req = self._open.get(frame.request_id)
+        if _rid(frame) is not None:
+            req = self._open.get(_rid(frame))
             if req is None:
-                gone = self._expired.get(frame.request_id)
+                gone = self._expired.get(_rid(frame))
                 if gone is not None:
-                    self._fire_late(frame.request_id, frame)
+                    self._fire_late(_rid(frame), frame)
                 diag("stale_frame", reason="expired" if gone else "unknown", purpose=frame.purpose, id=frame.id,
-                     request_id=frame.request_id, phone_age_ms=round(frame.phone_age_ms))
+                     request_id=_rid(frame), phone_age_ms=round(phone_age_ms(frame)))
                 self.remember_recent(frame)  # reusable by look_frame only while fresh (``recent``)
                 return "stale"
             if not self._fresh_for(req, frame):
@@ -146,10 +162,10 @@ class FrameStore:
         return outcome
 
     def _fresh_for(self, req: _Request, frame: Frame) -> bool:
-        if frame.phone_age_ms <= req.max_age_ms:
+        if phone_age_ms(frame) <= req.max_age_ms:
             return True
-        diag("stale_frame", reason="too_old", purpose=frame.purpose, id=frame.id, request_id=frame.request_id,
-             phone_age_ms=round(frame.phone_age_ms), max_age_ms=req.max_age_ms)
+        diag("stale_frame", reason="too_old", purpose=frame.purpose, id=frame.id, request_id=_rid(frame),
+             phone_age_ms=round(phone_age_ms(frame)), max_age_ms=req.max_age_ms)
         return False
 
     def _claimant(self, frame: Frame) -> _Request | None:
@@ -204,7 +220,7 @@ class FrameStore:
                     await self._cond.wait_for(lambda: len(req.frames) >= req.count)
         except TimeoutError:
             return []
-        return sorted(req.frames, key=lambda f: f.order_key)[:req.count]
+        return sorted(req.frames, key=_order_key)[:req.count]
 
     def got(self, rid: str) -> int:
         req = self._open.get(rid) or (self._expired.get(rid) or (None,))[0]
@@ -241,11 +257,16 @@ class FrameStore:
             since_arrival = now - at
             if since_arrival >= max_age_s:
                 return None  # older arrivals can only be older
-            if since_arrival + f.phone_age_ms / 1000 >= max_age_s:
+            if since_arrival + phone_age_ms(f) / 1000 >= max_age_s:
                 continue
             if f.purpose not in exclude and max(f.w, f.h) >= min_side:
                 return f
         return None
+
+    def arrival_monotonic(self, frame) -> float | None:
+        """Server ``time.monotonic`` when this very frame (identity) reached the store, or None when it is not
+        among the recent frames (never arrived, or already pushed out)."""
+        return next((at for at, f in reversed(self._recent_frames) if f is frame), None)
 
     def last_ts(self, purpose: str | None = None) -> float:
         """The newest timestamp stored (for ``purpose``), or 0 when there is none."""

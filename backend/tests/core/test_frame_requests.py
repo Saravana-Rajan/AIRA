@@ -129,6 +129,16 @@ async def test_a_frame_with_capture_ts_marks_a_current_phone():
     store.close_request(rid)
 
 
+def test_arrival_time_is_recorded_for_every_kept_frame():
+    store = FrameStore()
+    a, b, c = fr(1, "walk"), fr(2, "ask", "nope"), fr(3, "count")
+    store.add(a)
+    store.add(b)  # stale (unknown request): still kept for fresh reuse, so its arrival is known
+    assert store.arrival_monotonic(a) is not None and store.arrival_monotonic(b) is not None
+    assert store.arrival_monotonic(c) is None  # never arrived
+    assert store.arrival_monotonic(fr(1, "walk")) is None  # an equal but different object
+
+
 async def test_duplicate_frames_count_once():
     store = FrameStore()
     rid = store.open_request("count", 2)

@@ -75,8 +75,9 @@ def capture_age_s(store, frame, now: float | None = None) -> float | None:
     phone_s = (ts - cap) / 1000.0
     if not 0.0 <= phone_s <= MAX_PHONE_DELAY_S:
         return None
-    # FrameStore keeps (monotonic arrival, frame) for its recent frames; the walk frame is that same object.
-    arrived = next((at for at, f in reversed(getattr(store, "_recent_frames", ())) if f is frame), None)
+    # FrameStore records the monotonic arrival of every frame it keeps; the walk frame is that same object.
+    arrival = getattr(store, "arrival_monotonic", None)
+    arrived = arrival(frame) if arrival is not None else None
     if arrived is None:
         return None
     held = (time.monotonic() if now is None else now) - arrived
