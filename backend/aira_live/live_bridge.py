@@ -515,12 +515,16 @@ class LiveBridge:
         spoken = " ".join([*self._out_final, self._out_partial]).strip()
         self._out_final, self._out_partial = [], ""
         current = self._take_tool_results()
-        if spoken and current:  # only turns where a tool ran; prices may also come from the catalog prompt
+        # Turns where a tool ran, and every turn that states a count of objects (an answer from the live video
+        # included): a count needs a tool result or must be hedged as an estimate. Prices may also come from the
+        # catalog prompt.
+        if spoken and (current or safety.states_object_count(spoken)):
             recent = [r for turn in self._recent_results for r in turn]
             facts = last_catalog_facts(getattr(self.session, "shop_id", ""))  # PRODUCTS list numbers in the prompt
             # Off the event pump: the check may call an LLM (safety.llm_verify), and the next answer's audio
             # must never queue behind it.
-            task = asyncio.create_task(self._safety_check(spoken, current + recent + ([facts] if facts else [])))
+            task = asyncio.create_task(
+                self._safety_check(spoken, current + recent + ([facts] if facts else []), current))
             self._listener_tasks.add(task)
             task.add_done_callback(self._listener_tasks.discard)
         if current:
@@ -535,16 +539,19 @@ class LiveBridge:
         entries.clear()
         return [r for r in taken if isinstance(r, dict)]
 
-    async def _safety_check(self, spoken: str, results: list[dict]) -> None:
+    async def _safety_check(self, spoken: str, results: list[dict], current: list[dict] | None = None) -> None:
+        """Post-hoc: the answer has already been spoken; a violation makes AIRA correct itself right after."""
         try:
-            verdict = safety.check_numbers(spoken, results)
+            verdict = safety.check_turn(spoken, current if current is not None else results, results)
             if verdict.ok and verdict.needs_llm:
                 verdict = await safety.llm_verify(spoken, results)
             if verdict.ok:
                 return
-            log.warning("AIRA said numbers no tool returned: %s", verdict.unexpected)
+            log.warning("AIRA said numbers no tool returned: %s (unverified=%s)", verdict.unexpected,
+                        verdict.unverified)
             await self._send(CueMsg(cue="warn"))
-            await self.send_text(safety.correction_text(verdict.unexpected, self.session.lang))
+            await self.send_text(safety.correction_text(verdict.unexpected, self.session.lang,
+                                                        unverified=verdict.unverified))
         except Exception:
             log.exception("safety check failed")
 

@@ -178,12 +178,13 @@ async def test_llm_verify_uses_verify_role(monkeypatch):
     assert seen["role"] == "verify" and v.ok is False and v.unexpected == [600]
 
 
-async def test_llm_verify_failure_is_treated_as_ok(monkeypatch):
+async def test_llm_verify_failure_fails_closed_only_for_money_or_counts(monkeypatch):
     async def boom(*a, **k):
         raise TimeoutError
 
     monkeypatch.setattr(safety, "generate_json", boom)
-    assert (await safety.llm_verify("அறுநூறு ரூபாய்", [{"total": 60}])).ok
+    assert not (await safety.llm_verify("அறுநூறு ரூபாய்", [{"total": 60}])).ok   # a money amount: fail closed
+    assert (await safety.llm_verify("இரண்டு லிட்டர் பால்", [{"qty": 2}])).ok      # harmless: pass
 
 
 async def test_llm_verify_ignores_garbage_and_numbers_that_are_in_the_results(monkeypatch):
@@ -197,7 +198,9 @@ async def test_llm_verify_ignores_garbage_and_numbers_that_are_in_the_results(mo
         return ["nope"]
 
     monkeypatch.setattr(safety, "generate_json", not_a_dict)
-    assert (await safety.llm_verify("அறுபது ரூபாய்", [{"total": 60}])).ok
+    # a malformed verifier reply is a verifier failure: a money amount fails closed, a description passes
+    assert not (await safety.llm_verify("அறுபது ரூபாய்", [{"total": 60}])).ok
+    assert (await safety.llm_verify("இரண்டு லிட்டர் பால்", [{"qty": 2}])).ok
 
 
 def test_correction_text_names_the_wrong_number():
