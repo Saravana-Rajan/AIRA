@@ -339,7 +339,8 @@ async def test_non_blocking_tool_still_runs_with_its_session(mk_session):
     (tool,) = live_tools([sale_pay], s, frozenset({"sale_pay"}))
     assert isinstance(tool, FunctionTool)
     result = await tool.func(method="upi", tool_context=SimpleNamespace(function_call_id="fc1"))
-    assert result == {"say": "waiting for upi", "session": s.session_id}
+    assert result == {"say": "waiting for upi", "session": s.session_id, "status": "ok", "retryable": False,
+                      "message": "waiting for upi"}
     assert s.tool_results == [{"tool": "sale_pay", "call_id": "fc1", "result": result}]
 
 

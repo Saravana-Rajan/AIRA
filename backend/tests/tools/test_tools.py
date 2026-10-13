@@ -138,7 +138,7 @@ def test_harness_prints_server_msgs_then_result_and_loads_images(capsys, monkeyp
                     "--purpose", "count", "--shop", "test_shop", "--lang", "ta"])
     lines = capsys.readouterr().out.strip().splitlines()
     assert json.loads(lines[0]) == {"t": "cue", "cue": "thinking"}
-    assert json.loads(lines[-1]) == {"say_en": "Counted sakthi_curd_1l", "frames": 2}
+    assert json.loads(lines[-1]) == {"say_en": "Counted sakthi_curd_1l", "frames": 2, "status": "ok", "retryable": False, "message": "Counted sakthi_curd_1l"}
     assert seen == {"shop": "test_shop", "lang": "ta", "frames": [("img0", "count"), ("img1", "count")]}
 
 
@@ -155,7 +155,7 @@ def test_harness_answers_request_frame_like_the_phone(capsys, monkeypatch, tmp_p
     call_tool.main(["fake_cash", "--args", '{"amount": 60}', "--image", str(img)])
     lines = capsys.readouterr().out.strip().splitlines()
     assert json.loads(lines[0]) == {"t": "request_frame", "purpose": "cash", "burst": {"count": 3, "intervalMs": 100}}
-    assert json.loads(lines[-1]) == {"say_en": "ok", "frames": ["cash", "cash", "cash"]}
+    assert json.loads(lines[-1]) == {"say_en": "ok", "frames": ["cash", "cash", "cash"], "status": "ok", "retryable": False, "message": "ok"}
 
 
 @pytest.mark.parametrize("bad", ["not json", "[1]"])

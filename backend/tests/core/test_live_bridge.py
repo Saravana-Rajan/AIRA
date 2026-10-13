@@ -107,7 +107,7 @@ async def test_barge_in_cue_and_hard_stop_mutes_until_next_question(mk_session):
     await bridge.start()
     b.push(LiveEvent("audio", audio=b"a1"))
     await wait_until(lambda: _of(rec, "audio"))
-    bridge.hard_stop()                                   # long-press on the phone
+    await bridge.hard_stop()                                   # long-press on the phone
     b.push(LiveEvent("audio", audio=b"a2"))              # rest of the stopped answer -> dropped
     b.push(LiveEvent("output_transcript", text="and the curd", final=False))  # its caption -> dropped too
     b.push(LiveEvent("input_transcript", text="two litres curd", final=True))
@@ -220,14 +220,17 @@ async def test_multi_turn_answer_stays_muted_and_is_checked_once_idle(mk_session
     b = FakeBackend()
     bridge = _bridge(s, b)
     await bridge.start()
-    bridge.hard_stop()
+    await bridge.hard_stop()
     b.push(LiveEvent("audio", audio=b"old1"))
     b.push(LiveEvent("turn_complete", more=True))       # the stopped answer goes on in another turn
     b.push(LiveEvent("audio", audio=b"old2"))           # -> still dropped
-    b.push(LiveEvent("turn_complete"))                  # interaction idle -> mute lifts
+    b.push(LiveEvent("turn_complete"))                  # interaction idle -> still silent after a long-press
+    b.push(LiveEvent("audio", audio=b"old3"))
+    b.push(LiveEvent("input_transcript", text="how much curd", final=True))  # the owner's next question
     b.push(LiveEvent("audio", audio=b"new"))
     await wait_until(lambda: _of(rec, "audio"))
     assert _audio(rec) == [b"new"]
+    b.sent_text.remove(live_bridge.STOP_NOTE)
     # A tool ran in turn 1; the wrong total is spoken in turn 2 of the same answer.
     s.tool_results.append(_result("sale_start", {"total": 60}))
     b.push(LiveEvent("turn_complete", more=True))
@@ -270,15 +273,22 @@ async def test_streamed_fragments_give_listeners_one_full_utterance_and_no_false
     await bridge.close()
 
 
-async def test_hard_stop_also_lifts_when_the_stopped_turn_completes(mk_session):
+async def test_hard_stop_does_not_lift_when_the_stopped_turn_completes(mk_session):
+    """Only the owner's next turn (or a new notice) ends a long-press: a late tool result spoken after the
+    stopped turn ends is never heard."""
     s, rec = mk_session()
     b = FakeBackend()
     bridge = _bridge(s, b)
     await bridge.start()
-    bridge.hard_stop()
+    await bridge.hard_stop()
+    assert b.sent_text == [live_bridge.STOP_NOTE]
     b.push(LiveEvent("audio", audio=b"old"))
     b.push(LiveEvent("turn_complete"))
-    b.push(LiveEvent("audio", audio=b"notice"))  # e.g. a vendor notice spoken later
+    b.push(LiveEvent("audio", audio=b"late result"))
+    b.push(LiveEvent("turn_complete"))
+    await settle()
+    await bridge.speak_notice("Sakthi vendor confirmed: delivery at 6 pm.")  # a new notice is heard
+    b.push(LiveEvent("audio", audio=b"notice"))
     await wait_until(lambda: _of(rec, "audio"))
     assert _audio(rec) == [b"notice"]
     await bridge.close()
@@ -290,7 +300,7 @@ async def test_a_long_press_while_idle_never_swallows_the_next_notice(mk_session
     b = FakeBackend()
     bridge = _bridge(s, b)
     await bridge.start()
-    bridge.hard_stop()
+    await bridge.hard_stop()
     await bridge.speak_notice("Sakthi vendor confirmed: delivery at 6 pm.")
     b.push(LiveEvent("output_transcript", text="Sakthi vendor delivers at 6 pm.", final=True))
     b.push(LiveEvent("audio", audio=b"notice"))
@@ -309,8 +319,8 @@ async def test_text_sent_during_a_stopped_answer_is_heard_once_that_answer_is_cu
     await bridge.start()
     b.push(LiveEvent("audio", audio=b"a1"))
     await wait_until(lambda: _of(rec, "audio"))
-    bridge.hard_stop()
-    await bridge.send_text("How many curd packets are left?")  # typed while the stopped answer still streams
+    await bridge.hard_stop()
+    await bridge.send_text("How many curd packets are left?", user_turn=True)  # typed while it still streams
     b.push(LiveEvent("audio", audio=b"a2"))                    # rest of the stopped answer -> dropped
     b.push(LiveEvent("interrupted"))                           # the new prompt cut the old answer
     b.push(LiveEvent("audio", audio=b"a3"))                    # answer to the typed question -> played
@@ -319,17 +329,20 @@ async def test_text_sent_during_a_stopped_answer_is_heard_once_that_answer_is_cu
     await bridge.close()
 
 
-async def test_a_reconnect_ends_the_hard_stop(mk_session):
-    """The stopped answer died with the old connection; what Live says after reconnecting is new."""
+async def test_a_reconnect_keeps_the_hard_stop_until_the_next_question(mk_session):
+    """A reconnect may still deliver a late tool result: the owner's next question ends the stop, not the
+    reconnect."""
     s, rec = mk_session()
     b1, b2 = FakeBackend(), FakeBackend()
     bridge = _bridge(s, b1, b2)
     await bridge.start()
     b1.push(LiveEvent("audio", audio=b"old"))
     await wait_until(lambda: _of(rec, "audio"))
-    bridge.hard_stop()
+    await bridge.hard_stop()
     b1.end()  # the connection drops in the middle of the stopped answer
     await wait_until(lambda: b2.started_with == [None])
+    b2.push(LiveEvent("audio", audio=b"late"))
+    b2.push(LiveEvent("input_transcript", text="any milk left", final=True))
     b2.push(LiveEvent("audio", audio=b"new"))
     await wait_until(lambda: len(_of(rec, "audio")) == 2)
     assert _audio(rec) == [b"old", b"new"]
@@ -342,13 +355,14 @@ async def test_unheard_words_of_a_stopped_answer_are_not_checked(mk_session):
     bridge = _bridge(s, b)
     await bridge.start()
     s.tool_results.append(_result("sale_start", {"total": 60}))
-    bridge.hard_stop()
+    await bridge.hard_stop()
     b.push(LiveEvent("output_transcript", text="Total is ₹600.", final=True))  # muted: the owner never heard it
     b.push(LiveEvent("turn_complete"))
+    b.push(LiveEvent("input_transcript", text="what next", final=True))
     b.push(LiveEvent("audio", audio=b"next"))
     await wait_until(lambda: _of(rec, "audio"))
     await settle()
-    assert "warn" not in _cues(rec) and b.sent_text == [] and s.tool_results == []
+    assert "warn" not in _cues(rec) and b.sent_text == [live_bridge.STOP_NOTE] and s.tool_results == []
     await bridge.close()
 
 

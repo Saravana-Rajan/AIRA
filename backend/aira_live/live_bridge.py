@@ -39,6 +39,10 @@ NOTICE_PREFIX = ("[SYSTEM NOTE] Tell the owner now, in the language he is speaki
 # A safety notice (stop, obstacle, cannot see) cuts in: the rest of the answer being spoken is dropped.
 URGENT_PREFIX = ("[SYSTEM NOTE] URGENT, for his safety: stop what you are saying and tell the owner at once, in the "
                  "language he is speaking, in a few words, keeping every number exactly as given")
+# Long-press Stop: Live is told to drop the answer; the relay stays silent until the owner's next real turn.
+STOP_NOTE = ("[SYSTEM NOTE] The owner pressed Stop: stop talking now, drop any pending answer and any tool result "
+             "still coming, say nothing, and wait for his next question.")
+STOP_LIFT_WORDS = 2  # a final transcript of at least this many words is the owner's next turn (not noise)
 # Reply-language lock: an answer outside the session language and the shop's languages is corrected at once,
 # and its caption is hidden; one correction per LANG_LOCK_GAP_S so a wordy model never gets a flood of notes.
 LANG_LOCK_GAP_S = 5.0
@@ -128,6 +132,8 @@ class LiveBridge:
         self._connected = False
         self._closed = False
         self._muted = False
+        # Long-press Stop: nothing reaches the phone until the owner's next real turn (not turn end, not reconnect).
+        self._stopped = False
         self._answering = False  # Live is speaking an answer that has not ended (turn_complete / interrupted)
         self._task: asyncio.Task | None = None
         self._pending_text: list[tuple[str, float, bool]] = []  # (text, queued at, is a notice)
@@ -236,10 +242,16 @@ class LiveBridge:
             return False
         return True
 
-    async def send_text(self, text: str, _notice: bool = False) -> None:
-        """Typed text, notices and corrections. Queued while reconnecting and sent once Live is back."""
+    async def send_text(self, text: str, _notice: bool = False, user_turn: bool = False) -> None:
+        """Typed text, notices and corrections. Queued while reconnecting and sent once Live is back.
+
+        ``user_turn`` (the owner typed or tapped) and a notice end a long-press stop; an internal correction does
+        not."""
         if self._closed:
             return
+        if self._stopped and (user_turn or _notice):
+            self._stopped = False  # what follows is new; the stopped answer stays muted until Live cuts it
+            self._muted = self._muted or self._answering
         if self._muted and not self._answering:
             # A long-press with nothing playing (e.g. to stop guidance) must not swallow the answer to this new
             # prompt. If the stopped answer is still streaming, the mute lifts when Live cuts or ends it.
@@ -283,13 +295,35 @@ class LiveBridge:
     def _lang_name(self) -> str:
         return LANG_NAME.get(str(self.session.lang or "en"), "English")
 
-    def hard_stop(self) -> None:
-        """Long-press: drop the rest of the current answer (audio + captions).
+    async def hard_stop(self) -> None:
+        """Long-press: drop the rest of the current answer (audio + captions) and tell Live to stop.
 
-        The mute lifts when the next question starts (the owner speaks, or a new text prompt arrives while nothing
-        is playing), when Live cuts or ends the stopped answer, or on a reconnect.
+        Nothing reaches the phone until the owner's next real turn: a final transcript of at least
+        ``STOP_LIFT_WORDS`` words, typed text or a tap (``user_turn``), or a notice (vendor reply, alert), which
+        is new. Turn end, an interruption and a reconnect do not lift it. Late tool results are dropped by
+        ``tool_runtime.stop``. Idempotent: a repeated long-press sends no second note.
         """
         self._muted = True
+        if self._stopped:
+            return
+        self._stopped = True
+        diag("live", event="hard_stop", session=self.session.session_id, answering=self._answering)
+        if self._connected and self._backend is not None:
+            try:
+                await self._backend.send_text(STOP_NOTE)
+            except Exception as exc:  # the pump notices a dead connection; the relay stays silent anyway
+                log.debug("stop note send failed: %s", exc)
+
+    def user_turn(self) -> None:
+        """The owner started a new turn on the phone (talk tap): a long-press stop ends."""
+        if not self._stopped:
+            return
+        self._stopped = False
+        self._muted = self._answering  # a stopped answer still streaming stays muted until Live cuts it
+
+    @property
+    def _silent(self) -> bool:
+        return self._muted or self._stopped
 
     def _queue_text(self, text: str, notice: bool = False) -> None:
         self._pending_text.append((text, _monotonic(), notice))
@@ -359,11 +393,11 @@ class LiveBridge:
             self._answering = True
             if self._heard_at is not None:
                 self._log_first_audio()
-            if not self._muted and ev.audio:
+            if not self._silent and ev.audio:
                 await s.send(AudioOutMsg(pcm24=base64.b64encode(ev.audio).decode()))
         elif ev.kind == "output_transcript":
             self._answering = True
-            if self._muted:  # the owner stopped this answer: he never hears these words
+            if self._silent:  # the owner stopped this answer: he never hears these words
                 return
             await self._output_caption(ev)
         elif ev.kind == "input_transcript":
@@ -374,6 +408,8 @@ class LiveBridge:
             if ev.final:
                 self._final_at = self._heard_at
                 utterance, self._in_partial = ev.text or self._in_partial, ""
+                if self._stopped and len(utterance.split()) >= STOP_LIFT_WORDS:
+                    self._stopped = False  # the owner's next question after a long-press
                 # AIRA follows the speaker: the catalog and the phone's labels switch with him, but only when he
                 # clearly speaks another language (sticky: "Amo" in Latin letters is still Tamil).
                 lang, unclear = await self._judge(utterance)
