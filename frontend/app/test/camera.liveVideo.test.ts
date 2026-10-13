@@ -46,9 +46,9 @@ beforeEach(() => vi.useFakeTimers());
 afterEach(() => vi.useRealTimers());
 
 describe("live frame spec", () => {
-  it("is 768 px at quality 0.7; count frames are 1280 px", () => {
+  it("is 768 px at quality 0.7; count frames are 1024 px", () => {
     expect(frameSpec("live")).toEqual({ maxSide: 768, quality: 0.7 });
-    expect(frameSpec("count").maxSide).toBe(1280);
+    expect(frameSpec("count").maxSide).toBe(1024);
   });
 });
 

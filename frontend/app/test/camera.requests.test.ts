@@ -178,8 +178,11 @@ describe("request_frame handler", () => {
     await s.handle({ t: "request_frame", purpose: "ask" });
     expect(log).toEqual(["hold", "send:ask", "release"]);
     log.length = 0;
-    await s.handle({ t: "request_frame", purpose: "invoice" });           // not an owner camera question
-    expect(log).toEqual(["send:invoice"]);
+    await s.handle({ t: "request_frame", purpose: "invoice" });           // an invoice photo is a tool frame too
+    expect(log).toEqual(["hold", "send:invoice", "release"]);
+    log.length = 0;
+    await s.handle({ t: "request_frame", purpose: "guide" });             // hand guidance is not
+    expect(log).toEqual(["send:guide"]);
   });
 
   it("a walk burst also holds background capture", async () => {
@@ -205,6 +208,21 @@ describe("request_frame handler", () => {
     expect(reqs).toHaveLength(2);
     expect(reqs[0]).toMatchObject({ purpose: "count", i: 0, of: 2, waitedMs: 0, encodeMs: 120, bytes: 500, buffered: 5000, sent: true });
     expect(reqs[1]).toMatchObject({ purpose: "count", i: 1, waitedMs: 520, encodeMs: 120, bytes: 500 });
+  });
+
+  it("frame_req says whether the JPEG was encoded in the worker", async () => {
+    const logs: any[] = [];
+    let n = 0;
+    const s = setup({
+      log: (tag: string, data: any) => { if (tag === "frame_req") logs.push(data); },
+      viaWorker: () => ++n === 1,
+    });
+    await s.handle({ t: "request_frame", purpose: "count" });
+    await s.handle({ t: "request_frame", purpose: "count" });
+    expect(logs.map((d) => d.worker)).toEqual([true, false]);
+    const plain: any[] = [];
+    await setup({ log: (_t: string, d: any) => { plain.push(d); } }).handle({ t: "request_frame", purpose: "ask" });
+    expect(plain[0]).toMatchObject({ worker: false, purpose: "ask", bytes: 1 });
   });
 
   it("the hold is released even when the camera fails", async () => {

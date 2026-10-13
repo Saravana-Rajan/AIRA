@@ -1,5 +1,6 @@
 import type { ClientMsg, CueName, Lang, Verbosity } from "@aira/contracts";
 import type { AiraSocket } from "../net/socket";
+import type { EarconName } from "../voice/earcons";
 
 export type HapticName = "ack" | "warn" | "done" | "match" | "mismatch";
 
@@ -25,7 +26,7 @@ export interface AppDeps {
   socket: Pick<AiraSocket, "send">;
   settings: Settings;
   speakImpl: (text: string, s: Settings) => void;
-  earconImpl: (n: CueName) => void;
+  earconImpl: (n: EarconName) => void;
   hapticImpl: (n: HapticName) => void;
   /** The label language right now (the one the server last detected). Default: from `settings.lang`. */
   langImpl?: () => Lang;
@@ -36,7 +37,7 @@ export interface AppApi {
   socket: AiraSocket;
   settings: Settings;
   speak(text: string): void;
-  earcon(n: CueName): void;
+  earcon(n: EarconName): void;
   haptic(n: HapticName): void;
   send(m: ClientMsg): boolean;
   /** The language of the labels and local TTS right now: what the speaker last used, as the server heard it. */

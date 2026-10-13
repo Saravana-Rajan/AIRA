@@ -16,7 +16,9 @@ import { createFrameRequestHandler, defaultSleep } from "../src/camera/requests"
 
 const fakeCanvas = () => ({ canvas: {} as HTMLCanvasElement, ctx: { getImageData: () => ({ data: new Uint8ClampedArray(4 * 4 * 4).fill(200) }) } as unknown as CanvasRenderingContext2D });
 
-interface Enc { q: number; at: number; resolve: (s: string) => void }
+interface Enc { q: number; side: number; at: number; resolve: (s: string) => void }
+/** The count frame's long side (a 720x1280 camera scaled to 1024): live frames are 768, describe 640. */
+const COUNT_SIDE = 1024;
 type Frame = Extract<ClientMsg, { t: "frame" }>;
 const isFrame = (m: ClientMsg): m is Frame => m.t === "frame";
 
@@ -35,10 +37,12 @@ describe("a tool frame request beats live / describe work and socket backpressur
     // Live / describe encodes hang (a slow, busy phone); count encodes take 80 ms.
     __setCaptureDeps({
       source: { width: () => 720, height: () => 1280, draw: () => {} },
-      makeCanvas: fakeCanvas,
-      encoder: (_c, q) => new Promise<string>((resolve) => {
-        encodes.push({ q, at: Date.now(), resolve });
-        if (q === 0.75) setTimeout(() => resolve("C".repeat(1000)), 80);
+      makeCanvas: (w, h) => ({ ...fakeCanvas(), canvas: { width: w, height: h } as HTMLCanvasElement }),
+      worker: () => null,
+      encoder: (c, q) => new Promise<string>((resolve) => {
+        const side = Math.max(c.width, c.height);
+        encodes.push({ q, side, at: Date.now(), resolve });
+        if (side === COUNT_SIDE) setTimeout(() => resolve("C".repeat(1000)), 80);
       }),
     });
   });
@@ -76,14 +80,14 @@ describe("a tool frame request beats live / describe work and socket backpressur
   it("captures the count frame within 300 ms with a live encode in flight and 170 KB queued", async () => {
     const r = rig();
     await vi.advanceTimersByTimeAsync(10);
-    const liveEnc = encodes.find((e) => e.q === 0.7);
+    const liveEnc = encodes.find((e) => e.side === 768);
     expect(liveEnc).toBeDefined();               // a live frame is mid-encode and does not finish on its own
     buffered = 170_000;                          // the uplink is congested (mic_drop said 168-173 KB)
 
     const t0 = Date.now();
     const done = r.handle({ t: "request_frame", purpose: "count", burst: { count: 2, intervalMs: 400 } });
     await vi.advanceTimersByTimeAsync(300);
-    const countEnc = encodes.filter((e) => e.q === 0.75);
+    const countEnc = encodes.filter((e) => e.side === COUNT_SIDE);
     expect(countEnc.length).toBeGreaterThanOrEqual(1);
     expect(countEnc[0].at - t0).toBeLessThan(300);
     expect(wire.filter((m) => isFrame(m) && m.purpose === "count")).toHaveLength(1);

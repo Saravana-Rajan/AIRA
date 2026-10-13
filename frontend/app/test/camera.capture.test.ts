@@ -153,19 +153,19 @@ describe("owner questions come first", () => {
     expect(isPriorityPurpose("describe")).toBe(false);
   });
 
-  it("count frames keep 1280 px but encode at quality 0.75 (about 120 KB, not 230 KB, on a congested uplink)", async () => {
-    expect(COUNT_QUALITY).toBe(0.75);
-    expect(frameSpec("count")).toEqual({ maxSide: 1280, quality: 0.75 });
+  it("count frames are 1024 px at quality 0.7 (about 110 KB: a busy phone encodes and sends them fast)", async () => {
+    expect(COUNT_QUALITY).toBe(0.7);
+    expect(frameSpec("count")).toEqual({ maxSide: 1024, quality: 0.7 });
     const enc = vi.fn(async (_c: HTMLCanvasElement, _q: number) => "AAAA");
     __setCaptureDeps({ encoder: enc, source: { width: () => 1080, height: () => 1920, draw: () => {} } });
     const f = await captureFrame("count");
-    expect(f).toMatchObject({ t: "frame", w: 720, h: 1280, purpose: "count" });
+    expect(f).toMatchObject({ t: "frame", w: 576, h: 1024, purpose: "count" });
     expect(enc).toHaveBeenCalledTimes(1);
-    expect(enc).toHaveBeenLastCalledWith(expect.anything(), 0.75);
+    expect(enc).toHaveBeenLastCalledWith(expect.anything(), 0.7);
   });
 
-  it("every tool frame request (ask / count / identify / point / walk) holds background frames; others do not", () => {
-    for (const p of ["ask", "count", "identify", "point", "walk"] as const) expect(holdsBackground(p)).toBe(true);
+  it("every tool frame request (ask / count / identify / point / walk / invoice / cash) holds background frames; others do not", () => {
+    for (const p of ["ask", "count", "identify", "point", "walk", "invoice", "cash"] as const) expect(holdsBackground(p)).toBe(true);
     for (const p of ["live", "describe", "preview", "guide"] as const) expect(holdsBackground(p)).toBe(false);
   });
 

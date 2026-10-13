@@ -2,7 +2,7 @@
 // MediaPipe Hand Landmarker: streams the index fingertip (landmark 8) and the whole hand's box in 0–1000
 // image coords. MediaPipe is loaded lazily (./mediapipe), so it stays out of the start-up bundle.
 import type { HandLandmarker } from "@mediapipe/tasks-vision";
-import { startCamera } from "../camera/capture";
+import { detectionPaused, startCamera } from "../camera/capture";
 import { getFrameSource, type FrameSourceEl } from "../camera/source";
 import type { Box } from "./geometry";
 
@@ -118,7 +118,8 @@ export async function trackHand(onHand: (hand: Hand | null) => void): Promise<()
   };
   const loop = () => {
     if (!running) return;
-    if (hasPixels(source)) {
+    // An owner tool photo (ask, count, ...) is being taken: skip this pass, the phone's CPU goes to it.
+    if (hasPixels(source) && !detectionPaused()) {
       let ts = performance.now();
       if (ts <= lastTs) ts = lastTs + 1;   // MediaPipe needs strictly increasing timestamps
       lastTs = ts;

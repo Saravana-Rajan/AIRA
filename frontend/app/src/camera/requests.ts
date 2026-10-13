@@ -41,6 +41,8 @@ export interface RequestDeps {
   now?: () => number;
   /** Diagnostics sink. Default clientLog. */
   log?: (tag: string, data: Record<string, unknown>) => void;
+  /** True when the frame's JPEG was encoded in the worker (frame_req `worker`). Default: false. */
+  viaWorker?: (f: FrameMsg) => boolean;
   /** Bytes waiting on the socket, reported with each frame_req line. */
   buffered?: () => number;
 }
@@ -60,6 +62,9 @@ function clamp(v: number | undefined, lo: number, hi: number, fallback: number):
 export function createFrameRequestHandler(deps: RequestDeps): (m: FrameRequest) => Promise<void> {
   const now = deps.now ?? defaultNow;
   const log = deps.log ?? ((tag: string, data: Record<string, unknown>) => { clientLog(tag, data); });
+  const viaWorker = (f: FrameMsg): boolean => {
+    try { return deps.viaWorker?.(f) === true; } catch { return false; }
+  };
   const buffered = (): number | null => {
     try { return deps.buffered ? deps.buffered() : null; } catch { return null; }
   };
@@ -97,7 +102,7 @@ export function createFrameRequestHandler(deps: RequestDeps): (m: FrameRequest) 
           // server stamps log lines on arrival, so a late line alone cannot tell a slow phone from a slow uplink).
           log("frame_req", {
             purpose: m.purpose, i, of: count, waitedMs: Math.round(start - received), encodeMs: Math.round(encoded - start),
-            bytes: f.jpeg.length, buffered: buffered(), sent, clientTs: Date.now(),
+            bytes: f.jpeg.length, buffered: buffered(), sent, clientTs: Date.now(), worker: viaWorker(f),
           });
         } catch (e) {
           clientLog("frame", { purpose: m.purpose, error: e instanceof CameraError ? e.code : "unknown" });
