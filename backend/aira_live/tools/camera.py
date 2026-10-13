@@ -1,18 +1,19 @@
-"""Live tool camera_ask: open questions about what the camera sees, answered as guidance for a blind owner.
+"""Live tool camera_ask: open questions about what the camera sees, answered as facts for a blind owner.
 
-The Live model only hears audio. For "what's in front of me?", "is my path clear?", "read this label" or
-"where is the door?" it calls this tool, which takes a fresh frame from the chest camera and asks the
-``point`` model (Robotics-ER 2, Flash fallback through ``generate_json``) for objects with [y, x] points
-(0-1000) and distances. The spoken line is built here, not by the model: a side (left / ahead / right), a
-distance (arm's length, a few steps) and the next action, in the session language.
+The Live model hears Sam in any language and decides what he wants: it calls ``camera_ask`` with a ``kind``
+("look", "read", "count", "path", "list") and, for a count, the ``item`` (generic English noun) and ``product``
+(brand, if named). The code routes on ``kind`` only and never parses the owner's words.
 
-"What's in front of me?" names up to three objects, nearest first, each with its side and distance ("a table
-straight ahead, at arm's length"). Every ER 2 result also goes to ``vision.observers.on_vision_objects`` so
-the visual memory can record what was seen.
+The tool takes a fresh frame from the chest camera and asks the ``point`` model (Robotics-ER 2, Flash fallback
+through ``generate_json``) for objects with [y, x] points (0-1000) and distances. The result is structured facts
+in plain English (``facts``, ``objects`` with side and distance, ``count`` / ``approx``, ``hint``) plus a short
+English ``say_en`` meaning hint; Live says it to the owner in the language he is speaking. No fixed sentence in
+any language is built here.
 
-Rules: low confidence or a bad frame says "not sure" plus an aim hint, never a guess. "Read this" is read
-twice (``read`` and ``verify`` roles) and spoken verbatim only when both reads agree. A path question names
-the obstacle and its direction and never says "safe" or "clear".
+Rules: low confidence or a bad frame is ``sure: false`` plus an aim hint, never a guess. "Read this" is read
+twice (``read`` and ``verify`` roles) and returned verbatim only when both reads agree. A path answer names the
+obstacle and its direction and never says "safe" or "clear". Every ER 2 result also goes to
+``vision.observers.on_vision_objects`` so the visual memory can record what was seen.
 """
 from __future__ import annotations
 
@@ -21,12 +22,10 @@ import logging
 import re
 import time
 from contextlib import asynccontextmanager
-from typing import Any, NamedTuple
+from typing import Any, Literal, NamedTuple
 
 from aira_live.contracts import RequestFrameMsg
 from aira_live.diag import diag, summarize, trunc
-from aira_live.i18n import t
-from aira_live.prompt import LANG_NAME
 from aira_live.session import REUSE_MIN_SIDE, Session, get_session
 from aira_live.vision import listing, observers, precount
 from aira_live.vision.count import CountResult, count_in_frame
@@ -44,18 +43,30 @@ COUNT_INTERVAL_MS = 400
 LOOK_TIMEOUT_S = 4.0      # per-attempt model timeout for a look / path answer (one retry)
 READ_MIN_SIDE = 1280      # a reused frame for reading text must be a full-size owner frame
 DIST_ORDER = ("near", "arm", "far")
+KINDS = ("look", "read", "count", "path", "list")
 # Labels that must never be spoken: people are never described, and a label can't smuggle in "safe".
 PERSON = re.compile(r"\b(person|people|man|woman|boy|girl|child|kid|customer|face|human|lady|guy)\b", re.I)
 UNSAFE_WORDS = re.compile(r"\bsafe\b|\bclear\b", re.I)
 
-READ_WORDS = ("read", "what does it say", "what does this say", "label", "text", "written", "price tag",
-              "expiry", "படி", "எழுத", "पढ़", "लिखा")
-PATH_WORDS = ("path", "way clear", "walk", "step", "in my way", "obstacle", "trip", "move forward", "go forward",
-              "ahead of me", "வழி", "நடக்க", "रास्ता", "चल")
+# Plain-English meaning of each fact (Live says it in the owner's language).
+SIDE_EN = {"far_left": "to your far left", "left": "to your left", "centre": "straight ahead",
+           "right": "to your right", "far_right": "to your far right"}
+DIST_EN = {"near": "within arm's reach", "arm": "at arm's length", "far": "a few steps away"}
+HINT_EN = {
+    "move_back": "Move the phone back a little.",
+    "spread_out": "Spread the items apart.",
+    "show_items": "Show the items in front of the camera.",
+    "show_label": "Turn the pack so the label faces the camera.",
+    "hold_closer": "Hold it closer to the camera.",
+    "not_visible": "It is not in view.",
+    "hold_still": "Hold the camera still, or step back a little.",
+}
+AREA_EN = {"top": "Top shelf", "middle": "Middle shelf", "bottom": "Bottom shelf", "door": "Fridge door",
+           "floor": "On the floor", "counter": "On the counter", "other": "Also"}
 
 ASK_PROMPT = (
     "You are the eyes of a blind shopkeeper wearing this chest camera in a small dairy shop. "
-    "Question: \"{question}\". Answer in {lang}. Describe what is there so a blind person can act on it: "
+    "Question: \"{question}\". Answer in plain English. Describe what is there so a blind person can act on it: "
     "list the main objects (at most 3, nearest and most relevant first), each with a short plain label, "
     "its point [y, x] normalized 0-1000 (x: 0 is the owner's left, 1000 the right), "
     "and its distance: near (within reach), arm (an arm's "
@@ -76,72 +87,45 @@ READ_SCHEMA = '{"text": "<verbatim text>", "confidence": 0.0}'
 _WS = re.compile(r"\s+")
 
 
-COUNT_EN = re.compile(r"\bhow many\b|\bcount\b|\bcount (?:the|these|those|them|all)\b", re.I)
-COUNT_WORDS = ("எத்தனை", "எண்ணு", "எண்ணி", "எண்ணிக்கை", "कितने", "कितनी", "कितना", "गिन")
-_LEAD = re.compile(r"^.*?\b(?:how many|count)\b\s*", re.I | re.S)
-_ARTICLES = {"the", "these", "those", "all", "of", "my", "your"}
-_STOP = re.compile(r"\b(?:are|is|do|does|did|can|could|would|will|in|on|at|there|here|visible|you|i|that|which|"
-                   r"left|remaining|kept|lying|placed|now|please|for)\b.*$", re.I | re.S)
-_PRONOUNS = {"them", "these", "those", "it", "they", "items", "item", "things", "thing", "this", "that"}
-CONTAINERS = {"packet": "packet", "packets": "packet", "pack": "pack", "packs": "pack", "pouch": "pouch",
-              "pouches": "pouch", "bottle": "bottle", "bottles": "bottle", "box": "box", "boxes": "box",
-              "cup": "cup", "cups": "cup", "tub": "tub", "tubs": "tub", "can": "can", "cans": "can",
-              "carton": "carton", "cartons": "carton", "bag": "bag", "bags": "bag", "tin": "tin", "tins": "tin",
-              "jar": "jar", "jars": "jar", "sachet": "sachet", "sachets": "sachet", "tray": "tray", "trays": "tray",
-              "brick": "brick", "bricks": "brick"}
-CATEGORIES = {"milk", "curd", "butter", "ghee", "paneer", "cheese", "buttermilk", "lassi", "yogurt", "yoghurt",
-              "cream", "ice", "dahi", "milkshake", "khoa", "flavoured", "flavored", "toned", "skimmed"}
-_SIZE = re.compile(r"^\d+(?:\.\d+)?(?:ml|l|ltr|litre|liter|g|gm|kg)?$", re.I)
-_UNITS = {"ml", "l", "ltr", "litre", "liter", "litres", "g", "gm", "gram", "grams", "kg"}
-_NON_ASCII_LETTER = re.compile(r"[^\x00-\x7f]")
-
-
 class CountTarget(NamedTuple):
     generic: str            # what ER points at: "curd packet" (generic, so half-readable packs are pointed too)
     product: str | None     # the named product the labels must carry ("Hatsun Curd"), or None for every item
-    phrase: str             # the owner's own words for the spoken answer ("Hatsun Curd packets"); "" if unknown
+    phrase: str             # the English label of the answer ("Hatsun Curd packets"); "" when none
 
 
-def count_target(question: str) -> CountTarget:
-    """What to count, from the owner's question. English questions are parsed; other languages pass the whole
-    question to the model as the item hint (the model reads Tamil and Hindi)."""
-    q = question.strip()
-    if _NON_ASCII_LETTER.search(q):
-        return CountTarget(f'item the owner asks about in "{q}"', None, "")
-    rest = _LEAD.sub("", q, count=1)
-    rest = re.sub(r"[?.!,]", " ", rest)
-    rest = _STOP.sub("", rest).strip()
-    words = rest.split()
-    while words and words[0].lower() in _ARTICLES:
-        words = words[1:]
-    if not words or all(w.lower() in _PRONOUNS for w in words):
-        return CountTarget("item the owner is showing", None, "")
-    phrase = " ".join(words)
-    container = next((CONTAINERS[w.lower()] for w in reversed(words) if w.lower() in CONTAINERS), None)
-    category = [w.lower() for w in words if w.lower() in CATEGORIES]
-    brand = [w for w in words if w.lower() not in CONTAINERS and w.lower() not in CATEGORIES
-             and w.lower() not in _UNITS and not _SIZE.match(w)]
-    if container is None and not category:
-        return CountTarget(phrase, None, phrase)
-    generic = " ".join([*category, container or "packet"])
-    product_words = [w for w in words if w in brand or w.lower() in category]
-    product = " ".join(product_words) if brand else None
-    return CountTarget(generic, product, phrase)
+def _plural(noun: str) -> str:
+    noun = noun.strip()
+    if not noun or noun.endswith("s"):
+        return noun
+    return noun + ("es" if noun.endswith(("x", "ch", "sh")) else "s")
 
 
-def classify(question: str) -> str:
-    """One of "count", "read", "list", "path" or "look" from the owner's words (any language falls back to
-    "look")."""
-    q = question.lower()
-    if COUNT_EN.search(q) or any(w in q for w in COUNT_WORDS):
-        return "count"
-    if any(w in q for w in READ_WORDS):
-        return "read"
-    if listing.is_listing(q):           # "what's in my fridge?": list the items by shelf (spec §4)
-        return "list"
-    if any(w in q for w in PATH_WORDS):
-        return "path"
-    return "look"
+def count_target(item: str = "", product: str = "") -> CountTarget:
+    """What to count, straight from the model's tool arguments (never parsed from the owner's words): ``item`` is
+    the generic noun in English ("curd packet"), ``product`` the brand or product when one was named."""
+    item = _WS.sub(" ", item or "").strip()
+    product = _WS.sub(" ", product or "").strip()
+    generic = item or (f"{product} packet" if product else "item the owner is showing")
+    if product:
+        phrase = f"{product} {_plural(item.split()[-1])}" if item else product
+    else:
+        phrase = _plural(item) if item else ""
+    return CountTarget(generic, product or None, phrase)
+
+
+def normalize_kind(kind: Any) -> str:
+    """The model's ``kind`` argument; anything missing or unknown is a plain "look"."""
+    k = str(kind or "").strip().lower()
+    return k if k in KINDS else "look"
+
+
+def short_hint(key: Any) -> str:
+    """"vision.aim.move_back" -> "move_back" ("" for none)."""
+    return str(key or "").rsplit(".", 1)[-1]
+
+
+def hint_en(hint: str) -> str:
+    return HINT_EN.get(short_hint(hint), "")
 
 
 def side_key(x: float) -> str:
@@ -155,6 +139,11 @@ def side_key(x: float) -> str:
     if x <= 800:
         return "cam.side.right"
     return "cam.side.far_right"
+
+
+def side_name(x: float) -> str:
+    """"far_left", "left", "centre", "right" or "far_right"."""
+    return side_key(x).rsplit(".", 1)[-1]
 
 
 def dist_key(distance: Any) -> str:
@@ -228,39 +217,67 @@ def _steps(raw: Any) -> list[str]:
     return [str(x).strip() for x in raw if str(x).strip()] if isinstance(raw, list) else []
 
 
-def _where(obj: dict, lang: str) -> str:
-    return t("cam.where", lang, label=obj["label"], side=t(side_key(obj["point"][1]), lang),
-             dist=t(dist_key(obj["distance"]), lang))
-
-
 def _sentence(text: str) -> str:
     text = text.strip()
     return text if not text or text[-1] in ".!?।" else text + "."
 
 
-def _say_look(answer: str, steps: list[str], objects: list[dict], lang: str) -> str:
+def where_en(obj: dict) -> str:
+    """"The table is straight ahead, at arm's length." (English facts for Live to say in his language.)"""
+    return (f"The {obj['label']} is {SIDE_EN[side_name(obj['point'][1])]}, "
+            f"{DIST_EN.get(obj['distance'], DIST_EN['arm'])}.")
+
+
+def fact_objects(objects: list[dict]) -> list[dict]:
+    """The objects as facts: label, side and distance in words, nearest first (at most ``MAX_OBJECTS``)."""
+    return [{"label": o["label"], "side": side_name(o["point"][1]), "distance": o["distance"]}
+            for o in nearest_first(objects)[:MAX_OBJECTS]]
+
+
+def _facts_look(answer: str, steps: list[str], objects: list[dict]) -> str:
     """Up to three objects with side and distance, nearest first; the model's answer only when it sees fewer
     than two objects; then the next action. At most four short sentences."""
-    parts: list[str] = [_where(obj, lang) for obj in nearest_first(objects)[:MAX_OBJECTS]]
+    parts: list[str] = [where_en(obj) for obj in nearest_first(objects)[:MAX_OBJECTS]]
     if answer and len(objects) < 2:
         parts.append(_sentence(answer))
     if steps and len(parts) < 4:
         parts.append(_sentence(steps[0]))
-    return " ".join(parts) if parts else t("cam.not_sure", lang)
+    return " ".join(parts) if parts else "Not sure what is there."
 
 
-def _say_path(steps: list[str], objects: list[dict], lang: str) -> str:
-    """The obstacle and its direction. Never the model's own words: those could say "safe"."""
+def _facts_path(steps: list[str], objects: list[dict]) -> tuple[str, dict | None]:
+    """The obstacle and its direction. Never the model's own words alone: those could say "safe"."""
     if not objects:
-        return t("cam.path_nothing", lang)
+        return "Nothing seen in the way up to a few steps. Walk slowly and check again.", None
     nearest = nearest_first(objects)[0]
-    line = t("cam.obstacle", lang, label=nearest["label"], side=t(side_key(nearest["point"][1]), lang),
-             dist=t(dist_key(nearest["distance"]), lang))
+    line = (f"There is a {nearest['label']} {SIDE_EN[side_name(nearest['point'][1])]}, "
+            f"{DIST_EN.get(nearest['distance'], DIST_EN['arm'])}. Go around it slowly.")
     step = next((s for s in steps if not UNSAFE_WORDS.search(s)), "")
-    return f"{line} {_sentence(step)}".strip() if step else line
+    obstacle = {"label": nearest["label"], "side": side_name(nearest["point"][1]), "distance": nearest["distance"]}
+    return (f"{line} {_sentence(step)}".strip() if step else line), obstacle
 
 
-async def _read_twice(frame_b64: str, lang: str) -> dict:
+def _not_sure(kind: str, reason: str, hint: str = "", **extra: Any) -> dict:
+    """Never a guess: what went wrong and how to aim, as facts."""
+    h = short_hint(hint)
+    say_en = " ".join(x for x in ("Not sure.", HINT_EN.get(h, "")) if x)
+    return {"kind": kind, "sure": False, "reason": reason, "hint": h, "aim_hint": hint, "say_en": say_en,
+            "facts": say_en, "answer": "", "objects": [], "confidence": 0.0, **extra}
+
+
+def _no_camera(kind: str) -> dict:
+    return {"kind": kind, "sure": False, "reason": "no_camera_frame", "hint": "", "answer": "", "objects": [],
+            "confidence": 0.0, "say_en": "I can't see a camera picture. Please check the camera.",
+            "facts": "No camera picture arrived."}
+
+
+def _unavailable(kind: str) -> dict:
+    return {"kind": kind, "sure": False, "reason": "vision_unavailable", "hint": "", "answer": "", "objects": [],
+            "confidence": 0.0, "say_en": "I can't reach the vision model right now. Please try again.",
+            "facts": "The vision model did not answer."}
+
+
+async def _read_twice(frame_b64: str) -> dict:
     """Two independent reads (read + verify models) must agree, else "not sure" and the label hint."""
     # The two reads are independent: run them at the same time (one model wait instead of two).
     datas = await asyncio.gather(*(generate_json(role, [image_part(frame_b64), READ_PROMPT], READ_SCHEMA,
@@ -269,10 +286,38 @@ async def _read_twice(frame_b64: str, lang: str) -> dict:
     texts = [_WS.sub(" ", r[0]).casefold() for r in reads]
     conf = min(r[1] for r in reads)
     if not texts[0] or texts[0] != texts[1] or conf < MIN_CONF:
-        return {"say": f"{t('cam.not_sure', lang)} {t('vision.aim.show_label', lang)}", "answer": "",
-                "kind": "read", "confidence": conf, "agreed": bool(texts[0]) and texts[0] == texts[1],
-                "aim_hint": "vision.aim.show_label"}
-    return {"say": reads[0][0], "answer": reads[0][0], "kind": "read", "confidence": conf, "agreed": True}
+        reason = "nothing_readable" if not texts[0] else "reads_disagree" if texts[0] != texts[1] else "low_confidence"
+        return _not_sure("read", reason, "vision.aim.show_label", confidence=conf,
+                         agreed=bool(texts[0]) and texts[0] == texts[1])
+    text = reads[0][0]
+    return {"kind": "read", "sure": True, "text": text, "verbatim": True, "answer": text,
+            "facts": f'The printed text reads, verbatim: "{text}"', "say_en": text, "confidence": conf,
+            "agreed": True}
+
+
+def listing_facts(areas: list[dict]) -> str:
+    """"Top shelf: milk to your left, curd straight ahead. Fridge door: ..." in English."""
+    if not areas:
+        return "No products in view. Show me the shelf."
+    parts: list[str] = []
+    for a in areas[:listing.MAX_AREAS]:
+        title = a["area_name"] if a["area"] == "other" and a["area_name"] else AREA_EN.get(a["area"], "Also")
+        items = ", ".join(f"{i['label']} {SIDE_EN[side_name(i['point'][1])]}" for i in a["items"][:listing.MAX_ITEMS])
+        parts.append(f"{title}: {items}.")
+    return " ".join(parts)
+
+
+def _as_list_facts(out: dict) -> dict:
+    """A shelf listing (``vision.listing``) as facts: the areas and their items, in English."""
+    if out.get("aim_hint"):
+        return _not_sure("list", "low_confidence", out["aim_hint"], confidence=out.get("confidence", 0.0))
+    areas = out.get("areas") or []
+    facts = listing_facts(areas)
+    return {"kind": "list", "sure": bool(areas), "facts": facts, "say_en": facts, "answer": facts,
+            "areas": [{"area": a["area"], "area_name": a["area_name"],
+                       "items": [{"label": i["label"], "side": side_name(i["point"][1])} for i in a["items"]]}
+                      for a in areas],
+            "objects": out.get("objects", []), "confidence": out.get("confidence", 0.0)}
 
 
 @asynccontextmanager
@@ -317,26 +362,41 @@ def _usable(r: CountResult | None) -> bool:
 
 
 # A full shelf (more than SMALL_COUNT packs) is never counted exactly twice in a row: packs overlap and the two
-# reads differ by a few. Two reads within ABOUT_TOLERANCE of each other give "about N" (the word is spoken, so it
-# is never passed off as exact); reads further apart, or with confidence below ABOUT_MIN_CONF, stay "not sure".
+# reads differ by a few. Two reads within ABOUT_TOLERANCE of each other give "about N" (``approx`` true, so it is
+# never passed off as exact); reads further apart, or with confidence below ABOUT_MIN_CONF, stay "not sure".
 SMALL_COUNT = 10
 ABOUT_MIN_CONF = 0.3
 ABOUT_TOLERANCE = 0.08
+# Hints that only say the packs are crowded or cut at the edge. Any other hint ("hold closer": an unreadable label
+# that may be one more of the product, or a reply cut at the item / output cap; "show items") blocks "about N":
+# ``count.assess`` caps those reads at 0.4 confidence precisely so that no number is said.
+ABOUT_HINTS = frozenset({"", "vision.aim.spread_out", "vision.aim.move_back"})
 
 
 def _about(a: CountResult | None, b: CountResult | None) -> int | None:
-    if any(r is None or r.count is None or r.confidence < ABOUT_MIN_CONF for r in (a, b)):
-        return None
+    for r in (a, b):
+        if r is None or r.count is None or r.aim_hint not in ABOUT_HINTS:
+            return None
+        if r.confidence < ABOUT_MIN_CONF:
+            return None
     hi = max(a.count, b.count)
     if hi <= SMALL_COUNT or abs(a.count - b.count) > max(2, round(ABOUT_TOLERANCE * hi)):
         return None
     return round((a.count + b.count) / 2)
 
 
-async def _count(s: Session, question: str) -> dict:
+def _count_say_en(n: int, phrase: str, approx: bool) -> str:
+    what = f" {phrase}" if phrase else ""
+    return f"About {n}{what}." if approx else f"I can see {n}{what}."
+
+
+async def _count(s: Session, item: str = "", product: str = "") -> dict:
     """Two frames counted in parallel; a number only when they agree. Off by one: a third read on the newest
-    frame breaks the tie. Anything else is "not sure" plus how to hold the camera. Never an invented count."""
-    tgt = count_target(question)
+    frame breaks the tie. Anything else is "not sure" plus how to hold the camera. Never an invented count.
+
+    A full shelf whose two reads are close gives ``approx`` true ("about N"); ``exact`` is false then, so an
+    estimate can never pass as an exact stock or delivery number."""
+    tgt = count_target(item, product)
     frames = await s.request_frames("count", count=COUNT_FRAMES, interval_ms=COUNT_INTERVAL_MS,
                                     timeout_s=FRAME_TIMEOUT_S)
     diag("camera_ask", stage="frames", session=s.session_id, kind="count", lang=s.lang, frames=len(frames),
@@ -344,8 +404,7 @@ async def _count(s: Session, question: str) -> dict:
     if not frames:
         diag("camera_ask", severity="WARNING", stage="no_frames", session=s.session_id, kind="count",
              timeout_s=FRAME_TIMEOUT_S)
-        return {"say": t("camera.none", s.lang), "answer": "", "kind": "count", "count": None, "agreed": False,
-                "objects": [], "confidence": 0.0}
+        return {**_no_camera("count"), "count": None, "approx": False, "exact": False, "agreed": False}
     pair = [frames[0], frames[-1]] if len(frames) > 1 else [frames[0], frames[0]]
     started = time.perf_counter()
     reads: list[CountResult | None] = list(await asyncio.gather(*(_count_one(f, tgt) for f in pair)))
@@ -375,37 +434,62 @@ async def _count(s: Session, question: str) -> dict:
         await listing.publish_boxes(s, shown.objects, "camera_ask:count", frame_id=pair[-1].id)
     hints = {r.aim_hint for r in good if r.aim_hint}
     hint = hints.pop() if len(hints) == 1 and len(good) == len(reads) else ""
+    what = {"label": tgt.generic if item else "", "product": tgt.product or ""}
     if n is None:
-        say = t("cam.count_unsure", s.lang)
-        if hint and hint != "vision.aim.move_back":            # "step back" is already in the line
-            say = f"{say} {t(hint, s.lang)}"
-        return {"say": say, "answer": "", "kind": "count", "count": None, "agreed": False,
-                "objects": [], "confidence": conf, "aim_hint": hint}
-    key = "cam.count_about" if approx is not None else "cam.count"
-    say = (t(f"{key}_label", s.lang, n=n, label=tgt.phrase) if tgt.phrase else t(key, s.lang, n=n))
+        if len(good) < len(reads):
+            reason = "vision_failed"
+        elif any(r.count is None for r in good):
+            reason = "nothing_counted"
+        elif any(r.confidence < MIN_CONF for r in good):
+            reason = "low_confidence"
+        else:
+            reason = "reads_disagree"
+        h = short_hint(hint) or "hold_still"
+        say_en = f"Not sure of the count. {HINT_EN[h] if h in HINT_EN else HINT_EN['hold_still']}"
+        return {"kind": "count", "sure": False, "count": None, "approx": False, "exact": False, "agreed": False,
+                "reason": reason, "hint": h, "aim_hint": hint, **what, "say_en": say_en, "facts": say_en,
+                "answer": "", "objects": [], "confidence": conf}
+    is_approx = approx is not None
+    say_en = _count_say_en(n, tgt.phrase, is_approx)
     if hint:
-        say = f"{say} {t(hint, s.lang)}"
-    return {"say": say, "answer": say, "kind": "count", "count": n, "agreed": True, "approx": approx is not None,
-            "objects": shown.objects if shown else [], "confidence": conf}
+        say_en = f"{say_en} {hint_en(hint)}".strip()
+    return {"kind": "count", "sure": True, "count": n, "approx": is_approx, "exact": not is_approx,
+            "agreed": not is_approx, "hint": short_hint(hint), "aim_hint": hint, **what, "say_en": say_en,
+            "facts": say_en, "answer": say_en, "objects": shown.objects if shown else [], "confidence": conf}
 
 
-async def camera_ask(question: str) -> dict:
-    """Look through the camera and answer the owner's question as guidance: what is in front of him, where
-    something is (left / ahead / right, how far), how many of something are visible, whether something is in
-    his way, or read a label or sign.
+async def camera_ask(question: str, kind: Literal["look", "read", "count", "path", "list"] = "look",
+                     item: str = "", product: str = "") -> dict:
+    """Look through the camera and answer the owner's question. Call it for ANY question about what is around
+    the owner or in front of the camera, in any language. You decide what he wants and pass it in the
+    arguments; the code never guesses it from his words.
 
-    Call it for ANY question about what is around the owner or in front of the camera, including "how many
-    ... are there?". The reply is in the session language; when the picture is unclear it says "not sure" and
-    how to aim. Speak only its 'say': never guess a count or an object yourself.
+    question: his question, as he asked it.
+    kind: "count" for ANY how-many / count question in any language ("how many curd packets?", "எத்தனை
+      பாக்கெட்?", "कितने पैकेट हैं?"); "read" to read a label, price tag, expiry date or any printed text;
+      "list" for what is in or on a fridge, shelf or rack ("what's in my fridge?", "list the products here");
+      "path" for whether his way is clear, obstacles ahead, can he walk forward; "look" for everything else
+      (what is in front of me, where is the door, which shelf has curd).
+    item: for kind="count", the generic thing to count as a short English noun ("curd packet", "milk pouch",
+      "bottle"); empty if he did not say.
+    product: for kind="count", the brand or product when he named one, in English ("Hatsun Curd"); else empty.
+
+    The result is facts in English (facts, objects with side and distance, count, approx, hint) and a short
+    English say_en meaning hint. Say the result to the owner in the language he is speaking; say numbers
+    exactly as given; if approx is true say 'about'. sure false means not sure: say so and give the hint;
+    never guess a count or an object yourself. An approx count is an estimate: never use it as a stock,
+    delivery or sale quantity.
     """
     s: Session = get_session()
-    kind = classify(question)
-    precounted = await precount.answer(s, question)  # "how many": the background count of this scene, if any
-    if precounted is not None:
-        return precounted
+    kind = normalize_kind(kind)
+    if kind == "count":
+        # the background count of this scene, if there is one
+        precounted = await precount.answer(s, kind, item=item, product=product)
+        if precounted is not None:
+            return precounted
     async with owner_first(s):
         if kind == "count":
-            return await _count(s, question)
+            return await _count(s, item, product)
         return await _ask(s, kind, question)
 
 
@@ -421,21 +505,20 @@ async def _ask(s: Session, kind: str, question: str) -> dict:
     if not frames:
         diag("camera_ask", severity="WARNING", stage="no_frames", session=s.session_id, kind=kind,
              timeout_s=FRAME_TIMEOUT_S)
-        return {"say": t("camera.none", s.lang), "answer": "", "kind": kind, "objects": [], "confidence": 0.0}
+        return _no_camera(kind)
     try:
         if kind == "read":
-            out = await _read_twice(frames[-1].jpeg_b64, s.lang)
+            out = await _read_twice(frames[-1].jpeg_b64)
             diag("camera_ask", stage="done", session=s.session_id, kind=kind, confidence=out["confidence"],
-                 agreed=out.get("agreed"), aim_hint=out.get("aim_hint"), say=trunc(out["say"]))
+                 agreed=out.get("agreed"), aim_hint=out.get("aim_hint"), say=trunc(out["say_en"]))
             return out
         if kind == "list":
-            out = await listing.list_shelf(s, frames[-1].jpeg_b64, question)
+            out = _as_list_facts(await listing.list_shelf(s, frames[-1].jpeg_b64, question))
             diag("camera_ask", stage="done", session=s.session_id, kind=kind, verdict="list",
-                 confidence=out.get("confidence"), say=trunc(out.get("say", "")))
+                 confidence=out.get("confidence"), say=trunc(out.get("say_en", "")))
             return out
         parts = [image_part(f.jpeg_b64) for f in frames]
-        parts.append(ASK_PROMPT.format(question=question, lang=LANG_NAME.get(s.lang, "English"),
-                                       hints=", ".join(HINT_KEYS)))
+        parts.append(ASK_PROMPT.format(question=question, hints=", ".join(HINT_KEYS)))
         # The owner is waiting: low thinking, LOOK_TIMEOUT_S per attempt and a single retry (worst case ~8 s,
         # not 3 x 6 s).
         data = await generate_json("point", parts, ASK_SCHEMA, thinking="low", timeout_s=LOOK_TIMEOUT_S,
@@ -444,7 +527,7 @@ async def _ask(s: Session, kind: str, question: str) -> dict:
         log.warning("camera_ask: vision failed for %s: %s", s.shop_id, exc)
         diag("camera_ask", severity="WARNING", stage="error", session=s.session_id, kind=kind,
              error=type(exc).__name__, message=trunc(str(exc), 200))
-        return {"say": t("live.unavailable", s.lang), "answer": "", "kind": kind, "objects": [], "confidence": 0.0}
+        return _unavailable(kind)
 
     objects = parse_objects(data.get("objects"))
     conf = _conf(data.get("confidence"))
@@ -469,11 +552,19 @@ async def _ask(s: Session, kind: str, question: str) -> dict:
     # sure but has nothing to say.
     if conf < MIN_CONF or (data.get("aim_hint") and not answer and not objects):
         hint = _hint(data.get("aim_hint"))
-        say = f"{t('cam.not_sure', s.lang)} {t(hint, s.lang)}"
+        out = _not_sure(kind, "low_confidence", hint, confidence=conf, objects=objects)
         diag("camera_ask", stage="done", session=s.session_id, kind=kind, verdict="not_sure", confidence=conf,
-             aim_hint=hint, say=trunc(say))
-        return {"say": say, "answer": "", "kind": kind, "objects": objects, "confidence": conf, "aim_hint": hint}
-    say = _say_path(steps, objects, s.lang) if kind == "path" else _say_look(answer, steps, objects, s.lang)
+             aim_hint=hint, say=trunc(out["say_en"]))
+        return out
+    out = {"kind": kind, "sure": True, "answer": answer, "guidance": steps, "objects": objects,
+           "seen": fact_objects(objects), "confidence": conf}
+    if kind == "path":
+        facts, obstacle = _facts_path(steps, objects)
+        out["obstacle"] = obstacle                # never "safe" / "clear": only what is in the way
+        out["answer"] = ""                        # the model's own words could say "safe"
+    else:
+        facts = _facts_look(answer, steps, objects)
+    out["facts"] = out["say_en"] = facts
     diag("camera_ask", stage="done", session=s.session_id, kind=kind, verdict="answer", confidence=conf,
-         objects=len(objects), say=trunc(say))
-    return {"say": say, "answer": answer, "guidance": steps, "kind": kind, "objects": objects, "confidence": conf}
+         objects=len(objects), say=trunc(facts))
+    return out

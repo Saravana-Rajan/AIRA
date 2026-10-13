@@ -28,22 +28,12 @@ FRIDGE = {
 }
 
 
-# --- classification ----------------------------------------------------------------------------------------------
+# --- routing: the model says kind="list"; no word list ------------------------------------------------------------
 
 
-@pytest.mark.parametrize("q", [
-    "what's in my fridge?", "What is in the fridge", "list the products on this shelf", "what products are here",
-    "tell me each product", "what items are on the shelf", "ஃப்ரிட்ஜில் என்ன இருக்கு", "फ्रिज में क्या है",
-])
-def test_fridge_and_shelf_questions_are_listings(q):
-    assert listing.is_listing(q) is True
-    assert camera.classify(q) == "list"
-
-
-@pytest.mark.parametrize("q", ["what's in front of me?", "is my path clear?", "read the label on the fridge",
-                               "which shelf has curd?", "where is the fridge?"])
-def test_other_questions_are_not_listings(q):
-    assert camera.classify(q) != "list"
+def test_no_listing_word_list_is_left():
+    for name in ("is_listing", "LIST_WORDS", "CONTAINER_WORDS", "CONTENTS_WORDS"):
+        assert not hasattr(listing, name), name
 
 
 # --- parsing --------------------------------------------------------------------------------------------------------
@@ -153,39 +143,40 @@ def _script(monkeypatch, *replies):
 
 async def test_camera_ask_lists_the_fridge(session, monkeypatch):
     seen = _script(monkeypatch, FRIDGE)
-    out = await camera.camera_ask("what's in my fridge?")
+    out = await camera.camera_ask("what's in my fridge?", kind="list")
     assert session.frame_calls == [{"purpose": "ask", "count": 1}]
     assert seen[0]["role"] == "point" and "shelf" in seen[0]["parts"][-1].lower()
     assert out["kind"] == "list" and out["confidence"] == 0.85
-    assert out["say"].startswith("Top shelf: milk to your left, curd straight ahead.")
+    assert out["facts"].startswith("Top shelf: milk to your left, curd straight ahead.")
+    assert out["areas"][0]["items"][0] == {"label": "milk", "side": "left"} and "say" not in out
     assert [a["area"] for a in out["areas"]] == ["top", "door", "bottom"]
     assert [o["label"] for o in out["objects"]] == ["milk", "curd", "red jam jar", "water bottle"]
 
 
-async def test_camera_ask_listing_in_tamil(session, monkeypatch):
+async def test_camera_ask_listing_in_a_tamil_session_is_the_same_facts(session, monkeypatch):
     session.lang = "ta"
     _script(monkeypatch, FRIDGE)
-    out = await camera.camera_ask("ஃப்ரிட்ஜில் என்ன இருக்கு")
-    assert out["say"].startswith(t("cam.area.top", "ta"))
+    out = await camera.camera_ask("ஃப்ரிட்ஜில் என்ன இருக்கு", kind="list")
+    assert out["kind"] == "list" and out["facts"].startswith("Top shelf")
 
 
 async def test_camera_ask_listing_low_confidence_is_not_sure(session, monkeypatch):
     _script(monkeypatch, {"areas": FRIDGE["areas"], "confidence": 0.3, "aim_hint": "vision.aim.move_back"})
-    out = await camera.camera_ask("what's on this shelf?")
-    assert out["say"] == f"{t('cam.not_sure', 'en')} {t('vision.aim.move_back', 'en')}"
-    assert out["areas"] == [] and "milk" not in out["say"]
+    out = await camera.camera_ask("what's on this shelf?", kind="list")
+    assert out["sure"] is False and out["hint"] == "move_back"
+    assert "areas" not in out and "milk" not in str(out)
 
 
 async def test_camera_ask_listing_with_nothing_visible_asks_for_the_shelf(session, monkeypatch):
     _script(monkeypatch, {"areas": [], "confidence": 0.9})
-    out = await camera.camera_ask("what products are here?")
-    assert out["say"] == t("cam.list.none", "en") and out["objects"] == []
+    out = await camera.camera_ask("what products are here?", kind="list")
+    assert out["sure"] is False and out["facts"] == "No products in view. Show me the shelf." and out["objects"] == []
 
 
 async def test_camera_ask_listing_vision_down_is_honest(session, monkeypatch):
     _script(monkeypatch, VisionError("down"))
-    out = await camera.camera_ask("what's in the fridge?")
-    assert out["say"] == t("live.unavailable", "en")
+    out = await camera.camera_ask("what's in the fridge?", kind="list")
+    assert out["sure"] is False and out["reason"] == "vision_unavailable"
 
 
 async def test_listing_tells_the_observers_when_the_module_exists(session, monkeypatch):
@@ -201,7 +192,7 @@ async def test_listing_tells_the_observers_when_the_module_exists(session, monke
     mod.on_vision_objects = on_vision_objects
     monkeypatch.setitem(sys.modules, "aira_live.vision.observers", mod)
     _script(monkeypatch, FRIDGE)
-    await camera.camera_ask("what's in my fridge?")
+    await camera.camera_ask("what's in my fridge?", kind="list")
     assert seen == [(session, ["milk", "curd", "red jam jar", "water bottle"], "camera_list")]
 
 
@@ -209,7 +200,7 @@ async def test_listing_without_observers_module_still_works(session, monkeypatch
     import sys
     monkeypatch.setitem(sys.modules, "aira_live.vision.observers", None)   # import raises ImportError
     _script(monkeypatch, FRIDGE)
-    out = await camera.camera_ask("what's in my fridge?")
+    out = await camera.camera_ask("what's in my fridge?", kind="list")
     assert out["kind"] == "list"
 
 
@@ -225,5 +216,5 @@ async def test_a_broken_observer_never_breaks_the_answer(session, monkeypatch):
     mod.on_vision_objects = on_vision_objects
     monkeypatch.setitem(sys.modules, "aira_live.vision.observers", mod)
     _script(monkeypatch, FRIDGE)
-    out = await camera.camera_ask("what's in my fridge?")
-    assert out["kind"] == "list" and out["say"].startswith("Top shelf")
+    out = await camera.camera_ask("what's in my fridge?", kind="list")
+    assert out["kind"] == "list" and out["facts"].startswith("Top shelf")

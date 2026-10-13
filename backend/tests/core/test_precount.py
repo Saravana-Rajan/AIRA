@@ -66,9 +66,11 @@ async def test_a_settled_scene_is_counted_once_and_served_at_once(mk_session, cl
     assert s.cached_count() == (3, 0.9, 0.0)
     assert s.cached_count("hatsun")[0] == 2 and s.cached_count("Arokya curd")[0] == 3  # "curd" matches both
     assert s.cached_count("aavin milk") is None  # labels of other products: not this one
-    out = await precount.answer(s, "how many hatsun packets are there?")
-    assert out["count"] == 2 and "2" in out["say"] and out["kind"] == "count"
-    assert await precount.answer(s, "what is this?") is None
+    out = await precount.answer(s, "count", item="packet", product="Hatsun")
+    assert out["count"] == 2 and out["kind"] == "count" and out["approx"] is False and out["product"] == "Hatsun"
+    assert "2" in out["say_en"] and "say" not in out
+    assert await precount.answer(s, "look") is None          # served only when the model asked for a count
+    assert await precount.answer(s, "read", item="packet") is None
     precount.forget(s.session_id)
 
 
@@ -93,7 +95,7 @@ async def test_one_count_in_flight_and_answer_waits_for_it(mk_session, clock):
     first = FakeCounter(_result(["packet"] * 2), gate)
     precount.scene_changed(s, 10.0, counter=first)
     await _settle()
-    waiting = asyncio.create_task(precount.answer(s, "how many packets?", wait_s=5))
+    waiting = asyncio.create_task(precount.answer(s, "count", item="packet", wait_s=5))
     await _settle()
     assert not waiting.done()
     gate.set()
@@ -122,7 +124,7 @@ async def test_unusable_or_old_counts_are_never_served(mk_session, clock):
     bad = CountResult(count=None, confidence=0.0, needs_retake=True, aim_hint="vision.aim.move_back")
     precount.scene_changed(s, 10.0, counter=FakeCounter(bad))
     await _settle()
-    assert s.cached_count() is None and await precount.answer(s, "how many?") is None
+    assert s.cached_count() is None and await precount.answer(s, "count") is None
     clock.t += precount.MIN_GAP_S
     precount.scene_changed(s, 11.0, counter=FakeCounter(_result(["packet"])))
     await _settle()
@@ -145,15 +147,41 @@ async def test_camera_ask_says_the_precount_without_asking_the_phone(mk_session,
     s.request_frames = no_frames
     token = current_session.set(s)
     try:
-        out = await camera.camera_ask("how many packets on this shelf?")
+        out = await camera.camera_ask("how many packets on this shelf?", kind="count", item="packet")
     finally:
         current_session.reset(token)
     assert out["count"] == 5 and out["precounted"] is True
     precount.forget(s.session_id)
 
 
-def test_count_questions_in_three_languages():
-    assert precount.is_count_question("How many curd packets?")
-    assert precount.is_count_question("எத்தனை பாக்கெட்")
-    assert precount.is_count_question("कितने पैकेट हैं")
-    assert not precount.is_count_question("what is this")
+def test_no_count_word_list_is_left():
+    assert not hasattr(precount, "is_count_question") and not hasattr(precount, "COUNT_WORDS")
+
+
+async def test_camera_ask_serves_the_precount_only_for_kind_count(mk_session, clock, monkeypatch):
+    """A "how many" question the model sent as a look is a look: the pre-count is never served by words."""
+    from aira_live.session import current_session
+    from aira_live.tools import camera
+
+    s = _session(mk_session)
+    precount.scene_changed(s, 10.0, counter=FakeCounter(_result(["packet"] * 5)))
+    await _settle()
+
+    async def look(role, parts, schema_hint, thinking="low", timeout_s=6.0, **_kw):
+        return {"answer": "A shelf.", "guidance": [], "objects": [], "confidence": 0.9}
+
+    async def frames(*a, **k):
+        from aira_live.frames import Frame
+        return [Frame(id="f1", jpeg_b64="/9j/4AAQSkZJRg==", w=640, h=480, ts=1.0, purpose="ask")]
+
+    monkeypatch.setattr(camera, "generate_json", look)
+    s.request_frames = frames
+    token = current_session.set(s)
+    try:
+        out = await camera.camera_ask("எத்தனை பாக்கெட்?")
+        assert out["kind"] == "look" and not out.get("precounted")
+        out = await camera.camera_ask("எத்தனை பாக்கெட்?", kind="count", item="packet")
+        assert out["precounted"] is True and out["count"] == 5
+    finally:
+        current_session.reset(token)
+    precount.forget(s.session_id)
