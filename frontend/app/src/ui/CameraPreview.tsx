@@ -21,6 +21,7 @@ export const OVERLAY_W = 360;
 
 export const PREVIEW_TEXT = {
   looking: "AIRA is looking",
+  shared: "Camera on · shared with AIRA",
   counting: "Counting…",
   reading: "Reading…",
   waiting: "Camera starting…",
@@ -177,6 +178,11 @@ export function CameraPreview({
         <span class="cam-card__placeholder" data-testid="camera-placeholder">
           {isDenied ? PREVIEW_TEXT.denied : PREVIEW_TEXT.waiting}
         </span>
+      ) : null}
+      {stream ? (
+        // Always on with the camera: live video and background frames go to AIRA continuously, not only
+        // while the "looking" badge below is lit for a question's photo.
+        <span class="cam-card__shared" data-testid="camera-shared">{PREVIEW_TEXT.shared}</span>
       ) : null}
       {kind ? (
         <span class="cam-card__badge" data-testid="looking-badge" data-kind={kind}>

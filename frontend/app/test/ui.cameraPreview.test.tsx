@@ -72,11 +72,15 @@ describe("<CameraPreview>", () => {
     expect(card()!.style.aspectRatio.replace(/\s/g, "")).toBe("640/480");
     expect(root.querySelector("[data-testid=camera-placeholder]")).toBeNull();
     expect(gum).not.toHaveBeenCalled();
+    // Frames go to AIRA continuously while the camera runs, so the card always says so (not only the badge).
+    expect(root.querySelector("[data-testid=camera-shared]")!.textContent).toBe(PREVIEW_TEXT.shared);
+    expect(root.querySelector("[data-testid=looking-badge]")).toBeNull();
   });
 
   it("shows a placeholder before the camera starts, and a permission note when it was refused", () => {
     act(() => render(<CameraPreview video={() => null} denied={() => false} ctxOf={() => null} />, root));
     expect(root.querySelector("[data-testid=camera-placeholder]")!.textContent).toBe(PREVIEW_TEXT.waiting);
+    expect(root.querySelector("[data-testid=camera-shared]")).toBeNull();
     act(() => render(null, root));
     act(() => render(<CameraPreview video={() => null} denied={() => true} ctxOf={() => null} />, root));
     expect(root.querySelector("[data-testid=camera-placeholder]")!.textContent).toBe(PREVIEW_TEXT.denied);
