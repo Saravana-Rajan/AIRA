@@ -5,6 +5,7 @@
 // a slightly odd angle).
 import { frameLooksGood as frameEvidence } from "./quality";
 import { clientLog } from "../core/clientLog";
+import { motionAccess } from "../core/motionPermission";
 
 export type TiltHintKey = "tilt_down" | "tilt_up";
 
@@ -127,10 +128,15 @@ function logTiltDecision(d: TiltDecision): void {
   }, { minGapMs: d.reason === "speak" ? 0 : 1000 });
 }
 
-/** Listens to deviceorientation and speaks through onHint. No sensor or no permission: no events, no hints. */
+/**
+ * Listens to deviceorientation and speaks through onHint. No sensor or no permission: no events, no hints.
+ * On iOS the listener is attached only after the orientation permission (asked inside the Start tap by
+ * core/motionPermission) comes back "granted"; a refusal leaves the tilt hints off, silently.
+ */
 export function startTiltHints(
   onHint: (h: TiltHintKey) => void,
   judge: TiltJudge = createTiltJudge({ onDecision: logTiltDecision }),
+  g: typeof globalThis = globalThis,
 ): () => void {
   if (typeof window === "undefined") return () => {};
   const handler = (e: Event) => {
@@ -138,6 +144,25 @@ export function startTiltHints(
     const h = judge.sample(o.beta, o.gamma);
     if (h) onHint(h);
   };
-  window.addEventListener("deviceorientation", handler);
-  return () => window.removeEventListener("deviceorientation", handler);
+  let stopped = false;
+  let attached = false;
+  const attach = () => {
+    if (stopped || attached) return;
+    window.addEventListener("deviceorientation", handler);
+    attached = true;
+  };
+  const DOE = (g as unknown as { DeviceOrientationEvent?: { requestPermission?: unknown } }).DeviceOrientationEvent;
+  if (typeof DOE?.requestPermission === "function") {
+    void motionAccess("orientation", g).then((ok) => {
+      if (ok) attach();
+      else clientLog("tilt", { reason: "no_permission" }, { minGapMs: 0 });
+    });
+  } else {
+    attach();
+  }
+  return () => {
+    stopped = true;
+    if (attached) window.removeEventListener("deviceorientation", handler);
+    attached = false;
+  };
 }

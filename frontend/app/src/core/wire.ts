@@ -9,6 +9,7 @@ import { clientLog, loadBuildInfo, shortText, type BuildInfo } from "./clientLog
 import { langFromPhone, phoneLanguages, uiLangFor } from "./lang";
 import { saveSettings } from "./settings";
 import { vibrate } from "./haptics";
+import { requestMotionAccess } from "./motionPermission";
 import { ThinkingTimer } from "./thinking";
 import { ConfirmState } from "./confirm";
 import { createDispatcher } from "./dispatch";
@@ -17,6 +18,7 @@ import { STRINGS } from "../i18n/strings";
 import { PlaybackQueue, type PlaybackOpts } from "../voice/playback";
 import { playEarcon, type EarconName } from "../voice/earcons";
 import { startMic, type StartMicOpts } from "../voice/mic";
+import { shareToneContext } from "../guidance/tones";
 import { announceToRegion } from "../ui/ScreenReaderRegion";
 import { initialScreen, reduceScreen, type LocalEvent, type ScreenState } from "../ui/screenState";
 import type { CountProgress } from "../ui/view";
@@ -74,8 +76,11 @@ export interface WireEnv {
   createPlayback(ctx: AudioContext, opts?: PlaybackOpts): PlaybackLike;
   playEarcon(ctx: AudioContext, n: EarconName): void;
   vibrate(n: HapticName): void;
-  /** Client TTS for local status and fallbacks. Null where speechSynthesis is missing. */
-  speech: { speak(text: string, lang: Lang, rate: number): void; cancel(): void } | null;
+  /**
+   * Client TTS for local status and fallbacks. Null where speechSynthesis is missing. `prime` speaks a silent empty
+   * line: iOS only lets speechSynthesis talk after one speak() call inside a user gesture.
+   */
+  speech: { speak(text: string, lang: Lang, rate: number): void; cancel(): void; prime?(): void } | null;
   /** Writes to the single aria-live region (screen-reader mode). */
   announce(text: string): void;
   startMic(opts: StartMicOpts): Promise<{ stop(): void }>;
@@ -86,6 +91,8 @@ export interface WireEnv {
   requestWakeLock(): void;
   /** Asks for mic and camera once, inside the Start tap, so later turns never prompt. */
   requestPermissions(): void;
+  /** iOS: asks for the motion/orientation sensors inside the tap (core/motionPermission). No-op elsewhere. */
+  requestMotionAccess?(): void;
   /** The phone's locales: only the hint for AIRA's first line (`hello.lang`) and the labels before anyone speaks. */
   languages: readonly string[];
   /** The deployed build (/version.json) for the "build" diagnostic line. Default: `loadBuildInfo`. */
@@ -184,6 +191,11 @@ export function browserEnv(): WireEnv {
             synth.speak(u);
           },
           cancel() { synth.cancel(); },
+          prime() {
+            const u = new SpeechSynthesisUtterance("");
+            u.volume = 0;
+            synth.speak(u);
+          },
         }
       : null,
     announce: announceToRegion,
@@ -205,6 +217,7 @@ export function browserEnv(): WireEnv {
         .catch(() => md.getUserMedia({ audio: true }).then(release))
         .catch(() => { /* the mic start reports a block when the owner talks */ });
     },
+    requestMotionAccess: () => requestMotionAccess(),
     languages: phoneLanguages(),
     buildInfo: () => loadBuildInfo(),
   };
@@ -270,6 +283,10 @@ export function wireApp(opts: WireOpts): WiredApp {
   const tryRun = (fn: () => void) => { try { fn(); } catch { /* best effort */ } };
   tryRun(() => env.requestWakeLock());
   tryRun(() => env.requestPermissions());
+  tryRun(() => env.requestMotionAccess?.());
+  tryRun(() => env.speech?.prime?.());
+  // The hand-guidance tones play on this same, tap-unlocked context (iOS never starts one made later).
+  if (ctx) tryRun(() => shareToneContext(ctx));
 
   const socket = env.createSocket(opts.wsUrl ?? wsDefault());
   // Latency diagnostics: one "latency" line per AIRA answer, when its first chunk starts playing.
@@ -623,11 +640,41 @@ export function wireApp(opts: WireOpts): WiredApp {
     setView({ online: true });
     void replay().catch(() => {});
   });
+  // ---- keep audio running (iOS Safari) ----
+  // Safari suspends the context when the page hides, puts it in the non-standard "interrupted" state during a
+  // phone call or Siri, and (after a gesture-less start) leaves it suspended until a tap. Resume on every return
+  // to the page, on a bfcache restore, when the state drops while visible, and on the owner's next touch.
+  const wakeAudio = () => {
+    if (!ctx || disposed || env.doc.hidden) return;
+    const st = String(ctx.state);
+    if (st === "running" || st === "closed") return;
+    tryRun(() => { void ctx!.resume().catch(() => {}); });
+  };
+  const ctxEvents = ctx as unknown as Partial<Listenable> | null;
+  if (ctxEvents && typeof ctxEvents.addEventListener === "function") on(ctxEvents as Listenable, "statechange", wakeAudio);
+  on(env.win, "pageshow", () => {
+    wakeAudio();
+    tryRun(() => env.requestWakeLock());
+  });
+  let primedByTouch = false;
+  const onTouch = () => {
+    wakeAudio();
+    if (primedByTouch) return;
+    primedByTouch = true;
+    tryRun(() => env.speech?.prime?.());
+  };
+  on(env.doc, "touchend", onTouch);
+  on(env.doc, "pointerup", onTouch);
+  on(env.doc, "keydown", onTouch);
   on(env.doc, "visibilitychange", () => {
     const hidden = env.doc.hidden;
     api.send({ t: "event", name: "visibility", data: { hidden } });
-    if (hidden) api.speak(STRINGS.paused[lang()]);
-    else tryRun(() => env.requestWakeLock()); // the lock is released whenever the page hides
+    if (hidden) {
+      api.speak(STRINGS.paused[lang()]);
+      return;
+    }
+    tryRun(() => env.requestWakeLock()); // the lock is released whenever the page hides
+    wakeAudio();
   });
 
   if (opts.connect !== false) {
@@ -674,7 +721,10 @@ export function wireApp(opts: WireOpts): WiredApp {
       cleanups.splice(0).forEach((fn) => tryRun(fn));
       subs.clear();
       tryRun(() => socket.close());
-      if (ctx) void ctx.close().catch(() => {});
+      if (ctx) {
+        tryRun(() => shareToneContext(null, ctx!));
+        void ctx.close().catch(() => {});
+      }
     },
   };
 }

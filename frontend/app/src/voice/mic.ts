@@ -87,6 +87,22 @@ function resolveDeps(d: Partial<MicDeps> = {}): MicDeps {
   };
 }
 
+/** How long startMic waits for a suspended context to resume before going on (it keeps trying in the background). */
+export const MIC_RESUME_WAIT_MS = 1000;
+
+/**
+ * resume(), but never waits more than MIC_RESUME_WAIT_MS: outside a user gesture iOS Safari can leave the promise
+ * pending, and startMic must not hang on it (the hands-free start and the mic watchdog call it without a tap).
+ */
+async function resumeBriefly(ctx: AudioContext): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  await Promise.race([
+    ctx.resume().catch(() => {}),
+    new Promise<void>((r) => { timer = setTimeout(r, MIC_RESUME_WAIT_MS); }),
+  ]);
+  clearTimeout(timer);
+}
+
 function release(stream: MediaStream | null): void {
   stream?.getTracks().forEach((t) => t.stop());
 }
@@ -132,7 +148,7 @@ export async function startMic(opts: StartMicOpts): Promise<MicHandle> {
       ctx = d.createContext();
       src = ctx.createMediaStreamSource(stream);
     }
-    if (ctx.state === "suspended") await ctx.resume().catch(() => {});
+    if (ctx.state === "suspended") await resumeBriefly(ctx);
     await ctx.audioWorklet.addModule(await d.loadWorkletUrl());
     const node = d.createWorkletNode(ctx, MIC_WORKLET_NAME);
 
@@ -152,6 +168,12 @@ export async function startMic(opts: StartMicOpts): Promise<MicHandle> {
 
     const live = ctx;
     let stopped = false;
+    // iOS Safari: a phone call or Siri leaves the context "interrupted" (or suspended); resume when it lets us.
+    const onState = () => {
+      const st = String(live.state);
+      if (!stopped && (st === "interrupted" || st === "suspended")) void live.resume().catch(() => {});
+    };
+    live.addEventListener?.("statechange", onState);
     return {
       ctx: live,
       deviceId: opened.deviceId,
@@ -159,6 +181,7 @@ export async function startMic(opts: StartMicOpts): Promise<MicHandle> {
         if (stopped) return;
         stopped = true;
         node.port.onmessage = null;
+        try { live.removeEventListener?.("statechange", onState); } catch { /* fake or closed context */ }
         try { src.disconnect(); } catch { /* already disconnected */ }
         try { node.disconnect(); } catch { /* already disconnected */ }
         release(stream);

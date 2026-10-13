@@ -12,7 +12,8 @@ import { statusLabel, type CountProgress } from "./view";
 import { LABELS, STRINGS } from "../i18n/strings";
 import { loadSettings } from "../core/settings";
 import { langFromPhone, phoneLanguages } from "../core/lang";
-import { isInstalledLaunch, shouldAutoStart } from "../core/autostart";
+import { isIOS, isInstalledLaunch, shouldAutoStart } from "../core/autostart";
+import { requestMotionAccess } from "../core/motionPermission";
 import type { Settings } from "../core/types";
 import { wireApp, type AppView, type WiredApp, type WireOpts } from "../core/wire";
 import { DeviceCheck, type DeviceCheckProps } from "../check/DeviceCheck";
@@ -108,6 +109,22 @@ function sayLocal(text: string, lang: Lang, rate: number): void {
 }
 
 /**
+ * Runs synchronously inside the Start tap, before the device check: asks for the motion sensors (iOS shows its
+ * prompt only from a gesture) and speaks an empty line, which unlocks speechSynthesis on iOS for the check's
+ * spoken prompts. Best effort, never throws.
+ */
+function unlockInTap(): void {
+  try { requestMotionAccess(); } catch { /* no sensors */ }
+  try {
+    if (typeof speechSynthesis !== "undefined" && typeof SpeechSynthesisUtterance !== "undefined") {
+      const u = new SpeechSynthesisUtterance("");
+      u.volume = 0;
+      speechSynthesis.speak(u);
+    }
+  } catch { /* no speech */ }
+}
+
+/**
  * The whole phone app: onboarding until the one Start tap, then the single gesture surface
  * (status chip, voice orb, captions, task card) plus the screen-reader live region.
  * main.tsx only has to render <AppShell />.
@@ -169,7 +186,7 @@ export function AppShell({ wire = wireApp, wsUrl, connect, initial, languages, o
   };
 
   useEffect(() => {
-    const auto = autoStart ?? shouldAutoStart({ onboarded: saved.onboarded, search: location.search, installed: isInstalledLaunch() });
+    const auto = autoStart ?? shouldAutoStart({ onboarded: saved.onboarded, search: location.search, installed: isInstalledLaunch(), ios: isIOS() });
     if (!auto || !saved.onboarded) return;
     begin(saved, true);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- once, on mount
@@ -198,7 +215,11 @@ export function AppShell({ wire = wireApp, wsUrl, connect, initial, languages, o
       <Onboarding
         initial={saved}
         languages={languages}
-        onDone={(s) => { begin(s, false); }} // the check first; wiring stays synchronous inside a tap
+        onDone={(s) => {
+          // iOS: the motion prompt and speech only unlock inside this tap (the device check comes before wiring).
+          unlockInTap();
+          begin(s, false);
+        }} // the check first; wiring stays synchronous inside a tap
       />
     );
     if (!fallback) return onboarding;
