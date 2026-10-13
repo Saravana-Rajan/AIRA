@@ -113,6 +113,11 @@ class FrameMsg(_ClientWire):
     changed: Optional[StrictBool] = None  # live frames only: the view settled on something new
     labels: Optional[list[Annotated[StrictStr, Field(max_length=60)]]] = Field(default=None,
                                                                               max_length=MAX_FRAME_LABELS)
+    # Echoed from the RequestFrameMsg this frame answers; absent on continuous/background frames and old phones.
+    request_id: Optional[StrictStr] = None
+    # Phone clock (epoch ms) when the picture was grabbed, before encoding (``ts`` is stamped after encoding).
+    # Only ``ts - capture_ts`` (same clock) is used on the server; never compared with the server's clock.
+    capture_ts: Optional[Num] = None
 
 
 class TextMsg(_ClientWire):
@@ -263,6 +268,9 @@ class RequestFrameMsg(_ServerWire):
     burst: Optional[Burst] = None
     continuous: Optional[StrictBool] = None
     stop: Optional[StrictBool] = None
+    request_id: Optional[StrictStr] = None  # one-off request id; the phone echoes it on each frame it captures
+    # ms after the phone RECEIVES the request that it may still start a capture (relative: no clock sync needed)
+    ttl_ms: Optional[StrictInt] = None
 
 
 class TargetMsg(_ServerWire):

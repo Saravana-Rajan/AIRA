@@ -130,6 +130,10 @@ describe("contract fixtures", () => {
     expect(isServerMsg({ t: "count", sku: "s", counted: 3, final: false, confidence: 0.5 })).toBe(false);
     expect(isServerMsg({ t: "request_frame", purpose: "count", burst: { count: 3 } })).toBe(false);
     expect(isServerMsg({ t: "request_frame", purpose: "count", continuous: "yes" })).toBe(false);
+    expect(isServerMsg({ t: "request_frame", purpose: "count", requestId: 5 })).toBe(false);
+    expect(isServerMsg({ t: "request_frame", purpose: "count", ttlMs: 1.5 })).toBe(false);
+    expect(isClientMsg({ t: "frame", id: "f", jpeg: "x", w: 1, h: 1, ts: 1, purpose: "count", requestId: 7 })).toBe(false);
+    expect(isClientMsg({ t: "frame", id: "f", jpeg: "x", w: 1, h: 1, ts: 1, purpose: "count", captureTs: "1" })).toBe(false);
     expect(isServerMsg({ t: "state", entity: "customer", id: "x", state: "S", summary: "" })).toBe(false);
     expect(isServerMsg({ t: "error", code: "oops", say: "x" })).toBe(false);
     expect(isServerMsg({ t: "ready", sessionId: "s", resume: "s", mock: "true" })).toBe(false);

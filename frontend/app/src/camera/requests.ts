@@ -85,6 +85,10 @@ export function createFrameRequestHandler(deps: RequestDeps): (m: FrameRequest) 
       return;
     }
     const received = now();
+    // ttlMs (relative to receipt, so no clock sync): past it the server has stopped waiting for this request and
+    // would ignore its frames, so no capture starts after it. Absent (old server): no deadline.
+    const ttl = typeof m.ttlMs === "number" && Number.isFinite(m.ttlMs) && m.ttlMs > 0 ? m.ttlMs : null;
+    const expired = (): boolean => ttl !== null && now() - received > ttl;
     const count = clamp(m.burst?.count, 1, MAX_BURST, 1);
     const interval = clamp(m.burst?.intervalMs, 0, MAX_INTERVAL_MS, 0);
     // A tool request never waits behind live or describe work: background capture pauses (and a background frame
@@ -93,10 +97,16 @@ export function createFrameRequestHandler(deps: RequestDeps): (m: FrameRequest) 
     const release = holdsBackground(m.purpose) ? deps.hold?.() : undefined;
     try {
       for (let i = 0; i < count; i++) {
+        if (expired()) {
+          log("frame_req_expired", { purpose: m.purpose, i, of: count, ttlMs: ttl, waitedMs: Math.round(now() - received) });
+          return;
+        }
         try {
           const start = now();
           const f = await deps.capture(m.purpose);
           const encoded = now();
+          // Echo the request id on every frame of this request (mutated, not copied: the encode-worker set keys on f).
+          if (typeof m.requestId === "string") f.requestId = m.requestId;
           const sent = deps.send(f);
           // Diagnostics: request -> capture start, encode time, size, socket backlog, and the phone's own clock (the
           // server stamps log lines on arrival, so a late line alone cannot tell a slow phone from a slow uplink).

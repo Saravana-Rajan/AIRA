@@ -358,7 +358,9 @@ async function captureFrameRaw(purpose: FramePurpose, keep?: FrameKeep): Promise
   const worker = !demo && src.grab ? deps.worker() : null;
   if (worker && !worker.dead) {
     let out: { jpeg: string; gray: Float32Array | null } | null = null;
+    let grabbedAt = Date.now();
     try {
+      grabbedAt = Date.now(); // the picture's moment: before the grab, long before the encode
       const frame = await src.grab!();
       out = await worker.encode(frame, w, h, { quality: spec.quality, retryQuality, maxB64: MAX_B64, gray: checkQuality || !!keep });
     } catch (e) {
@@ -368,11 +370,12 @@ async function captureFrameRaw(purpose: FramePurpose, keep?: FrameKeep): Promise
     if (out) {
       const quality = out.gray ? checkFrame(out.gray, w, h, checkQuality) : "skipped";
       if (keep && out.gray && !keep(out.gray, w, h)) return null;
-      return finish(purpose, out.jpeg, w, h, quality, false, true);
+      return finish(purpose, out.jpeg, w, h, quality, false, true, grabbedAt);
     }
   }
   const { canvas, ctx } = deps.makeCanvas(w, h);
   if (!ctx) throw new CameraError("no_canvas");
+  const drawnAt = Date.now(); // the picture's moment: the draw copies the current video frame
   src.draw(ctx, w, h);
   let quality: "ok" | "dark" | "blurry" | "skipped" = "skipped";
   if (checkQuality || keep) {
@@ -384,7 +387,7 @@ async function captureFrameRaw(purpose: FramePurpose, keep?: FrameKeep): Promise
   let jpeg = await deps.encoder(canvas, spec.quality);
   if (jpeg.length > MAX_B64) jpeg = await deps.encoder(canvas, retryQuality);
   if (jpeg.length > MAX_B64) throw new CameraError("too_large");
-  return finish(purpose, jpeg, w, h, quality, demo !== null, false);
+  return finish(purpose, jpeg, w, h, quality, demo !== null, false, drawnAt);
 }
 
 /** The quality hint for a tool frame's gray copy (every 3rd frame), told to the hint listener. */
@@ -396,10 +399,13 @@ function checkFrame(gray: Float32Array, w: number, h: number, check: boolean): "
   return hint ?? "ok";
 }
 
-function finish(purpose: FramePurpose, jpeg: string, w: number, h: number, quality: string, demo: boolean, worker: boolean): FrameMsg {
+/** `captureTs` is when the picture was grabbed (phone clock, before encoding); `ts` is stamped now, after it. */
+function finish(
+  purpose: FramePurpose, jpeg: string, w: number, h: number, quality: string, demo: boolean, worker: boolean, captureTs: number,
+): FrameMsg {
   // Diagnostics: the frame about to go out, by size only (never the jpeg). At most a few lines a second.
   clientLog("frame", { purpose, bytes: jpeg.length, w, h, quality, demo, worker }, { minGapMs: 250 });
-  const f: FrameMsg = { t: "frame", id: nextId(), jpeg, w, h, ts: Date.now(), purpose };
+  const f: FrameMsg = { t: "frame", id: nextId(), jpeg, w, h, ts: Date.now(), purpose, captureTs };
   if (worker) viaWorker.add(f);
   return f;
 }

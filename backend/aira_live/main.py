@@ -395,7 +395,8 @@ async def ws_endpoint(ws: WebSocket) -> None:
                 if bridge:  # mock mode has no Live session: audio is accepted and dropped
                     await bridge.send_audio(msg.pcm16)
             elif isinstance(msg, FrameMsg):
-                frame = Frame(id=msg.id, jpeg_b64=msg.jpeg, w=msg.w, h=msg.h, ts=msg.ts, purpose=msg.purpose)
+                frame = Frame(id=msg.id, jpeg_b64=msg.jpeg, w=msg.w, h=msg.h, ts=msg.ts, purpose=msg.purpose,
+                              request_id=msg.request_id, capture_ts=msg.capture_ts)
                 if msg.purpose == monitor.PREVIEW_PURPOSE:
                     # The monitor's own stream: relayed to the dashboard only, never stored for the tools and
                     # never shown to Gemini.
@@ -405,9 +406,11 @@ async def ws_endpoint(ws: WebSocket) -> None:
                     await live_frame(session, bridge, frame, video=settings.live_video,
                                      changed=bool(msg.changed), labels=msg.labels, precount_on=settings.precount and settings.er2)
                     continue
-                session.frames.add(frame)
+                stored = session.frames.add(frame)  # "stale"/"too_old"/"duplicate": never given to a tool
                 diag("frame", session=session.session_id, purpose=msg.purpose, id=msg.id, bytes=len(msg.jpeg),
-                     w=msg.w, h=msg.h)
+                     w=msg.w, h=msg.h, request_id=msg.request_id, stored=stored)
+                if stored == "duplicate":
+                    continue
                 await monitor.publish_frame(session, frame)  # a no-op unless a monitor watches this shop
             elif isinstance(msg, BoxesMsg):  # the phone's own boxes: relayed to the monitor, never answered
                 if session:  # a walk with me in progress: the phone's detector can say "Stop." before ER does

@@ -46,7 +46,9 @@ async def test_runs_the_tool_wrapped_with_frames_and_an_idem_key(tmp_path, monke
     rc = await call_tool.run(["delivery_count", "--args", '{"sku": "sakthi_curd_1l"}', "--image", str(img)])
     lines = _lines(capsys.readouterr().out)
     assert rc == 0
-    assert lines[0] == {"t": "request_frame", "purpose": "count", "burst": {"count": 2, "intervalMs": 0}}
+    req = lines[0]
+    assert isinstance(req.pop("requestId"), str) and req.pop("ttlMs") == 1000
+    assert req == {"t": "request_frame", "purpose": "count", "burst": {"count": 2, "intervalMs": 0}}
     assert lines[-1]["say"] == "sakthi_curd_1l: 2 frames" and lines[-1]["purpose"] == "count"
     assert len(lines[-1]["idem"]) == 32
 

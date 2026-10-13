@@ -154,7 +154,9 @@ def test_harness_answers_request_frame_like_the_phone(capsys, monkeypatch, tmp_p
     monkeypatch.setitem(call_tool.TOOLS_BY_NAME, "fake_cash", fake_cash)
     call_tool.main(["fake_cash", "--args", '{"amount": 60}', "--image", str(img)])
     lines = capsys.readouterr().out.strip().splitlines()
-    assert json.loads(lines[0]) == {"t": "request_frame", "purpose": "cash", "burst": {"count": 3, "intervalMs": 100}}
+    req = json.loads(lines[0])
+    assert isinstance(req.pop("requestId"), str) and req.pop("ttlMs") == 1000
+    assert req == {"t": "request_frame", "purpose": "cash", "burst": {"count": 3, "intervalMs": 100}}
     assert json.loads(lines[-1]) == {"say_en": "ok", "frames": ["cash", "cash", "cash"]}
 
 
