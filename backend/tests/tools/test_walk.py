@@ -5,7 +5,6 @@ import pytest
 
 from aira_live.contracts import RequestFrameMsg, TranscriptMsg
 from aira_live.frames import Frame
-from aira_live.i18n import t
 from aira_live.session import current_session
 from aira_live.tools import TOOLS_BY_NAME, NON_BLOCKING_TOOLS, walk
 from aira_live.vision.gemini import VisionError
@@ -85,7 +84,7 @@ async def test_arrives_and_ends(session):
     assert loop.ended == "arrived" and not loop.active and walk.active(s) is None
     said = _spoken(rec)
     assert said[0] == "fridge ahead, about 3 steps."
-    assert said[-1] == t("walk.arrived", "en", name="fridge")
+    assert said[-1] == "Stop. The fridge is right in front of you. Reach forward."
     assert _stopped_frames(rec)
 
 
@@ -161,7 +160,7 @@ async def test_auto_stop_after_90_seconds(session):
     s, rec = session
     loop = make(s, [FAR], Clock())
     await _run(loop)
-    assert loop.ended == "timeout" and _spoken(rec)[-1] == t("walk.timeout", "en")
+    assert loop.ended == "timeout" and _spoken(rec)[-1] == "I stopped guiding. Ask me again when you are ready."
     assert 80 <= len(loop.calls) <= 91
 
 
@@ -213,7 +212,7 @@ async def test_lost_target_uses_memory_then_not_found(session):
     await _run(loop)
     said = _spoken(rec)
     assert said[0] == "The fridge was last seen near the counter. Turn slowly right. I'm looking."
-    assert t("walk.not_found", "en", name="fridge") in said
+    assert "I can't find the fridge. Try turning around slowly." in said
 
 
 async def test_stale_result_is_dropped(session):

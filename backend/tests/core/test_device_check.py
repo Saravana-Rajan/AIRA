@@ -296,19 +296,19 @@ def test_the_per_address_counters_stay_small_under_many_addresses():
 
 
 def test_the_server_reads_the_same_words_the_screen_shows():
-    """The check's spoken lines exist twice (app strings.ts and the server's i18n): they must not drift apart."""
-    import json
+    """The check's spoken lines exist twice (app strings.ts and the server's system_lines): they must not drift."""
     import re
     from pathlib import Path
+
+    from aira_live.system_lines import LINES
     root = Path(__file__).resolve().parents[3]
     ts = (root / "frontend/app/src/i18n/strings.ts").read_text(encoding="utf-8")
     block = ts[ts.index("export const CHECK"):]
     rows = {k: (en, ta, hi) for k, en, ta, hi in
             re.findall(r'^\s*(\w+):\s*\{ en: "(.*?)", ta: "(.*?)", hi: "(.*?)" \},\s*$', block, re.M)}
     for i, lang in enumerate(("en", "ta", "hi")):
-        cat = json.loads((root / f"backend/aira_live/i18n/{lang}.json").read_text(encoding="utf-8"))
         for key in device_check.SPOKEN_LINES:
-            assert cat[f"check.{key}"] == rows[key][i], (lang, key)
+            assert LINES[f"check.{key}"][lang] == rows[key][i], (lang, key)
 
 
 def test_a_flood_of_fresh_addresses_never_locks_out_a_new_one():

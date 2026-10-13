@@ -21,7 +21,7 @@ from typing import TYPE_CHECKING, AsyncIterator, Awaitable, Callable, Literal, P
 from aira_live import monitor, safety, tool_runtime
 from aira_live.contracts import AudioOutMsg, CueMsg, ErrorMsg, TranscriptMsg
 from aira_live.diag import diag, trunc
-from aira_live.i18n import t
+from aira_live.system_lines import line
 from aira_live.i18n.detect import detect_lang, latin_lang
 from aira_live.live_video import LiveVideo, ambient_holding
 from aira_live.prompt import LANG_NAME, last_catalog_facts, last_vocabulary, unclear_note
@@ -324,7 +324,7 @@ class LiveBridge:
             while True:
                 failures += 1
                 if failures > self.MAX_RECONNECTS:
-                    await self._send(ErrorMsg(code="network", say=t("live.unavailable", self.session.lang)))
+                    await self._send(ErrorMsg(code="network", say=line("live.unavailable", self.session.lang)))
                     self._closed = True
                     with suppress(Exception):
                         await self._backend.close()

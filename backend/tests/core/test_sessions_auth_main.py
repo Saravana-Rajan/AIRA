@@ -18,7 +18,7 @@ from starlette.websockets import WebSocketDisconnect
 
 from aira_live import auth, confirm, sessions
 from aira_live import main as main_mod
-from aira_live.i18n import t
+from aira_live.system_lines import line as t
 from aira_live.live_bridge import NOTICE_PREFIX, LiveEvent
 from aira_live.tool_runtime import live_tools
 from aira_live.tools import NON_BLOCKING_TOOLS, TOOL_FUNCS

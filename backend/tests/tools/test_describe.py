@@ -87,7 +87,7 @@ def _frame_requests(rec):
 def test_registered_as_a_live_tool_with_a_prompt_rule():
     assert TOOLS_BY_NAME["describe_mode"] is describe.describe_mode
     text = prompt.render_prompt({"name": "Sunrise Dairy"}, [], [], "en", "short")
-    assert "describe_mode" in text and "Stop describing" in text
+    assert "describe_mode" in text and "stop describing" in text and "on=false" in text and "on=true" in text
 
 
 def test_coarse_side_is_left_ahead_right():

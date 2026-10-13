@@ -7,4 +7,4 @@ class CashRead(BaseModel):
     total: int | None          # computed in code; None unless both reads agree
     agreed: bool
     confidence: float          # 0..1
-    hint_key: str = ""         # i18n key to speak when not agreed, e.g. "cash.spread_notes" (additive field)
+    hint_key: str = ""         # hint code when not agreed (see payments.CASH_HINTS_EN), e.g. "cash.spread_notes" (additive field)

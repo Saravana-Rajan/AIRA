@@ -13,7 +13,7 @@ import pytest
 from live_fakes import FakeBackend, wait_until
 
 from aira_live import live_bridge, safety
-from aira_live.i18n import t
+from aira_live.system_lines import line as t
 from aira_live.live_bridge import AdkLiveBackend, LiveBridge, LiveEvent, on_input_transcript, translate
 
 

@@ -20,7 +20,6 @@ from typing import Any
 from aira_live import monitor
 from aira_live.diag import diag, trunc
 from aira_live.frames import Frame
-from aira_live.i18n import t
 from aira_live.models import model_for
 from aira_live.vision import gemini
 from aira_live.vision.gemini import VisionError, image_part
@@ -162,9 +161,32 @@ async def look(frame: Frame, target: str, timeout_s: float = LOOK_TIMEOUT_S) -> 
 # --- the instruction ------------------------------------------------------------------------------------------------
 
 
+# The English meaning of each instruction (``tools.walk`` sends facts plus this; Live says it in the owner's
+# language). The key is the fact; these words are only its hint.
+WALK_EN: dict[str, str] = {
+    "walk.hazard": "Stop. {label} in front.",
+    "walk.arrived": "Stop. The {name} is right in front of you. Reach forward.",
+    "walk.obstacle_left": "Stop. {label} in front. Move a little left.",
+    "walk.obstacle_right": "Stop. {label} in front. Move a little right.",
+    "walk.left": "{name} on your left. Turn left a little.",
+    "walk.right": "{name} on your right. Turn right a little.",
+    "walk.ahead": "{name} ahead, about {n} steps.",
+    "walk.ahead_slow": "{name} ahead. Keep going slowly.",
+    "walk.not_found": "I can't find the {name}. Try turning around slowly.",
+    "walk.looking_left": "Turn slowly left. I'm looking.",
+    "walk.looking_right": "Turn slowly right. I'm looking.",
+    "walk.memory": "The {name} was last seen {place}.",
+    "walk.keep_going": "Keep going.",
+}
+
+
+def _en(key: str, **kw) -> str:
+    return WALK_EN[key].format(**kw)
+
+
 @dataclass(frozen=True)
 class Instruction:
-    key: str                     # i18n key, also the diag "instruction key"
+    key: str                     # the instruction (a fact), also the diag "instruction key"
     text: str
     urgent: bool = False         # safety: said at once, never held back
     arrived: bool = False        # the walk ends after this line
@@ -222,40 +244,41 @@ class Search:
 NOT_FOUND_S = 8.0
 
 
-def decide(view: WalkView, name: str, lang: str, search: Search | None = None) -> Instruction:
-    """The ONE instruction for this look. Safety first, then arrival, obstacle, direction, search."""
+def decide(view: WalkView, name: str, lang: str = "en", search: Search | None = None) -> Instruction:
+    """The ONE instruction for this look. Safety first, then arrival, obstacle, direction, search. ``text`` is
+    the English meaning only (``lang`` is ignored: Live says it in the owner's language)."""
     search = search or Search()
     near = sorted((o for o in view.obstacles if in_corridor(o.box)), key=lambda o: -o.box[2])
     hazards = [o for o in near if o.hazard]
     if hazards:
-        return Instruction("walk.hazard", t("walk.hazard", lang, label=hazards[0].label), urgent=True)
+        return Instruction("walk.hazard", _en("walk.hazard", label=hazards[0].label), urgent=True)
     if arrived(view):
-        return Instruction("walk.arrived", t("walk.arrived", lang, name=name), urgent=True, arrived=True)
+        return Instruction("walk.arrived", _en("walk.arrived", name=name), urgent=True, arrived=True)
     if near:
         side = side_with_room(near[0], view.obstacles)
         key = f"walk.obstacle_{side}"
-        return Instruction(key, t(key, lang, label=near[0].label), urgent=True)
+        return Instruction(key, _en(key, label=near[0].label), urgent=True)
     if view.target_point is not None:
         x = view.target_point[1]
         if x < LEFT_X:
-            return Instruction("walk.left", t("walk.left", lang, name=name))
+            return Instruction("walk.left", _en("walk.left", name=name))
         if x > RIGHT_X:
-            return Instruction("walk.right", t("walk.right", lang, name=name))
+            return Instruction("walk.right", _en("walk.right", name=name))
         n = steps_for(view.target_box)
         if n is None:
-            return Instruction("walk.ahead_slow", t("walk.ahead_slow", lang, name=name))
-        return Instruction("walk.ahead", t("walk.ahead", lang, name=name, n=n), steps=n)
+            return Instruction("walk.ahead_slow", _en("walk.ahead_slow", name=name))
+        return Instruction("walk.ahead", _en("walk.ahead", name=name, n=n), steps=n)
     if search.lost_s >= NOT_FOUND_S:
-        return Instruction("walk.not_found", t("walk.not_found", lang, name=name))
+        return Instruction("walk.not_found", _en("walk.not_found", name=name))
     if search.last_x is not None:
         side = "left" if search.last_x < 500 else "right"
     else:
         side = search.memory_side or "left"
     key = f"walk.looking_{side}"
-    text = t(key, lang, name=name)
+    text = _en(key, name=name)
     if search.memory_place and not search.memory_said:
         search.memory_said = True
-        text = f"{t('walk.memory', lang, name=name, place=search.memory_place)} {text}"
+        text = f"{_en('walk.memory', name=name, place=search.memory_place)} {text}"
         return Instruction("walk.memory", text)
     return Instruction(key, text)
 
@@ -263,8 +286,8 @@ def decide(view: WalkView, name: str, lang: str, search: Search | None = None) -
 @dataclass
 class Speech:
     """Change-only speaking: a new instruction goes at once, the same one again after ``reassure_s`` (direction
-    lines become "keep going"). Safety lines are never held back."""
-    lang: str
+    lines become "keep going"). Safety lines are never held back. ``lang`` is unused (English meanings)."""
+    lang: str = "en"
     reassure_s: float = REASSURE_S
     last_key: str | None = None
     last_steps: int | None = None
@@ -276,7 +299,7 @@ class Speech:
         if changed:
             text = ins.text
         elif now - self.last_at >= self.reassure_s:
-            text = t("walk.keep_going", self.lang) if ins.key in _DIRECTION else ins.text
+            text = _en("walk.keep_going") if ins.key in _DIRECTION else ins.text
         else:
             return None
         self.last_key, self.last_at = ins.key, now

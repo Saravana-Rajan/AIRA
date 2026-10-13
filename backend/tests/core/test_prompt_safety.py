@@ -239,3 +239,22 @@ async def test_bridge_safety_check_allows_prices_from_the_prompt_catalog(fake_db
     assert b.sent_text == [safety.correction_text([440], "en")]
     assert [m.cue for m in rec.msgs if m.t == "cue"].count("warn") == 1
     await bridge.close()
+
+
+def test_the_model_decides_intent_in_any_language():
+    """No keyword matchers: the prompt tells Live which tool and kind to use, whatever language he speaks."""
+    p = render_prompt({"name": "Sunrise Dairy"}, [CURD], [], "ta", "short")
+    low = p.lower()
+    for kind in ("kind=count", "kind=read", "kind=list", "kind=path", "kind=look"):
+        assert kind in p, kind
+    assert "any how-many question" in low and "generic english noun" in low
+    assert "call walk_stop immediately" in low and "nothing else listens for those words" in low
+    assert "describe_mode with on=false" in low and "describe_mode with on=true" in low
+    assert "handled by the system" not in low
+
+
+def test_an_approximate_count_is_never_a_quantity():
+    low = render_prompt({"name": "Sunrise Dairy"}, [CURD], [], "en", "short").lower()
+    assert "approx true, exact false" in low
+    assert "never use it as a quantity for stock_add, a delivery or a sale" in low
+    assert "if approx is true say 'about'" in low

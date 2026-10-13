@@ -1,7 +1,7 @@
 """AIRA follows the speaker's language turn by turn: no default and no fixed language anywhere.
 
 - ``i18n.detect_lang`` is pure and script-based (JAPAC: Indic, Thai, CJK, Latin).
-- ``i18n.t`` gives the English line for a language without a catalog, never silence.
+- ``system_lines.line`` (the phone's no-Live lines) gives English for a language without one, never silence.
 - The system prompt tells Live to answer in the language of the last utterance and never to ask.
 - ``session.lang`` follows every user turn (Live transcripts and typed text) and the phone hears it on the
   transcript message (``lang``) so its labels can follow too.
@@ -10,7 +10,8 @@ import pytest
 from live_fakes import FakeBackend, wait_until
 
 from aira_live.contracts import TranscriptMsg, dump_server_msg
-from aira_live.i18n import LANGS, detect_lang, t
+from aira_live.i18n import detect_lang
+from aira_live.system_lines import LANGS, line
 from aira_live.live_bridge import LiveBridge, LiveEvent
 from aira_live.prompt import render_prompt
 
@@ -57,11 +58,11 @@ def test_detect_lang_never_raises_and_only_returns_lowercase_codes():
 
 
 # ---------- fixed lines in a language without a catalog ----------
-def test_i18n_gives_the_english_line_for_any_language_without_a_catalog():
+def test_a_system_line_is_english_for_any_language_without_one():
     assert LANGS == ("ta", "hi", "en")
     for lang in ("ja", "ko", "zh", "th", "vi", "id", "fil", "te", "kn", "ml", "bn", "gu", "pa"):
-        assert t("error.internal", lang) == t("error.internal", "en")
-        assert t("mock.echo", lang, text="x").endswith("x")
+        assert line("error.internal", lang) == line("error.internal", "en")
+        assert line("mock.echo", lang, text="x").endswith("x")
 
 
 # ---------- prompt ----------
