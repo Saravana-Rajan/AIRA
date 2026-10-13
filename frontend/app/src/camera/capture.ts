@@ -8,6 +8,7 @@ import { toGray, qualityHint, noteFrameQuality } from "./quality";
 import { overrideSource } from "./source";
 import { ensureBackCamera, type BackCameraResult, type CameraFacing } from "./backCamera";
 import { beginLooking } from "./looking";
+import { EncodeFailure, sharedWorkerEncoder, type GrabbedFrame, type WorkerEncoder } from "./encode";
 
 export type FrameMsg = Extract<ClientMsg, { t: "frame" }>;
 export type CameraErrorCode = "permission" | "no_frame" | "no_canvas" | "too_large";
@@ -27,11 +28,12 @@ export const BACKGROUND_MAX_BUFFERED = PREVIEW_MAX_BUFFERED;
 export const PRIORITY_MAX_SIDE = 1280;
 export const PRIORITY_QUALITY = 0.9;
 const PRIORITY: ReadonlySet<FramePurpose> = new Set<FramePurpose>(["ask", "count", "identify", "point"]);
-/** Count frames keep the 1280 px detail but encode lighter (about 120 KB instead of 230 KB): two of them must
- *  cross a congested phone uplink inside the server's wait. */
-export const COUNT_QUALITY = 0.75;
-/** Tool frame requests that pause live, describe and preview frames until they are sent. */
-const HOLDS: ReadonlySet<FramePurpose> = new Set<FramePurpose>([...PRIORITY, "walk"]);
+/** Count frames: 1024 px long side at quality 0.7 (about 110 KB). A busy Galaxy A22 took 4-13 s to encode a
+ *  1280 px count photo on the main thread (2026-10-13); the server reads this one frame twice. */
+export const COUNT_MAX_SIDE = 1024;
+export const COUNT_QUALITY = 0.7;
+/** Tool frame requests that pause live, describe and preview frames (and on-phone MediaPipe) until they are sent. */
+const HOLDS: ReadonlySet<FramePurpose> = new Set<FramePurpose>([...PRIORITY, "walk", "invoice", "cash"]);
 /** Walk with me (purpose `walk`, about 1 a second): enough detail for ER to see the target and floor obstacles. */
 export const WALK_MAX_SIDE = 1024;
 export const WALK_QUALITY = 0.75;
@@ -42,7 +44,7 @@ export function isPriorityPurpose(purpose: FramePurpose): boolean {
   return PRIORITY.has(purpose);
 }
 
-/** True for a tool frame request (ask, count, identify, point, walk) that holds background frames. */
+/** True for a tool frame request (ask, count, identify, point, walk, invoice, cash) that holds background frames. */
 export function holdsBackground(purpose: FramePurpose): boolean {
   return HOLDS.has(purpose);
 }
@@ -53,7 +55,7 @@ export const LIVE_QUALITY = 0.7;
 /** How big and how good a frame of this purpose is. */
 export function frameSpec(purpose: FramePurpose): { maxSide: number; quality: number } {
   if (purpose === "preview") return { maxSide: PREVIEW_MAX_SIDE, quality: PREVIEW_QUALITY };
-  if (purpose === "count") return { maxSide: PRIORITY_MAX_SIDE, quality: COUNT_QUALITY };
+  if (purpose === "count") return { maxSide: COUNT_MAX_SIDE, quality: COUNT_QUALITY };
   if (PRIORITY.has(purpose)) return { maxSide: PRIORITY_MAX_SIDE, quality: PRIORITY_QUALITY };
   if (purpose === "live") return { maxSide: LIVE_MAX_SIDE, quality: LIVE_QUALITY };
   if (purpose === "walk") return { maxSide: WALK_MAX_SIDE, quality: WALK_QUALITY };
@@ -63,6 +65,7 @@ export function frameSpec(purpose: FramePurpose): { maxSide: number; quality: nu
 // Tool frames (anything but the live video and the monitor preview) beat the live video: while one is being
 // captured, and once one started during a live capture, the live frame is skipped.
 let toolCaptures = 0;
+let heldCaptures = 0;
 let toolCaptureSeq = 0;
 const isToolPurpose = (p: FramePurpose) => p !== "live" && p !== "preview";
 /** True while a tool-requested frame (ask, count, identify, ...) is being captured. */
@@ -92,6 +95,12 @@ export function backgroundHeld(): boolean {
   return backgroundHolds > 0;
 }
 
+/** True while an owner tool frame (ask, count, identify, point, walk, invoice, cash) is requested or capturing:
+ *  on-phone MediaPipe (bump guard, room boxes, hand tracking) skips its passes so the phone's CPU goes to it. */
+export function detectionPaused(): boolean {
+  return backgroundHolds > 0 || heldCaptures > 0;
+}
+
 export class CameraError extends Error {
   readonly code: CameraErrorCode;
   constructor(code: CameraErrorCode) {
@@ -105,6 +114,9 @@ export interface FrameSource {
   width(): number;
   height(): number;
   draw(ctx: CanvasRenderingContext2D, w: number, h: number): void;
+  /** The current camera frame as a transferable VideoFrame / ImageBitmap for the encode worker. Optional: a
+   *  source without it (demo media, tests) always encodes on the canvas path. */
+  grab?(): Promise<GrabbedFrame>;
 }
 /** Encodes the canvas as JPEG and returns base64 without the `data:` prefix. */
 export type Encoder = (canvas: HTMLCanvasElement, quality: number) => Promise<string>;
@@ -136,8 +148,31 @@ interface CaptureDeps {
   source: FrameSource | null;
   encoder: Encoder;
   makeCanvas: MakeCanvas;
+  /** The off-main-thread JPEG encoder; null = canvas path (unsupported browser, jsdom). */
+  worker: () => WorkerEncoder | null;
 }
-const deps: CaptureDeps = { source: null, encoder: defaultEncoder, makeCanvas: defaultMakeCanvas };
+const deps: CaptureDeps = { source: null, encoder: defaultEncoder, makeCanvas: defaultMakeCanvas, worker: sharedWorkerEncoder };
+
+/** Frames whose JPEG was encoded in the worker (for the frame_req diagnostics). */
+const viaWorker = new WeakSet<object>();
+/** True when this frame's JPEG was made by the encode worker, false when on the main-thread canvas. */
+export function encodedInWorker(f: FrameMsg): boolean {
+  return viaWorker.has(f);
+}
+
+/** The camera frame for the worker: a VideoFrame when the browser has one (no copy on this thread), else an
+ *  ImageBitmap of the <video>. */
+export async function grabVideoFrame(v: HTMLVideoElement): Promise<GrabbedFrame> {
+  const VF = (globalThis as { VideoFrame?: new (src: HTMLVideoElement) => GrabbedFrame }).VideoFrame;
+  if (typeof VF === "function") {
+    try {
+      return new VF(v);
+    } catch {
+      /* a video without a decoded frame yet: try createImageBitmap */
+    }
+  }
+  return createImageBitmap(v);
+}
 
 /** Tests only: swap the frame source, encoder or canvas factory. */
 export function __setCaptureDeps(p: Partial<CaptureDeps>): void {
@@ -234,7 +269,12 @@ async function openCamera(): Promise<HTMLVideoElement> {
   stream = s;
   video = v;
   denied = false;
-  deps.source = { width: () => v.videoWidth, height: () => v.videoHeight, draw: (ctx, w, h) => ctx.drawImage(v, 0, 0, w, h) };
+  deps.source = {
+    width: () => v.videoWidth,
+    height: () => v.videoHeight,
+    draw: (ctx, w, h) => ctx.drawImage(v, 0, 0, w, h),
+    grab: () => grabVideoFrame(v),
+  };
   return v;
 }
 
@@ -267,13 +307,16 @@ export async function captureFrame(purpose: FramePurpose): Promise<FrameMsg> {
 /** Like captureFrame, but returns null (without encoding) when `keep` says the frame is not worth sending. */
 export async function captureFrameIf(purpose: FramePurpose, keep?: FrameKeep): Promise<FrameMsg | null> {
   if (!isToolPurpose(purpose)) return captureFrameRaw(purpose, keep);
+  const held = HOLDS.has(purpose);
   toolCaptures++;
+  if (held) heldCaptures++;
   toolCaptureSeq++;
   const endLooking = beginLooking(purpose); // the preview's "AIRA is looking" badge (display only)
   try {
     return await captureFrameRaw(purpose, keep);
   } finally {
     toolCaptures--;
+    if (held) heldCaptures--;
     endLooking();
   }
 }
@@ -282,37 +325,67 @@ async function captureFrameRaw(purpose: FramePurpose, keep?: FrameKeep): Promise
   // Demo mode (/try): draw the demo media and never open the camera. null = real camera.
   const demo = overrideSource();
   if (!demo && !deps.source) await startCamera();
-  const src = demo ?? deps.source;
+  const src: FrameSource | null = demo ?? deps.source;
   if (!src) throw new CameraError("no_frame");
   const sw = src.width();
   const sh = src.height();
   if (!sw || !sh) throw new CameraError("no_frame");
   const spec = frameSpec(purpose);
   const { w, h } = fitWithin(sw, sh, spec.maxSide);
+  // Quality check on every 3rd frame; the keep gate reads the same gray copy.
+  // Preview frames are for the dashboard only: they never earn the owner a "hold still" hint.
+  const checkQuality = isToolPurpose(purpose) && qualityListener !== null && ++qualityCounter % 3 === 0;
+  const retryQuality = Math.min(spec.quality, JPEG_RETRY_QUALITY);
+  // The worker path: the frame is scaled and encoded off the main thread. Any worker trouble (other than a frame
+  // that is too big at both qualities) falls back to the canvas path below, for this frame and, once the worker
+  // died, for good.
+  const worker = !demo && src.grab ? deps.worker() : null;
+  if (worker && !worker.dead) {
+    let out: { jpeg: string; gray: Float32Array | null } | null = null;
+    try {
+      const frame = await src.grab!();
+      out = await worker.encode(frame, w, h, { quality: spec.quality, retryQuality, maxB64: MAX_B64, gray: checkQuality || !!keep });
+    } catch (e) {
+      if (e instanceof EncodeFailure && e.code === "too_large") throw new CameraError("too_large");
+      out = null;
+    }
+    if (out) {
+      const quality = out.gray ? checkFrame(out.gray, w, h, checkQuality) : "skipped";
+      if (keep && out.gray && !keep(out.gray, w, h)) return null;
+      return finish(purpose, out.jpeg, w, h, quality, false, true);
+    }
+  }
   const { canvas, ctx } = deps.makeCanvas(w, h);
   if (!ctx) throw new CameraError("no_canvas");
   src.draw(ctx, w, h);
-  // Quality check on every 3rd frame (cheap enough at 640 px); the keep gate reads the same gray copy.
-  // Preview frames are for the dashboard only: they never earn the owner a "hold still" hint.
   let quality: "ok" | "dark" | "blurry" | "skipped" = "skipped";
-  const checkQuality = isToolPurpose(purpose) && qualityListener !== null && ++qualityCounter % 3 === 0;
   if (checkQuality || keep) {
     const img = ctx.getImageData(0, 0, w, h);
     const gray = toGray(img.data, w, h);
-    if (checkQuality && qualityListener) {
-      const hint = qualityHint(gray, w, h);
-      noteFrameQuality(hint);
-      quality = hint ?? "ok";
-      if (hint) qualityListener(hint);
-    }
+    quality = checkFrame(gray, w, h, checkQuality);
     if (keep && !keep(gray, w, h)) return null;
   }
   let jpeg = await deps.encoder(canvas, spec.quality);
-  if (jpeg.length > MAX_B64) jpeg = await deps.encoder(canvas, Math.min(spec.quality, JPEG_RETRY_QUALITY));
+  if (jpeg.length > MAX_B64) jpeg = await deps.encoder(canvas, retryQuality);
   if (jpeg.length > MAX_B64) throw new CameraError("too_large");
+  return finish(purpose, jpeg, w, h, quality, demo !== null, false);
+}
+
+/** The quality hint for a tool frame's gray copy (every 3rd frame), told to the hint listener. */
+function checkFrame(gray: Float32Array, w: number, h: number, check: boolean): "ok" | "dark" | "blurry" | "skipped" {
+  if (!check || !qualityListener) return "skipped";
+  const hint = qualityHint(gray, w, h);
+  noteFrameQuality(hint);
+  if (hint) qualityListener(hint);
+  return hint ?? "ok";
+}
+
+function finish(purpose: FramePurpose, jpeg: string, w: number, h: number, quality: string, demo: boolean, worker: boolean): FrameMsg {
   // Diagnostics: the frame about to go out, by size only (never the jpeg). At most a few lines a second.
-  clientLog("frame", { purpose, bytes: jpeg.length, w, h, quality, demo: demo !== null }, { minGapMs: 250 });
-  return { t: "frame", id: nextId(), jpeg, w, h, ts: Date.now(), purpose };
+  clientLog("frame", { purpose, bytes: jpeg.length, w, h, quality, demo, worker }, { minGapMs: 250 });
+  const f: FrameMsg = { t: "frame", id: nextId(), jpeg, w, h, ts: Date.now(), purpose };
+  if (worker) viaWorker.add(f);
+  return f;
 }
 
 /** True while the socket still holds more than BACKGROUND_MAX_BUFFERED bytes it could not hand to the network. */
@@ -336,12 +409,12 @@ export function startContinuous(purpose: FramePurpose, fps: number, keep?: Frame
   let busy = false;
   const tick = async () => {
     if (stopped || busy) return;
-    if (pausable && backgroundHeld()) return; // the owner's question has the camera and the socket
+    if (pausable && detectionPaused()) return; // the owner's question has the camera and the socket
     if (dropWhenBusy && socketBusy()) return; // the last picture is still on its way: this one is not worth encoding
     busy = true;
     try {
       const f = await captureFrameIf(purpose, keep);
-      if (f && !stopped && !(pausable && backgroundHeld()) && !(dropWhenBusy && socketBusy())) app.send(f);
+      if (f && !stopped && !(pausable && detectionPaused()) && !(dropWhenBusy && socketBusy())) app.send(f);
     } catch {
       // Camera errors are surfaced by the request handler and the hint speaker.
     } finally {

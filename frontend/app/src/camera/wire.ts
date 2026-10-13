@@ -8,8 +8,9 @@ import { app } from "../core/app";
 import type { WiredApp } from "../core/wire";
 import {
   backgroundHeld, captureFrame, captureFrameIf, getVideo, holdBackground, setQualityListener, startCamera, startContinuous,
-  stopCamera, toolCaptureBusy, toolCaptureCount, type FrameKeep,
+  stopCamera, toolCaptureBusy, toolCaptureCount, encodedInWorker, type FrameKeep,
 } from "./capture";
+import { createWorkingCue } from "./working";
 import { startLiveVideo } from "./liveVideo";
 import { overrideSource } from "./source";
 import { createSceneGate } from "./sceneGate";
@@ -99,6 +100,7 @@ export function wireCameraAndGuidance(opts: WireOptions = {}): CameraWiring {
     hint,
     sleep: defaultSleep,
     hold: holdBackground,
+    viaWorker: encodedInWorker,
     buffered: () => { try { return app.socket?.bufferedAmount?.() ?? 0; } catch { return 0; } },
   });
 
@@ -119,6 +121,8 @@ export function wireCameraAndGuidance(opts: WireOptions = {}): CameraWiring {
       }
     },
   });
+  // A soft word-free tick the moment AIRA asks for a photo, every 2 s until AIRA speaks (or 30 s).
+  const working = createWorkingCue({ play: () => app.earcon("working") });
   const count = createCountUx({ speak, earcon: (n) => app.earcon(n), lang, onProgress: opts.onCountProgress });
   const openUrl = createOpenUrlHandler({ speak, lang, open: defaultOpen, dial: defaultDial });
   // Live video for the dashboard over WebRTC: the same camera stream the frames come from, never a second prompt.
@@ -149,6 +153,7 @@ export function wireCameraAndGuidance(opts: WireOptions = {}): CameraWiring {
     socket,
     handleFrame,
     handlers: [
+      (m) => working.onServerMsg(m),
       (m) => guidance.onServerMsg(m),
       (m) => count.onServerMsg(m),
       (m) => openUrl.onServerMsg(m),
@@ -158,6 +163,7 @@ export function wireCameraAndGuidance(opts: WireOptions = {}): CameraWiring {
       ...(opts.extraHandlers ?? []),
     ],
     cleanup: [
+      () => working.stop(),
       stopLive,
       () => rtc.dispose(),
       stopTilt,

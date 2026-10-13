@@ -1,4 +1,5 @@
 """One phone connection: who is talking, in which language, and how to send them server messages."""
+import asyncio
 import re
 import time
 import unicodedata
@@ -23,6 +24,9 @@ NOTICE_DEDUPE_S = 10.0
 # when it is at least REUSE_MIN_SIDE px on its long side (ambient / describe frames are 640 px).
 FRAME_REUSE_S = 1.0
 REUSE_MIN_SIDE = 640
+# Frames that reach the server after a request's wait ended (up to LATE_FRAME_WINDOW_S later) are logged as
+# ``late_frame``: a slow phone and a slow uplink look the same from the tool, and this says by how much it missed.
+LATE_FRAME_WINDOW_S = 10.0
 _monotonic = time.monotonic  # tests swap in a clock
 _WS = re.compile(r"\s+")
 
@@ -52,6 +56,7 @@ class Session:
         # make no ER 2 call: the owner's own question gets the camera and the model first.
         self.owner_asks = 0
         self._send = send
+        self._late_watches: set[asyncio.Task] = set()
 
     @property
     def owner_busy(self) -> bool:
@@ -137,14 +142,38 @@ class Session:
              sizes=[[f.w, f.h] for f in frames])
         diag("latency", stage="frame_wait", session=self.session_id, purpose=purpose, reused=False,
              ms=round((time.perf_counter() - started) * 1000), got=len(frames), wanted=count)
+        if len(frames) < count:
+            self._watch_late(purpose, since, len(frames), count, started, timeout_s)
         return frames
+
+    def _watch_late(self, purpose: str, since: float, got: int, wanted: int, started: float,
+                    timeout_s: float) -> None:
+        """After a request's wait ran out, keep listening up to LATE_FRAME_WINDOW_S more: a frame that arrives
+        then is logged as ``late_frame`` (how late, how big), never dropped silently. Nothing waits on this."""
+        async def watch() -> None:
+            late = await self.frames.wait_for(count=got + 1, purpose=purpose, after_ts=since,
+                                              timeout_s=LATE_FRAME_WINDOW_S)
+            if not late:
+                return
+            f = late[got]
+            waited_ms = round((time.perf_counter() - started) * 1000)
+            diag("late_frame", severity="WARNING", session=self.session_id, purpose=purpose, wanted=wanted,
+                 got_in_time=got, waited_ms=waited_ms, late_ms=max(0, waited_ms - round(timeout_s * 1000)),
+                 bytes=len(f.jpeg_b64), size=[f.w, f.h])
+
+        try:
+            task = asyncio.get_running_loop().create_task(watch())
+        except RuntimeError:
+            return
+        self._late_watches.add(task)
+        task.add_done_callback(self._late_watches.discard)
 
     async def look_frame(self, purpose: str, timeout_s: float = 4.0, max_age_s: float = FRAME_REUSE_S,
                          min_side: int = REUSE_MIN_SIDE) -> list[Frame]:
         """One frame for a single-frame look (camera_ask "look"/"read", identify, free-text find): a frame of any
         purpose that reached the server less than ``max_age_s`` ago and is at least ``min_side`` px on its long
         side is used at once; otherwise one fresh frame is requested (``request_frames``). Never for a count:
-        a count needs its own sharp 1280 px burst."""
+        a count needs its own fresh, sharp count frame."""
         hit = self.frames.recent(max_age_s, min_side=min_side)
         if hit is not None:
             diag("latency", stage="frame_wait", session=self.session_id, purpose=purpose, reused=True,

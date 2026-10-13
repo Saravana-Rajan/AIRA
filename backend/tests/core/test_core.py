@@ -196,6 +196,35 @@ async def test_request_single_frame_has_no_burst_and_times_out_empty():
     assert sent[0].purpose == "point" and sent[0].burst is None
 
 
+async def test_a_frame_that_arrives_after_the_wait_is_logged_late(monkeypatch):
+    from aira_live import session as session_mod
+    logged: list[dict] = []
+    monkeypatch.setattr(session_mod, "diag", lambda event, **kw: logged.append({"event": event, **kw}))
+    s, _ = mk_session()
+    assert await s.request_frames("count", timeout_s=0.05) == []
+    s.frames.add(mk(1, 2_000, "count"))
+    for _ in range(50):
+        await asyncio.sleep(0.01)
+        if any(e["event"] == "late_frame" for e in logged):
+            break
+    late = [e for e in logged if e["event"] == "late_frame"]
+    assert len(late) == 1 and late[0]["purpose"] == "count" and late[0]["got_in_time"] == 0
+    assert late[0]["late_ms"] >= 0 and late[0]["bytes"] > 0
+
+
+async def test_frames_in_time_start_no_late_watch():
+    s, _ = mk_session()
+
+    async def client():
+        await asyncio.sleep(0.01)
+        s.frames.add(mk(1, 2_000, "ask"))
+
+    task = asyncio.create_task(client())
+    assert len(await s.request_frames("ask", timeout_s=1)) == 1
+    await task
+    assert not s._late_watches
+
+
 def test_session_ids_are_unique():
     a, _ = mk_session()
     b, _ = mk_session()

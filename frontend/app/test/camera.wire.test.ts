@@ -120,6 +120,18 @@ describe("wireCameraAndGuidance", () => {
       .toMatchObject({ data: { purpose: "invoice", i: 0, of: 1, bytes: expect.any(Number), waitedMs: expect.any(Number) } });
   });
 
+  it("a count photo request plays the working earcon at once and every 2 s until AIRA audio arrives", async () => {
+    vi.useFakeTimers();
+    wire();
+    socket.emit({ t: "request_frame", purpose: "count" });
+    expect(earcons.filter((e) => e === "working")).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(4000);
+    expect(earcons.filter((e) => e === "working")).toHaveLength(3);
+    socket.emit({ t: "audio", pcm24: "AAAA" });
+    await vi.advanceTimersByTimeAsync(6000);
+    expect(earcons.filter((e) => e === "working")).toHaveLength(3);
+  });
+
   it("a continuous describe stream gets the scene-change gate; guide frames stream ungated", async () => {
     vi.mocked(startContinuous).mockClear();
     wire();

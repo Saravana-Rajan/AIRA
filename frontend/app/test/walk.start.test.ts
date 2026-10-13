@@ -2,7 +2,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 const video = { readyState: 4, videoWidth: 1280, videoHeight: 720 };
-vi.mock("../src/camera/capture", () => ({ startCamera: vi.fn(async () => video) }));
+const paused = vi.hoisted(() => ({ on: false }));
+vi.mock("../src/camera/capture", () => ({ startCamera: vi.fn(async () => video), detectionPaused: () => paused.on }));
 vi.mock("../src/core/app", () => ({ app: { earcon: vi.fn(), speak: vi.fn(), settings: { lang: "auto" }, lang: () => "en" } }));
 
 import { grabFrame, startBumpGuard } from "../src/walk/start";
@@ -37,6 +38,17 @@ describe("bump guard frame grab", () => {
     expect(g).toEqual({ frame: bitmap, ts: 4321 });
     expect(createImageBitmap).toHaveBeenCalledWith(video, expect.objectContaining({ resizeWidth: 320, resizeHeight: 180 }));
     vi.mocked(performance.now).mockRestore();
+  });
+
+  it("no detector frame while an owner tool photo (ask, count, ...) is being captured", async () => {
+    paused.on = true;
+    try {
+      expect(await grabFrame()).toBeNull();
+      expect(createImageBitmap).not.toHaveBeenCalled();
+    } finally {
+      paused.on = false;
+    }
+    expect(await grabFrame()).not.toBeNull();
   });
 
   it("a camera that is not ready yet gives no frame", async () => {

@@ -3,7 +3,7 @@
 // The integrator calls startBumpGuard() once (after the Start tap) and connects the guidance session's
 // onNear to guard.setHandNearTarget.
 import { app } from "../core/app";
-import { startCamera } from "../camera/capture";
+import { detectionPaused, startCamera } from "../camera/capture";
 import { getFrameSource } from "../camera/source";
 import type { BumpWarning } from "./bump";
 import { boxStore, createBoxSender } from "./boxes";
@@ -29,6 +29,8 @@ export const bumpLatencyLog = (): BumpLatencyLog => latencyLog.slice();
  */
 export async function grabFrame(): Promise<{ frame: ImageBitmap; ts: number } | null> {
   if (getFrameSource()) return null;
+  // An owner tool photo (ask, count, ...) is being taken: this detector pass waits, the phone's CPU goes to it.
+  if (detectionPaused()) return null;
   const video = await startCamera();
   if (video.readyState < 2 || !video.videoWidth) return null;
   const ts = performance.now();

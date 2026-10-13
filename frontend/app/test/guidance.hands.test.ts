@@ -15,7 +15,12 @@ vi.mock("../src/guidance/mediapipe", () => ({
     }),
   },
 }));
-vi.mock("../src/camera/capture", () => ({ getVideo: vi.fn(() => null), startCamera: vi.fn(async () => { throw new Error("camera must not open"); }) }));
+const paused = vi.hoisted(() => ({ on: false }));
+vi.mock("../src/camera/capture", () => ({
+  getVideo: vi.fn(() => null),
+  startCamera: vi.fn(async () => { throw new Error("camera must not open"); }),
+  detectionPaused: () => paused.on,
+}));
 
 import { fingertipFrom, handBoxFrom, trackFingertip, trackHand, __resetHands } from "../src/guidance/hands";
 import { setFrameSource } from "../src/camera/source";
@@ -119,6 +124,20 @@ describe("trackFingertip", () => {
     expect(ts[2]).toBeGreaterThan(ts[1]);
     stop();
     vi.mocked(performance.now).mockRestore();
+  });
+
+  it("skips MediaPipe passes while an owner tool photo is being captured, and resumes after", async () => {
+    setFrameSource(document.createElement("canvas"));
+    detectForVideo.mockClear();
+    detectForVideo.mockReturnValue({ landmarks: [] });
+    const stop = await trackFingertip(() => {});
+    paused.on = true;
+    runFrame(); runFrame();
+    expect(detectForVideo).not.toHaveBeenCalled();
+    paused.on = false;
+    runFrame();
+    expect(detectForVideo).toHaveBeenCalledTimes(1);
+    stop();
   });
 
   it("falls back to the CPU when the GPU delegate fails, and loads the model only once", async () => {

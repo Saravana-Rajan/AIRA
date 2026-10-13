@@ -1,5 +1,5 @@
-"""camera_ask counting: "how many X are visible?" counts with ER 2 points on two frames (in parallel) and speaks a
-number only when they agree (a one-off difference gets a third read). Ambient and describe loops stay quiet while
+"""camera_ask counting: "how many X are visible?" asks the phone for ONE frame, reads it twice with ER 2 points (in
+parallel) and speaks a number only when the two reads agree (a one-off difference gets a third read). Ambient and describe loops stay quiet while
 the owner's question is answered."""
 import asyncio
 import json
@@ -105,12 +105,12 @@ async def test_kind_count_counts_in_any_language_with_the_model_item(session, mo
 # --- counting -------------------------------------------------------------------------------------------------
 
 
-async def test_two_frames_that_agree_speak_the_number(session, monkeypatch):
+async def test_two_reads_of_one_frame_that_agree_speak_the_number(session, monkeypatch):
     s, _ = session
     seen = _counter(monkeypatch, _res(4), _res(4))
     out = await camera.camera_ask("how many Hatsun Curd packets are visible?", kind="count", item="curd packet", product="Hatsun Curd")
-    assert s.frame_calls == [{"purpose": "count", "count": 2, "interval_ms": 400, "timeout_s": camera.COUNT_FRAME_TIMEOUT_S}]
-    assert [c["frame"] for c in seen] == ["c1.0", "c2.0"]
+    assert s.frame_calls == [{"purpose": "count", "count": 1, "interval_ms": 0, "timeout_s": camera.COUNT_FRAME_TIMEOUT_S}]
+    assert [c["frame"] for c in seen] == ["c1.0", "c1.0"]
     assert all(c["label"] == "curd packet" and c["product"] == "Hatsun Curd" for c in seen)
     assert out["kind"] == "count" and out["count"] == 4 and out["agreed"] is True
     assert out["approx"] is False and out["exact"] is True and out["sure"] is True
@@ -118,10 +118,12 @@ async def test_two_frames_that_agree_speak_the_number(session, monkeypatch):
     assert out["say_en"] == "I can see 4 Hatsun Curd packets." and "say" not in out
 
 
-async def test_frames_are_counted_in_parallel(session, monkeypatch):
+async def test_the_two_reads_of_the_one_frame_run_in_parallel(session, monkeypatch):
     running = {"now": 0, "max": 0}
+    frames: list[str] = []
 
     async def slow(frame, label, product=None):
+        frames.append(frame.id)
         running["now"] += 1
         running["max"] = max(running["max"], running["now"])
         await asyncio.sleep(0.01)
@@ -130,13 +132,13 @@ async def test_frames_are_counted_in_parallel(session, monkeypatch):
 
     monkeypatch.setattr(camera, "count_in_frame", slow)
     out = await camera.camera_ask("how many milk packets?", kind="count", item="milk packet")
-    assert out["count"] == 3 and running["max"] == 2
+    assert out["count"] == 3 and running["max"] == 2 and frames == ["c1.0", "c1.0"]
 
 
 async def test_off_by_one_takes_a_third_read_that_breaks_the_tie(session, monkeypatch):
     seen = _counter(monkeypatch, _res(4), _res(5), _res(5))
     out = await camera.camera_ask("how many curd packets?", kind="count", item="curd packet")
-    assert len(seen) == 3 and seen[2]["frame"] == "c2.0"
+    assert len(seen) == 3 and seen[2]["frame"] == "c1.0"
     assert out["count"] == 5 and out["agreed"] is True
 
 
@@ -204,9 +206,9 @@ def test_ask_frame_wait_is_six_seconds():
     assert camera.FRAME_TIMEOUT_S == 6.0
 
 
-def test_count_frame_wait_is_ten_seconds():
-    # two 1280 px count frames over a congested phone uplink can take longer than an ask's single frame
-    assert camera.COUNT_FRAME_TIMEOUT_S == 10.0
+def test_count_waits_fifteen_seconds_for_one_frame():
+    # a busy phone (Galaxy A22) took 4-13 s to encode one count photo: one frame, a longer wait
+    assert camera.COUNT_FRAME_TIMEOUT_S == 15.0 and camera.COUNT_FRAMES == 1
 
 
 async def test_count_diag_has_counts_and_no_user_words(session, monkeypatch):

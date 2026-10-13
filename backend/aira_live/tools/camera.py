@@ -38,9 +38,8 @@ log = logging.getLogger(__name__)
 MIN_CONF = 0.5
 MAX_OBJECTS = 3           # "what's in front of me": up to three objects, nearest first
 FRAME_TIMEOUT_S = 6.0     # the phone may be busy with ambient frames; an owner question waits a little longer
-COUNT_FRAME_TIMEOUT_S = 10.0  # count only: two 1280 px frames over a congested uplink need longer than one ask frame
-COUNT_FRAMES = 2          # a count is two frames 400 ms apart, counted in parallel, spoken only when they agree
-COUNT_INTERVAL_MS = 400
+COUNT_FRAME_TIMEOUT_S = 15.0  # count only: a slow phone may need several seconds to encode the count photo
+COUNT_FRAMES = 1          # a count is ONE frame read twice in parallel, spoken only when the two reads agree
 LOOK_TIMEOUT_S = 4.0      # per-attempt model timeout for a look / path answer (one retry)
 READ_MIN_SIDE = 1280      # a reused frame for reading text must be a full-size owner frame
 DIST_ORDER = ("near", "arm", "far")
@@ -392,21 +391,20 @@ def _count_say_en(n: int, phrase: str, approx: bool) -> str:
 
 
 async def _count(s: Session, item: str = "", product: str = "") -> dict:
-    """Two frames counted in parallel; a number only when they agree. Off by one: a third read on the newest
-    frame breaks the tie. Anything else is "not sure" plus how to hold the camera. Never an invented count.
+    """One frame, counted twice in parallel; a number only when the two reads agree. Off by one: a third read
+    breaks the tie. Anything else is "not sure" plus how to hold the camera. Never an invented count.
 
     A full shelf whose two reads are close gives ``approx`` true ("about N"); ``exact`` is false then, so an
     estimate can never pass as an exact stock or delivery number."""
     tgt = count_target(item, product)
-    frames = await s.request_frames("count", count=COUNT_FRAMES, interval_ms=COUNT_INTERVAL_MS,
-                                    timeout_s=COUNT_FRAME_TIMEOUT_S)
+    frames = await s.request_frames("count", count=COUNT_FRAMES, timeout_s=COUNT_FRAME_TIMEOUT_S)
     diag("camera_ask", stage="frames", session=s.session_id, kind="count", lang=s.lang, frames=len(frames),
          bytes=[len(f.jpeg_b64) for f in frames], sizes=[[f.w, f.h] for f in frames])
     if not frames:
         diag("camera_ask", severity="WARNING", stage="no_frames", session=s.session_id, kind="count",
              timeout_s=COUNT_FRAME_TIMEOUT_S)
         return {**_no_camera("count"), "count": None, "approx": False, "exact": False, "agreed": False}
-    pair = [frames[0], frames[-1]] if len(frames) > 1 else [frames[0], frames[0]]
+    pair = [frames[-1], frames[-1]]  # the model reads the same photo twice: two independent counts to agree
     started = time.perf_counter()
     reads: list[CountResult | None] = list(await asyncio.gather(*(_count_one(f, tgt) for f in pair)))
     n: int | None = None

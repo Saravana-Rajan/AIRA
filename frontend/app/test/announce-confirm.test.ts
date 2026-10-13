@@ -118,6 +118,13 @@ describe("dispatcher", () => {
     dispatch({ t: "error", code: "internal", say: "Sorry" });
     expect(d.thinking.disarm).toHaveBeenCalledTimes(4);
   });
+  it("a tool photo request (count, ask, ...) stops the thinking sound: the camera's working earcon takes over", () => {
+    const d = deps(); const dispatch = createDispatcher(d as any);
+    dispatch({ t: "request_frame", purpose: "count" });
+    expect(d.thinking.disarm).toHaveBeenCalledTimes(1);
+    dispatch({ t: "request_frame", purpose: "ask", burst: { count: 2, intervalMs: 400 } });
+    expect(d.thinking.disarm).toHaveBeenCalledTimes(2);
+  });
   it("confirm sets pending state and plays the warn earcon; the prompt is spoken only in a mock session", () => {
     const d = deps(); const dispatch = createDispatcher(d as any);
     dispatch({ t: "confirm", id: "c1", kind: "order", prompt: "Order 30 litres Sakthi curd?" });
@@ -158,10 +165,11 @@ describe("dispatcher", () => {
     createDispatcher(d as any)({ t: "cue", cue: "interrupted" });
     expect(d.stopSpeech).toHaveBeenCalledOnce();
   });
-  it("confirm, state, count and target replies also stop the thinking sound; user transcripts and frame requests do not", () => {
+  it("confirm, state, count and target replies also stop the thinking sound; user transcripts and background frame requests do not", () => {
     const d = deps(); const dispatch = createDispatcher(d as any);
     dispatch({ t: "transcript", role: "user", text: "order curd", final: true });
-    dispatch({ t: "request_frame", purpose: "count" });
+    dispatch({ t: "request_frame", purpose: "describe", continuous: true });
+    dispatch({ t: "request_frame", purpose: "walk" });
     dispatch({ t: "ready", sessionId: "s", resume: "r", mock: false });
     expect(d.thinking.disarm).not.toHaveBeenCalled();
     dispatch({ t: "confirm", id: "c1", kind: "order", prompt: "Order?" });

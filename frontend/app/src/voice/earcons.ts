@@ -22,9 +22,12 @@ export const EARCONS: Record<CueName, Earcon> = {
 /**
  * Earcons the app plays on its own, never sent by the server (the contract's CueName list is frozen).
  * `listening`: the hands-free start opened the mic; a short rise, softer than `done`.
+ * `working`: AIRA asked the camera for a photo (count, ask, identify, invoice, cash) and is working on it; a soft
+ * low double tick, repeated every 2 s until AIRA speaks. No words, so it means the same in every language.
  */
-export const LOCAL_EARCONS: Record<"listening", Earcon> = {
+export const LOCAL_EARCONS: Record<"listening" | "working", Earcon> = {
   listening: { tones: [{ hz: 587, ms: 70 }, { hz: 880, ms: 110 }], gain: 0.2 },
+  working: { tones: [{ hz: 392, ms: 50 }, { hz: 0, ms: 70 }, { hz: 392, ms: 50 }], gain: 0.07 },
 };
 
 export type EarconName = CueName | keyof typeof LOCAL_EARCONS;
@@ -36,6 +39,7 @@ export function playEarcon(ctx: AudioContext, n: EarconName): void {
   let t = ctx.currentTime;
   for (const tone of e.tones) {
     const dur = tone.ms / 1000;
+    if (tone.hz <= 0) { t += dur; continue; } // a rest between two ticks
     const osc = ctx.createOscillator();
     const g = ctx.createGain();
     osc.frequency.value = tone.hz;
