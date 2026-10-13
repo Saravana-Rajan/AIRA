@@ -8,12 +8,13 @@ const { app } = vi.hoisted(() => ({
 vi.mock("../src/core/app", () => ({ app }));
 
 import {
-  createWorkerEncoder, EncodeFailure, workerEncodingSupported, type EncodeJob, type EncodeWorkerLike, type WorkerEncoder,
+  __resetSharedWorkerEncoder, createWorkerEncoder, ENCODE_TIMEOUT_MS, EncodeFailure, MAX_WORKER_TIMEOUTS, sharedWorkerEncoder,
+  workerEncodingSupported, type EncodeJob, type EncodeWorkerLike, type WorkerEncoder,
 } from "../src/camera/encode";
 import { bytesToBase64, runEncodeJob, type JobCanvas } from "../src/camera/encodeJob";
 import {
   __setCaptureDeps, captureFrame, captureFrameIf, CameraError, COUNT_MAX_SIDE, COUNT_QUALITY, detectionPaused, encodedInWorker,
-  grabVideoFrame, MAX_B64, setQualityListener,
+  grabVideoFrame, MAX_B64, setQualityListener, toolCaptureBusy,
 } from "../src/camera/capture";
 
 const fakeCanvas = () => ({ canvas: {} as HTMLCanvasElement, ctx: { getImageData: () => ({ data: new Uint8ClampedArray(4 * 4 * 4).fill(200) }) } as unknown as CanvasRenderingContext2D });
@@ -78,6 +79,69 @@ describe("createWorkerEncoder (main side of the encode worker)", () => {
     const f = frame();
     await expect(enc.encode(f, 10, 10, OPTS)).rejects.toMatchObject({ code: "worker" });
     expect(f.close).toHaveBeenCalled();
+  });
+
+  it("a job the worker never answers times out: the worker is terminated, every pending job rejects with timeout", async () => {
+    vi.useFakeTimers();
+    try {
+      const w = fakeWorker();
+      const enc = createWorkerEncoder(w);
+      const a = enc.encode(frame(), 10, 10, OPTS);
+      const b = enc.encode(frame(), 10, 10, OPTS); // queued behind the stuck one (the worker is serial)
+      const ra = expect(a).rejects.toMatchObject({ code: "timeout" });
+      const rb = expect(b).rejects.toMatchObject({ code: "timeout" });
+      await vi.advanceTimersByTimeAsync(ENCODE_TIMEOUT_MS - 1);
+      expect(enc.dead).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      await ra;
+      await rb;
+      expect(enc.dead).toBe(true);
+      expect(enc.timedOut).toBe(true);
+      expect(w.terminated).toBe(true);
+      // a late reply from the killed worker is ignored
+      w.onmessage!({ data: { type: "done", id: w.posted[0].msg.id, jpeg: "LATE", gray: null } });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("a reply in time clears the job's timer (no timeout afterwards)", async () => {
+    vi.useFakeTimers();
+    try {
+      const w = fakeWorker();
+      const enc = createWorkerEncoder(w);
+      const p = enc.encode(frame(), 10, 10, OPTS);
+      w.onmessage!({ data: { type: "done", id: w.posted[0].msg.id, jpeg: "OK", gray: null } });
+      await expect(p).resolves.toMatchObject({ jpeg: "OK" });
+      await vi.advanceTimersByTimeAsync(ENCODE_TIMEOUT_MS * 2);
+      expect(enc.dead).toBe(false);
+      expect(w.terminated).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("sharedWorkerEncoder replaces a timed-out worker, and after MAX_WORKER_TIMEOUTS stays on the canvas path", async () => {
+    vi.useFakeTimers();
+    try {
+      __resetSharedWorkerEncoder();
+      const made: Array<ReturnType<typeof fakeWorker>> = [];
+      const make = () => { const w = fakeWorker(); made.push(w); return w; };
+      const on = () => true;
+      for (let i = 0; i < MAX_WORKER_TIMEOUTS; i++) {
+        const enc = sharedWorkerEncoder(make, on)!;
+        expect(enc).not.toBeNull();
+        const p = enc.encode(frame(), 10, 10, OPTS).catch((e: EncodeFailure) => e.code);
+        await vi.advanceTimersByTimeAsync(ENCODE_TIMEOUT_MS);
+        expect(await p).toBe("timeout");
+      }
+      expect(made).toHaveLength(MAX_WORKER_TIMEOUTS);
+      expect(sharedWorkerEncoder(make, on)).toBeNull(); // disabled for good
+      expect(made).toHaveLength(MAX_WORKER_TIMEOUTS);
+    } finally {
+      __resetSharedWorkerEncoder();
+      vi.useRealTimers();
+    }
   });
 
   it("is supported only with Worker and OffscreenCanvas.convertToBlob (jsdom has neither)", () => {
@@ -154,6 +218,7 @@ describe("captureFrame through the encode worker", () => {
     worker = {
       calls,
       dead: false,
+      timedOut: false,
       encode: vi.fn(async (_f, w, h, o) => { calls.push({ w, h, o }); return reply(o); }),
       close: vi.fn(),
     };
@@ -214,6 +279,44 @@ describe("captureFrame through the encode worker", () => {
     expect(await captureFrameIf("describe", keep)).toBeNull();
     expect(worker.calls[0].o).toMatchObject({ gray: true });
     expect(keep).toHaveBeenCalledWith(expect.any(Float32Array), 360, 640);
+  });
+
+  it("a stuck worker job times out: the frame falls back to the canvas once and the tool holds are released", async () => {
+    vi.useFakeTimers();
+    try {
+      const stuck = fakeWorker(); // never replies
+      const real = createWorkerEncoder(stuck);
+      __setCaptureDeps({ worker: () => real });
+      const p = captureFrame("count");
+      await vi.advanceTimersByTimeAsync(10);
+      expect(detectionPaused()).toBe(true);     // the count photo holds MediaPipe / live video meanwhile
+      expect(toolCaptureBusy()).toBe(true);
+      await vi.advanceTimersByTimeAsync(ENCODE_TIMEOUT_MS);
+      const f = await p;
+      expect(f.jpeg).toBe("CANVAS");
+      expect(canvasEnc).toHaveBeenCalledTimes(1);
+      expect(encodedInWorker(f)).toBe(false);
+      expect(detectionPaused()).toBe(false);    // released: live video and MediaPipe resume
+      expect(toolCaptureBusy()).toBe(false);
+      expect(real.dead && real.timedOut).toBe(true);
+      expect(stuck.terminated).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("a frame grab that never resolves is bounded too: canvas fallback, holds released", async () => {
+    vi.useFakeTimers();
+    try {
+      grab.mockImplementationOnce(() => new Promise(() => {}));
+      const p = captureFrame("ask");
+      await vi.advanceTimersByTimeAsync(ENCODE_TIMEOUT_MS + 10);
+      expect((await p).jpeg).toBe("CANVAS");
+      expect(worker.calls).toHaveLength(0);
+      expect(detectionPaused()).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("MediaPipe and background frames pause while a tool photo is captured, not for guide frames", async () => {

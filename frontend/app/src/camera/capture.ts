@@ -8,7 +8,8 @@ import { toGray, qualityHint, noteFrameQuality } from "./quality";
 import { overrideSource } from "./source";
 import { ensureBackCamera, type BackCameraResult, type CameraFacing } from "./backCamera";
 import { beginLooking } from "./looking";
-import { EncodeFailure, sharedWorkerEncoder, type GrabbedFrame, type WorkerEncoder } from "./encode";
+import { ENCODE_TIMEOUT_MS, EncodeFailure, sharedWorkerEncoder, type GrabbedFrame, type WorkerEncoder } from "./encode";
+import { BACKGROUND_MAX_BUFFERED as BG_CAP, micBackedUp, waitForDrain } from "../net/sendPriority";
 
 export type FrameMsg = Extract<ClientMsg, { t: "frame" }>;
 export type CameraErrorCode = "permission" | "no_frame" | "no_canvas" | "too_large";
@@ -20,8 +21,9 @@ export const MAX_B64 = 1_500_000;
 export const PREVIEW_MAX_SIDE = 360;
 export const PREVIEW_QUALITY = 0.45;
 /** A preview or describe tick is skipped while more than this many bytes wait on the socket: background frames
- *  are never queued, so at most one sits ahead of an owner frame on a slow uplink. */
-export const PREVIEW_MAX_BUFFERED = 32_000;
+ *  are never queued, so at most one sits ahead of an owner frame on a slow uplink. The lowest cap of all
+ *  (net/sendPriority): mic audio, tool frames and the live video all go before them. */
+export const PREVIEW_MAX_BUFFERED = BG_CAP;
 export const BACKGROUND_MAX_BUFFERED = PREVIEW_MAX_BUFFERED;
 
 /** The owner's own camera questions (ask, count, identify, point): full detail, so ER 2 can count packs. */
@@ -312,6 +314,18 @@ export async function captureFrame(purpose: FramePurpose): Promise<FrameMsg> {
   return (await captureFrameIf(purpose)) as FrameMsg; // without a keep gate every frame is returned
 }
 
+/**
+ * A frame the server asked for (single or burst request), ready to hand to the socket: captured at once, then held
+ * until the socket backlog is below TOOL_SEND_BUFFERED, at most TOOL_DRAIN_MAX_MS (net/sendPriority). The owner's
+ * mic audio keeps flowing during the wait, and the frame never lands on top of a backlog it would only lengthen.
+ */
+export async function captureToolFrame(purpose: FramePurpose): Promise<FrameMsg> {
+  const f = await captureFrame(purpose);
+  const r = await waitForDrain(socketBuffered);
+  if (r.waitedMs > 0) clientLog("tool_drain", { purpose, waitedMs: Math.round(r.waitedMs), drained: r.drained }, { minGapMs: 1000 });
+  return f;
+}
+
 /** Like captureFrame, but returns null (without encoding) when `keep` says the frame is not worth sending. */
 export async function captureFrameIf(purpose: FramePurpose, keep?: FrameKeep): Promise<FrameMsg | null> {
   if (purpose === "live") {
@@ -359,11 +373,14 @@ async function captureFrameRaw(purpose: FramePurpose, keep?: FrameKeep): Promise
   if (worker && !worker.dead) {
     let out: { jpeg: string; gray: Float32Array | null } | null = null;
     try {
-      const frame = await src.grab!();
+      // The grab is bounded too: a camera that never hands over a frame must not hold the capture (and with it
+      // the tool holds that pause live video and MediaPipe) forever. The encode itself times out in the encoder.
+      const frame = await grabWithin(src.grab!, ENCODE_TIMEOUT_MS);
       out = await worker.encode(frame, w, h, { quality: spec.quality, retryQuality, maxB64: MAX_B64, gray: checkQuality || !!keep });
     } catch (e) {
       if (e instanceof EncodeFailure && e.code === "too_large") throw new CameraError("too_large");
-      out = null;
+      if (e instanceof EncodeFailure && e.code === "timeout") clientLog("encode_timeout", { purpose, w, h }, { minGapMs: 2000 });
+      out = null; // this frame goes the canvas way below
     }
     if (out) {
       const quality = out.gray ? checkFrame(out.gray, w, h, checkQuality) : "skipped";
@@ -385,6 +402,28 @@ async function captureFrameRaw(purpose: FramePurpose, keep?: FrameKeep): Promise
   if (jpeg.length > MAX_B64) jpeg = await deps.encoder(canvas, retryQuality);
   if (jpeg.length > MAX_B64) throw new CameraError("too_large");
   return finish(purpose, jpeg, w, h, quality, demo !== null, false);
+}
+
+/** Resolves the grabbed frame, or rejects with EncodeFailure("timeout") after `ms`; a frame arriving late is closed. */
+function grabWithin(grab: () => Promise<GrabbedFrame>, ms: number): Promise<GrabbedFrame> {
+  return new Promise((resolve, reject) => {
+    let done = false;
+    const t = setTimeout(() => { done = true; reject(new EncodeFailure("timeout")); }, ms);
+    grab().then(
+      (f) => {
+        if (done) { try { f.close(); } catch { /* ignore */ } return; }
+        done = true;
+        clearTimeout(t);
+        resolve(f);
+      },
+      (e: unknown) => {
+        if (done) return;
+        done = true;
+        clearTimeout(t);
+        reject(e);
+      },
+    );
+  });
 }
 
 /** The quality hint for a tool frame's gray copy (every 3rd frame), told to the hint listener. */
@@ -426,10 +465,16 @@ export function probeGrid(gw = 32, gh = 24): Float32Array | null {
   }
 }
 
-/** True while the socket still holds more than BACKGROUND_MAX_BUFFERED bytes it could not hand to the network. */
+const socketBuffered = (): number => {
+  try { return app.socket?.bufferedAmount?.() ?? 0; } catch { return 0; }
+};
+
+/** True while the socket still holds more than BACKGROUND_MAX_BUFFERED bytes it could not hand to the network,
+ *  or while the owner's mic audio is backed up on it (background frames yield to speech). */
 export function socketBusy(): boolean {
   try {
-    return (app.socket?.bufferedAmount?.() ?? 0) > BACKGROUND_MAX_BUFFERED;
+    if (micBackedUp()) return true;
+    return socketBuffered() > BACKGROUND_MAX_BUFFERED;
   } catch {
     return false;
   }
@@ -453,6 +498,10 @@ export function startContinuous(purpose: FramePurpose, fps: number, keep?: Frame
     busy = true;
     try {
       const f = await captureFrameIf(purpose, keep);
+      // A continuous tool stream (walk, guide, identify...) never piles frames onto a backed-up socket: it waits,
+      // bounded by TOOL_DRAIN_MAX_MS, for the buffer to drain (mic audio keeps flowing meanwhile), then sends.
+      // `busy` stays set, so no second capture starts while it waits.
+      if (f && !stopped && !pausable && isToolPurpose(purpose)) await waitForDrain(socketBuffered);
       if (f && !stopped && !(pausable && (detectionPaused() || liveCaptureBusy())) && !(dropWhenBusy && socketBusy())) app.send(f);
     } catch {
       // Camera errors are surfaced by the request handler and the hint speaker.

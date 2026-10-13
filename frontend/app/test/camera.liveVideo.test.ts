@@ -107,6 +107,29 @@ describe("startLiveVideo", () => {
     stop();
   });
 
+  it("yields to the owner's mic: no live frame while the mic is backed up, and one overtaken by it is dropped", async () => {
+    let mic = true;
+    const { sent, st, deps, logs } = harness({ micBusy: () => mic });
+    const stop = startLiveVideo(deps);
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(sent).toEqual([]);
+    expect(st.captures).toBe(0);                 // not even encoded: the CPU and the socket go to speech
+    mic = false;
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(sent.length).toBe(1);
+    // the mic backs up while a live frame is being made: that frame is dropped ("late")
+    (deps.capture as ReturnType<typeof vi.fn>).mockImplementationOnce(async () => {
+      mic = true;
+      return { t: "frame", id: "lx", jpeg: "AAAA", w: 768, h: 432, ts: 9, purpose: "live" } as FrameMsg;
+    });
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(sent.length).toBe(1);
+    stop();
+    const s = logs.find((l) => l.tag === "live_stats")!.data as { skipped: Record<string, number> };
+    expect(s.skipped.mic).toBeGreaterThanOrEqual(2);
+    expect(s.skipped.late).toBe(1);
+  });
+
   it("skips a tick while the socket is backpressured", async () => {
     const { sent, st, deps } = harness();
     st.buffered = LIVE_MAX_BUFFERED + 1;

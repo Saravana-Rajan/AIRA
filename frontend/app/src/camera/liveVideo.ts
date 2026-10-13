@@ -22,14 +22,15 @@
 import type { ClientMsg } from "@aira/contracts";
 import type { FrameKeep, FrameMsg } from "./capture";
 import { coarseGray, meanAbsDiff } from "./sceneGate";
+import { LIVE_MAX_BUFFERED } from "../net/sendPriority";
 import type { Box } from "../guidance/geometry";
 import { candidateOf, isCentral, HAND_LABEL, MIN_HAND_AREA } from "../ambient/holdUp";
 
 export const LIVE_FPS = 1;
 /** Bytes waiting on the socket above which a live tick is skipped (and a finished live frame dropped). Above the
- *  background cap (preview / describe stop at 32 KB), so they can never starve the live video, and about one live
- *  frame (~60 KB) on top of that: an owner's tool frame never waits behind a backlog of video. */
-export const LIVE_MAX_BUFFERED = 96_000;
+ *  background cap (preview / describe), so they can never starve the live video, and far enough under the mic's cap
+ *  that one live frame (~60 KB) sent here never makes the owner's speech drop (net/sendPriority). */
+export { LIVE_MAX_BUFFERED } from "../net/sendPriority";
 /** Mean absolute luma difference (0-255, 32x24 grid) from the settled view that counts as a new scene. */
 export const CHANGE_THRESHOLD = 14;
 /** ...and the most two probe samples (~200 ms apart) may differ for the view to count as steady. Generous enough
@@ -194,7 +195,7 @@ export function readScene(objects: readonly SeenObject[], hand: Box | null): { c
   return { centred, held, labels: labels.slice(0, MAX_LABELS) };
 }
 
-export type SkipReason = "hidden" | "inactive" | "camera" | "tool" | "buffered" | "busy" | "late" | "quiet" | "error";
+export type SkipReason = "hidden" | "inactive" | "camera" | "tool" | "mic" | "buffered" | "busy" | "late" | "quiet" | "error";
 
 export interface LiveVideoDeps {
   /** captureFrameIf("live", keep): the gate sees the gray frame and always keeps it. */
@@ -207,6 +208,8 @@ export interface LiveVideoDeps {
   /** Bytes waiting on the socket. */
   buffered: () => number;
   toolBusy: () => boolean;
+  /** The owner's mic audio is backed up on the socket: video yields to it (net/sendPriority micBackedUp). */
+  micBusy?: () => boolean;
   toolCount: () => number;
   /** The phone's current MediaPipe object boxes (fresh only). */
   objects: () => readonly SeenObject[];
@@ -256,6 +259,7 @@ export function startLiveVideo(deps: LiveVideoDeps): () => void {
     if (!deps.active()) return "inactive";
     if (!deps.cameraOn()) return "camera";
     if (deps.toolBusy()) return "tool";
+    if (deps.micBusy?.()) return "mic";
     if (deps.buffered() > LIVE_MAX_BUFFERED) return "buffered";
     return null;
   };
@@ -276,8 +280,8 @@ export function startLiveVideo(deps: LiveVideoDeps): () => void {
     try {
       const f = await deps.capture((gray, w, h) => { if (feedTick) grid = coarseGray(gray, w, h); return true; });
       if (!f || stopped) return;
-      // A tool frame started meanwhile, or the socket filled up: the tool frame goes first, this one never.
-      if (deps.toolCount() !== seq || deps.toolBusy() || deps.hidden() || deps.buffered() > LIVE_MAX_BUFFERED) {
+      // A tool frame started meanwhile, the mic backed up, or the socket filled up: they go first, this one never.
+      if (deps.toolCount() !== seq || deps.toolBusy() || deps.hidden() || deps.micBusy?.() || deps.buffered() > LIVE_MAX_BUFFERED) {
         skipped("late");
         if (change) queued = null; // the change is stale by the time the tool is done
         return;
