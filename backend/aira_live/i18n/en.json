@@ -80,6 +80,8 @@
   "cam.not_sure": "Not sure.",
   "cam.count": "I can see {n}.",
   "cam.count_label": "I can see {n} {label}.",
+  "cam.count_about": "About {n}.",
+  "cam.count_about_label": "About {n} {label}.",
   "cam.count_unsure": "Not sure of the count. Hold the camera still, or step back a little.",
   "cam.where": "The {label} is {side}, {dist}.",
   "cam.obstacle": "There is a {label} {side}, {dist}. Go around it slowly.",

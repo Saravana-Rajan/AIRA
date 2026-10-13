@@ -316,6 +316,23 @@ def _usable(r: CountResult | None) -> bool:
     return r is not None and r.count is not None and r.confidence >= MIN_CONF
 
 
+# A full shelf (more than SMALL_COUNT packs) is never counted exactly twice in a row: packs overlap and the two
+# reads differ by a few. Two reads within ABOUT_TOLERANCE of each other give "about N" (the word is spoken, so it
+# is never passed off as exact); reads further apart, or with confidence below ABOUT_MIN_CONF, stay "not sure".
+SMALL_COUNT = 10
+ABOUT_MIN_CONF = 0.3
+ABOUT_TOLERANCE = 0.08
+
+
+def _about(a: CountResult | None, b: CountResult | None) -> int | None:
+    if any(r is None or r.count is None or r.confidence < ABOUT_MIN_CONF for r in (a, b)):
+        return None
+    hi = max(a.count, b.count)
+    if hi <= SMALL_COUNT or abs(a.count - b.count) > max(2, round(ABOUT_TOLERANCE * hi)):
+        return None
+    return round((a.count + b.count) / 2)
+
+
 async def _count(s: Session, question: str) -> dict:
     """Two frames counted in parallel; a number only when they agree. Off by one: a third read on the newest
     frame breaks the tie. Anything else is "not sure" plus how to hold the camera. Never an invented count."""
@@ -334,7 +351,10 @@ async def _count(s: Session, question: str) -> dict:
     reads: list[CountResult | None] = list(await asyncio.gather(*(_count_one(f, tgt) for f in pair)))
     n: int | None = None
     a, b = reads
-    if _usable(a) and _usable(b):
+    approx = _about(a, b)
+    if approx is not None:
+        n = approx
+    elif _usable(a) and _usable(b):
         if a.count == b.count:
             n = a.count
         elif abs(a.count - b.count) == 1:
@@ -348,7 +368,8 @@ async def _count(s: Session, question: str) -> dict:
     diag("camera_ask", stage="count", session=s.session_id, kind="count", frames=len(frames),
          counts=[r.count if r else None for r in reads], confidences=[r.confidence if r else None for r in reads],
          hints=[r.aim_hint if r else None for r in reads], models=[r.model if r else None for r in reads],
-         agreed=n is not None, third=len(reads) > 2, product_filter=tgt.product is not None, ms=ms)
+         agreed=n is not None, approx=approx is not None, third=len(reads) > 2,
+         product_filter=tgt.product is not None, ms=ms)
     shown = next((r for r in reversed(reads) if r is not None and r.count is not None), None)
     if shown is not None:
         await listing.publish_boxes(s, shown.objects, "camera_ask:count", frame_id=pair[-1].id)
@@ -360,10 +381,11 @@ async def _count(s: Session, question: str) -> dict:
             say = f"{say} {t(hint, s.lang)}"
         return {"say": say, "answer": "", "kind": "count", "count": None, "agreed": False,
                 "objects": [], "confidence": conf, "aim_hint": hint}
-    say = (t("cam.count_label", s.lang, n=n, label=tgt.phrase) if tgt.phrase else t("cam.count", s.lang, n=n))
+    key = "cam.count_about" if approx is not None else "cam.count"
+    say = (t(f"{key}_label", s.lang, n=n, label=tgt.phrase) if tgt.phrase else t(key, s.lang, n=n))
     if hint:
         say = f"{say} {t(hint, s.lang)}"
-    return {"say": say, "answer": say, "kind": "count", "count": n, "agreed": True,
+    return {"say": say, "answer": say, "kind": "count", "count": n, "agreed": True, "approx": approx is not None,
             "objects": shown.objects if shown else [], "confidence": conf}
 
 

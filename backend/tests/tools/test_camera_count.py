@@ -285,3 +285,38 @@ async def test_describe_frames_pause_on_the_phone_during_a_question(session, mon
         await describe.stop_describe(s)
         sessions.unregister(s)
         describe._ACTIVE.clear()
+
+
+# --- a full shelf: close reads give an "about" count -----------------------------------------------------------
+
+
+async def test_a_full_shelf_with_close_reads_says_about_the_rounded_mean(session, monkeypatch):
+    _counter(monkeypatch, _res(57, conf=0.45, hint="vision.aim.spread_out"), _res(60, conf=0.4, hint="vision.aim.spread_out"))
+    out = await camera.camera_ask("how many curd packets are there?")
+    assert out["count"] == 58 and out["agreed"] is True and out.get("approx") is True
+    assert out["say"].startswith(t("cam.count_about_label", "en", n=58, label="curd packets"))
+
+
+async def test_a_full_shelf_cut_at_the_edge_says_about_and_asks_to_step_back(session, monkeypatch):
+    _counter(monkeypatch, _res(40, conf=0.6, hint="vision.aim.move_back"), _res(41, conf=0.6, hint="vision.aim.move_back"))
+    out = await camera.camera_ask("how many curd packets?")
+    assert out["count"] == 40 or out["count"] == 41
+    assert t("vision.aim.move_back", "en") in out["say"]
+
+
+async def test_a_full_shelf_with_far_apart_reads_is_still_not_sure(session, monkeypatch):
+    _counter(monkeypatch, _res(40, conf=0.6), _res(60, conf=0.6))
+    out = await camera.camera_ask("how many curd packets?")
+    assert out["count"] is None and not any(ch.isdigit() for ch in out["say"])
+
+
+async def test_a_full_shelf_with_very_low_confidence_is_not_sure(session, monkeypatch):
+    _counter(monkeypatch, _res(50, conf=0.1), _res(50, conf=0.1))
+    out = await camera.camera_ask("how many curd packets?")
+    assert out["count"] is None
+
+
+def test_about_keys_exist_in_every_language():
+    for lang in ("en", "ta", "hi"):
+        for key in ("cam.count_about", "cam.count_about_label"):
+            assert t(key, lang) != key and "{n}" not in t(key, lang, n=5, label="x")

@@ -80,6 +80,8 @@
   "cam.not_sure": "पक्का नहीं है।",
   "cam.count": "{n} दिख रहे हैं।",
   "cam.count_label": "{label}: {n} दिख रहे हैं।",
+  "cam.count_about": "लगभग {n} दिख रहे हैं।",
+  "cam.count_about_label": "{label}: लगभग {n} दिख रहे हैं।",
   "cam.count_unsure": "गिनती पक्की नहीं है। कैमरा स्थिर रखें, या थोड़ा पीछे हटें।",
   "cam.where": "{label} {side}, {dist} है।",
   "cam.obstacle": "{side}, {dist} एक {label} है। धीरे से बचकर जाइए।",
