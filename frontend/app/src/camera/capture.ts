@@ -17,13 +17,20 @@ export const MAX_B64 = 1_500_000;
 /** The monitor preview (purpose `preview`): a small, light picture 8 times a second, never seen by Gemini. */
 export const PREVIEW_MAX_SIDE = 360;
 export const PREVIEW_QUALITY = 0.45;
-/** A preview tick is skipped while more than this many bytes wait on the socket: a stale picture is never sent. */
+/** A preview or describe tick is skipped while more than this many bytes wait on the socket: background frames
+ *  are never queued, so at most one sits ahead of an owner frame on a slow uplink. */
 export const PREVIEW_MAX_BUFFERED = 32_000;
+export const BACKGROUND_MAX_BUFFERED = PREVIEW_MAX_BUFFERED;
 
 /** The owner's own camera questions (ask, count, identify, point): full detail, so ER 2 can count packs. */
 export const PRIORITY_MAX_SIDE = 1280;
 export const PRIORITY_QUALITY = 0.9;
 const PRIORITY: ReadonlySet<FramePurpose> = new Set<FramePurpose>(["ask", "count", "identify", "point"]);
+/** Count frames keep the 1280 px detail but encode lighter (about 120 KB instead of 230 KB): two of them must
+ *  cross a congested phone uplink inside the server's wait. */
+export const COUNT_QUALITY = 0.75;
+/** Tool frame requests that pause live, describe and preview frames until they are sent. */
+const HOLDS: ReadonlySet<FramePurpose> = new Set<FramePurpose>([...PRIORITY, "walk"]);
 /** Walk with me (purpose `walk`, about 1 a second): enough detail for ER to see the target and floor obstacles. */
 export const WALK_MAX_SIDE = 1024;
 export const WALK_QUALITY = 0.75;
@@ -33,6 +40,11 @@ const PAUSABLE: ReadonlySet<FramePurpose> = new Set<FramePurpose>(["describe", "
 export function isPriorityPurpose(purpose: FramePurpose): boolean {
   return PRIORITY.has(purpose);
 }
+
+/** True for a tool frame request (ask, count, identify, point, walk) that holds background frames. */
+export function holdsBackground(purpose: FramePurpose): boolean {
+  return HOLDS.has(purpose);
+}
 /** Gemini Live video (purpose `live`): one frame a second, 768 px long side, quality 0.7 (Live API guidance). */
 export const LIVE_MAX_SIDE = 768;
 export const LIVE_QUALITY = 0.7;
@@ -40,6 +52,7 @@ export const LIVE_QUALITY = 0.7;
 /** How big and how good a frame of this purpose is. */
 export function frameSpec(purpose: FramePurpose): { maxSide: number; quality: number } {
   if (purpose === "preview") return { maxSide: PREVIEW_MAX_SIDE, quality: PREVIEW_QUALITY };
+  if (purpose === "count") return { maxSide: PRIORITY_MAX_SIDE, quality: COUNT_QUALITY };
   if (PRIORITY.has(purpose)) return { maxSide: PRIORITY_MAX_SIDE, quality: PRIORITY_QUALITY };
   if (purpose === "live") return { maxSide: LIVE_MAX_SIDE, quality: LIVE_QUALITY };
   if (purpose === "walk") return { maxSide: WALK_MAX_SIDE, quality: WALK_QUALITY };
@@ -291,10 +304,10 @@ async function captureFrameRaw(purpose: FramePurpose, keep?: FrameKeep): Promise
   return { t: "frame", id: nextId(), jpeg, w, h, ts: Date.now(), purpose };
 }
 
-/** True while the socket still holds more than PREVIEW_MAX_BUFFERED bytes it could not hand to the network. */
+/** True while the socket still holds more than BACKGROUND_MAX_BUFFERED bytes it could not hand to the network. */
 export function socketBusy(): boolean {
   try {
-    return (app.socket?.bufferedAmount?.() ?? 0) > PREVIEW_MAX_BUFFERED;
+    return (app.socket?.bufferedAmount?.() ?? 0) > BACKGROUND_MAX_BUFFERED;
   } catch {
     return false;
   }
@@ -302,11 +315,12 @@ export function socketBusy(): boolean {
 
 /** Sends frames via app.send at `fps` until the returned stop fn is called. Never overlaps captures.
  *  With `keep` (describe mode), a frame the gate refuses is dropped without being encoded or sent.
- *  A preview frame is sent the moment it is encoded, and dropped (not queued) while the socket is busy. */
+ *  A preview or describe frame is sent the moment it is encoded, and dropped (never queued) while the socket is
+ *  busy: on a slow uplink a queued background frame would sit ahead of the owner's next tool frame. */
 export function startContinuous(purpose: FramePurpose, fps: number, keep?: FrameKeep): () => void {
   const period = Math.max(100, Math.round(1000 / Math.max(0.1, fps)));
-  const dropWhenBusy = purpose === "preview";
   const pausable = PAUSABLE.has(purpose);
+  const dropWhenBusy = pausable;
   let stopped = false;
   let busy = false;
   const tick = async () => {

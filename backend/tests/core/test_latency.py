@@ -189,7 +189,7 @@ async def test_camera_count_never_reuses_a_frame(mk_session, monkeypatch):
     monkeypatch.setattr(s, "request_frames", fake_frames)
     token = current_session.set(s)
     try:
-        await camera.camera_ask("how many milk packets are there?")
+        await camera.camera_ask("how many milk packets are there?", kind="count", item="milk packet")
     finally:
         current_session.reset(token)
     assert asked == [("count", camera.COUNT_FRAMES)]
@@ -251,7 +251,7 @@ async def test_label_read_runs_both_models_at_once(monkeypatch):
         return {"text": "Full cream milk", "confidence": 0.9}
 
     monkeypatch.setattr(camera, "generate_json", fake)
-    out = await camera._read_twice("eHh4eA==", "en")
+    out = await camera._read_twice("eHh4eA==")
     assert peak[0] == 2 and out["agreed"] is True
 
 

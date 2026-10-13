@@ -6,12 +6,14 @@ A new look starts every second (up to two in flight: ER takes 2-6 s) at the newe
 Robotics-ER (``vision.walk.look``); only the newest finished look is acted on. Each look, turns the look into ONE short
 instruction in code (``vision.walk.decide``) and says it only when it changes, or every 4 s as a reassurance.
 Safety lines ("Stop. Step in front.") go at once, and the phone's own MediaPipe boxes (5 a second) can say
-"Stop." before ER answers. The walk ends when he arrives, says stop, after 90 s, or after
+"Stop." before ER answers. The walk ends when he arrives, when the Live model calls ``walk_stop`` (he asked to
+stop in any language: the model decides, no word list here), on the phone's long-press stop, after 90 s, or after
 three ticks in a row without a usable look ("I can't see well. Please stop and wait.").
 """
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import re
 import time
@@ -19,8 +21,6 @@ from collections.abc import Awaitable, Callable
 
 from aira_live.contracts import CueMsg, RequestFrameMsg, TranscriptMsg
 from aira_live.diag import diag
-from aira_live.i18n import t
-from aira_live.live_bridge import on_input_transcript
 from aira_live.session import Session, get_session, notice_key
 from aira_live.vision import walk as vwalk
 from aira_live.vision.gemini import VisionError
@@ -36,14 +36,47 @@ MEMORY_TIMEOUT_S = 1.5
 MAX_IN_FLIGHT = 2        # ER looks running at once (each takes 2-6 s; a new one starts every second)
 FAST_STOP_GAP_S = 3.0
 
-_STOP = re.compile(r"(\b(stop|halt|enough|cancel)\b|நில்|நிறுத்து|போதும்|रुको|रुक जा|बस|बंद करो|ठहरो)", re.I)
 _ACTIVE: dict[str, "WalkLoop"] = {}
 
 Look = Callable[..., Awaitable[vwalk.WalkView]]
 
 
-def is_stop(text: str) -> bool:
-    return bool(text) and _STOP.search(text) is not None
+def walk_facts(ins: vwalk.Instruction, view: vwalk.WalkView, target: str,
+               search: vwalk.Search | None = None) -> dict:
+    """The instruction as structured facts, e.g. {"action": "stop", "obstacle": "chair", "move": "left"} or
+    {"action": "go", "direction": "ahead", "steps_about": 3}. Live says them in the owner's language."""
+    key = ins.key
+    near = sorted((o for o in view.obstacles if vwalk.in_corridor(o.box)), key=lambda o: -o.box[2])
+    if key == "walk.hazard":
+        hazard = next((o.label for o in near if o.hazard), near[0].label if near else "")
+        return {"action": "stop", "hazard": hazard}
+    if key == "walk.arrived":
+        return {"action": "arrived", "target": target, "reach": "forward"}
+    if key.startswith("walk.obstacle_"):
+        return {"action": "stop", "obstacle": near[0].label if near else "", "move": key.rsplit("_", 1)[-1]}
+    if key in ("walk.left", "walk.right"):
+        return {"action": "turn", "direction": key.split(".", 1)[1], "target": target}
+    if key == "walk.ahead":
+        return {"action": "go", "direction": "ahead", "steps_about": ins.steps, "target": target}
+    if key == "walk.ahead_slow":
+        return {"action": "go", "direction": "ahead", "slowly": True, "target": target}
+    if key == "walk.not_found":
+        return {"action": "search", "found": False, "target": target, "turn": "around slowly"}
+    if key == "walk.memory":
+        side = (search.memory_side if search else None) or "left"
+        return {"action": "search", "target": target, "last_seen": search.memory_place if search else "",
+                "turn": side}
+    if key.startswith("walk.looking_"):
+        return {"action": "search", "target": target, "turn": key.rsplit("_", 1)[-1]}
+    return {"action": key.split(".", 1)[-1], "target": target}
+
+
+def notice_text(meaning: str, facts: dict | None) -> str:
+    """What goes to Live's notice path: the facts, then the English meaning as a hint. Numbers stay exact."""
+    if not facts:
+        return meaning
+    shown = {k: v for k, v in facts.items() if v not in (None, "")}
+    return f"{json.dumps(shown, ensure_ascii=False)} (meaning: {meaning})"
 
 
 def _bridge_of(s: Session):
@@ -65,7 +98,7 @@ class WalkLoop:
         self.started_at = clock()
         self.last_seen_at = self.started_at
         self.search = vwalk.Search(memory_place=memory_place, memory_side=memory_side)
-        self.speech = vwalk.Speech(session.lang)
+        self.speech = vwalk.Speech("en")     # English meaning only: Live says it in the owner's language
         self.last_ts = 0.0               # newest frame taken (phone clock)
         self.acted_ts = 0.0              # newest frame whose look was acted on
         self.max_in_flight = max_in_flight
@@ -126,18 +159,21 @@ class WalkLoop:
             self.last_seen_at = now
             self.search.last_x = view.target_point[1]
         self.search.lost_s = now - self.last_seen_at
-        ins = vwalk.decide(view, self.target, s.lang, self.search)
+        ins = vwalk.decide(view, self.target, "en", self.search)
         if ins.key == "walk.not_found":
             self.last_seen_at = now      # say it once per 8 s of searching, not every tick
         text = self.speech.pick(ins, now)
+        facts = walk_facts(ins, view, self.target, self.search)
+        if text is not None and text != ins.text:          # the 4 s reassurance of a direction line
+            facts = {"action": "keep_going", "target": self.target}
         diag("walk_tick", session=s.session_id, has_target=view.has_target, n_obstacles=len(view.obstacles),
              key=ins.key, spoke=text is not None, ms=ms)
         await self._publish(view, frame.id)
         if ins.arrived:
-            await self._end("arrived", ins.text, cue="match")
+            await self._end("arrived", ins.text, cue="match", facts=facts)
             return False
         if text is not None:
-            await self._say(text, cue="warn" if ins.urgent else None)
+            await self._say(text, cue="warn" if ins.urgent else None, facts=facts)
         return self.active
 
     async def _failed(self, why: str, ms: int = 0) -> bool:
@@ -145,7 +181,8 @@ class WalkLoop:
         diag("walk_tick", session=self.session.session_id, has_target=False, n_obstacles=0, key=f"fail.{why}",
              spoke=False, ms=ms, fails=self.fails)
         if self.fails >= MAX_FAILS:
-            await self._end("blind", t("walk.blind", self.session.lang), cue="warn")
+            await self._end("blind", "I can't see well. Please stop and wait.", cue="warn",
+                            facts={"action": "stop", "reason": "camera_unclear", "wait": True})
             return False
         return self.active
 
@@ -164,7 +201,8 @@ class WalkLoop:
         try:
             while self.active:
                 if self._clock() >= deadline:
-                    await self._end("timeout", t("walk.timeout", self.session.lang), cue="done")
+                    await self._end("timeout", "I stopped guiding. Ask me again when you are ready.", cue="done",
+                                    facts={"action": "guidance_ended", "reason": "timeout"})
                     return
                 inflight = {x for x in inflight if not x.done()}
                 if len(inflight) < self.max_in_flight:
@@ -209,33 +247,30 @@ class WalkLoop:
         self.fast_stop_at = now
         self.speech.last_key, self.speech.last_at = "walk.fast_stop", now   # the next ER line counts as new
         diag("walk_fast_stop", session=self.session.session_id)
-        await self._say(t("walk.hazard", self.session.lang, label=hit), cue="warn")
+        await self._say(f"Stop. {hit} in front.", cue="warn", facts={"action": "stop", "hazard": hit})
         return True
 
-    async def on_utterance(self, text: str) -> None:
-        """"Stop" (any language) ends the walk at once, before the model."""
-        if self.active and is_stop(text):
-            await self._end("stopped", t("walk.stopped", self.session.lang), cue="done")
-
     # ---------- speaking and ending ----------
-    async def _say(self, text: str, cue: str | None = None, fresh: bool = True) -> None:
-        """Caption + earcon + the live voice (the proactive notice path). ``fresh``: a safety line or a repeat
-        is said again even when the bridge said the same words a few seconds ago (``Speech`` already limits
-        repeats to one per 4 s)."""
+    async def _say(self, text: str, cue: str | None = None, fresh: bool = True, facts: dict | None = None) -> None:
+        """Caption + earcon + the live voice (the proactive notice path). ``text`` is the English meaning and
+        ``facts`` the structured instruction; Live says it in the language the owner is speaking. ``fresh``: a
+        safety line or a repeat is said again even when the bridge said the same words a few seconds ago
+        (``Speech`` already limits repeats to one per 4 s)."""
         s = self.session
+        notice = notice_text(text, facts)
         try:
-            await s.send(TranscriptMsg(role="aira", text=text, final=True, lang=s.lang))
+            await s.send(TranscriptMsg(role="aira", text=text, final=True, lang="en"))
             if cue:
                 await s.send(CueMsg(cue=cue))
             bridge = _bridge_of(s)
             if bridge is not None:
                 if fresh:
-                    getattr(bridge, "_notices", {}).pop(notice_key(text), None)
-                await bridge.speak_notice(text)
+                    getattr(bridge, "_notices", {}).pop(notice_key(notice), None)
+                await bridge.speak_notice(notice)
         except Exception:
             log.warning("walk: session %s unreachable", s.session_id, exc_info=True)
 
-    async def _end(self, why: str, text: str | None, cue: str = "done") -> bool:
+    async def _end(self, why: str, text: str | None, cue: str = "done", facts: dict | None = None) -> bool:
         """End the walk once: unregister, say the last line, then stop the frames and the loop (the line goes
         before the loop is cancelled, so a look that ends the walk is never cut off mid-sentence)."""
         if not self.active:
@@ -247,7 +282,7 @@ class WalkLoop:
             del _ACTIVE[sid]
         diag("walk_end", session=sid, why=why, s=round(self._clock() - self.started_at, 1))
         if text:
-            await self._say(text, cue=cue)
+            await self._say(text, cue=cue, facts=facts)
         await self._cleanup()
         return True
 
@@ -295,7 +330,7 @@ async def remembered_place(session: Session, target: str) -> tuple[str | None, s
     if side is None:
         low = sighting.place.casefold()
         side = "left" if "left" in low else "right" if "right" in low else None
-    return items.speak_place(sighting, session.lang), side
+    return items.speak_place(sighting, "en"), side   # English facts: Live says them in the owner's language
 
 
 # --- start / stop ----------------------------------------------------------------------------------------------------
@@ -309,7 +344,6 @@ async def start(session: Session, target: str, run: bool = True, **kw) -> WalkLo
     loop = WalkLoop(session, target, **kw)
     await session.send(RequestFrameMsg(purpose=PURPOSE, continuous=True))
     _ACTIVE[session.session_id] = loop
-    loop._unsubscribe = on_input_transcript(session.session_id, loop.on_utterance)
     if run:
         loop.task = asyncio.create_task(loop.run(), name=f"walk-{session.session_id}")
     diag("walk_start", session=session.session_id, memory=kw.get("memory_place") is not None)
@@ -355,17 +389,23 @@ async def walk_to(target: str) -> dict:
     to the door"). target: what to reach, in short English ("fridge", "curd shelf", "door"). The system then
     says each next step by itself ("Fridge ahead, about 3 steps", "Stop. Chair in front. Move a little left.")
     until he arrives or says stop. While he walks, do not talk and do not call camera_ask: the system guides.
+    The result is facts with a short English say_en meaning hint. Say the result to the owner in the language
+    he is speaking; say numbers exactly as given; if approx is true say 'about'.
     """
     s: Session = get_session()
     name = re.sub(r"\s+", " ", target or "").strip()[:40]
     if not name:
-        return {"say": t("walk.which", s.lang), "active": False}
+        return {"active": False, "reason": "no_target", "ask": "where to go", "say_en": "Where do you want to go?"}
     await start(s, name)
-    return {"say": t("walk.start", s.lang, name=name), "active": True, "target": name}
+    return {"active": True, "target": name, "action": "walk_slowly",
+            "say_en": f"Okay. Walk slowly. I will guide you to the {name}."}
 
 
 async def walk_stop() -> dict:
-    """Stop walking guidance: "stop", "I'm here", "that's enough", "stop guiding me"."""
+    """Stop walking guidance at once. Call it the moment the owner wants to stop, wait, or has had enough while
+    walking, in ANY language ("stop", "wait", "I'm here", "that's enough", "நில்லு", "போதும்", "रुको", "बस").
+    Nothing else stops the walk by voice: only this call. Say the result to the owner in the language he is
+    speaking."""
     s: Session = get_session()
     was = await stop_walk(s)
-    return {"say": t("walk.stopped", s.lang), "was_active": was}
+    return {"stopped": True, "was_active": was, "say_en": "Okay, stopped."}

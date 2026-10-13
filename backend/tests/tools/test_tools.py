@@ -19,7 +19,7 @@ EXPECTED = {
     "sale_pay": ["sale_id", "method"],
     "stock_query": ["product"], "expiry_check": [],
     "product_find": ["product", "count_needed"], "product_identify": [], "location_remember": ["product", "zone"],
-    "camera_ask": ["question"], "describe_mode": ["on"],
+    "camera_ask": ["question", "kind", "item", "product"], "describe_mode": ["on"],
     "memory_where": ["item"], "memory_forget": ["item"], "memory_remembering": ["on", "item"],
     "day_summary": [], "reorder_suggest": ["product"], "confirm_action": ["confirm_id", "answer"],
     "web_search": ["query"],  # Google Search grounding for current facts (tools/search.py)
@@ -42,6 +42,7 @@ OPTIONAL_DEFAULTS = {
     ("product_update", "supplier_id"): None, ("stock_add", "unit"): None,
     ("memory_forget", "item"): None, ("memory_remembering", "item"): None,
     ("price_query", "product"): None, ("price_query", "page"): 0,
+    ("camera_ask", "kind"): "look", ("camera_ask", "item"): "", ("camera_ask", "product"): "",
 }
 
 LITERALS = {
@@ -49,6 +50,7 @@ LITERALS = {
     ("supplier_pay", "method"): ("cash", "upi"), ("sale_pay", "method"): ("cash", "upi"),
     ("confirm_action", "answer"): ("yes", "no"),
     ("supplier_add", "channel"): ("telegram", "call", "whatsapp"),
+    ("camera_ask", "kind"): ("look", "read", "count", "path", "list"),
 }
 
 # Typed sample arguments for each stub. When an owner implements a tool, they remove it from STUBS

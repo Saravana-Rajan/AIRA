@@ -1,9 +1,11 @@
-"""camera_ask: open camera questions answered as guidance for a blind owner, never as a generic description."""
+"""camera_ask: open camera questions answered as facts for a blind owner, never as a generic description.
+
+The Live model decides what is asked (``kind``); the code routes on it and never parses the owner's words.
+Results are English facts (``facts``, ``say_en``); Live says them in the owner's language."""
 import pytest
 
 from aira_live import prompt
 from aira_live.frames import Frame
-from aira_live.i18n import t
 from aira_live.session import current_session
 from aira_live.tools import TOOLS_BY_NAME, camera
 
@@ -71,14 +73,16 @@ async def test_point_on_the_left_and_near_is_spoken_as_guidance(session, monkeyp
         "objects": [{"label": "milk crate", "point": [700, 150], "distance": "near"}],
         "confidence": 0.9,
     })
-    out = await camera.camera_ask("what's in front of me?")
+    out = await camera.camera_ask("what's in front of me?", kind="look")
     assert s.frame_calls == [{"purpose": "ask", "count": 1}]
     assert seen[0]["role"] == "point"
     assert out["confidence"] == 0.9 and out["objects"][0]["point"] == [700, 150]
-    assert "left" in out["say"] and "arm" in out["say"]
-    assert "Reach down with your left hand." in out["say"]
-    assert out["say"].count(".") <= 3
-    assert "safe" not in out["say"].lower()
+    assert "left" in out["facts"] and "arm" in out["facts"]
+    assert "Reach down with your left hand." in out["facts"]
+    assert out["facts"].count(".") <= 3
+    assert "safe" not in out["facts"].lower()
+    assert out["seen"] == [{"label": "milk crate", "side": "far_left", "distance": "near"}]
+    assert out["sure"] is True and out["say_en"] == out["facts"] and "say" not in out
 
 
 async def test_point_on_the_right_and_far(session, monkeypatch):
@@ -87,7 +91,7 @@ async def test_point_on_the_right_and_far(session, monkeypatch):
         "objects": [{"label": "door", "point": [500, 900], "distance": "far"}], "confidence": 0.8,
     })
     out = await camera.camera_ask("where is the door?")
-    assert "right" in out["say"] and "steps" in out["say"]
+    assert "right" in out["facts"] and "steps" in out["facts"]
 
 
 async def test_point_in_the_centre_uses_centre_word(session, monkeypatch):
@@ -96,7 +100,7 @@ async def test_point_in_the_centre_uses_centre_word(session, monkeypatch):
         "objects": [{"label": "curd shelf", "point": [500, 500], "distance": "arm"}], "confidence": 0.8,
     })
     out = await camera.camera_ask("which shelf has curd?")
-    assert "ahead" in out["say"] and "curd shelf" in out["say"]
+    assert "ahead" in out["facts"] and "curd shelf" in out["facts"]
 
 
 # --- uncertainty -----------------------------------------------------------------------------------------------
@@ -106,8 +110,9 @@ async def test_low_confidence_says_not_sure_and_gives_the_aim_hint(session, monk
     _script(monkeypatch, {"answer": "Maybe a shelf.", "guidance": ["Go forward."], "objects": [],
                           "confidence": 0.2, "aim_hint": "vision.aim.hold_closer"})
     out = await camera.camera_ask("what's this?")
-    assert out["say"] == f"{t('cam.not_sure', 'en')} {t('vision.aim.hold_closer', 'en')}"
-    assert "Maybe" not in out["say"] and out["confidence"] == 0.2
+    assert out["sure"] is False and out["hint"] == "hold_closer" and out["reason"] == "low_confidence"
+    assert out["say_en"] == "Not sure. Hold it closer to the camera."
+    assert "Maybe" not in out["facts"] and out["confidence"] == 0.2
 
 
 async def test_a_confident_answer_with_a_tip_is_still_spoken(session, monkeypatch):
@@ -115,20 +120,20 @@ async def test_a_confident_answer_with_a_tip_is_still_spoken(session, monkeypatc
     _script(monkeypatch, {"answer": "A person is in front of you.", "guidance": ["Hold up the item you want me to see."],
                           "objects": [], "confidence": 0.9, "aim_hint": "vision.aim.show_items"})
     out = await camera.camera_ask("what is in front of the camera?")
-    assert out["say"] == "A person is in front of you. Hold up the item you want me to see."
+    assert out["facts"] == "A person is in front of you. Hold up the item you want me to see."
 
 
 async def test_a_confident_reply_with_nothing_to_say_is_still_not_sure(session, monkeypatch):
     _script(monkeypatch, {"answer": "", "guidance": [], "objects": [], "confidence": 0.9,
                           "aim_hint": "vision.aim.hold_closer"})
     out = await camera.camera_ask("what's this?")
-    assert out["say"] == f"{t('cam.not_sure', 'en')} {t('vision.aim.hold_closer', 'en')}"
+    assert out["sure"] is False and out["hint"] == "hold_closer"
 
 
 async def test_unknown_aim_hint_falls_back_to_show_items(session, monkeypatch):
     _script(monkeypatch, {"answer": "", "guidance": [], "objects": [], "confidence": 0.1, "aim_hint": "bogus"})
     out = await camera.camera_ask("what's around?")
-    assert t("vision.aim.show_items", "en") in out["say"]
+    assert out["hint"] == "show_items" and out["aim_hint"] == "vision.aim.show_items"
 
 
 async def test_no_frame_says_camera_none(session, monkeypatch):
@@ -139,14 +144,14 @@ async def test_no_frame_says_camera_none(session, monkeypatch):
 
     monkeypatch.setattr(s, "request_frames", none)
     out = await camera.camera_ask("what's in front?")
-    assert out["say"] == t("camera.none", "en") and out["confidence"] == 0.0
+    assert out["sure"] is False and out["reason"] == "no_camera_frame" and out["confidence"] == 0.0
 
 
 async def test_vision_failure_is_spoken_not_raised(session, monkeypatch):
     from aira_live.vision.gemini import VisionError
     _script(monkeypatch, VisionError("down"))
     out = await camera.camera_ask("what's in front?")
-    assert out["say"] == t("live.unavailable", "en")
+    assert out["sure"] is False and out["reason"] == "vision_unavailable"
 
 
 # --- reading text ----------------------------------------------------------------------------------------------
@@ -156,18 +161,17 @@ async def test_read_text_twice_and_return_verbatim_when_they_agree(session, monk
     seen = _script(monkeypatch,
                    {"text": "Aavin Milk 500 ml  MRP 28", "confidence": 0.9},
                    {"text": "AAVIN MILK 500 ML MRP 28", "confidence": 0.8})
-    out = await camera.camera_ask("read this label")
+    out = await camera.camera_ask("read this label", kind="read")
     assert [c["role"] for c in seen] == ["read", "verify"]
-    assert out["say"] == "Aavin Milk 500 ml  MRP 28"
+    assert out["text"] == "Aavin Milk 500 ml  MRP 28" and out["verbatim"] is True
     assert out["answer"] == "Aavin Milk 500 ml  MRP 28" and out["kind"] == "read"
 
 
 async def test_read_text_disagreement_says_not_sure(session, monkeypatch):
     _script(monkeypatch, {"text": "MRP 28", "confidence": 0.9}, {"text": "MRP 26", "confidence": 0.9})
-    out = await camera.camera_ask("what does this say?")
-    assert out["say"].startswith(t("cam.not_sure", "en"))
-    assert "28" not in out["say"] and "26" not in out["say"]
-    assert t("vision.aim.show_label", "en") in out["say"]
+    out = await camera.camera_ask("what does this say?", kind="read")
+    assert out["sure"] is False and out["reason"] == "reads_disagree" and out["hint"] == "show_label"
+    assert "28" not in str(out) and "26" not in str(out)
 
 
 # --- safety: path questions ------------------------------------------------------------------------------------
@@ -179,24 +183,26 @@ async def test_path_question_names_the_obstacle_and_its_direction_never_safe(ses
         "answer": "Yes, your path is safe and clear.", "guidance": ["Walk ahead."],
         "objects": [{"label": "crate", "point": [800, 200], "distance": "near"}], "confidence": 0.9,
     })
-    out = await camera.camera_ask("is my path clear?")
+    out = await camera.camera_ask("is my path clear?", kind="path")
     assert s.frame_calls[0]["count"] >= 2                      # a short burst: motion matters on a path
-    assert "crate" in out["say"] and "left" in out["say"]
-    assert "safe" not in out["say"].lower()
+    assert "crate" in out["facts"] and "left" in out["facts"]
+    assert out["obstacle"] == {"label": "crate", "side": "left", "distance": "near"}
+    assert "safe" not in str(out).lower()
     assert out["kind"] == "path"
 
 
 async def test_path_question_with_nothing_seen_still_never_says_safe(session, monkeypatch):
     _script(monkeypatch, {"answer": "All clear, safe to go.", "guidance": [], "objects": [], "confidence": 0.85})
-    out = await camera.camera_ask("can I walk forward?")
-    assert "safe" not in out["say"].lower() and "clear" not in out["say"].lower()
-    assert out["say"] == t("cam.path_nothing", "en")
+    out = await camera.camera_ask("can I walk forward?", kind="path")
+    assert "safe" not in str(out).lower() and "clear" not in str(out).lower()
+    assert out["obstacle"] is None and out["facts"].startswith("Nothing seen in the way")
 
 
-# --- language ----------------------------------------------------------------------------------------------------
+# --- language and routing --------------------------------------------------------------------------------------
 
 
-async def test_reply_follows_the_session_language(mk_session, monkeypatch):
+async def test_facts_are_english_whatever_the_session_language(mk_session, monkeypatch):
+    """Live says the facts in Sam's language: the vision prompt asks for plain English, never a fixed sentence."""
     s, _ = mk_session(lang="ta")
 
     async def fake_frames(purpose, count=1, interval_ms=0, timeout_s=4.0):
@@ -206,18 +212,48 @@ async def test_reply_follows_the_session_language(mk_session, monkeypatch):
     token = current_session.set(s)
     try:
         seen = _script(monkeypatch, {"answer": "", "guidance": [], "objects": [], "confidence": 0.1})
-        out = await camera.camera_ask("என் முன்னால் என்ன இருக்கு?")
-        assert out["say"].startswith(t("cam.not_sure", "ta"))
-        assert "Tamil" in " ".join(p for p in seen[0]["parts"] if isinstance(p, str))
+        out = await camera.camera_ask("என் முன்னால் என்ன இருக்கு?", kind="look")
+        assert out["sure"] is False and out["say_en"].startswith("Not sure.")
+        prompt_text = " ".join(p for p in seen[0]["parts"] if isinstance(p, str))
+        assert "plain English" in prompt_text and "Tamil" not in prompt_text
     finally:
         current_session.reset(token)
 
 
-def test_i18n_keys_exist_in_all_three_languages():
-    for lang in ("en", "ta", "hi"):
-        for key in ("cam.not_sure", "cam.path_nothing", "cam.where", "cam.obstacle", "cam.side.left",
-                    "cam.side.right", "cam.side.centre", "cam.dist.near", "cam.dist.arm", "cam.dist.far"):
-            assert t(key, lang) != key, (key, lang)
+@pytest.mark.parametrize("question", ["read this label", "how many packets?", "is my path clear?",
+                                      "what's in my fridge?", "எத்தனை பாக்கெட்?"])
+async def test_routing_follows_kind_never_the_words(session, monkeypatch, question):
+    """Without a kind (or with an unknown one) every question is a plain look, whatever its words say."""
+    seen = _script(monkeypatch, {"answer": "A shelf.", "guidance": [], "objects": [], "confidence": 0.9},
+                   {"answer": "A shelf.", "guidance": [], "objects": [], "confidence": 0.9})
+    out = await camera.camera_ask(question)
+    assert out["kind"] == "look" and [c["role"] for c in seen] == ["point"]
+    out = await camera.camera_ask(question, kind="bogus")
+    assert out["kind"] == "look"
+
+
+async def test_kind_read_reads_even_for_a_question_without_read_words(session, monkeypatch):
+    seen = _script(monkeypatch, {"text": "MRP 28", "confidence": 0.9}, {"text": "MRP 28", "confidence": 0.9})
+    out = await camera.camera_ask("இது என்ன?", kind="read")
+    assert [c["role"] for c in seen] == ["read", "verify"] and out["text"] == "MRP 28"
+
+
+def test_no_word_list_classifier_is_left():
+    for name in ("classify", "READ_WORDS", "PATH_WORDS", "COUNT_WORDS", "COUNT_EN"):
+        assert not hasattr(camera, name), name
+
+
+def test_kind_is_an_enum_for_live():
+    import inspect
+    import typing
+
+    sig = inspect.signature(camera.camera_ask)
+    assert list(sig.parameters) == ["question", "kind", "item", "product"]
+    kind = typing.get_type_hints(camera.camera_ask)["kind"]
+    assert set(typing.get_args(kind)) == {"look", "read", "count", "path", "list"}
+    assert sig.parameters["kind"].default == "look"
+    doc = " ".join(camera.camera_ask.__doc__.split())
+    assert "in the language he is speaking" in doc and "exactly" in doc and "about" in doc
 
 
 # --- "what's in front of me": describe up to three objects with position, nearest first ------------------------
@@ -233,7 +269,7 @@ async def test_look_describes_up_to_three_objects_nearest_first(session, monkeyp
         "confidence": 0.9,
     })
     out = await camera.camera_ask("what's in front of me?")
-    say = out["say"]
+    say = out["facts"]
     assert say.startswith("The table is straight ahead, within arm's reach.")
     assert say.index("table") < say.index("fridge") < say.index("milk crates")
     assert "door" not in say                                   # at most three objects
@@ -254,7 +290,7 @@ async def test_distance_falls_back_to_the_box_size_and_people_are_dropped(sessio
     out = await camera.camera_ask("what's around?")
     assert [(o["label"], o["distance"]) for o in out["objects"]] == [("table", "near"), ("shelf", "arm"), ("door", "far")]
     assert out["objects"][0]["box"] == [200, 100, 900, 900]
-    assert "man" not in out["say"]
+    assert "man" not in out["facts"]
 
 
 def test_parse_objects_drops_bad_points_boxes_and_safe_labels():

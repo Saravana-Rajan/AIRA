@@ -1,7 +1,7 @@
 """Fridge / shelf listing (spec §4): "what's in my fridge?" lists every visible item grouped by shelf or area.
 
-``camera_ask`` hands a listing question here. The ``point`` model (ER 2, Flash fallback) returns areas with
-items as [y, x] points (0-1000). The result is FACTS: areas (top shelf first) with their items left to right,
+``camera_ask`` hands a listing question here (the Live model calls it with kind="list"). The ``point`` model
+(ER 2, Flash fallback) returns areas with items as [y, x] points (0-1000). The result is FACTS: areas (top shelf first) with their items left to right,
 each with a coarse ``side`` (left / ahead / right) and distance, plus a short English ``say_en``; Gemini Live
 phrases it in the owner's language. Low confidence returns ``unsure`` plus an aim hint and lists nothing;
 nothing visible asks for the shelf. Never a guess.
@@ -37,17 +37,6 @@ DIST_EN = {"near": "within arm's reach", "arm": "at arm's length", "far": "a few
 NONE_EN = "I can't see any products. Show me the shelf."
 NOT_SURE_EN = "Not sure."
 
-# A listing on their own: the owner wants every item named.
-LIST_WORDS = (
-    "what products", "which products", "what items", "which items", "list the", "list what", "list everything",
-    "each product", "every product", "each item", "every item", "what all", "என்னென்ன", "क्या-क्या", "क्या क्या",
-)
-# A container plus an "in / on" question: "what's in my fridge?", "ஃப்ரிட்ஜில் என்ன இருக்கு", "फ्रिज में क्या है".
-# "Which shelf has curd?" names a container but asks where one thing is: that stays a "look" question.
-CONTAINER_WORDS = ("fridge", "freezer", "shelf", "shelves", "rack", "cupboard", "ஃப்ரிட்ஜ", "அலமாரி", "फ्रिज", "शेल्फ")
-CONTENTS_WORDS = ("what's in", "what is in", "whats in", "what's on", "what is on", "whats on", "inside",
-                  "what do you see", "என்ன இருக்கு", "என்ன இருக்கிறது", "என்ன உள்ளது", "क्या है", "क्या रखा", "क्या दिख")
-
 LIST_PROMPT = (
     "You are the eyes of a blind shopkeeper wearing this chest camera. The owner asks: \"{question}\". "
     "List every product or item you can see, grouped by where it is: each shelf of a fridge or rack from top to "
@@ -62,14 +51,6 @@ LIST_SCHEMA = ('{"areas": [{"area": "top|middle|bottom|door|floor|counter|other"
                '"items": [{"label": "<name>", "point": [y, x], '
                '"distance": "near|arm|far"}]}], '
                '"confidence": 0.0, "aim_hint": "<optional key>"}')
-
-
-def is_listing(question: str) -> bool:
-    """True for "what's in my fridge?", "list the products on this shelf", and the same in Tamil or Hindi."""
-    q = (question or "").lower()
-    if any(w in q for w in LIST_WORDS):
-        return True
-    return any(w in q for w in CONTAINER_WORDS) and any(w in q for w in CONTENTS_WORDS)
 
 
 def coarse_side(x: float) -> str:
@@ -219,6 +200,4 @@ async def list_shelf(session, frame_b64: str, question: str) -> dict:
     await observe(session, objects, "camera_list")
     await publish_boxes(session, objects, "camera_list")
     out = {"kind": "list", "areas": areas, "objects": objects, "confidence": conf, "say_en": say_listing(areas)}
-    if not areas:
-        out["aim_hint"] = "vision.aim.show_items"
     return out
