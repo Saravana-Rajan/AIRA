@@ -95,6 +95,55 @@ def register_committer(name: str, fn: Committer) -> None:
     _COMMITTERS[name] = fn
 
 
+# session id -> {confirm_id: made at (monotonic)}: the proposals a long-press Stop cancels. Entries older than
+# the TTL are pruned; a resumed session keeps its id, so its proposals stay cancellable.
+_PENDING: dict[str, dict[str, tuple[str, float]]] = {}  # session id -> {confirm_id: (shop id, made at)}
+
+
+def _remember_pending(session_id: str, shop_id: str, confirm_id: str) -> None:
+    now = time.monotonic()
+    for sid in list(_PENDING):
+        ids = _PENDING[sid]
+        for cid in [c for c, (_, at) in ids.items() if now - at > PROPOSAL_TTL_S]:
+            del ids[cid]
+        if not ids:
+            del _PENDING[sid]
+    _PENDING.setdefault(session_id, {})[confirm_id] = (shop_id, now)
+
+
+def _forget_pending(session_id: str, confirm_id: str) -> None:
+    ids = _PENDING.get(session_id)
+    if ids is not None:
+        ids.pop(confirm_id, None)
+        if not ids:
+            _PENDING.pop(session_id, None)
+
+
+async def cancel_pending(session_id: str) -> int:
+    """Long-press Stop: reject every still-pending proposal of ``session_id``, so no later "yes" commits it
+    (a fresh proposal needs a fresh yes). Returns how many were cancelled; idempotent; never raises."""
+    n = 0
+    for cid, (shop_id, _) in list(_PENDING.pop(session_id, {}).items()):
+        try:
+            st = store()
+            key = (shop_id, cid)
+            lock = _LOCKS.get(key)
+            if lock is None:
+                lock = _LOCKS[key] = asyncio.Lock()
+            async with lock:  # never races a "yes" being resolved right now
+                doc = await st.get(shop_id, cid)
+                if doc is None or doc.get("sessionId") != session_id or doc.get("status", "pending") != "pending":
+                    continue
+                await st.update(shop_id, cid, {"status": "rejected", "resolvedAt": time.time(),
+                                               "result": {"ok": False, "say_en": "Cancelled."}, "cancelledBy": "stop"})
+            n += 1
+        except Exception:
+            log.warning("could not cancel proposal %s on stop", cid, exc_info=True)
+    if n:
+        diag("confirm", action="cancel_on_stop", session=session_id, cancelled=n)
+    return n
+
+
 async def propose(kind: str, prompt: str, payload: dict, committer: str, facts: dict | None = None) -> dict:
     """Store a pending proposal for the current session, show it on the phone, return the facts to confirm.
 
@@ -106,7 +155,12 @@ async def propose(kind: str, prompt: str, payload: dict, committer: str, facts: 
     if committer not in _COMMITTERS:
         raise KeyError(f"no committer registered as {committer!r}")
     s = get_session()
+    from aira_live import tool_runtime  # lazy: tool_runtime is loaded by every tool, confirm only by some
+
+    if tool_runtime.call_is_stale():  # the owner pressed Stop while this tool ran: nothing to confirm
+        return dict(tool_runtime.CANCELLED)
     cid = "cf_" + uuid.uuid4().hex[:10]
+    _remember_pending(s.session_id, s.shop_id, cid)
     await store().put(s.shop_id, cid, {
         "kind": kind, "prompt": prompt, "payload": payload, "committer": committer, "status": "pending",
         "createdAt": time.time(), "sessionId": s.session_id, "uid": s.uid,
@@ -132,8 +186,15 @@ async def resolve(confirm_id: str, answer: Literal["yes", "no"], value: str | No
     lock = _LOCKS.get(key)
     if lock is None:  # no await between the lookup and the insert, so every concurrent resolve shares one lock
         lock = _LOCKS[key] = asyncio.Lock()
-    async with lock:  # concurrent "yes" answers commit exactly once
-        result = await _resolve_locked(s, confirm_id, answer, value)
+    async def locked() -> dict:
+        async with lock:  # concurrent "yes" answers commit exactly once
+            return await _resolve_locked(s, confirm_id, answer, value)
+
+    # Shielded: a long-press Stop cancels the confirm_action tool call, never a commit already under way (the
+    # proposal's status always matches what the committer did).
+    result = await asyncio.shield(locked())
+    if result.get("status") != "pending":
+        _forget_pending(s.session_id, confirm_id)
     diag("confirm", action="resolve", session=s.session_id, shop=s.shop_id, id=confirm_id, answer=answer,
          value=None if value is None else trunc(value), status=result.get("status"), ok=result.get("ok"),
          error=result.get("error"), say=trunc(str(result.get("say_en", ""))))

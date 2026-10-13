@@ -126,7 +126,7 @@ async def test_confirm_flag_on_a_result_that_needs_no_confirmation(monkeypatch, 
     _use_tools(monkeypatch, stock_query)
     assert await call_tool.run(["stock_query", "--confirm", "yes"]) == 0
     captured = capsys.readouterr()
-    assert _lines(captured.out) == [{"say": "Twelve left."}]
+    assert _lines(captured.out) == [{"say": "Twelve left.", "status": "ok", "retryable": False, "message": "Twelve left."}]
     assert "nothing to confirm" in captured.err
 
 
@@ -140,7 +140,7 @@ async def test_preloaded_images_take_the_tools_default_purpose(tmp_path, monkeyp
 
     _use_tools(monkeypatch, product_identify)
     assert await call_tool.run(["product_identify", "--image", str(img)]) == 0
-    assert _lines(capsys.readouterr().out)[-1] == {"say": "ok", "frames": 1}
+    assert _lines(capsys.readouterr().out)[-1] == {"say": "ok", "frames": 1, "status": "ok", "retryable": False, "message": "ok"}
 
 
 async def test_unknown_tool_exits_2_and_lists_the_tools(monkeypatch, capsys):
@@ -179,7 +179,7 @@ def test_main_returns_quietly_on_success_and_exits_with_the_error_code(monkeypat
 
     _use_tools(monkeypatch, day_summary)
     call_tool.main(["day_summary"])  # success: no SystemExit
-    assert _lines(capsys.readouterr().out) == [{"say": "ok"}]
+    assert _lines(capsys.readouterr().out) == [{"say": "ok", "status": "ok", "retryable": False, "message": "ok"}]
     with pytest.raises(SystemExit) as exc:
         call_tool.main(["missing_tool"])
     assert exc.value.code == 2

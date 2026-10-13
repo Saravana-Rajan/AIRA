@@ -144,7 +144,7 @@ async def test_path_results_interrupt_and_others_wait_for_idle(mk_session):
     assert "question" in tool._get_declaration().model_dump_json()
     ctx = SimpleNamespace(function_call_id="fc1")
     look = await tool.func(question="what is this", tool_context=ctx)
-    assert look == {"say": "Box ahead.", "kind": "look"}
+    assert look == {"say": "Box ahead.", "kind": "look", "status": "ok", "retryable": False, "message": "Box ahead."}
     path = await tool.func(question="is the path clear", tool_context=ctx)
     assert isinstance(path, types.FunctionResponse)
     assert path.scheduling == types.FunctionResponseScheduling.INTERRUPT and path.response["kind"] == "path"
