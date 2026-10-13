@@ -1,6 +1,7 @@
-"""camera_ask counting: "how many X are visible?" asks the phone for ONE frame, reads it twice with ER 2 points (in
-parallel) and speaks a number only when the two reads agree (a one-off difference gets a third read). Ambient and describe loops stay quiet while
-the owner's question is answered."""
+"""camera_ask counting: "how many X are visible?" asks the phone for TWO fresh count frames ~400 ms apart, reads
+each once with ER 2 points (in parallel) and speaks a verified number only when the two independent reads agree (a
+one-off difference gets a third read). One frame is one read, never verified. Ambient and describe loops stay quiet
+while the owner's question is answered."""
 import asyncio
 import json
 
@@ -18,7 +19,7 @@ TINY = "/9j/4AAQSkZJRg=="
 
 
 def _frame(ts: float) -> Frame:
-    return Frame(id=f"c{ts}", jpeg_b64=TINY, w=1280, h=960, ts=ts, purpose="count")
+    return Frame(id=f"c{ts}", jpeg_b64=f"{TINY}{ts}", w=1024, h=768, ts=ts, purpose="count")
 
 
 @pytest.fixture
@@ -38,9 +39,9 @@ def session(mk_session, monkeypatch):
     current_session.reset(token)
 
 
-def _res(n, conf=1.0, hint=""):
+def _res(n, conf=1.0, hint="", **kw):
     return CountResult(count=n, confidence=conf, needs_retake=bool(hint) or n is None, aim_hint=hint,
-                       objects=[], model="gemini-robotics-er-2")
+                       objects=[], model="gemini-robotics-er-2", **kw)
 
 
 def _counter(monkeypatch, *results):
@@ -105,17 +106,19 @@ async def test_kind_count_counts_in_any_language_with_the_model_item(session, mo
 # --- counting -------------------------------------------------------------------------------------------------
 
 
-async def test_two_reads_of_one_frame_that_agree_speak_the_number(session, monkeypatch):
+async def test_two_frames_read_once_each_that_agree_give_a_verified_number(session, monkeypatch):
     s, _ = session
     seen = _counter(monkeypatch, _res(4), _res(4))
     out = await camera.camera_ask("how many Hatsun Curd packets are visible?", kind="count", item="curd packet", product="Hatsun Curd")
-    assert s.frame_calls == [{"purpose": "count", "count": 1, "interval_ms": 0, "timeout_s": camera.COUNT_FRAME_TIMEOUT_S}]
-    assert [c["frame"] for c in seen] == ["c1.0", "c1.0"]
+    assert s.frame_calls == [{"purpose": "count", "count": 2, "interval_ms": camera.COUNT_INTERVAL_MS,
+                              "timeout_s": camera.COUNT_FRAME_TIMEOUT_S}]
+    assert camera.COUNT_INTERVAL_MS == 400
+    assert [c["frame"] for c in seen] == ["c1.0", "c2.0"]  # two distinct frames, one read each
     assert all(c["label"] == "curd packet" and c["product"] == "Hatsun Curd" for c in seen)
-    assert out["kind"] == "count" and out["count"] == 4 and out["agreed"] is True
+    assert out["kind"] == "count" and out["count"] == 4 and out["agreed"] is True and out["verified"] is True
     assert out["approx"] is False and out["exact"] is True and out["sure"] is True
     assert out["label"] == "curd packet" and out["product"] == "Hatsun Curd"
-    assert out["say_en"] == "I can see 4 Hatsun Curd packets." and "say" not in out
+    assert out["say_en"] == "I can see 4 Hatsun Curd packets in the current view." and "say" not in out
 
 
 async def test_the_two_reads_of_the_one_frame_run_in_parallel(session, monkeypatch):
@@ -132,14 +135,23 @@ async def test_the_two_reads_of_the_one_frame_run_in_parallel(session, monkeypat
 
     monkeypatch.setattr(camera, "count_in_frame", slow)
     out = await camera.camera_ask("how many milk packets?", kind="count", item="milk packet")
-    assert out["count"] == 3 and running["max"] == 2 and frames == ["c1.0", "c1.0"]
+    assert out["count"] == 3 and running["max"] == 2 and frames == ["c1.0", "c2.0"]
 
 
-async def test_off_by_one_takes_a_third_read_that_breaks_the_tie(session, monkeypatch):
+async def test_off_by_one_third_read_agreeing_with_the_other_frame_is_verified(session, monkeypatch):
+    seen = _counter(monkeypatch, _res(4), _res(5), _res(4))
+    out = await camera.camera_ask("how many curd packets?", kind="count", item="curd packet")
+    assert len(seen) == 3 and seen[2]["frame"] == "c2.0"  # the newest frame, read again
+    assert out["count"] == 4 and out["agreed"] is True and out["verified"] is True and out["exact"] is True
+
+
+async def test_off_by_one_third_read_agreeing_only_with_its_own_frame_is_not_verified(session, monkeypatch):
+    """Two reads of the same picture are not independent: their agreement is never passed off as verification."""
     seen = _counter(monkeypatch, _res(4), _res(5), _res(5))
     out = await camera.camera_ask("how many curd packets?", kind="count", item="curd packet")
-    assert len(seen) == 3 and seen[2]["frame"] == "c1.0"
-    assert out["count"] == 5 and out["agreed"] is True
+    assert len(seen) == 3 and seen[2]["frame"] == "c2.0"
+    assert out["count"] == 5 and out["verified"] is False and out["exact"] is False and out["approx"] is True
+    assert out["agreed"] is False and out["say_en"].startswith("About 5")
 
 
 async def test_off_by_one_with_a_third_read_that_matches_neither_is_not_sure(session, monkeypatch):
@@ -176,12 +188,29 @@ async def test_a_failed_count_is_not_sure(session, monkeypatch):
     assert out.get("approx") is False
 
 
-async def test_one_frame_is_counted_twice(session, monkeypatch):
+async def test_one_frame_is_read_once_and_never_verified(session, monkeypatch):
     s, _ = session
     s.n_frames = 1
     seen = _counter(monkeypatch, _res(2), _res(2))
     out = await camera.camera_ask("how many curd packets?", kind="count", item="curd packet")
-    assert [c["frame"] for c in seen] == ["c1.0", "c1.0"] and out["count"] == 2
+    assert [c["frame"] for c in seen] == ["c1.0"]  # one picture: one read, never the same image twice
+    assert out["count"] == 2 and out["verified"] is False and out["exact"] is False and out["approx"] is True
+    assert out["evidence"]["frames"] == 1 and out["evidence"]["reads"] == 1
+    assert "one look" in out["say_en"]
+
+
+async def test_two_copies_of_the_same_picture_are_one_frame(session, monkeypatch):
+    """The phone sending the same picture twice (same bytes) is not two frames: one read, unverified."""
+    s, _ = session
+
+    async def same_twice(purpose, count=1, interval_ms=0, timeout_s=4.0):
+        f = _frame(1.0)
+        return [f, Frame(id="c-dup", jpeg_b64=f.jpeg_b64, w=f.w, h=f.h, ts=2.0, purpose="count")]
+
+    monkeypatch.setattr(s, "request_frames", same_twice)
+    seen = _counter(monkeypatch, _res(3), _res(3))
+    out = await camera.camera_ask("how many curd packets?", kind="count", item="curd packet")
+    assert len(seen) == 1 and out["verified"] is False and out["evidence"]["frames"] == 1
 
 
 async def test_no_frames_says_no_camera(session, monkeypatch):
@@ -206,9 +235,9 @@ def test_ask_frame_wait_is_six_seconds():
     assert camera.FRAME_TIMEOUT_S == 6.0
 
 
-def test_count_waits_fifteen_seconds_for_one_frame():
-    # a busy phone (Galaxy A22) took 4-13 s to encode one count photo: one frame, a longer wait
-    assert camera.COUNT_FRAME_TIMEOUT_S == 15.0 and camera.COUNT_FRAMES == 1
+def test_count_waits_fifteen_seconds_for_two_frames():
+    # a busy phone (Galaxy A22) took 4-13 s to encode one count photo: a longer wait for the two frames
+    assert camera.COUNT_FRAME_TIMEOUT_S == 15.0 and camera.COUNT_FRAMES == 2
 
 
 async def test_count_diag_has_counts_and_no_user_words(session, monkeypatch):
@@ -306,7 +335,8 @@ async def test_a_full_shelf_with_close_reads_says_about_the_rounded_mean(session
     _counter(monkeypatch, _res(57, conf=0.45, hint="vision.aim.spread_out"), _res(60, conf=0.4, hint="vision.aim.spread_out"))
     out = await camera.camera_ask("how many curd packets are there?", kind="count", item="curd packet")
     assert out["count"] == 58 and out["approx"] is True and out["exact"] is False and out["agreed"] is False
-    assert out["say_en"].startswith("About 58 curd packets.")
+    assert out["verified"] is False
+    assert out["say_en"].startswith("About 58 curd packets in the current view.")
 
 
 async def test_a_full_shelf_cut_at_the_edge_says_about_and_asks_to_step_back(session, monkeypatch):
@@ -365,3 +395,62 @@ async def test_an_approx_count_is_marked_and_never_exact(session, monkeypatch):
     out = await camera.camera_ask("how many curd packets?", kind="count", item="curd packet")
     assert out["approx"] is True and out["exact"] is False
     assert "about" in out["say_en"].lower() and "about" in out["answer"].lower()
+
+
+# --- result shape: what was seen now, with its evidence (never stock) -----------------------------------------
+
+
+async def test_a_count_result_carries_scope_evidence_and_provenance(session, monkeypatch):
+    _counter(monkeypatch, _res(3), _res(3))
+    out = await camera.camera_ask("how many milk cartons?", kind="count", item="milk carton")
+    assert out["visible_count"] == 3 == out["count"] and out["scope"] == "visible_now"
+    assert out["source"] == "fresh_count" and out["observed_at"] == 2.0 and out["frame_ids"] == ["c1.0", "c2.0"]
+    ev = out["evidence"]
+    assert ev == {"frames": 2, "reads": 2, "agreed": True, "unknown": 0, "hidden": 0, "edge": 0}
+    assert out["say_en"] == "I can see 3 milk cartons in the current view."
+    assert "stock" not in out["say_en"].lower()
+
+
+async def test_a_not_sure_count_carries_the_same_fields(session, monkeypatch):
+    _counter(monkeypatch, _res(4), _res(7))
+    out = await camera.camera_ask("how many milk cartons?", kind="count", item="milk carton")
+    assert out["visible_count"] is None and out["scope"] == "visible_now" and out["verified"] is False
+    assert out["evidence"]["frames"] == 2 and out["evidence"]["agreed"] is False and out["frame_ids"]
+
+
+async def test_no_frame_count_carries_the_fields(session, monkeypatch):
+    s, _ = session
+    s.n_frames = 0
+    _counter(monkeypatch)
+    out = await camera.camera_ask("how many milk cartons?", kind="count", item="milk carton")
+    assert out["verified"] is False and out["scope"] == "visible_now" and out["evidence"]["frames"] == 0
+    assert out["frame_ids"] == [] and out["observed_at"] is None
+
+
+async def test_a_partly_hidden_item_is_said_and_asks_for_a_closer_look(session, monkeypatch):
+    _counter(monkeypatch, _res(2, conf=0.7, hint="vision.aim.spread_out", hidden=1),
+             _res(2, conf=0.7, hint="vision.aim.spread_out", hidden=1))
+    out = await camera.camera_ask("how many milk cartons?", kind="count", item="milk carton")
+    assert out["count"] == 2 and out["evidence"]["hidden"] == 1
+    assert out["say_en"].startswith("I can clearly identify 2 milk cartons, but")
+    assert "partly hidden" in out["say_en"] and "show me that part of the shelf" in out["say_en"]
+
+
+async def test_unreadable_labels_make_a_product_count_uncertain_and_are_reported(session, monkeypatch):
+    _counter(monkeypatch, _res(2, conf=0.4, hint="vision.aim.hold_closer", unknown=1),
+             _res(2, conf=0.4, hint="vision.aim.hold_closer", unknown=1))
+    out = await camera.camera_ask("how many Hatsun curd?", kind="count", item="curd packet", product="Hatsun Curd")
+    assert out["count"] is None and out["sure"] is False and out["evidence"]["unknown"] == 1
+    assert "label" in out["say_en"] and not any(ch.isdigit() for ch in out["say_en"])
+
+
+async def test_a_count_is_remembered_as_a_scene_fact_and_a_recount_shows_the_previous(session, monkeypatch):
+    s, _ = session
+    _counter(monkeypatch, _res(3), _res(3), _res(4), _res(4))
+    first = await camera.camera_ask("how many milk cartons?", kind="count", item="milk carton")
+    assert first.get("previous") is None
+    fact = s.scene_facts.previous("milk cartons")
+    assert fact["count"] == 3 and fact["verified"] is True and fact["source"] == "fresh_count"
+    again = await camera.camera_ask("are you sure?", kind="count", item="milk carton")
+    assert again["count"] == 4 and again["source"] == "fresh_count"   # a recount is fresh, never the cache
+    assert again["previous"]["count"] == 3 and "age_s" in again["previous"]

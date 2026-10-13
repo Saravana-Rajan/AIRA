@@ -29,6 +29,7 @@ EXPECTED = {
     "stock_add": ["product", "quantity", "unit"], "supplier_add": ["name", "channel"],
     "price_query": ["product", "page"],  # the owner's price board, spoken (tools/prices.py)
     "walk_to": ["target"], "walk_stop": [],  # walk with me (tools/walk.py)
+    "scene_recall": ["item"],  # what AIRA last counted, with age and evidence (tools/camera.py; read-only)
 }
 
 OPTIONAL_DEFAULTS = {
@@ -43,6 +44,7 @@ OPTIONAL_DEFAULTS = {
     ("memory_forget", "item"): None, ("memory_remembering", "item"): None,
     ("price_query", "product"): None, ("price_query", "page"): 0,
     ("camera_ask", "kind"): "look", ("camera_ask", "item"): "", ("camera_ask", "product"): "",
+    ("scene_recall", "item"): "",
 }
 
 LITERALS = {

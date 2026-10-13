@@ -45,6 +45,12 @@ class CountResult(BaseModel):
     # The deduped packs as the monitor draws them: {"label", "point": [y, x], "box": [ymin, xmin, ymax, xmax] | None}
     objects: list[dict] = []
     model: str | None = None   # the model that answered (diagnostics)
+    # Evidence behind the number (additive): points whose label could not be read (with a named product they are
+    # left out of ``count`` and cap the confidence; without one they are counted), counted packs flagged as partly
+    # hidden behind another, and counted packs cut by / touching the frame edge.
+    unknown: int = 0
+    hidden: int = 0
+    edge: int = 0
 
 
 COUNT_PROMPT = (
@@ -99,6 +105,7 @@ def assess(items: list[dict], product: str | None = None) -> CountResult:
     hidden_flags: list[bool] = []
     objects: list[dict] = []
     unknown = 0
+    unread = 0
     for it in items if isinstance(items, list) else []:
         p = it.get("point") if isinstance(it, dict) else None
         if not _is_point(p):
@@ -112,6 +119,8 @@ def assess(items: list[dict], product: str | None = None) -> CountResult:
                 continue
         if any(_dist(q, r) < DEDUPE_RADIUS for r in pts):
             continue
+        if not product_words and label.casefold() in UNKNOWN_LABELS:
+            unread += 1  # counted (any pack counts), but reported: its product could not be read
         pts.append(q)
         box = parse_box(it.get("box_2d") if it.get("box_2d") is not None else it.get("box"))
         objects.append({"label": label, "point": [round(q[0]), round(q[1])], "box": list(box) if box else None})
@@ -125,7 +134,7 @@ def assess(items: list[dict], product: str | None = None) -> CountResult:
     n = len(pts)
     if n == 0:
         hint = "vision.aim.hold_closer" if unknown else "vision.aim.show_items"
-        return CountResult(count=None, confidence=0.0, needs_retake=True, aim_hint=hint)
+        return CountResult(count=None, confidence=0.0, needs_retake=True, aim_hint=hint, unknown=unknown)
     overlaps = sum(1 for i in range(n) for j in range(i + 1, n) if _dist(pts[i], pts[j]) < OVERLAP_RADIUS)
     hidden = sum(hidden_flags)
     overlap_ratio = min(1.0, (overlaps + hidden) / n)
@@ -142,7 +151,7 @@ def assess(items: list[dict], product: str | None = None) -> CountResult:
     else:
         hint = ""
     return CountResult(count=n, confidence=round(confidence, 2), needs_retake=bool(hint), aim_hint=hint,
-                       objects=objects)
+                       objects=objects, unknown=unknown + unread, hidden=hidden, edge=sum(edge_flags))
 
 
 def _items_from(data: dict) -> Any:

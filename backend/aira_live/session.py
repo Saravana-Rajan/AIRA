@@ -123,6 +123,16 @@ class Session:
         from aira_live.vision import precount
         return precount.cached(self.session_id, product)
 
+    @property
+    def scene_facts(self):
+        """What AIRA last counted in this session, with age and evidence (``aira_live.scene_facts``); created on
+        first use."""
+        sf = self.__dict__.get("_scene_facts")
+        if sf is None:
+            from aira_live.scene_facts import SceneFacts
+            sf = self.__dict__["_scene_facts"] = SceneFacts()
+        return sf
+
     async def request_frames(self, purpose: str, count: int = 1, interval_ms: int = 0,
                              timeout_s: float = 4.0) -> list[Frame]:
         """Ask the phone for ``count`` fresh frames and wait for them ([] on timeout).

@@ -1,7 +1,7 @@
 """Every Live tool exposed to Gemini (names and signatures: the interfaces "Live tools" table)."""
 from collections.abc import Awaitable, Callable
 
-from aira_live.tools.camera import camera_ask
+from aira_live.tools.camera import camera_ask, scene_recall
 from aira_live.tools.catalog import product_add, product_disable, product_update, stock_add, supplier_add
 from aira_live.tools.core import confirm_action
 from aira_live.tools.delivery import delivery_count, delivery_start, invoice_check
@@ -29,6 +29,7 @@ TOOL_FUNCS: list[Callable[..., Awaitable[dict]]] = [
     product_add, product_update, product_disable, stock_add, supplier_add,
     price_query,  # the owner's price board, spoken (read-only: prices come from the products in Firestore)
     walk_to, walk_stop,  # "walk with me": continuous guidance to a place (background loop, read-only)
+    scene_recall,  # what was last counted, with age and evidence (read-only, not ER: also in Live-only mode)
 ]
 TOOLS_BY_NAME: dict[str, Callable[..., Awaitable[dict]]] = {f.__name__: f for f in TOOL_FUNCS}
 # Tools that work through Robotics-ER (camera questions, identification, walking, narration, delivery counts).
