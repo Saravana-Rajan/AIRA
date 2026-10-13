@@ -38,6 +38,7 @@ log = logging.getLogger(__name__)
 MIN_CONF = 0.5
 MAX_OBJECTS = 3           # "what's in front of me": up to three objects, nearest first
 FRAME_TIMEOUT_S = 6.0     # the phone may be busy with ambient frames; an owner question waits a little longer
+COUNT_FRAME_TIMEOUT_S = 10.0  # count only: two 1280 px frames over a congested uplink need longer than one ask frame
 COUNT_FRAMES = 2          # a count is two frames 400 ms apart, counted in parallel, spoken only when they agree
 COUNT_INTERVAL_MS = 400
 LOOK_TIMEOUT_S = 4.0      # per-attempt model timeout for a look / path answer (one retry)
@@ -398,12 +399,12 @@ async def _count(s: Session, item: str = "", product: str = "") -> dict:
     estimate can never pass as an exact stock or delivery number."""
     tgt = count_target(item, product)
     frames = await s.request_frames("count", count=COUNT_FRAMES, interval_ms=COUNT_INTERVAL_MS,
-                                    timeout_s=FRAME_TIMEOUT_S)
+                                    timeout_s=COUNT_FRAME_TIMEOUT_S)
     diag("camera_ask", stage="frames", session=s.session_id, kind="count", lang=s.lang, frames=len(frames),
          bytes=[len(f.jpeg_b64) for f in frames], sizes=[[f.w, f.h] for f in frames])
     if not frames:
         diag("camera_ask", severity="WARNING", stage="no_frames", session=s.session_id, kind="count",
-             timeout_s=FRAME_TIMEOUT_S)
+             timeout_s=COUNT_FRAME_TIMEOUT_S)
         return {**_no_camera("count"), "count": None, "approx": False, "exact": False, "agreed": False}
     pair = [frames[0], frames[-1]] if len(frames) > 1 else [frames[0], frames[0]]
     started = time.perf_counter()

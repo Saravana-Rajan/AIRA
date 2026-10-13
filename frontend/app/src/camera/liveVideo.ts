@@ -10,8 +10,9 @@ import type { FrameKeep, FrameMsg } from "./capture";
 import { coarseGray, meanAbsDiff } from "./sceneGate";
 
 export const LIVE_FPS = 1;
-/** Bytes waiting on the socket above which a live tick is skipped. */
-export const LIVE_MAX_BUFFERED = 64_000;
+/** Bytes waiting on the socket above which a live tick is skipped (and a finished live frame dropped): at most
+ *  one live frame is ever queued, so an owner's tool frame never waits behind a backlog of video. */
+export const LIVE_MAX_BUFFERED = 32_000;
 /** Mean absolute luma difference (0-255, 32x24 grid) from the last settled view that counts as a new scene. */
 export const CHANGE_THRESHOLD = 14;
 /** ...and the most two frames a second apart may differ for the view to count as steady (no motion blur). */
