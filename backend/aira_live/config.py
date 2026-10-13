@@ -25,6 +25,9 @@ class Settings:
     live_video: bool = True  # AIRA_LIVE_VIDEO: the phone's 1 fps ``live`` frames go into Gemini Live as video
     live_nudge: bool = True  # AIRA_LIVE_NUDGE: a settled scene change asks Live to speak up (aira_live.live_video)
     precount: bool = True  # AIRA_PRECOUNT: a settled scene change starts a background count (vision.precount)
+    # AIRA_ER2=0: a Live-only test mode. No Robotics-ER tools, loops or pre-counts; Gemini Live answers every
+    # camera question from its own video (counts said as "about").
+    er2: bool = True
 
 
 def _env(name: str) -> str | None:
@@ -50,4 +53,5 @@ def load() -> Settings:
         live_video=os.getenv("AIRA_LIVE_VIDEO", "1") != "0",
         live_nudge=os.getenv("AIRA_LIVE_NUDGE", "1") != "0",
         precount=os.getenv("AIRA_PRECOUNT", "1") != "0",
+        er2=os.getenv("AIRA_ER2", "1") != "0",
     )

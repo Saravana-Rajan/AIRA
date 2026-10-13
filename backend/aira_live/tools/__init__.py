@@ -31,6 +31,16 @@ TOOL_FUNCS: list[Callable[..., Awaitable[dict]]] = [
     walk_to, walk_stop,  # "walk with me": continuous guidance to a place (background loop, read-only)
 ]
 TOOLS_BY_NAME: dict[str, Callable[..., Awaitable[dict]]] = {f.__name__: f for f in TOOL_FUNCS}
+# Tools that work through Robotics-ER (camera questions, identification, walking, narration, delivery counts).
+# AIRA_ER2=0 leaves them out so Gemini Live answers from its own video (config.Settings.er2).
+ER_TOOLS: frozenset[str] = frozenset({
+    "camera_ask", "product_identify", "walk_to", "walk_stop", "describe_mode", "delivery_count",
+})
+
+
+def active_tools(er2: bool = True) -> list[Callable[..., Awaitable[dict]]]:
+    """The Live tool list: every tool, or without the Robotics-ER ones in the Live-only test mode."""
+    return list(TOOL_FUNCS) if er2 else [f for f in TOOL_FUNCS if f.__name__ not in ER_TOOLS]
 # Live tools that run in the background (Live NON_BLOCKING behaviour): the conversation goes on while
 # delivery_count streams counts, sale_pay waits for the soundbox, walk_to starts the walk loop, and every camera / vision tool that takes
 # over ~1.5 s (frames + a model call) runs while AIRA says a short holding line, so the owner hears AIRA within
