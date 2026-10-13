@@ -179,7 +179,31 @@ describe("AppShell: hands-free start", () => {
     act(() => { root.querySelector<HTMLElement>(".autostart-fallback")!.click(); });
     expect(wire).toHaveBeenCalledTimes(2);
     expect(root.querySelector("button")!.getAttribute("aria-label")).toBe(SURFACE_LABEL);
-    expect(second.raw.startListening).not.toHaveBeenCalled(); // a real tap goes through the normal Start path
+    // The real tap goes through the normal Start path, which now also opens the mic (it used to wait for a
+    // double-tap, so on iPhone, where every start is a tap, AIRA never heard the owner).
+    expect(second.raw.startListening).toHaveBeenCalledTimes(1);
+  });
+
+  it("a Start tap opens the mic right away (iPhone has no hands-free start: every start is this tap)", async () => {
+    const f = fakeWired();
+    const wire = vi.fn((_o: WireOpts) => f.w);
+    act(() => { render(<AppShell deviceCheck={null} wire={wire} languages={["en"]} initial={{ ...DEFAULT_SETTINGS }} />, root); });
+    act(() => { startBtn().click(); });
+    expect(wire).toHaveBeenCalledTimes(1);
+    expect(f.raw.startListening).toHaveBeenCalledTimes(1); // called inside the tap, not on a later double-tap
+    await settle();
+    expect(f.raw.dispose).not.toHaveBeenCalled();
+  });
+
+  it("if the mic refuses after a Start tap, the app stays wired (a double-tap can still open it)", async () => {
+    const f = fakeWired();
+    f.raw.startListening = vi.fn(async () => false);
+    const wire = vi.fn((_o: WireOpts) => f.w);
+    act(() => { render(<AppShell deviceCheck={null} wire={wire} languages={["en"]} initial={{ ...DEFAULT_SETTINGS }} />, root); });
+    act(() => { startBtn().click(); });
+    await settle();
+    expect(f.raw.dispose).not.toHaveBeenCalled();
+    expect(root.querySelector("button")!.getAttribute("aria-label")).toBe(SURFACE_LABEL);
   });
 
   it("the Start tap itself still works on the fallback screen, once", async () => {
@@ -233,6 +257,7 @@ describe("AppShell: the device check comes before the conversation", () => {
     expect(check.seen.props).toMatchObject({ lang: "ta", autoContinue: false });
     act(() => { check.seen.props!.onPass(); });
     expect(wire).toHaveBeenCalledTimes(1);
+    expect(f.raw.startListening).toHaveBeenCalledTimes(1); // "Tap anywhere to start talking": the mic opens now
     expect(root.querySelector(".fake-check")).toBeNull();
     expect(root.querySelector("button")!.getAttribute("aria-label")).toBe(SURFACE_LABEL);
   });
