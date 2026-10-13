@@ -9,12 +9,21 @@ Safety lines ("Stop. Step in front.") go at once, and the phone's own MediaPipe 
 "Stop." before ER answers. The walk ends when he arrives, when the Live model calls ``walk_stop`` (he asked to
 stop in any language: the model decides, no word list here), on the phone's long-press stop, after 90 s, or after
 three ticks in a row without a usable look ("I can't see well. Please stop and wait.").
+
+Freshness: each look is judged by how long ago its frame was TAKEN, measured just before its line is said
+(``capture_age_s``: server-side arrival time plus the phone's own capture-to-send delay, no clock sync needed).
+``vision.walk.gate`` holds the per-instruction policy: stops always go; a step count only from a fresh look; turn
+and direction lines up to about 3 s; older lines are never said. "Arrived" needs a fresh look, else "Stop. Hold
+still." and a frame taken while he stood still confirms it. Three looks in a row too old to say ask him to slow
+down. Not a guarantee: the upload time is not counted, Live may queue the line, and the limits need real-device
+measurement.
 """
 from __future__ import annotations
 
 import asyncio
 import json
 import logging
+import math
 import re
 import time
 from collections.abc import Awaitable, Callable
@@ -35,10 +44,43 @@ MAX_FAILS = 3
 MEMORY_TIMEOUT_S = 1.5
 MAX_IN_FLIGHT = 2        # ER looks running at once (each takes 2-6 s; a new one starts every second)
 FAST_STOP_GAP_S = 3.0
+# Freshness (the per-instruction limits are vision.walk.WALK_MAX_AGE_S / WALK_DIRECTION_MAX_AGE_S):
+FRESH_VIEW_AFTER = 3     # looks in a row too old to say anything but a stop -> ask him to slow down
+HOLD_SETTLE_S = 1.0      # after "Stop. Hold still." a frame taken this long later shows him standing still
+HOLD_MAX_S = 10.0        # a "hold still" older than this no longer counts; the next one starts a new hold
+MAX_PHONE_DELAY_S = 5.0  # capture -> phone send stamp (``ts - capture_ts``) beyond this is not believed
 
 _ACTIVE: dict[str, "WalkLoop"] = {}
 
 Look = Callable[..., Awaitable[vwalk.WalkView]]
+
+
+def capture_age_s(store, frame, now: float | None = None) -> float | None:
+    """Seconds since ``frame`` was taken, without trusting the phone clock against the server's.
+
+    age = (server now - server arrival of the frame) + (phone send stamp ``ts`` - phone capture stamp
+    ``capture_ts``). Both server times are ``time.monotonic`` (FrameStore records the arrival); both phone times
+    are the same phone clock, so neither difference needs synced clocks. The upload time (phone send -> server
+    arrival) is not measurable without synced clocks and is NOT included: the age is a slight underestimate.
+    Without ``capture_ts`` the phone part is 0 (``ts`` is stamped right after encoding). None (= treat as stale)
+    when the frame's arrival here is unknown or its phone stamps are missing or impossible."""
+    ts = getattr(frame, "ts", None)
+    cap = getattr(frame, "capture_ts", None) or ts
+    try:
+        ts, cap = float(ts), float(cap)
+    except (TypeError, ValueError):
+        return None
+    if not (math.isfinite(ts) and math.isfinite(cap)) or ts <= 0 or cap <= 0:
+        return None
+    phone_s = (ts - cap) / 1000.0
+    if not 0.0 <= phone_s <= MAX_PHONE_DELAY_S:
+        return None
+    # FrameStore keeps (monotonic arrival, frame) for its recent frames; the walk frame is that same object.
+    arrived = next((at for at, f in reversed(getattr(store, "_recent_frames", ())) if f is frame), None)
+    if arrived is None:
+        return None
+    held = (time.monotonic() if now is None else now) - arrived
+    return held + phone_s if held >= 0 else None
 
 
 def walk_facts(ins: vwalk.Instruction, view: vwalk.WalkView, target: str,
@@ -52,6 +94,8 @@ def walk_facts(ins: vwalk.Instruction, view: vwalk.WalkView, target: str,
         return {"action": "stop", "hazard": hazard}
     if key == "walk.arrived":
         return {"action": "arrived", "target": target, "reach": "forward"}
+    if key == "walk.hold":
+        return {"action": "stop", "hold_still": True, "reason": "checking_arrival", "target": target}
     if key.startswith("walk.obstacle_"):
         return {"action": "stop", "obstacle": near[0].label if near else "", "move": key.rsplit("_", 1)[-1]}
     if key in ("walk.left", "walk.right"):
@@ -90,10 +134,15 @@ class WalkLoop:
                  clock: Callable[[], float] = time.monotonic, sleep: Callable[[float], Awaitable] = asyncio.sleep,
                  interval_s: float = INTERVAL_S, frame_timeout_s: float = FRAME_TIMEOUT_S, max_s: float = MAX_S,
                  memory_place: str | None = None, memory_side: str | None = None,
-                 max_in_flight: int = MAX_IN_FLIGHT):
+                 max_in_flight: int = MAX_IN_FLIGHT,
+                 frame_age: Callable[[object], float | None] | None = None):
         self.session, self.target = session, target
         self._look = look or vwalk.look
         self._clock, self._sleep = clock, sleep
+        # Seconds since a frame was taken, on the same time scale as ``clock`` (the default: both monotonic).
+        self._frame_age = frame_age or (lambda frame: capture_age_s(session.frames, frame))
+        self.stale_streak = 0            # looks in a row too old for anything but a stop
+        self.hold_at: float | None = None  # when "Stop. Hold still." was said to confirm an arrival
         self.interval_s, self.frame_timeout_s, self.max_s = interval_s, frame_timeout_s, max_s
         self.started_at = clock()
         self.last_seen_at = self.started_at
@@ -162,13 +211,33 @@ class WalkLoop:
         ins = vwalk.decide(view, self.target, "en", self.search)
         if ins.key == "walk.not_found":
             self.last_seen_at = now      # say it once per 8 s of searching, not every tick
+        # Freshness, judged now (just before speaking) from when the frame was taken: see vision.walk.gate.
+        age = self._frame_age(frame)
+        held = (self.hold_at is not None and now - self.hold_at <= HOLD_MAX_S and age is not None
+                and math.isfinite(age) and age >= 0 and now - age >= self.hold_at + HOLD_SETTLE_S)
+        if held:                         # taken while he stood still after "hold still": as good as fresh
+            self.hold_at, age = None, 0.0
+        self.stale_streak = self.stale_streak + 1 if vwalk.expired(age) else 0
+        decided, ins = ins.key, vwalk.gate(ins, age, self.target)
+        age_ms = round(age * 1000) if age is not None and math.isfinite(age) else None
+        await self._publish(view, frame.id)
+        if ins is None:                  # too old to say as current: never spoken
+            diag("walk_tick", session=s.session_id, has_target=view.has_target, n_obstacles=len(view.obstacles),
+                 key=decided, said="expired", spoke=False, ms=ms, age_ms=age_ms, stale=self.stale_streak)
+            if self.stale_streak >= FRESH_VIEW_AFTER:
+                self.stale_streak = 0
+                self.speech.last_key, self.speech.last_at = "walk.fresh_view", now   # the next line counts as new
+                await self._say("Please slow down, I need a fresh look.",
+                                facts={"action": "slow_down", "reason": "view_too_old", "wait_for": "fresh_look"})
+            return self.active
         text = self.speech.pick(ins, now)
+        if ins.key == "walk.hold" and text is not None and (self.hold_at is None or now - self.hold_at > HOLD_MAX_S):
+            self.hold_at = now
         facts = walk_facts(ins, view, self.target, self.search)
         if text is not None and text != ins.text:          # the 4 s reassurance of a direction line
             facts = {"action": "keep_going", "target": self.target}
         diag("walk_tick", session=s.session_id, has_target=view.has_target, n_obstacles=len(view.obstacles),
-             key=ins.key, spoke=text is not None, ms=ms)
-        await self._publish(view, frame.id)
+             key=decided, said=ins.key, spoke=text is not None, ms=ms, age_ms=age_ms, stale=self.stale_streak)
         if ins.arrived:
             await self._end("arrived", ins.text, cue="match", facts=facts)
             return False
