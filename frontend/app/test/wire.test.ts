@@ -7,6 +7,9 @@ import { DEFAULT_SETTINGS, SETTINGS_KEY } from "../src/core/settings";
 import type { Settings } from "../src/core/types";
 import { memStore } from "../src/net/offline-queue";
 import { STRINGS } from "../src/i18n/strings";
+import {
+  BACKGROUND_MAX_BUFFERED, LIVE_MAX_BUFFERED, TOOL_SEND_BUFFERED, __resetSendPriority, micBackedUp, micDropCount,
+} from "../src/net/sendPriority";
 
 class MemStorage implements Storage {
   private m = new Map<string, string>();
@@ -88,6 +91,7 @@ afterEach(() => {
   while (wired.length) wired.pop()!.dispose();
   vi.useRealTimers();
   vi.unstubAllEnvs();
+  __resetSendPriority();
 });
 const flush = async () => { for (let i = 0; i < 10; i++) await Promise.resolve(); };
 const CONFIRM: ServerMsg = { t: "confirm", id: "c1", kind: "sale", prompt: "Sell 2 Sakthi curd for 120 rupees?" };
@@ -245,6 +249,12 @@ describe("wireApp: gestures", () => {
     expect(a.socket.sent).toContainEqual({ t: "audio", pcm16: "AAAA" });
   });
 
+  it("a talk tap tells the server it is the owner's turn (lifts a long-press Stop there)", () => {
+    const a = setup();
+    a.w.onTalk();
+    expect(a.socket.sent).toContainEqual({ t: "event", name: "talk", data: {} });
+  });
+
   it("double-tap while AIRA speaks cuts her off so the owner can talk", () => {
     const a = setup();
     a.w.onTalk();
@@ -388,7 +398,37 @@ describe("wireApp: audio latency", () => {
     a.socket.buffered = 0;
     a.chunk("DDDD");
     expect(a.socket.sent.filter((m) => m.t === "audio").map((m) => (m as { pcm16: string }).pcm16)).toEqual(["AAAA", "DDDD"]);
-    expect(MIC_MAX_BUFFERED_BYTES).toBeLessThanOrEqual(32_000); // about half a second of 32 ms chunks
+    expect(MIC_MAX_BUFFERED_BYTES).toBeLessThanOrEqual(160_000); // a few seconds of speech at most on a dead link
+  });
+
+  it("keeps sending mic audio at backlogs where every camera stream already stops (mic goes first)", async () => {
+    const a = setup();
+    a.w.onTalk();
+    await flush();
+    // A live frame and a count photo still leaving the phone: video is skipped at these levels, speech is not.
+    for (const b of [BACKGROUND_MAX_BUFFERED + 1, LIVE_MAX_BUFFERED + 1, TOOL_SEND_BUFFERED + 1, 110_000]) {
+      a.socket.buffered = b;
+      a.chunk(`A${b}`);
+    }
+    expect(a.socket.sent.filter((m) => m.t === "audio")).toHaveLength(4);
+    // ...and the mic being backed up makes the video yield for a while.
+    expect(micBackedUp()).toBe(true);
+  });
+
+  it("logs mic drops with a running count", async () => {
+    const t0 = Date.now() + 600_000; // past any earlier test's rate-limited mic_drop line
+    vi.useFakeTimers();
+    vi.setSystemTime(t0);
+    const a = setup();
+    a.w.onTalk();
+    await flush();
+    a.socket.buffered = MIC_MAX_BUFFERED_BYTES + 1;
+    a.chunk("X");
+    a.chunk("Y");
+    const logs = a.socket.sent.filter((m) => m.t === "log" && (m as { tag: string }).tag === "mic_drop") as unknown as Array<{ data: { drops: number } }>;
+    expect(logs).toHaveLength(1); // rate-limited
+    expect(logs[0].data.drops).toBeGreaterThanOrEqual(1);
+    expect(micDropCount()).toBeGreaterThanOrEqual(2);
   });
 
   it("logs one latency line when AIRA's answer starts playing, with the ms since the user finished", async () => {

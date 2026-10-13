@@ -5,6 +5,8 @@ ADK's ``FunctionTool`` passes its ``ToolContext`` (which carries ``function_call
 parameter, so a tool body only needs ``get_session()`` and ``ids.current_idem_key()``: a retried call with the
 same tool-call id gets the same idempotency key.
 """
+import asyncio
+import contextvars
 import functools
 import inspect
 import time
@@ -29,6 +31,91 @@ _RUNNING: dict[str, int] = {}  # session id -> tool calls running now (the live-
 def tools_running(session_id: str) -> int:
     """How many wrapped tool calls of ``session_id`` are running now."""
     return _RUNNING.get(session_id, 0)
+
+
+# ---------- long-press Stop: cancel the session's tool calls ----------
+# Each session has a stop generation, bumped by every Stop. A call remembers the generation it started in; a call
+# that ends in a later generation is stale: its result is replaced by ``CANCELLED`` (Live gets nothing to say,
+# scheduled SILENT for a non-blocking tool), it is never recorded, and a running call is cancelled outright.
+CANCELLED: dict = {"cancelled": True, "status": "cancelled", "retryable": False,
+                   "message": "The owner pressed Stop. Do not say this result.", "say_en": ""}
+_GEN: dict[str, int] = {}                     # session id -> stop generation
+_TASKS: dict[str, set[asyncio.Task]] = {}     # session id -> running tool bodies (cancelled by stop)
+_CALL_GEN: contextvars.ContextVar[tuple[str, int] | None] = contextvars.ContextVar("aira_call_gen", default=None)
+
+
+def generation(session_id: str) -> int:
+    """The stop generation of ``session_id`` (0 until its first Stop)."""
+    return _GEN.get(session_id, 0)
+
+
+def stop(session_id: str) -> None:
+    """Long-press Stop: every tool call of ``session_id`` running now is cancelled and its result discarded.
+    Idempotent; other sessions are untouched."""
+    _GEN[session_id] = _GEN.get(session_id, 0) + 1
+    for task in list(_TASKS.get(session_id, ())):
+        task.cancel()
+
+
+def end_session(session_id: str) -> None:
+    """The session ended: cancel its running tool calls and forget its state."""
+    stop(session_id)
+    _GEN.pop(session_id, None)
+    _TASKS.pop(session_id, None)
+
+
+def call_is_stale() -> bool:
+    """True inside a tool call that the owner stopped (a Stop came after it started). Outside a call: False."""
+    started = _CALL_GEN.get()
+    return started is not None and _GEN.get(started[0], 0) != started[1]
+
+
+def with_status(result: dict) -> dict:
+    """``result`` plus the structured fields Gemini Live expects of every function response, added only when
+    missing (existing keys are kept): ``status`` ("error" when the tool reports an error or ``ok: false``,
+    "no_results" when it is not sure, else "ok"), ``retryable`` (False) and ``message`` (its ``say_en`` or
+    ``say``)."""
+    if "status" in result and "retryable" in result and "message" in result:
+        return result
+    out = dict(result)
+    if "status" not in out:
+        if out.get("error") or out.get("ok") is False:
+            out["status"] = "error"
+        elif out.get("sure") is False:
+            out["status"] = "no_results"
+        else:
+            out["status"] = "ok"
+    out.setdefault("retryable", False)
+    out.setdefault("message", str(out.get("say_en") or out.get("say") or ""))
+    return out
+
+
+_STOPPED = object()  # a tool body cancelled by stop() / end_session()
+
+
+def _cancelled() -> dict:
+    return dict(CANCELLED)
+
+
+async def _run_cancellable(sid: str, body: Awaitable) -> Any:
+    """Await a tool body as its own task, tracked so ``stop(sid)`` can cancel it. The task copies the current
+    context, so the body sees the session and call id. Returns ``_STOPPED`` when a Stop cancelled it; a
+    cancellation of the caller itself (Live closing) propagates as before."""
+    task = asyncio.ensure_future(body)
+    _TASKS.setdefault(sid, set()).add(task)
+    try:
+        return await task
+    except asyncio.CancelledError:
+        me = asyncio.current_task()
+        if task.cancelled() and (me is None or me.cancelling() == 0):
+            return _STOPPED  # stopped by the owner (or the session ended), not by our caller
+        raise
+    finally:
+        tasks = _TASKS.get(sid)
+        if tasks is not None:
+            tasks.discard(task)
+            if not tasks:
+                _TASKS.pop(sid, None)
 # Result keys worth a log line (never the whole result: a count may carry frames or long lists).
 _LOGGED_RESULT_KEYS = ("say", "say_en", "approx", "aim_hint", "confidence", "kind", "needs_confirm", "confirm_id", "error", "ok")
 
@@ -111,11 +198,13 @@ def wrap_tool(fn: Callable[..., Any], session: Session) -> ToolFn:
         started = time.perf_counter()
         monitor.status(session, "thinking")
         sid = session.session_id
+        gen = generation(sid)
+        gen_token = _CALL_GEN.set((sid, gen))
         _RUNNING[sid] = _RUNNING.get(sid, 0) + 1
         try:
             result = fn(*args, **kwargs)
             if inspect.isawaitable(result):
-                result = await result
+                result = await _run_cancellable(sid, result)
         except BaseException as exc:  # logged, never swallowed (CancelledError included)
             _log_call(fn.__name__, call_id, session, sig, args, kwargs, started, error=exc)
             raise
@@ -125,8 +214,14 @@ def wrap_tool(fn: Callable[..., Any], session: Session) -> ToolFn:
                 _RUNNING[sid] = left
             else:
                 _RUNNING.pop(sid, None)
+            _CALL_GEN.reset(gen_token)
             current_tool_call_id.reset(c_token)
             current_session.reset(s_token)
+        if result is _STOPPED or generation(sid) != gen:  # the owner pressed Stop while it ran: never delivered, recorded or spoken
+            _log_call(fn.__name__, call_id, session, sig, args, kwargs, started, result=_cancelled())
+            return _cancelled()
+        if isinstance(result, dict):
+            result = with_status(result)
         _log_call(fn.__name__, call_id, session, sig, args, kwargs, started, result=result)
         if isinstance(result, dict):
             session.tool_results.append({"tool": fn.__name__, "call_id": call_id, "result": result})
@@ -171,12 +266,16 @@ def is_urgent(result: Any) -> bool:
 
 def _scheduled(wrapped: ToolFn) -> ToolFn:
     """``wrapped`` returning an INTERRUPT-scheduled ``FunctionResponse`` for an urgent result (ADK reads the
-    scheduling of a returned FunctionResponse and sends its ``response``); any other result is returned as is."""
+    scheduling of a returned FunctionResponse and sends its ``response``) and a SILENT one for a call cancelled by
+    Stop; any other result is returned as is."""
     from google.genai import types
 
     @functools.wraps(wrapped)
     async def run(*args: Any, **kwargs: Any) -> Any:
         result = await wrapped(*args, **kwargs)
+        if isinstance(result, dict) and result.get("cancelled") is True:  # stopped: Live must not speak it
+            return types.FunctionResponse(response=result,
+                                          scheduling=types.FunctionResponseScheduling.SILENT)
         if is_urgent(result):
             return types.FunctionResponse(response=result,
                                           scheduling=types.FunctionResponseScheduling.INTERRUPT)

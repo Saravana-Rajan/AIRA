@@ -39,6 +39,10 @@ NOTICE_PREFIX = ("[SYSTEM NOTE] Tell the owner now, in the language he is speaki
 # A safety notice (stop, obstacle, cannot see) cuts in: the rest of the answer being spoken is dropped.
 URGENT_PREFIX = ("[SYSTEM NOTE] URGENT, for his safety: stop what you are saying and tell the owner at once, in the "
                  "language he is speaking, in a few words, keeping every number exactly as given")
+# Long-press Stop: Live is told to drop the answer; the relay stays silent until the owner's next real turn.
+STOP_NOTE = ("[SYSTEM NOTE] The owner pressed Stop: stop talking now, drop any pending answer and any tool result "
+             "still coming, say nothing, and wait for his next question.")
+STOP_LIFT_WORDS = 2  # a final transcript of at least this many words is the owner's next turn (not noise)
 # Reply-language lock: an answer outside the session language and the shop's languages is corrected at once,
 # and its caption is hidden; one correction per LANG_LOCK_GAP_S so a wordy model never gets a flood of notes.
 LANG_LOCK_GAP_S = 5.0
@@ -128,6 +132,8 @@ class LiveBridge:
         self._connected = False
         self._closed = False
         self._muted = False
+        # Long-press Stop: nothing reaches the phone until the owner's next real turn (not turn end, not reconnect).
+        self._stopped = False
         self._answering = False  # Live is speaking an answer that has not ended (turn_complete / interrupted)
         self._task: asyncio.Task | None = None
         self._pending_text: list[tuple[str, float, bool]] = []  # (text, queued at, is a notice)
@@ -236,10 +242,16 @@ class LiveBridge:
             return False
         return True
 
-    async def send_text(self, text: str, _notice: bool = False) -> None:
-        """Typed text, notices and corrections. Queued while reconnecting and sent once Live is back."""
+    async def send_text(self, text: str, _notice: bool = False, user_turn: bool = False) -> None:
+        """Typed text, notices and corrections. Queued while reconnecting and sent once Live is back.
+
+        ``user_turn`` (the owner typed or tapped) and a notice end a long-press stop; an internal correction does
+        not."""
         if self._closed:
             return
+        if self._stopped and (user_turn or _notice):
+            self._stopped = False  # what follows is new; the stopped answer stays muted until Live cuts it
+            self._muted = self._muted or self._answering
         if self._muted and not self._answering:
             # A long-press with nothing playing (e.g. to stop guidance) must not swallow the answer to this new
             # prompt. If the stopped answer is still streaming, the mute lifts when Live cuts or ends it.
@@ -283,13 +295,35 @@ class LiveBridge:
     def _lang_name(self) -> str:
         return LANG_NAME.get(str(self.session.lang or "en"), "English")
 
-    def hard_stop(self) -> None:
-        """Long-press: drop the rest of the current answer (audio + captions).
+    async def hard_stop(self) -> None:
+        """Long-press: drop the rest of the current answer (audio + captions) and tell Live to stop.
 
-        The mute lifts when the next question starts (the owner speaks, or a new text prompt arrives while nothing
-        is playing), when Live cuts or ends the stopped answer, or on a reconnect.
+        Nothing reaches the phone until the owner's next real turn: a final transcript of at least
+        ``STOP_LIFT_WORDS`` words, typed text or a tap (``user_turn``), or a notice (vendor reply, alert), which
+        is new. Turn end, an interruption and a reconnect do not lift it. Late tool results are dropped by
+        ``tool_runtime.stop``. Idempotent: a repeated long-press sends no second note.
         """
         self._muted = True
+        if self._stopped:
+            return
+        self._stopped = True
+        diag("live", event="hard_stop", session=self.session.session_id, answering=self._answering)
+        if self._connected and self._backend is not None:
+            try:
+                await self._backend.send_text(STOP_NOTE)
+            except Exception as exc:  # the pump notices a dead connection; the relay stays silent anyway
+                log.debug("stop note send failed: %s", exc)
+
+    def user_turn(self) -> None:
+        """The owner started a new turn on the phone (talk tap): a long-press stop ends."""
+        if not self._stopped:
+            return
+        self._stopped = False
+        self._muted = self._answering  # a stopped answer still streaming stays muted until Live cuts it
+
+    @property
+    def _silent(self) -> bool:
+        return self._muted or self._stopped
 
     def _queue_text(self, text: str, notice: bool = False) -> None:
         self._pending_text.append((text, _monotonic(), notice))
@@ -359,11 +393,11 @@ class LiveBridge:
             self._answering = True
             if self._heard_at is not None:
                 self._log_first_audio()
-            if not self._muted and ev.audio:
+            if not self._silent and ev.audio:
                 await s.send(AudioOutMsg(pcm24=base64.b64encode(ev.audio).decode()))
         elif ev.kind == "output_transcript":
             self._answering = True
-            if self._muted:  # the owner stopped this answer: he never hears these words
+            if self._silent:  # the owner stopped this answer: he never hears these words
                 return
             await self._output_caption(ev)
         elif ev.kind == "input_transcript":
@@ -374,6 +408,8 @@ class LiveBridge:
             if ev.final:
                 self._final_at = self._heard_at
                 utterance, self._in_partial = ev.text or self._in_partial, ""
+                if self._stopped and len(utterance.split()) >= STOP_LIFT_WORDS:
+                    self._stopped = False  # the owner's next question after a long-press
                 # AIRA follows the speaker: the catalog and the phone's labels switch with him, but only when he
                 # clearly speaks another language (sticky: "Amo" in Latin letters is still Tamil).
                 lang, unclear = await self._judge(utterance)
@@ -515,12 +551,16 @@ class LiveBridge:
         spoken = " ".join([*self._out_final, self._out_partial]).strip()
         self._out_final, self._out_partial = [], ""
         current = self._take_tool_results()
-        if spoken and current:  # only turns where a tool ran; prices may also come from the catalog prompt
+        # Turns where a tool ran, and every turn that states a count of objects (an answer from the live video
+        # included): a count needs a tool result or must be hedged as an estimate. Prices may also come from the
+        # catalog prompt.
+        if spoken and (current or safety.states_object_count(spoken)):
             recent = [r for turn in self._recent_results for r in turn]
             facts = last_catalog_facts(getattr(self.session, "shop_id", ""))  # PRODUCTS list numbers in the prompt
             # Off the event pump: the check may call an LLM (safety.llm_verify), and the next answer's audio
             # must never queue behind it.
-            task = asyncio.create_task(self._safety_check(spoken, current + recent + ([facts] if facts else [])))
+            task = asyncio.create_task(
+                self._safety_check(spoken, current + recent + ([facts] if facts else []), current))
             self._listener_tasks.add(task)
             task.add_done_callback(self._listener_tasks.discard)
         if current:
@@ -535,16 +575,19 @@ class LiveBridge:
         entries.clear()
         return [r for r in taken if isinstance(r, dict)]
 
-    async def _safety_check(self, spoken: str, results: list[dict]) -> None:
+    async def _safety_check(self, spoken: str, results: list[dict], current: list[dict] | None = None) -> None:
+        """Post-hoc: the answer has already been spoken; a violation makes AIRA correct itself right after."""
         try:
-            verdict = safety.check_numbers(spoken, results)
+            verdict = safety.check_turn(spoken, current if current is not None else results, results)
             if verdict.ok and verdict.needs_llm:
                 verdict = await safety.llm_verify(spoken, results)
             if verdict.ok:
                 return
-            log.warning("AIRA said numbers no tool returned: %s", verdict.unexpected)
+            log.warning("AIRA said numbers no tool returned: %s (unverified=%s)", verdict.unexpected,
+                        verdict.unverified)
             await self._send(CueMsg(cue="warn"))
-            await self.send_text(safety.correction_text(verdict.unexpected, self.session.lang))
+            await self.send_text(safety.correction_text(verdict.unexpected, self.session.lang,
+                                                        unverified=verdict.unverified))
         except Exception:
             log.exception("safety check failed")
 
@@ -640,11 +683,22 @@ def input_transcription_config(types, session):
                                 vocabulary=last_vocabulary(str(getattr(session, "shop_id", "") or "")))
 
 
-def live_extras(types) -> dict:
-    """Extra Live RunConfig fields. Proactive audio (on unless AIRA_PROACTIVE_AUDIO=0): the model may stay
-    silent when speech is not meant for it, e.g. Sam chatting with a customer, and answers only when needed."""
+def live_extras(types, model: str | None = None) -> dict:
+    """Extra Live RunConfig fields: proactive audio, so the model may stay silent when speech is not meant for
+    it (Sam chatting with a customer) and answers only when needed.
+
+    Gemini 3.8 Live has proactive audio and affective dialogue on by default, and its developer guide says not
+    to pass the legacy ``proactivity`` / ``enable_affective_dialog`` fields, so nothing is added for a 3.8 Live
+    model. An older Live model (an AIRA_MODEL_LIVE override) still gets proactivity asked for explicitly, unless
+    AIRA_PROACTIVE_AUDIO=0."""
     import os
 
+    if model is None:
+        from aira_live.models import model_for
+
+        model = model_for("live")
+    if model.startswith("gemini-3.8-live"):
+        return {}
     if os.environ.get("AIRA_PROACTIVE_AUDIO", "1") == "0" or not hasattr(types, "ProactivityConfig"):
         return {}
     return {"proactivity": types.ProactivityConfig(proactive_audio=True)}

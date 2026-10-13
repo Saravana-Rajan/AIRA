@@ -12,6 +12,7 @@ Coordinates stay normalised 0-1000: points [y, x], boxes [ymin, xmin, ymax, xmax
 from __future__ import annotations
 
 import asyncio
+import math
 import re
 import time
 from dataclasses import dataclass, field
@@ -177,6 +178,7 @@ WALK_EN: dict[str, str] = {
     "walk.looking_right": "Turn slowly right. I'm looking.",
     "walk.memory": "The {name} was last seen {place}.",
     "walk.keep_going": "Keep going.",
+    "walk.hold": "Stop. Hold still. Let me check you are at the {name}.",
 }
 
 
@@ -309,6 +311,54 @@ class Speech:
 
 
 _DIRECTION = frozenset({"walk.left", "walk.right", "walk.ahead", "walk.ahead_slow"})
+
+
+# --- freshness: how old a look may be when its line is said --------------------------------------------------------
+# Age = seconds since the frame was TAKEN, measured when the line is about to be said (tools.walk.capture_age_s).
+# Typical age today: phone encode ~0.1-0.2 s + upload (unmeasured, ~0.1-0.3 s) + wait for the 1 s walk tick
+# (0-1 s) + ER low thinking 2-4 s (timeout 6 s) = about 2.3-5 s. A 1.5 s limit for everything would silence almost
+# every ER line, so the limit depends on what the line asks him to do:
+#   stop (hazard / obstacle)        always said: stopping on old news is safe
+#   go with a step count            <= WALK_MAX_AGE_S; up to WALK_DIRECTION_MAX_AGE_S the count is dropped
+#                                   ("fridge ahead. Keep going slowly."); older: never said
+#   turn / ahead / keep going /     <= WALK_DIRECTION_MAX_AGE_S (a bearing changes slowly at his pace; a count of
+#   search lines                    steps does not survive 2-3 s of walking)
+#   arrived (ends the walk)         <= WALK_MAX_AGE_S, else "Stop. Hold still." and the walk goes on until a frame
+#                                   taken while he held still confirms it (tools.walk)
+# A missing or invalid age is treated as infinitely old.
+WALK_MAX_AGE_S = 1.5
+WALK_DIRECTION_MAX_AGE_S = 3.0
+
+
+def _age(age_s: float | None) -> float:
+    try:
+        age = float(age_s)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return float("inf")
+    return age if math.isfinite(age) and age >= 0 else float("inf")
+
+
+def expired(age_s: float | None) -> bool:
+    """True when a look this old may say nothing but a stop."""
+    return _age(age_s) > WALK_DIRECTION_MAX_AGE_S
+
+
+def gate(ins: Instruction, age_s: float | None, name: str) -> Instruction | None:
+    """The instruction (for target ``name``) as it may be said now, from a look whose frame was taken ``age_s``
+    seconds ago (None: unknown): itself, a weaker one (no step count; "hold still" instead of "arrived"), or None
+    (too old to say)."""
+    age = _age(age_s)
+    if ins.urgent and not ins.arrived:
+        return ins
+    if ins.arrived:
+        if age <= WALK_MAX_AGE_S:
+            return ins
+        return Instruction("walk.hold", _en("walk.hold", name=name), urgent=True)
+    if age > WALK_DIRECTION_MAX_AGE_S:
+        return None
+    if ins.key == "walk.ahead" and age > WALK_MAX_AGE_S:
+        return Instruction("walk.ahead_slow", _en("walk.ahead_slow", name=name))
+    return ins
 
 
 def overlay_objects(view: WalkView, name: str) -> list[dict]:

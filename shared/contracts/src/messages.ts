@@ -21,7 +21,11 @@ export type ClientMsg =
   | { t: "audio"; pcm16: string }
   // `changed`/`labels` only on purpose "live": the view settled on something new (labels: the phone's own
   // detector labels, at most MAX_FRAME_LABELS), so the server may nudge Live to speak up.
-  | { t: "frame"; id: string; jpeg: string; w: number; h: number; ts: number; purpose: FramePurpose; changed?: boolean; labels?: string[] }
+  // `requestId`: echoed from the request_frame this frame answers (every frame of a burst), absent on continuous
+  // and background frames. `captureTs`: phone clock (epoch ms) when the camera picture was grabbed, before encoding;
+  // `ts` is stamped after encoding. The server only uses `ts - captureTs` (same clock), never compares either with
+  // its own clock.
+  | { t: "frame"; id: string; jpeg: string; w: number; h: number; ts: number; purpose: FramePurpose; changed?: boolean; labels?: string[]; requestId?: string; captureTs?: number }
   | { t: "text"; text: string }
   | { t: "event"; name: ClientEventName; data: Record<string, unknown> }
   | { t: "confirm"; id: string; answer: ConfirmAnswer; value?: string }
@@ -61,7 +65,10 @@ export type ServerMsg =
   // unclear: a finished user transcript that looks like a language the shop does not usually speak (shop doc
   // "languages"); probably misheard, so AIRA asks to repeat instead of answering it. The caption marks it.
   | { t: "transcript"; role: TranscriptRole; text: string; final: boolean; lang?: string; unclear?: boolean }
-  | { t: "request_frame"; purpose: FramePurpose; burst?: { count: number; intervalMs: number }; continuous?: boolean; stop?: boolean }
+  // requestId: a one-off (single/burst) request's id; the phone echoes it on every frame it captures for it.
+  // ttlMs: how long after the phone RECEIVES the request it may still start a capture (relative, so no clock sync);
+  // past it the server has stopped waiting, so the phone skips the capture.
+  | { t: "request_frame"; purpose: FramePurpose; burst?: { count: number; intervalMs: number }; continuous?: boolean; stop?: boolean; requestId?: string; ttlMs?: number }
   | { t: "target"; frameId: string; label: string; point: Point; box?: Box; confidence: number }
   | { t: "count"; sku: string; counted: number; expected: number | null; final: boolean; confidence: number }
   | { t: "state"; entity: Entity; id: string; state: string; summary: string }
@@ -148,7 +155,8 @@ export function isClientMsg(x: unknown): x is ClientMsg {
       return isStr(x.pcm16);
     case "frame":
       return isStr(x.id) && isStr(x.jpeg) && isInt(x.w) && isInt(x.h) && isNum(x.ts) && inList(FRAME_PURPOSES, x.purpose) &&
-        optional(x.changed, isBool) && optional(x.labels, isLabelList);
+        optional(x.changed, isBool) && optional(x.labels, isLabelList) && optional(x.requestId, isStr) &&
+        optional(x.captureTs, isNum);
     case "text":
       return isStr(x.text);
     case "event":
@@ -179,7 +187,8 @@ export function isServerMsg(x: unknown): x is ServerMsg {
         optional(x.unclear, isBool);
     case "request_frame":
       return inList(FRAME_PURPOSES, x.purpose) && optional(x.burst, isBurst) &&
-        optional(x.continuous, isBool) && optional(x.stop, isBool);
+        optional(x.continuous, isBool) && optional(x.stop, isBool) && optional(x.requestId, isStr) &&
+        optional(x.ttlMs, isInt);
     case "target":
       return isStr(x.frameId) && isStr(x.label) && isPoint(x.point) && optional(x.box, isBox) && isNum(x.confidence);
     case "count":

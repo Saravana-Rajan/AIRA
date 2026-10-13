@@ -13,7 +13,7 @@ const h = vi.hoisted(() => ({
 
 vi.mock("../src/camera/capture", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../src/camera/capture")>()),
-  captureFrame: vi.fn(async (purpose: string) => ({ t: "frame", id: "fr1", jpeg: "AAAA", w: 640, h: 480, ts: 1, purpose })),
+  captureToolFrame: vi.fn(async (purpose: string) => ({ t: "frame", id: "fr1", jpeg: "AAAA", w: 640, h: 480, ts: 1, purpose })),
   startContinuous: vi.fn(() => () => {}),
   setQualityListener: vi.fn(),
   stopCamera: vi.fn(),
@@ -36,7 +36,7 @@ vi.mock("../src/ambient/watch", () => ({
 import { initApp } from "../src/core/app";
 import { noteBumpWarning, startHoldUpWatch } from "../src/ambient/watch";
 import type { Settings } from "../src/core/types";
-import { captureFrame, setQualityListener, startContinuous, stopCamera } from "../src/camera/capture";
+import { captureToolFrame, setQualityListener, startContinuous, stopCamera } from "../src/camera/capture";
 import { trackFingertip } from "../src/guidance/hands";
 import { guideTo, stopTone } from "../src/guidance/tones";
 import { startBumpGuard } from "../src/walk/start";
@@ -114,7 +114,7 @@ describe("wireCameraAndGuidance", () => {
     wire();
     socket.emit({ t: "request_frame", purpose: "invoice" });
     await flush();
-    expect(captureFrame).toHaveBeenCalledWith("invoice");
+    expect(captureToolFrame).toHaveBeenCalledWith("invoice");
     expect(socket.sent.filter((m: any) => m.t === "frame")).toEqual([expect.objectContaining({ t: "frame", id: "fr1", purpose: "invoice" })]);
     // ...followed by its frame_req diagnostics line (sizes and timings only)
     expect(socket.sent.find((m: any) => m.t === "log" && m.tag === "frame_req"))
@@ -163,7 +163,7 @@ describe("wireCameraAndGuidance", () => {
   });
 
   it("a camera failure speaks one hint and sends nothing", async () => {
-    vi.mocked(captureFrame).mockRejectedValueOnce(new Error("NotAllowedError"));
+    vi.mocked(captureToolFrame).mockRejectedValueOnce(new Error("NotAllowedError"));
     wire();
     socket.emit({ t: "request_frame", purpose: "ask" });
     await flush();

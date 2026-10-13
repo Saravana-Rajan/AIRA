@@ -12,7 +12,7 @@ from pydantic import BaseModel
 
 from aira_live.contracts import Burst, RequestFrameMsg
 from aira_live.diag import diag
-from aira_live.frames import Frame, FrameStore
+from aira_live.frames import EXPIRED_KEEP_S, Frame, FrameStore
 from aira_live.i18n.detect import LangStep, judge_lang
 
 SendFn = Callable[[BaseModel], Awaitable[None]]
@@ -26,7 +26,7 @@ FRAME_REUSE_S = 1.0
 REUSE_MIN_SIDE = 640
 # Frames that reach the server after a request's wait ended (up to LATE_FRAME_WINDOW_S later) are logged as
 # ``late_frame``: a slow phone and a slow uplink look the same from the tool, and this says by how much it missed.
-LATE_FRAME_WINDOW_S = 10.0
+LATE_FRAME_WINDOW_S = EXPIRED_KEEP_S
 _monotonic = time.monotonic  # tests swap in a clock
 _WS = re.compile(r"\s+")
 
@@ -56,7 +56,7 @@ class Session:
         # make no ER 2 call: the owner's own question gets the camera and the model first.
         self.owner_asks = 0
         self._send = send
-        self._late_watches: set[asyncio.Task] = set()
+        self._late_watches: set[asyncio.Task] = set()  # kept for callers/tests: late frames are logged inline now
 
     @property
     def owner_busy(self) -> bool:
@@ -123,56 +123,73 @@ class Session:
         from aira_live.vision import precount
         return precount.cached(self.session_id, product)
 
-    async def request_frames(self, purpose: str, count: int = 1, interval_ms: int = 0,
-                             timeout_s: float = 4.0) -> list[Frame]:
-        """Ask the phone for ``count`` fresh frames and wait for them ([] on timeout).
+    @property
+    def scene_facts(self):
+        """What AIRA last counted in this session, with age and evidence (``aira_live.scene_facts``); created on
+        first use."""
+        sf = self.__dict__.get("_scene_facts")
+        if sf is None:
+            from aira_live.scene_facts import SceneFacts
+            sf = self.__dict__["_scene_facts"] = SceneFacts()
+        return sf
 
-        "Fresh" means newer than the newest frame already stored for ``purpose``. Frame timestamps come from
-        the phone's clock, so they are never compared with the server's clock.
+    async def request_frames(self, purpose: str, count: int = 1, interval_ms: int = 0,
+                             timeout_s: float = 4.0, partial: bool = False) -> list[Frame]:
+        """Ask the phone for ``count`` fresh frames and wait for them ([] on timeout; with ``partial`` the
+        frames of THIS request that did arrive, possibly fewer than ``count``, never another request's).
+
+        Each call has its own request id: the phone echoes it on the frames it captures for this request, and
+        only those frames satisfy it (``FrameStore.open_request``), so a late frame of an earlier timed-out
+        request, or a concurrent same-purpose request (background pre-count vs the owner's count), never hands
+        this one someone else's picture. A phone that predates request ids gets frames of ``purpose`` that
+        arrived after this request opened, each frame going to one request only. Frames older than the
+        purpose's capture-age limit (``frames.MAX_CAPTURE_AGE_MS``) are refused. Phone timestamps are never
+        compared with the server's clock. ``ttl_ms`` tells the phone not to start a capture after we stopped
+        waiting (measured from when the phone received the request).
         """
-        since = self.frames.last_ts(purpose)
+        rid = self.frames.open_request(purpose, count)
         burst = Burst(count=count, interval_ms=interval_ms) if count > 1 else None
         started = time.perf_counter()
-        diag("request_frame", session=self.session_id, purpose=purpose, count=count, interval_ms=interval_ms,
-             timeout_s=timeout_s, since_ts=since)
-        await self.send(RequestFrameMsg(purpose=purpose, burst=burst))
-        frames = await self.frames.wait_for(count=count, purpose=purpose, after_ts=since, timeout_s=timeout_s)
+        frames: list[Frame] = []
+        try:
+            diag("request_frame", session=self.session_id, purpose=purpose, count=count, interval_ms=interval_ms,
+                 timeout_s=timeout_s, request_id=rid)
+            await self.send(RequestFrameMsg(purpose=purpose, burst=burst, request_id=rid,
+                                            ttl_ms=max(1, round(timeout_s * 1000))))
+            frames = await self.frames.wait_request(rid, timeout_s)
+            if partial and len(frames) < count:
+                frames = self.frames.own_frames(rid)
+        finally:
+            got = self.frames.got(rid)
+            on_late = (self._late_logger(purpose, rid, count, started, timeout_s)
+                       if len(frames) < count else None)
+            self.frames.close_request(rid, on_late=on_late)
         diag("frames_got", session=self.session_id, purpose=purpose, wanted=count, got=len(frames),
-             waited_ms=round((time.perf_counter() - started) * 1000), bytes=[len(f.jpeg_b64) for f in frames],
-             sizes=[[f.w, f.h] for f in frames])
+             request_id=rid, waited_ms=round((time.perf_counter() - started) * 1000),
+             bytes=[len(f.jpeg_b64) for f in frames], sizes=[[f.w, f.h] for f in frames],
+             phone_age_ms=[round(f.phone_age_ms) for f in frames])
         diag("latency", stage="frame_wait", session=self.session_id, purpose=purpose, reused=False,
              ms=round((time.perf_counter() - started) * 1000), got=len(frames), wanted=count)
-        if len(frames) < count:
-            self._watch_late(purpose, since, len(frames), count, started, timeout_s)
+        if len(frames) < count and got:
+            diag("frames_partial", session=self.session_id, purpose=purpose, request_id=rid, got=got, wanted=count)
         return frames
 
-    def _watch_late(self, purpose: str, since: float, got: int, wanted: int, started: float,
-                    timeout_s: float) -> None:
-        """After a request's wait ran out, keep listening up to LATE_FRAME_WINDOW_S more: a frame that arrives
-        then is logged as ``late_frame`` (how late, how big), never dropped silently. Nothing waits on this."""
-        async def watch() -> None:
-            late = await self.frames.wait_for(count=got + 1, purpose=purpose, after_ts=since,
-                                              timeout_s=LATE_FRAME_WINDOW_S)
-            if not late:
-                return
-            f = late[got]
+    def _late_logger(self, purpose: str, rid: str, wanted: int, started: float, timeout_s: float):
+        """After a request's wait ran out, the first frame that still arrives for it (its id, or for an old
+        phone its purpose, within ``frames.EXPIRED_KEEP_S``) is logged as ``late_frame`` (how late, how big):
+        it satisfies nothing, but is never dropped silently. Nothing waits on this."""
+        def late(f: Frame, got_in_time: int) -> None:
             waited_ms = round((time.perf_counter() - started) * 1000)
-            diag("late_frame", severity="WARNING", session=self.session_id, purpose=purpose, wanted=wanted,
-                 got_in_time=got, waited_ms=waited_ms, late_ms=max(0, waited_ms - round(timeout_s * 1000)),
-                 bytes=len(f.jpeg_b64), size=[f.w, f.h])
-
-        try:
-            task = asyncio.get_running_loop().create_task(watch())
-        except RuntimeError:
-            return
-        self._late_watches.add(task)
-        task.add_done_callback(self._late_watches.discard)
+            diag("late_frame", severity="WARNING", session=self.session_id, purpose=purpose, request_id=rid,
+                 wanted=wanted, got_in_time=got_in_time, waited_ms=waited_ms,
+                 late_ms=max(0, waited_ms - round(timeout_s * 1000)), bytes=len(f.jpeg_b64), size=[f.w, f.h])
+        return late
 
     async def look_frame(self, purpose: str, timeout_s: float = 4.0, max_age_s: float = FRAME_REUSE_S,
                          min_side: int = REUSE_MIN_SIDE) -> list[Frame]:
         """One frame for a single-frame look (camera_ask "look"/"read", identify, free-text find): a frame of any
-        purpose that reached the server less than ``max_age_s`` ago and is at least ``min_side`` px on its long
-        side is used at once; otherwise one fresh frame is requested (``request_frames``). Never for a count:
+        purpose whose capture age (the phone's own grab -> send time plus time since it reached the server, see
+        ``FrameStore.recent``) is under ``max_age_s`` and is at least ``min_side`` px on its long side is used at once; otherwise one fresh frame is requested (``request_frames``). Never for a count:
         a count needs its own fresh, sharp count frame."""
         hit = self.frames.recent(max_age_s, min_side=min_side)
         if hit is not None:

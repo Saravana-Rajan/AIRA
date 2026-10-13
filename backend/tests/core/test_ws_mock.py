@@ -112,6 +112,26 @@ def test_oversized_frame_rejected_not_stored(monkeypatch):
     assert stored == ["ok"]
 
 
+def test_frame_request_id_and_capture_ts_reach_the_store(monkeypatch):
+    stored = []
+    real_add = FrameStore.add
+
+    def spy(self, frame):
+        stored.append(frame)
+        return real_add(self, frame)
+
+    monkeypatch.setattr(FrameStore, "add", spy)
+    with TestClient(app).websocket_connect("/ws", headers=ORIGIN) as ws:
+        ws.send_json(HELLO); ws.receive_json()
+        frame = {"t": "frame", "id": "r", "jpeg": "AAAA", "w": 1, "h": 1, "ts": 2, "purpose": "count",
+                 "requestId": "rq1", "captureTs": 1.5}
+        ws.send_json(frame)
+        ws.send_json(frame)  # a duplicate: stored once, never given to a tool twice
+        ws.send_json({"t": "stop"})
+        assert ws.receive_json() == {"t": "cue", "cue": "done"}
+    assert [(f.request_id, f.capture_ts) for f in stored] == [("rq1", 1.5), ("rq1", 1.5)]
+
+
 def test_confirm_message_resolves_proposal(store):
     async def commit(payload, value):
         return {"say_en": "Order sent to Sakthi vendor."}

@@ -90,17 +90,17 @@ async def _call(tool: ToolFn, args: dict, ns: argparse.Namespace) -> None:
     frame_ids = itertools.count()
     last_ts = 0.0
 
-    def add_frames(n: int, frame_purpose: str) -> None:
+    def add_frames(n: int, frame_purpose: str, request_id: str | None = None) -> None:
         nonlocal last_ts
         for jpeg in itertools.islice(itertools.cycle(jpegs), n):
             last_ts = max(time.time() * 1000, last_ts + 1)  # strictly newer than every frame already stored
             s.frames.add(Frame(id=f"img{next(frame_ids)}", jpeg_b64=jpeg, w=0, h=0, ts=last_ts,
-                               purpose=frame_purpose))
+                               purpose=frame_purpose, request_id=request_id, capture_ts=last_ts))
 
     async def send(msg: BaseModel) -> None:
         print(dump_server_msg(msg), flush=True)
         if isinstance(msg, RequestFrameMsg) and jpegs and not msg.stop:
-            add_frames(msg.burst.count if msg.burst else 1, msg.purpose)
+            add_frames(msg.burst.count if msg.burst else 1, msg.purpose, msg.request_id)  # echo it, like the phone
 
     s = Session(uid="devtools", shop_id=ns.shop, lang=ns.lang, verbosity="short", send=send)
     if ns.session_id:

@@ -39,7 +39,8 @@ MIN_CONF = 0.5
 MAX_OBJECTS = 3           # "what's in front of me": up to three objects, nearest first
 FRAME_TIMEOUT_S = 6.0     # the phone may be busy with ambient frames; an owner question waits a little longer
 COUNT_FRAME_TIMEOUT_S = 15.0  # count only: a slow phone may need several seconds to encode the count photo
-COUNT_FRAMES = 1          # a count is ONE frame read twice in parallel, spoken only when the two reads agree
+COUNT_FRAMES = 2          # a count is TWO fresh frames ~400 ms apart, each read once (two independent reads)
+COUNT_INTERVAL_MS = 400
 LOOK_TIMEOUT_S = 4.0      # per-attempt model timeout for a look / path answer (one retry)
 READ_MIN_SIDE = 1280      # a reused frame for reading text must be a full-size owner frame
 DIST_ORDER = ("near", "arm", "far")
@@ -385,52 +386,116 @@ def _about(a: CountResult | None, b: CountResult | None) -> int | None:
     return round((a.count + b.count) / 2)
 
 
-def _count_say_en(n: int, phrase: str, approx: bool) -> str:
-    what = f" {phrase}" if phrase else ""
-    return f"About {n}{what}." if approx else f"I can see {n}{what}."
+def _count_say_en(n: int, phrase: str, *, verified: bool, single: bool, hidden: int, edge: int) -> str:
+    """What was seen in the current view (never stock), worded by how sure it is."""
+    what = phrase or "items"
+    if not verified:
+        line = f"About {n} {what} in the current view."
+        line += (" That was one look; I could not double-check it." if single
+                 else "" if n > SMALL_COUNT else " My two looks differed, so this is not a checked count.")
+    elif hidden:
+        more = "another item is" if hidden == 1 else "some items are"
+        return (f"I can clearly identify {n} {what}, but {more} partly hidden. "
+                f"Please show me that part of the shelf.")
+    else:
+        line = f"I can see {n} {what} in the current view."
+    if edge:
+        line += " Some may be cut off at the edge."
+    return line
+
+
+def _distinct(frames: list) -> list:
+    """The frames that are really different pictures: a repeated id or identical bytes is the same image, and two
+    reads of one image are never independent."""
+    out, ids, blobs = [], set(), set()
+    for f in frames:
+        if f.id in ids or f.jpeg_b64 in blobs:
+            continue
+        ids.add(f.id)
+        blobs.add(f.jpeg_b64)
+        out.append(f)
+    return out[-COUNT_FRAMES:]
+
+
+async def _count_frames(s: Session) -> list:
+    """Two fresh count frames ~COUNT_INTERVAL_MS apart. When the burst came back short, the one frame of THIS
+    request that did arrive is still used (as one unverified read); another request's frame never is."""
+    return await s.request_frames("count", count=COUNT_FRAMES, interval_ms=COUNT_INTERVAL_MS,
+                                  timeout_s=COUNT_FRAME_TIMEOUT_S, partial=True)
+
+
+def _fact_item(item: str, product: str) -> str:
+    """The scene-fact key of a count: the answer's English phrase ("Hatsun Curd packets", "milk cartons")."""
+    tgt = count_target(item, product)
+    return tgt.phrase or tgt.generic
+
+
+def _count_fields(frames: list, *, verified: bool, approx: bool, reads: int, hidden: int = 0, edge: int = 0,
+                  unknown: int = 0, scene: float = 0.0) -> dict:
+    """The provenance every count result carries (additive): what is visible now, how it was checked."""
+    return {"scope": "visible_now", "source": "fresh_count", "verified": verified, "approx": approx,
+            "exact": verified and not approx,
+            "evidence": {"frames": len(frames), "reads": reads, "agreed": verified, "unknown": unknown,
+                         "hidden": hidden, "edge": edge},
+            "observed_at": frames[-1].ts if frames else None, "frame_ids": [f.id for f in frames], "scene": scene}
 
 
 async def _count(s: Session, item: str = "", product: str = "") -> dict:
-    """One frame, counted twice in parallel; a number only when the two reads agree. Off by one: a third read
-    breaks the tie. Anything else is "not sure" plus how to hold the camera. Never an invented count.
-
-    A full shelf whose two reads are close gives ``approx`` true ("about N"); ``exact`` is false then, so an
-    estimate can never pass as an exact stock or delivery number."""
+    """Two fresh count frames ~400 ms apart, each read once, in parallel. A number is ``verified`` (and ``exact``)
+    only when the reads of the two different frames agree. Off by one: a third read of the newer frame breaks the
+    tie, verified only when it agrees with the OTHER frame's read (agreeing with its own frame's read is two looks
+    at one picture: "about N", unverified). A single frame is one read, "about N", never verified. A full shelf
+    whose two reads are close gives "about N" (``approx``). Anything else is "not sure" plus how to hold the
+    camera. Never an invented count, never a stock number (``scope`` "visible_now")."""
     tgt = count_target(item, product)
-    frames = await s.request_frames("count", count=COUNT_FRAMES, timeout_s=COUNT_FRAME_TIMEOUT_S)
+    scene = s.scene_facts.scene
+    frames = _distinct(await _count_frames(s))
     diag("camera_ask", stage="frames", session=s.session_id, kind="count", lang=s.lang, frames=len(frames),
          bytes=[len(f.jpeg_b64) for f in frames], sizes=[[f.w, f.h] for f in frames])
     if not frames:
         diag("camera_ask", severity="WARNING", stage="no_frames", session=s.session_id, kind="count",
              timeout_s=COUNT_FRAME_TIMEOUT_S)
-        return {**_no_camera("count"), "count": None, "approx": False, "exact": False, "agreed": False}
-    pair = [frames[-1], frames[-1]]  # the model reads the same photo twice: two independent counts to agree
+        return {**_no_camera("count"), "count": None, "visible_count": None, "agreed": False,
+                **_count_fields([], verified=False, approx=False, reads=0, scene=scene)}
     started = time.perf_counter()
-    reads: list[CountResult | None] = list(await asyncio.gather(*(_count_one(f, tgt) for f in pair)))
     n: int | None = None
-    a, b = reads
-    approx = _about(a, b)
-    if approx is not None:
-        n = approx
-    elif _usable(a) and _usable(b):
-        if a.count == b.count:
-            n = a.count
-        elif abs(a.count - b.count) == 1:
-            third = await _count_one(pair[-1], tgt)
-            reads.append(third)
-            if _usable(third) and third.count in (a.count, b.count):
-                n = third.count
+    verified = False
+    single = len(frames) == 1
+    approx: int | None = None
+    if single:
+        reads: list[CountResult | None] = [await _count_one(frames[0], tgt)]
+        if _usable(reads[0]):
+            n = reads[0].count
+    else:
+        reads = list(await asyncio.gather(*(_count_one(f, tgt) for f in frames)))
+        a, b = reads
+        approx = _about(a, b)
+        if approx is not None:
+            n = approx
+        elif _usable(a) and _usable(b):
+            if a.count == b.count:
+                n, verified = a.count, True
+            elif abs(a.count - b.count) == 1:
+                third = await _count_one(frames[-1], tgt)
+                reads.append(third)
+                if _usable(third) and third.count == a.count:      # agrees with the other frame: independent
+                    n, verified = a.count, True
+                elif _usable(third) and third.count == b.count:    # agrees with its own frame only
+                    n = b.count
     ms = round((time.perf_counter() - started) * 1000)
     good = [r for r in reads if r is not None]
     conf = min((r.confidence for r in good), default=0.0) if len(good) == len(reads) else 0.0
+    unknown = max((r.unknown for r in good), default=0)
+    hidden = max((r.hidden for r in good), default=0)
+    edge = max((r.edge for r in good), default=0)
     diag("camera_ask", stage="count", session=s.session_id, kind="count", frames=len(frames),
          counts=[r.count if r else None for r in reads], confidences=[r.confidence if r else None for r in reads],
          hints=[r.aim_hint if r else None for r in reads], models=[r.model if r else None for r in reads],
-         agreed=n is not None, approx=approx is not None, third=len(reads) > 2,
-         product_filter=tgt.product is not None, ms=ms)
+         agreed=verified, verified=verified, approx=approx is not None, third=len(reads) > 2,
+         product_filter=tgt.product is not None, unknown=unknown, hidden=hidden, edge=edge, ms=ms)
     shown = next((r for r in reversed(reads) if r is not None and r.count is not None), None)
     if shown is not None:
-        await listing.publish_boxes(s, shown.objects, "camera_ask:count", frame_id=pair[-1].id)
+        await listing.publish_boxes(s, shown.objects, "camera_ask:count", frame_id=frames[-1].id)
     hints = {r.aim_hint for r in good if r.aim_hint}
     hint = hints.pop() if len(hints) == 1 and len(good) == len(reads) else ""
     what = {"label": tgt.generic if item else "", "product": tgt.product or ""}
@@ -444,17 +509,34 @@ async def _count(s: Session, item: str = "", product: str = "") -> dict:
         else:
             reason = "reads_disagree"
         h = short_hint(hint) or "hold_still"
-        say_en = f"Not sure of the count. {HINT_EN[h] if h in HINT_EN else HINT_EN['hold_still']}"
-        return {"kind": "count", "sure": False, "count": None, "approx": False, "exact": False, "agreed": False,
+        unread = " I can't read the label on some packs, so one may be the one you asked about." if unknown else ""
+        say_en = f"Not sure of the count.{unread} {HINT_EN[h] if h in HINT_EN else HINT_EN['hold_still']}"
+        return {"kind": "count", "sure": False, "count": None, "visible_count": None, "agreed": False,
                 "reason": reason, "hint": h, "aim_hint": hint, **what, "say_en": say_en, "facts": say_en,
-                "answer": "", "objects": [], "confidence": conf}
-    is_approx = approx is not None
-    say_en = _count_say_en(n, tgt.phrase, is_approx)
-    if hint:
+                "answer": "", "objects": [], "confidence": conf,
+                **_count_fields(frames, verified=False, approx=False, reads=len(reads), hidden=hidden, edge=edge,
+                                unknown=unknown, scene=scene)}
+    say_en = _count_say_en(n, tgt.phrase, verified=verified, single=single, hidden=hidden, edge=edge)
+    if hint and not (verified and hidden):
         say_en = f"{say_en} {hint_en(hint)}".strip()
-    return {"kind": "count", "sure": True, "count": n, "approx": is_approx, "exact": not is_approx,
-            "agreed": not is_approx, "hint": short_hint(hint), "aim_hint": hint, **what, "say_en": say_en,
-            "facts": say_en, "answer": say_en, "objects": shown.objects if shown else [], "confidence": conf}
+    return {"kind": "count", "sure": True, "count": n, "visible_count": n, "agreed": verified,
+            "hint": short_hint(hint), "aim_hint": hint, **what, "say_en": say_en, "facts": say_en,
+            "answer": say_en, "objects": shown.objects if shown else [], "confidence": conf,
+            **_count_fields(frames, verified=verified, approx=not verified, reads=len(reads), hidden=hidden,
+                            edge=edge, unknown=unknown, scene=scene)}
+
+
+def _remember(s: Session, out: dict, item: str, product: str, previous: dict | None) -> dict:
+    """Record a count the owner is told as a scene fact, and attach the previous one of the same item (with its
+    age and whether the camera moved since) so "are you sure?" can compare honestly."""
+    if previous is not None:
+        out["previous"] = previous
+    if out.get("frame_ids"):
+        s.scene_facts.record(item=_fact_item(item, product), count=out.get("count"), approx=bool(out.get("approx")),
+                             verified=bool(out.get("verified")), source=out.get("source", "fresh_count"),
+                             observed_at=out.get("observed_at"), evidence=out.get("evidence"),
+                             scene=out.get("scene"))
+    return out
 
 
 async def camera_ask(question: str, kind: Literal["look", "read", "count", "path", "list"] = "look",
@@ -477,19 +559,41 @@ async def camera_ask(question: str, kind: Literal["look", "read", "count", "path
     English say_en meaning hint. Say the result to the owner in the language he is speaking; say numbers
     exactly as given; if approx is true say 'about'. sure false means not sure: say so and give the hint;
     never guess a count or an object yourself. An approx count is an estimate: never use it as a stock,
-    delivery or sale quantity.
+    delivery or sale quantity. A count is what is visible in the camera view now (scope visible_now), never
+    the shop's stock (stock_query has stock, only if he asks). verified true means two different frames agreed;
+    verified false (one look, or a quick earlier look: source background_precount) must be said as 'about'
+    and as not checked. When he asks "are you sure?", call this again for a fresh count (or scene_recall to
+    say what was counted before, how long ago and how it was checked); never repeat an earlier number as new.
     """
     s: Session = get_session()
     kind = normalize_kind(kind)
+    previous = s.scene_facts.previous(_fact_item(item, product)) if kind == "count" else None
     if kind == "count":
-        # the background count of this scene, if there is one
+        # the background count of this scene, if there is one: a provisional "about N", once per scene
         precounted = await precount.answer(s, kind, item=item, product=product)
         if precounted is not None:
-            return precounted
+            return _remember(s, precounted, item, product, previous)
     async with owner_first(s):
         if kind == "count":
-            return await _count(s, item, product)
+            return _remember(s, await _count(s, item, product), item, product, previous)
         return await _ask(s, kind, question)
+
+
+async def scene_recall(item: str = "") -> dict:
+    """What you last counted through the camera in this conversation, for "are you sure?", "what did you count?"
+    or "how many did you say?". Read-only: it never looks again and is never a fresh count.
+
+    item: the thing he asks about as a short English noun ("milk carton"); empty for everything recent.
+
+    Each fact has its count, approx / verified status, source, age_s and camera_moved_since. Say its age and how
+    it was checked (verified: two frames agreed; otherwise a quick look, 'about'); if the camera moved since,
+    say it may no longer match. Offer to count again (camera_ask kind count) for a fresh number. Never say it
+    as stock.
+    """
+    s: Session = get_session()
+    out = s.scene_facts.recall(item)
+    diag("scene_recall", session=s.session_id, found=out["found"], facts=len(out["facts"]))
+    return out
 
 
 async def _ask(s: Session, kind: str, question: str) -> dict:

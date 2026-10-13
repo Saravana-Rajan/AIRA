@@ -15,6 +15,7 @@
   {"t":"request_frame","purpose":"identify_held","stop":true},
   {"t":"request_frame","purpose":"preview","continuous":true},
   {"t":"request_frame","purpose":"preview","stop":true},
+  {"t":"request_frame","purpose":"count","burst":{"count":3,"intervalMs":0},"requestId":"r1a2b3","ttlMs":4000},
   {"t":"target","frameId":"f1","label":"Sakthi curd 1 L","point":[412,530],"box":[390,505,435,555],"confidence":0.82},
   {"t":"target","frameId":"f1","label":"Aavin milk 500 ml","point":[0,1000],"confidence":0.5},
   {"t":"count","sku":"sakthi_curd_1l","counted":28,"expected":30,"final":false,"confidence":0.9},

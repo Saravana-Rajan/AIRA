@@ -34,7 +34,7 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, ValidationError
 
-from aira_live import config, confirm, live_video, monitor, monitor_hooks, rtc, sessions
+from aira_live import config, confirm, live_video, monitor, monitor_hooks, rtc, sessions, tool_runtime
 from aira_live.auth import AuthError, verify_hello
 from aira_live.cameras.sources import is_camera_session
 from aira_live.contracts import (
@@ -222,6 +222,8 @@ async def live_frame(session: Session, bridge: LiveBridge | None, frame: Frame, 
     own preview stream, so the same picture is never relayed twice. With ``precount_on`` (AIRA_PRECOUNT) a
     settled scene change also starts a background count (``vision.precount``). True when it reached Live."""
     session.frames.remember_recent(frame)  # look_frame / latest_frame reuse it (768 px)
+    if changed:  # a new scene: earlier counts no longer describe the view (aira_live.scene_facts)
+        session.scene_facts.camera_moved(frame.ts)
     if not video or bridge is None:
         return False
     if precount_on and not session.walking:  # a walk guidance owns the camera: no background count
@@ -271,6 +273,7 @@ async def _end_session(session: Session, bridge: LiveBridge | None) -> None:
     await _guidance_hook("stop_guidance", session)
     await _ambient_hook("stop_session", session)
     precount.forget(session.session_id)
+    tool_runtime.end_session(session.session_id)  # running tool calls cancelled, their results dropped
     await _lane_hook("aira_live.tools.walk", "stop_session", session)
     if bridge is not None:
         await bridge.close()
@@ -365,12 +368,17 @@ async def ws_endpoint(ws: WebSocket) -> None:
                 await monitor.preview_on_join(session)  # the dashboard is watching: stream the small preview
                 if bridge is not None and settings.er2:  # ambient mode (ER-based) starts after the greeting
                     await _ambient_hook("on_session_start", session)
-            elif isinstance(msg, StopMsg):  # long-press: stop guidance and the answer being spoken
+            elif isinstance(msg, StopMsg):  # long-press: stop guidance, tool calls, proposals and the answer
+                if bridge:  # first: nothing more reaches the phone, Live is told to stop
+                    await bridge.hard_stop()
                 if session:
+                    tool_runtime.stop(session.session_id)  # in-flight tools cancelled, late results dropped
+                    try:
+                        await confirm.cancel_pending(session.session_id)  # no commit without a fresh yes
+                    except Exception:
+                        log.exception("cancelling proposals on stop failed")
                     await _guidance_hook("stop_guidance", session)
                     await _lane_hook("aira_live.tools.walk", "stop_session", session)
-                if bridge:
-                    bridge.hard_stop()
                 await send(CueMsg(cue="done"))
             elif isinstance(msg, LogMsg):  # a phone diagnostic: logged, never answered, capped per socket
                 if log_limit.allow():
@@ -385,7 +393,7 @@ async def ws_endpoint(ws: WebSocket) -> None:
                 if session:
                     monitor.transcript(session, "owner", msg.text, final=True, lang=lang)
                 if bridge:
-                    await bridge.send_text(msg.text)
+                    await bridge.send_text(msg.text, user_turn=True)
                 else:
                     await send(TranscriptMsg(role="aira", text=line("mock.echo", lang, text=msg.text), final=True,
                                              lang=session.lang if session else None))
@@ -395,7 +403,8 @@ async def ws_endpoint(ws: WebSocket) -> None:
                 if bridge:  # mock mode has no Live session: audio is accepted and dropped
                     await bridge.send_audio(msg.pcm16)
             elif isinstance(msg, FrameMsg):
-                frame = Frame(id=msg.id, jpeg_b64=msg.jpeg, w=msg.w, h=msg.h, ts=msg.ts, purpose=msg.purpose)
+                frame = Frame(id=msg.id, jpeg_b64=msg.jpeg, w=msg.w, h=msg.h, ts=msg.ts, purpose=msg.purpose,
+                              request_id=msg.request_id, capture_ts=msg.capture_ts)
                 if msg.purpose == monitor.PREVIEW_PURPOSE:
                     # The monitor's own stream: relayed to the dashboard only, never stored for the tools and
                     # never shown to Gemini.
@@ -405,9 +414,11 @@ async def ws_endpoint(ws: WebSocket) -> None:
                     await live_frame(session, bridge, frame, video=settings.live_video,
                                      changed=bool(msg.changed), labels=msg.labels, precount_on=settings.precount and settings.er2)
                     continue
-                session.frames.add(frame)
+                stored = session.frames.add(frame)  # "stale"/"too_old"/"duplicate": never given to a tool
                 diag("frame", session=session.session_id, purpose=msg.purpose, id=msg.id, bytes=len(msg.jpeg),
-                     w=msg.w, h=msg.h)
+                     w=msg.w, h=msg.h, request_id=msg.request_id, stored=stored)
+                if stored == "duplicate":
+                    continue
                 await monitor.publish_frame(session, frame)  # a no-op unless a monitor watches this shop
             elif isinstance(msg, BoxesMsg):  # the phone's own boxes: relayed to the monitor, never answered
                 if session:  # a walk with me in progress: the phone's detector can say "Stop." before ER does
@@ -431,11 +442,14 @@ async def ws_endpoint(ws: WebSocket) -> None:
                         await bridge.send_text(
                             f"[CONFIRMATION] The owner answered '{msg.answer}' on the phone for {msg.id}. "
                             f"Result facts: {facts}. Tell him the result briefly, in the language he is "
-                            "speaking, numbers exactly as given. Do not call confirm_action for it again.")
+                            "speaking, numbers exactly as given. Do not call confirm_action for it again.",
+                            user_turn=True)
                     else:  # no Live voice: the English meaning is the caption
                         await send(TranscriptMsg(role="aira", text=str(result.get("say_en", "")), final=True))
             elif isinstance(msg, EventMsg):
                 monitor.client_event(session, msg.name, msg.data)
+                if bridge and msg.name == "talk":  # a talk tap is the owner's next turn: a long-press stop ends
+                    bridge.user_turn()
                 await _guidance_hook("handle_client_event", session, msg.name, msg.data)
             elif isinstance(msg, RtcMsg):  # WebRTC signalling for a dashboard monitor: relayed, never read
                 if rtc_limit.allow():

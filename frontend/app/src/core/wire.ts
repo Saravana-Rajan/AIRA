@@ -3,6 +3,7 @@
 // `WireEnv`, so every rule here is tested with fakes.
 import type { ClientMsg, CueName, Lang, ServerMsg } from "@aira/contracts";
 import { AiraSocket } from "../net/socket";
+import { micDropCount, micMaySend } from "../net/sendPriority";
 import { OfflineQueue, defaultStore, type QueueStore } from "../net/offline-queue";
 import { initApp } from "./app";
 import { clientLog, loadBuildInfo, shortText, type BuildInfo } from "./clientLog";
@@ -44,11 +45,11 @@ export const SPEAK_STALE_MS = 8_000;
 export const SPEAK_WAIT_GAP_MS = 400;
 const SPEAK_POLL_MS = 250;
 /**
- * Mic chunks are dropped while this many bytes sit unsent on the socket (about half a second of 32 ms
- * chunks as JSON). Old audio must never queue up behind a stalled link: AIRA would hear it seconds late
- * and answer late. Dropping a little speech during a stall is the lesser harm.
+ * Mic chunks are dropped only while more than MIC_MAX_BUFFERED_BYTES sit unsent on the socket (net/sendPriority).
+ * Every camera stream stops well below that cap, so under congestion video is skipped first and the owner's speech
+ * keeps going; on a truly stalled link a little speech is dropped rather than heard seconds late.
  */
-export const MIC_MAX_BUFFERED_BYTES = 24_000;
+export { MIC_MAX_BUFFERED_BYTES } from "../net/sendPriority";
 
 /** The identity of a spoken line: trimmed, lowercased, punctuation and symbols dropped, spaces collapsed. */
 export function normaliseSpeech(text: string): string {
@@ -319,7 +320,9 @@ export function wireApp(opts: WireOpts): WiredApp {
   // - the same sentence (ignoring case, punctuation and spacing) within SPEAK_DEDUPE_MS is spoken once;
   // - screen-reader mode writes to the aria-live region only, never to speechSynthesis.
   let lastSpoken: { key: string; at: number } | null = null;
-  let waiting: { text: string; at: number } | null = null;
+  // - a server error line ("important") is deferred the same way, never dropped for being near Live audio, and a
+  //   lesser line arriving while it waits does not displace it (it is dropped instead).
+  let waiting: { text: string; at: number; important: boolean } | null = null;
   let waitTimer: ReturnType<typeof setTimeout> | null = null;
   const liveBusy = () => playback.msSinceAudio() < SPEAK_WAIT_GAP_MS;
   const sayNow = (text: string) => {
@@ -359,14 +362,19 @@ export function wireApp(opts: WireOpts): WiredApp {
     waiting = null;
     sayNow(text);
   };
+  const speakLocal = (text: string, important = false) => {
+    if (!liveBusy()) { sayNow(text); return; }
+    if (waiting?.important && !important) {
+      clientLog("speak", { text: shortText(text), dropped: "behind_error" });
+      return;
+    }
+    waiting = { text, at: Date.now(), important }; // the newest line replaces an older one: TTS would cancel it anyway
+    if (!waitTimer) drainWaiting();
+  };
   const api = initApp({
     socket,
     settings,
-    speakImpl: (text) => {
-      if (!liveBusy()) { sayNow(text); return; }
-      waiting = { text, at: Date.now() }; // the newest line replaces an older one: TTS would cancel it anyway
-      if (!waitTimer) drainWaiting();
-    },
+    speakImpl: (text) => speakLocal(text),
     earconImpl: (n) => { if (ctx) tryRun(() => env.playEarcon(ctx!, n)); },
     hapticImpl: (n) => tryRun(() => env.vibrate(n)),
     langImpl: () => uiLang,
@@ -429,7 +437,7 @@ export function wireApp(opts: WireOpts): WiredApp {
     confirm,
     earcon: (n) => api.earcon(n),
     haptic: (n) => api.haptic(n),
-    speak: (t) => api.speak(t),
+    speak: (t, kind) => { if (kind === "error") speakLocal(t, true); else api.speak(t); },
     stopSpeech: () => { dropWaiting(); env.speech?.cancel(); },
     ctx: () => ({ mock, msSinceLiveAudio: playback.msSinceAudio(), screenReaderMode: api.settings.screenReaderMode }),
     ui: (m) => setView(viewFor(m)),
@@ -510,8 +518,8 @@ export function wireApp(opts: WireOpts): WiredApp {
         onChunk: (b64) => {
           // Sent at once, one 32 ms chunk per call. Never queued behind a stalled socket: see MIC_MAX_BUFFERED_BYTES.
           const buffered = socket.bufferedAmount?.() ?? 0;
-          if (buffered > MIC_MAX_BUFFERED_BYTES) {
-            clientLog("mic_drop", { buffered }, { minGapMs: 2000 });
+          if (!micMaySend(buffered)) {
+            clientLog("mic_drop", { buffered, drops: micDropCount() }, { minGapMs: 2000 });
             return;
           }
           if (api.send({ t: "audio", pcm16: b64 })) lastMicChunkAt = Date.now();
@@ -608,6 +616,8 @@ export function wireApp(opts: WireOpts): WiredApp {
     dropWaiting();
     env.speech?.cancel();
     local("talk");
+    // The owner's turn: on the server this lifts a long-press Stop even for a one-word question.
+    api.send({ t: "event", name: "talk", data: {} });
     thinking.arm();
     void openMic();
     startSession();

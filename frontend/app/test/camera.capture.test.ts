@@ -31,9 +31,21 @@ describe("captureFrame", () => {
   it("builds an exact frame message", async () => {
     const f = await captureFrame("guide");
     expect(f).toMatchObject({ t: "frame", jpeg: "AAAA", w: 640, h: 360, purpose: "guide" });
-    expect(Object.keys(f).sort()).toEqual(["h", "id", "jpeg", "purpose", "t", "ts", "w"]);
+    expect(Object.keys(f).sort()).toEqual(["captureTs", "h", "id", "jpeg", "purpose", "t", "ts", "w"]);
     expect(typeof f.id).toBe("string");
     expect(typeof f.ts).toBe("number");
+  });
+  it("stamps captureTs when the picture is grabbed, before encoding; ts after", async () => {
+    let clock = 1_000;
+    const spy = vi.spyOn(Date, "now").mockImplementation(() => clock);
+    try {
+      __setCaptureDeps({ encoder: async () => { clock += 450; return "AAAA"; } }); // a slow encode
+      const f = await captureFrame("count");
+      expect(f.captureTs).toBe(1_000);
+      expect(f.ts).toBe(1_450);
+    } finally {
+      spy.mockRestore();
+    }
   });
   it("a monitor preview frame is small (360 px) and light (quality 0.45); other purposes keep 640 px / 0.8", async () => {
     expect(PREVIEW_MAX_SIDE).toBe(360);

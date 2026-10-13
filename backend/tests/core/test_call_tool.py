@@ -46,7 +46,9 @@ async def test_runs_the_tool_wrapped_with_frames_and_an_idem_key(tmp_path, monke
     rc = await call_tool.run(["delivery_count", "--args", '{"sku": "sakthi_curd_1l"}', "--image", str(img)])
     lines = _lines(capsys.readouterr().out)
     assert rc == 0
-    assert lines[0] == {"t": "request_frame", "purpose": "count", "burst": {"count": 2, "intervalMs": 0}}
+    req = lines[0]
+    assert isinstance(req.pop("requestId"), str) and req.pop("ttlMs") == 1000
+    assert req == {"t": "request_frame", "purpose": "count", "burst": {"count": 2, "intervalMs": 0}}
     assert lines[-1]["say"] == "sakthi_curd_1l: 2 frames" and lines[-1]["purpose"] == "count"
     assert len(lines[-1]["idem"]) == 32
 
@@ -124,7 +126,7 @@ async def test_confirm_flag_on_a_result_that_needs_no_confirmation(monkeypatch, 
     _use_tools(monkeypatch, stock_query)
     assert await call_tool.run(["stock_query", "--confirm", "yes"]) == 0
     captured = capsys.readouterr()
-    assert _lines(captured.out) == [{"say": "Twelve left."}]
+    assert _lines(captured.out) == [{"say": "Twelve left.", "status": "ok", "retryable": False, "message": "Twelve left."}]
     assert "nothing to confirm" in captured.err
 
 
@@ -138,7 +140,7 @@ async def test_preloaded_images_take_the_tools_default_purpose(tmp_path, monkeyp
 
     _use_tools(monkeypatch, product_identify)
     assert await call_tool.run(["product_identify", "--image", str(img)]) == 0
-    assert _lines(capsys.readouterr().out)[-1] == {"say": "ok", "frames": 1}
+    assert _lines(capsys.readouterr().out)[-1] == {"say": "ok", "frames": 1, "status": "ok", "retryable": False, "message": "ok"}
 
 
 async def test_unknown_tool_exits_2_and_lists_the_tools(monkeypatch, capsys):
@@ -177,7 +179,7 @@ def test_main_returns_quietly_on_success_and_exits_with_the_error_code(monkeypat
 
     _use_tools(monkeypatch, day_summary)
     call_tool.main(["day_summary"])  # success: no SystemExit
-    assert _lines(capsys.readouterr().out) == [{"say": "ok"}]
+    assert _lines(capsys.readouterr().out) == [{"say": "ok", "status": "ok", "retryable": False, "message": "ok"}]
     with pytest.raises(SystemExit) as exc:
         call_tool.main(["missing_tool"])
     assert exc.value.code == 2

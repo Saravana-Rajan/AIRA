@@ -232,6 +232,41 @@ describe("request_frame handler", () => {
     expect(release).toHaveBeenCalledTimes(1);
   });
 
+  it("echoes the request id on every frame of a burst (and adds none without one)", async () => {
+    const s = setup();
+    await s.handle({ t: "request_frame", purpose: "count", burst: { count: 3, intervalMs: 0 }, requestId: "r42" });
+    expect(s.sent.map((f) => f.requestId)).toEqual(["r42", "r42", "r42"]);
+    const old = setup();
+    await old.handle({ t: "request_frame", purpose: "count" });
+    expect("requestId" in old.sent[0]).toBe(false);
+  });
+
+  it("skips a request whose ttl passed before the capture could start", async () => {
+    let clock = 0;
+    const logs: string[] = [];
+    const s = setup({ now: () => clock, log: (tag: string) => { logs.push(tag); } });
+    const hold = s.handle({ t: "request_frame", purpose: "ask", requestId: "r1", ttlMs: 100 });
+    await hold;
+    expect(s.sent).toHaveLength(1); // in time
+    const late = setup({
+      now: () => clock, log: (tag: string) => { logs.push(tag); },
+      capture: vi.fn(async (purpose: any) => { clock += 80; return { t: "frame", id: `x${clock}`, jpeg: "A", w: 1, h: 1, ts: clock, purpose } as any; }),
+    });
+    clock = 0;
+    await late.handle({ t: "request_frame", purpose: "count", burst: { count: 3, intervalMs: 0 }, requestId: "r2", ttlMs: 100 });
+    // capture 1 starts at 0 (ok), capture 2 at 80 (ok), capture 3 would start at 160 > 100: skipped
+    expect(late.sent.map((f) => f.requestId)).toEqual(["r2", "r2"]);
+    expect(logs).toContain("frame_req_expired");
+    expect(late.deps.capture).toHaveBeenCalledTimes(2);
+  });
+
+  it("a request without ttlMs (old server) never expires on the phone", async () => {
+    let clock = 0;
+    const s = setup({ now: () => clock, capture: vi.fn(async (purpose: any) => { clock += 10_000; return { t: "frame", id: `y${clock}`, jpeg: "A", w: 1, h: 1, ts: clock, purpose } as any; }) });
+    await s.handle({ t: "request_frame", purpose: "count", burst: { count: 3, intervalMs: 0 } });
+    expect(s.sent).toHaveLength(3);
+  });
+
   it("defaultSleep resolves after the given delay", async () => {
     vi.useFakeTimers();
     try {

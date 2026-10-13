@@ -29,6 +29,7 @@ EXPECTED = {
     "stock_add": ["product", "quantity", "unit"], "supplier_add": ["name", "channel"],
     "price_query": ["product", "page"],  # the owner's price board, spoken (tools/prices.py)
     "walk_to": ["target"], "walk_stop": [],  # walk with me (tools/walk.py)
+    "scene_recall": ["item"],  # what AIRA last counted, with age and evidence (tools/camera.py; read-only)
 }
 
 OPTIONAL_DEFAULTS = {
@@ -43,6 +44,7 @@ OPTIONAL_DEFAULTS = {
     ("memory_forget", "item"): None, ("memory_remembering", "item"): None,
     ("price_query", "product"): None, ("price_query", "page"): 0,
     ("camera_ask", "kind"): "look", ("camera_ask", "item"): "", ("camera_ask", "product"): "",
+    ("scene_recall", "item"): "",
 }
 
 LITERALS = {
@@ -138,7 +140,7 @@ def test_harness_prints_server_msgs_then_result_and_loads_images(capsys, monkeyp
                     "--purpose", "count", "--shop", "test_shop", "--lang", "ta"])
     lines = capsys.readouterr().out.strip().splitlines()
     assert json.loads(lines[0]) == {"t": "cue", "cue": "thinking"}
-    assert json.loads(lines[-1]) == {"say_en": "Counted sakthi_curd_1l", "frames": 2}
+    assert json.loads(lines[-1]) == {"say_en": "Counted sakthi_curd_1l", "frames": 2, "status": "ok", "retryable": False, "message": "Counted sakthi_curd_1l"}
     assert seen == {"shop": "test_shop", "lang": "ta", "frames": [("img0", "count"), ("img1", "count")]}
 
 
@@ -154,8 +156,10 @@ def test_harness_answers_request_frame_like_the_phone(capsys, monkeypatch, tmp_p
     monkeypatch.setitem(call_tool.TOOLS_BY_NAME, "fake_cash", fake_cash)
     call_tool.main(["fake_cash", "--args", '{"amount": 60}', "--image", str(img)])
     lines = capsys.readouterr().out.strip().splitlines()
-    assert json.loads(lines[0]) == {"t": "request_frame", "purpose": "cash", "burst": {"count": 3, "intervalMs": 100}}
-    assert json.loads(lines[-1]) == {"say_en": "ok", "frames": ["cash", "cash", "cash"]}
+    req = json.loads(lines[0])
+    assert isinstance(req.pop("requestId"), str) and req.pop("ttlMs") == 1000
+    assert req == {"t": "request_frame", "purpose": "cash", "burst": {"count": 3, "intervalMs": 100}}
+    assert json.loads(lines[-1]) == {"say_en": "ok", "frames": ["cash", "cash", "cash"], "status": "ok", "retryable": False, "message": "ok"}
 
 
 @pytest.mark.parametrize("bad", ["not json", "[1]"])

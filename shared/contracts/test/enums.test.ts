@@ -35,7 +35,7 @@ describe("enums match the interface registry", () => {
   it("entities, confirm kinds, client events and error codes", () => {
     expect(ENTITIES).toEqual(["order", "delivery", "sale", "payment", "inventory"]);
     expect(CONFIRM_KINDS).toEqual(["order", "payment", "sale", "discrepancy", "generic"]);
-    expect(CLIENT_EVENT_NAMES).toEqual(["visibility", "network", "fingertip_in_target"]);
+    expect(CLIENT_EVENT_NAMES).toEqual(["visibility", "network", "fingertip_in_target", "talk"]);
     expect(ERROR_CODES).toEqual(["network", "model_timeout", "camera", "permission", "unsupported", "internal"]);
   });
 

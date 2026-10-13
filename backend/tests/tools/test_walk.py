@@ -228,6 +228,7 @@ async def test_stale_result_is_dropped(session):
     s, rec = session
     loop = make(s, [THERE], Clock(), frames=False)
     loop._look = lambda frame, target: _ret(FAR if frame.ts == 5 else NOTHING)
+    loop._frame_age = lambda frame: 0.5
     await loop.process(_frame(5))
     await loop.process(_frame(3))          # an older capture finishing later: ignored
     assert loop.acted_ts == 5 and _spoken(rec) == ["fridge ahead, about 3 steps."]
@@ -235,6 +236,161 @@ async def test_stale_result_is_dropped(session):
 
 async def _ret(v):
     return v
+
+
+# --- freshness: a look is judged by how long ago its frame was taken, at the moment its line is said ---------------
+
+CHAIR = WalkView((400, 500), (300, 420, 500, 580), (Obstacle("chair", (600, 300, 900, 550)),))
+
+
+def aged(s, clock, ages: dict[float, float | None] | None = None, delay: dict[float, float] | None = None):
+    """A loop whose fake ER takes ``delay[ts]`` fake seconds and whose frame age is ``ages[ts]`` (when given) or
+    the fake time since the frame was taken (frame ts == fake capture time)."""
+    loop = make(s, [FAR], clock, frames=False)
+    loop._frame_age = lambda f: ages[f.ts] if ages is not None else clock.t - f.ts
+    loop.replies = {}
+
+    async def look(frame, target):
+        loop.calls.append(frame.ts)
+        clock.t += (delay or {}).get(frame.ts, 0.0)
+        return loop.replies.get(frame.ts, FAR)
+
+    loop._look = look
+    return loop
+
+
+async def test_a_slow_look_is_too_old_to_say_go(session, monkeypatch):
+    s, rec = session
+    notices = _bridge(monkeypatch)
+    clock = Clock(10.0)
+    loop = aged(s, clock, delay={10.0: 0.5, 20.0: 2.4, 30.0: 4.0})
+    await loop.process(_frame(10.0))                    # answered in 0.5 s: the count is said
+    clock.t = 20.0
+    await loop.process(_frame(20.0))                    # 2.4 s: direction only, no count
+    clock.t = 30.0
+    await loop.process(_frame(30.0))                    # 4 s: expired, never said
+    assert _spoken(rec) == ["fridge ahead, about 3 steps.", "fridge ahead. Keep going slowly."]
+    assert '"steps_about"' not in notices[1]
+    assert loop.acted_ts == 30.0 and loop.stale_streak == 1
+
+
+async def test_an_older_frame_finishing_later_is_dropped(session):
+    s, rec = session
+    clock = Clock(10.0)
+    gate_a = asyncio.Event()
+    loop = aged(s, clock, ages={1.0: 0.5, 2.0: 0.5})
+
+    async def look(frame, target):
+        if frame.ts == 1.0:
+            await gate_a.wait()                         # the older look is slow ...
+            return CHAIR
+        return FAR
+
+    loop._look = look
+    older = asyncio.create_task(loop.process(_frame(1.0)))
+    await asyncio.sleep(0)
+    await loop.process(_frame(2.0))                     # ... the newer one finishes first and is acted on
+    gate_a.set()
+    await older                                         # the late, older answer is ignored even if a stop
+    assert loop.acted_ts == 2.0 and _spoken(rec) == ["fridge ahead, about 3 steps."]
+
+
+async def test_a_stop_is_said_even_when_old(session, monkeypatch):
+    s, rec = session
+    notices = _bridge(monkeypatch)
+    loop = aged(s, Clock(), ages={1.0: 9.0, 2.0: None})
+    loop.replies = {1.0: CHAIR, 2.0: WalkView(obstacles=(Obstacle("wet floor", (600, 300, 900, 550)),))}
+    await loop.process(_frame(1.0))
+    await loop.process(_frame(2.0))
+    assert _spoken(rec) == ["Stop. chair in front. Move a little right.", "Stop. wet floor in front."]
+    assert notices.urgent == [True, True]
+
+
+async def test_a_frame_without_a_capture_time_is_stale(session):
+    s, rec = session
+    loop = make(s, [FAR], Clock(), frames=False)       # the real age: from the frame store's arrival time
+    await loop.process(_frame(5))                       # never stored: its arrival is unknown
+    assert _spoken(rec) == [] and loop.stale_streak == 1
+
+
+def test_capture_age_from_server_arrival_and_phone_delay():
+    import dataclasses
+
+    from aira_live.frames import FrameStore
+
+    store = FrameStore()
+
+    @dataclasses.dataclass(frozen=True)
+    class Captured:
+        id: str
+        jpeg_b64: str
+        w: int
+        h: int
+        ts: float
+        purpose: str
+        capture_ts: float | None = None
+
+    plain = _frame(1_700_000_000_000)
+    early = Captured("a", TINY, 10, 10, 1_700_000_000_000, "walk", capture_ts=1_699_999_999_800)
+    future = Captured("b", TINY, 10, 10, 1_700_000_000_000, "walk", capture_ts=1_700_000_000_500)
+    for f in (plain, early, future):
+        store.add(f)
+    arrived = store._recent_frames[-1][0]
+    assert walk.capture_age_s(store, plain, now=arrived + 1.0) == pytest.approx(1.0, abs=0.01)
+    assert walk.capture_age_s(store, early, now=arrived + 1.0) == pytest.approx(1.2, abs=0.01)   # + phone encode time
+    assert walk.capture_age_s(store, future, now=arrived + 1.0) is None                # capture after send
+    assert walk.capture_age_s(store, _frame(1_700_000_000_000), now=arrived) is None   # never arrived here
+    assert walk.capture_age_s(store, _frame(0), now=arrived) is None                   # no phone time at all
+
+
+async def test_repeated_stale_looks_ask_him_for_a_fresh_view(session, monkeypatch):
+    import json
+
+    s, rec = session
+    notices = _bridge(monkeypatch)
+    loop = aged(s, Clock(), ages={1.0: 5.0, 2.0: 5.0, 3.0: 5.0, 4.0: 5.0})
+    for ts in (1.0, 2.0, 3.0):
+        await loop.process(_frame(ts))
+    assert _spoken(rec) == ["Please slow down, I need a fresh look."]
+    assert json.loads(notices[0].split(" (meaning: ")[0]) == {"action": "slow_down", "reason": "view_too_old",
+                                                              "wait_for": "fresh_look"}
+    await loop.process(_frame(4.0))                     # the count starts again: not said every tick
+    assert len(_spoken(rec)) == 1 and loop.active
+
+
+async def test_arrival_needs_a_fresh_view(session):
+    s, rec = session
+    clock = Clock(100.0)
+    loop = aged(s, clock, ages={1.0: 3.0, 2.0: 3.0, 3.0: 3.0})
+    loop.replies = {1.0: THERE, 2.0: THERE, 3.0: THERE}
+    await loop.process(_frame(1.0))                     # 3 s old: "stop, hold still", the walk goes on
+    assert loop.active and loop.ended is None
+    assert _spoken(rec) == ["Stop. Hold still. Let me check you are at the fridge."]
+    clock.t += 1.0
+    await loop.process(_frame(2.0))                     # taken before he was told to hold still: not proof
+    assert loop.active
+    clock.t += 3.5
+    await loop.process(_frame(3.0))                     # taken while he was holding still: he is there
+    assert loop.ended == "arrived" and _spoken(rec)[-1].startswith("Stop. The fridge is right in front")
+
+
+async def test_an_old_hold_still_no_longer_confirms(session):
+    s, rec = session
+    clock = Clock(100.0)
+    loop = aged(s, clock, ages={1.0: 3.0, 2.0: 3.0})
+    loop.replies = {1.0: THERE, 2.0: THERE}
+    await loop.process(_frame(1.0))
+    clock.t += walk.HOLD_MAX_S + 5                      # he may be walking again: a new hold, not an arrival
+    await loop.process(_frame(2.0))
+    assert loop.active and loop.hold_at == clock.t
+
+
+async def test_a_fresh_arrival_ends_at_once(session):
+    s, rec = session
+    loop = aged(s, Clock(), ages={1.0: 1.0})
+    loop.replies = {1.0: THERE}
+    await loop.process(_frame(1.0))
+    assert loop.ended == "arrived"
 
 
 async def test_pipelines_two_looks_in_flight(session):
