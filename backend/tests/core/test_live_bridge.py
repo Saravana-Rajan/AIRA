@@ -140,6 +140,55 @@ async def test_go_away_reconnects_with_handle_and_listeners_survive(mk_session):
     await bridge.close()
 
 
+class Expires(FakeBackend):
+    """A Live stream that dies the way production did (2026-10-13, revision aira-live-00035): Gemini closes it
+    with 1008 'BidiGenerateContent session not found or expired'."""
+    EXPIRED = "1008 None. BidiGenerateContent session not found or expired"
+
+    def fail(self) -> None:
+        self._loop.call_soon_threadsafe(self._q.put_nowait, "EXPIRE")
+
+    async def events(self):
+        while True:
+            ev = await self._q.get()
+            if ev == "EXPIRE":
+                raise ConnectionError(self.EXPIRED)
+            if ev is None:
+                return
+            yield ev
+
+
+async def test_an_expired_live_session_reconnects_fresh_instead_of_resuming_the_dead_handle(mk_session):
+    """Production: after a 1008 'session not found or expired' every reconnect reused the dead resumption
+    handle, failed the same way 6 times, and AIRA went silent. The handle must be dropped: a fresh session."""
+    s, rec = mk_session()
+    b1, b2 = Expires(), FakeBackend()
+    bridge = _bridge(s, b1, b2)
+    await bridge.start()
+    b1.push(LiveEvent("resumption_handle", handle="h-dead"))
+    await settle()
+    b1.fail()
+    await wait_until(lambda: b2.started_with)
+    assert b2.started_with == [None]  # a new Live session, not a resume of the expired one
+    assert not _of(rec, "error")      # AIRA keeps working: no "can't reach the AI" line
+    b2.push(LiveEvent("input_transcript", text="hello", final=True))
+    await wait_until(lambda: [m.text for m in _of(rec, "transcript")] == ["hello"])
+    await bridge.close()
+
+
+async def test_an_ordinary_drop_still_resumes_with_the_handle(mk_session):
+    s, _ = mk_session()
+    b1, b2 = FakeBackend(), FakeBackend()
+    bridge = _bridge(s, b1, b2)
+    await bridge.start()
+    b1.push(LiveEvent("resumption_handle", handle="h2"))
+    await settle()
+    b1.end()  # the stream just ends (network blip): the conversation is resumed
+    await wait_until(lambda: b2.started_with)
+    assert b2.started_with == ["h2"]
+    await bridge.close()
+
+
 async def test_gives_up_after_max_reconnects_with_spoken_error(mk_session):
     s, rec = mk_session()
     b1 = FakeBackend()
