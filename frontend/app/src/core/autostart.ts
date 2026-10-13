@@ -38,11 +38,27 @@ export function isInstalledLaunch(win: Window = window): boolean {
 }
 
 /**
+ * True on an iPhone or iPad (Safari, a home-screen app, or any iOS browser: all run WebKit). iPadOS reports a Mac
+ * user agent, so a touch "Macintosh" counts too. iOS unlocks Web Audio, speech and the motion sensors only inside a
+ * user gesture, so there the Start tap is always needed. Never throws.
+ */
+export function isIOS(nav: Pick<Navigator, "userAgent" | "maxTouchPoints"> | undefined = globalThis.navigator): boolean {
+  try {
+    const ua = String(nav?.userAgent ?? "");
+    if (/iPhone|iPad|iPod/.test(ua)) return true;
+    return /Macintosh/.test(ua) && (nav?.maxTouchPoints ?? 0) > 1;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Skip the Start tap only for an owner who has tapped it once before (see the note above), and only when the
  * app was opened from the icon / the Assistant (installed) or the `?start=1` shortcut. A plain browser tab
  * keeps the one tap: that is where a judge, a developer or an e2e run looks at the Start screen.
+ * Never on iOS (`ios`): without a tap AIRA's voice, the earcons and the motion sensors stay locked there.
  */
-export function shouldAutoStart(o: { onboarded: boolean; search: string; installed: boolean }): boolean {
-  if (!o.onboarded) return false;
+export function shouldAutoStart(o: { onboarded: boolean; search: string; installed: boolean; ios?: boolean }): boolean {
+  if (!o.onboarded || o.ios) return false;
   return o.installed || wantsStart(o.search);
 }

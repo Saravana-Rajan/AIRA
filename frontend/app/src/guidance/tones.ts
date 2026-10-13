@@ -24,6 +24,16 @@ export function __setAudioContext(c: AudioContext | null) {
   lastShowHand = -Infinity;
 }
 
+/**
+ * Wiring: play the tones on the app's shared AudioContext, the one unlocked inside the Start tap (iOS Safari never
+ * starts a context created later, without a gesture). `shareToneContext(null, old)` lets go only while `old` is the
+ * one in use, so a disposed app never leaves the tones on a closed context.
+ */
+export function shareToneContext(c: AudioContext | null, old?: AudioContext): void {
+  if (c === null && old !== undefined && ctx !== old) return;
+  __setAudioContext(c);
+}
+
 function ensure(): AudioContext {
   ctx ??= new AudioContext();
   if (ctx.state === "suspended") void ctx.resume().catch(() => {});
