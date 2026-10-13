@@ -4,6 +4,8 @@
 // at least 2 steps landed in the last 2.5 s. The counter is pure (injected samples); startMotionSensor()
 // attaches it to the browser and copes with no sensor and the iOS permission prompt.
 
+import { motionAccess } from "../core/motionPermission";
+
 export type MotionSample = { t: number; x: number; y: number; z: number };
 
 /** Steps must be at least this far apart: cadence capped at 2.5 Hz. */
@@ -83,13 +85,8 @@ export async function startMotionSensor(counter: StepCounter = createStepCounter
   };
   const off: MotionSensor = { available: false, isWalking: () => false, stop() { /* nothing to stop */ } };
   if (!g.DeviceMotionEvent || typeof g.addEventListener !== "function") return off;
-  if (typeof g.DeviceMotionEvent.requestPermission === "function") {
-    try {
-      if ((await g.DeviceMotionEvent.requestPermission()) !== "granted") return off;
-    } catch {
-      return off;
-    }
-  }
+  // iOS: shares the answer to the prompt asked inside the Start tap (core/motionPermission); elsewhere no prompt.
+  if (typeof g.DeviceMotionEvent.requestPermission === "function" && !(await motionAccess("motion"))) return off;
   const handler = (e: MotionEvt) => {
     const a = e.accelerationIncludingGravity;
     if (!a) return;

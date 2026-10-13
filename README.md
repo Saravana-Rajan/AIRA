@@ -16,6 +16,18 @@ AIRA is a voice-first assistant that lets a blind shopkeeper run a small shop al
 | Shop Dashboard (live, read-only) | https://aira-shop.web.app/dashboard |
 | Architecture | [shared/docs/architecture.md](shared/docs/architecture.md) |
 
+### Use AIRA on iPhone
+
+AIRA runs in Safari. You do not need an app from the App Store.
+
+1. Open https://aira-shop.web.app in **Safari**.
+2. Tap **Share**, then **Add to Home Screen**, then **Add**. Open AIRA from the new icon. It opens full screen.
+3. Tap **Tap to start** once each time you open AIRA. iPhone only turns on sound, speech and the motion sensors after a tap.
+4. When iPhone asks, allow the **Camera**, the **Microphone** and **Motion & Orientation**. If you refuse motion, AIRA still works. It just cannot tell you to tilt the phone, and the bump guard only warns about things coming closer.
+5. Go to **Settings → Display & Brightness → Auto-Lock** and choose **Never** while you work. AIRA also asks iPhone to keep the screen on, but Auto-Lock is the safer choice.
+6. iPhone has no vibration for web apps. Every warning still plays its beep and is spoken, so keep one earphone in or the volume up.
+7. Keep the Ring/Silent switch on Ring. In Silent mode iPhone can mute AIRA's beeps until the microphone is on.
+
 ## What AIRA does
 
 | # | Sam says or does | AIRA does |
