@@ -157,6 +157,15 @@ export function AppShell({ wire = wireApp, wsUrl, connect, initial, languages, o
     return wired;
   };
 
+  // A Start tap (and "Tap anywhere to start talking" after the device check) wires the app AND opens the mic,
+  // so the owner can just talk: on iPhone every start is a tap (no hands-free start), and the mic used to stay
+  // closed until a double-tap while AIRA kept describing the camera. If the mic refuses, the app stays wired
+  // and a double-tap can still open it (the mic start says what blocked it).
+  const tapStart = (s: Settings): void => {
+    const wired = wireNow(s);
+    void wired.startListening().catch(() => {});
+  };
+
   // ---- hands-free start ----
   // Wires on load, with no tap. The mic opens only if the browser lets a page that was granted the mic inside
   // an earlier Start tap reopen it without a gesture (installed apps and Chrome's persisted permission do).
@@ -179,7 +188,7 @@ export function AppShell({ wire = wireApp, wsUrl, connect, initial, languages, o
   const begin = (s: Settings, auto: boolean) => {
     if (!Check || checked.current) {
       if (auto) autoWire(s);
-      else wireNow(s); // synchronous: still inside the tap
+      else tapStart(s); // synchronous: still inside the tap
       return;
     }
     setPending({ s, auto });
@@ -204,7 +213,7 @@ export function AppShell({ wire = wireApp, wsUrl, connect, initial, languages, o
           checked.current = true;
           setPending(null);
           if (p.auto) autoWire(p.s);
-          else wireNow(p.s); // inside the "Start talking" tap: the gesture the voice app needs
+          else tapStart(p.s); // inside the "Start talking" tap: the gesture the voice app needs
         }}
       />
     );
