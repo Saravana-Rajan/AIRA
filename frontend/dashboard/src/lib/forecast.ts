@@ -1,5 +1,6 @@
 // Reorder suggestions from aira-live: GET {base}/api/forecast?shop={shopId}
-// -> { items: ForecastItem[], demoHistory: boolean }. Any failure (after the retries below) yields null so
+// -> { items: ForecastItem[], demoHistory: boolean }. There is one shop (lib/access DEMO_SHOP_ID); the server
+// also accepts the request with no ?shop= at all, so the parameter is kept only for compatibility. Any failure (after the retries below) yields null so
 // the page can say "Forecast unavailable". demoHistory is true when backfilled demo sales (shared/scripts/backfill_demo_sales.py,
 // ledger rows labelled demo:true) feed the numbers: the card then says "demo history", never real sales.
 

@@ -2,10 +2,33 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act } from "preact/test-utils";
 import { cleanup, findAllByText, flush, mount, text } from "./helpers/render";
 import { App, type ListenFn } from "../src/components/App";
-import { captureMonitorKey } from "../src/lib/useMonitor";
-import { KEY_STORAGE } from "../src/lib/monitor";
 import type { LiveStatus, ShopData } from "../src/lib/live";
 import type { Forecast, ForecastItem } from "../src/lib/forecast";
+import type { MonitorDeps } from "../src/lib/useMonitor";
+import type { SocketLike } from "../src/lib/monitor";
+import type { ViewerAuth, ViewerUser } from "../src/lib/viewerAuth";
+
+/** The Live page's deps for the App tests: a socket that never opens, and a sign-in that starts signed out. */
+function liveDeps(user: ViewerUser | null = null) {
+  const sockets: Array<SocketLike & { sent: string[] }> = [];
+  const auth: ViewerAuth & { user: ViewerUser | null; signIn: ReturnType<typeof vi.fn> } = {
+    user,
+    subscribe: (cb) => { cb(auth.user); return () => {}; },
+    signIn: vi.fn(async () => undefined),
+    signOut: async () => undefined,
+    idToken: async () => "tok",
+  };
+  // Hoisted: `deps` is in the hook's effect dependencies and must stay the same object across renders.
+  const deps: MonitorDeps = {
+    connect: () => {
+      const s = { onopen: null, onmessage: null, onclose: null, onerror: null, sent: [] as string[], send(d: string) { s.sent.push(d); }, close() {} };
+      sockets.push(s);
+      return s;
+    },
+    setTimer: () => 0, clearTimer: () => {}, auth,
+  };
+  return { deps, sockets, auth };
+}
 
 const NOW = Date.UTC(2026, 9, 10, 6, 30); // 2026-10-10 12:00 IST
 
@@ -70,7 +93,10 @@ function go(hash: string) {
 beforeEach(() => {
   history.replaceState(null, "", "/dashboard/");
 });
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  vi.unstubAllEnvs(); // App reads import.meta.env: the sign-in test below turns VITE_MONITOR_AUTH on
+});
 
 describe("App", () => {
   it("shows a loading state until the shop's records arrive, then the overview of every section", async () => {
@@ -154,18 +180,61 @@ describe("App", () => {
     expect(loadForecast).toHaveBeenCalledWith("sunrise_dairy");
   });
 
-  it("opens the Live page from a #/live#key=... link: the key is taken off before the first render", () => {
+  it("by default (no VITE_MONITOR_AUTH) the Live page opens for anyone: no sign-in, no key, a socket at once with nothing sent, and the empty people panel", () => {
+    vi.stubEnv("VITE_AIRA_LIVE_WS", "wss://live.example.test/ws"); // CI has no .env.local: the URL must not come from it
     sessionStorage.clear();
-    history.replaceState(null, "", "/dashboard/#/live#key=abc123");
-    captureMonitorKey(); // what main.tsx does before render
-    expect(location.hash).toBe("#/live");
-    expect(sessionStorage.getItem(KEY_STORAGE)).toBe("abc123");
+    history.replaceState(null, "", "/dashboard/#/live");
     const { listen } = fakeLive();
-    const el = mount(<App listen={listen} loadForecast={async () => null} now={() => NOW} />);
+    const live = liveDeps(); // the fake sign-in is injected but does not count: the flag is off
+    const el = mount(<App listen={listen} loadForecast={async () => null} now={() => NOW} monitorDeps={live.deps} />);
     expect(el.querySelector(".livepage")).not.toBeNull();
-    expect(el.querySelector("input#monitor-key")).toBeNull();
-    expect(location.href).not.toContain("abc123");
+    expect(el.querySelector("input, form, #monitor-key, .keyprompt, .signin, .signin__btn, .lv-user")).toBeNull();
+    expect(text(el)).not.toMatch(/Sign in|sign-in|Monitor key/);
+    expect(live.sockets).toHaveLength(1);
+    expect(live.sockets[0].sent).toEqual([]);
+    expect(live.auth.signIn).not.toHaveBeenCalled();
+    expect(text(el.querySelector(".people__title"))).toBe("People using AIRA now (0)");
+    expect(text(el.querySelector(".people__empty"))).toBe("No one is using AIRA right now.");
+    act(() => { live.sockets[0].onopen!({}); });
+    expect(live.sockets[0].sent).toEqual([]); // live on open: nothing to hand over
+    expect(findAllByText(el, ".lv-conn__text", "Connected")).toHaveLength(1);
+    expect(sessionStorage.length).toBe(0);
+  });
+
+  it("opens the Live page behind Google sign-in (VITE_MONITOR_AUTH=1): a sign-in button, no key screen, nothing read from the fragment or storage, no socket until signed in", () => {
+    vi.stubEnv("VITE_MONITOR_AUTH", "1");
     sessionStorage.clear();
+    history.replaceState(null, "", "/dashboard/#/live");
+    const { listen } = fakeLive();
+    const live = liveDeps();
+    const el = mount(<App listen={listen} loadForecast={async () => null} now={() => NOW} monitorDeps={live.deps} />);
+    expect(el.querySelector(".livepage")).not.toBeNull();
+    expect(el.querySelector("input, form, #monitor-key, .keyprompt")).toBeNull();
+    expect(text(el)).not.toContain("Monitor key");
+    const btn = findAllByText(el, "button.signin__btn", "Sign in with Google to watch AIRA Live");
+    expect(btn).toHaveLength(1);
+    expect(text(el)).not.toContain("Waiting for a phone");
+    expect(live.sockets).toHaveLength(0);
+    act(() => { btn[0].click(); });
+    expect(live.auth.signIn).toHaveBeenCalledTimes(1);
+    expect(sessionStorage.length).toBe(0);
+  });
+
+  it("the other pages are untouched by the Live sign-in", async () => {
+    const { listen, push } = fakeLive();
+    const live = liveDeps();
+    const el = mount(<App listen={listen} loadForecast={async () => null} now={() => NOW} monitorDeps={live.deps} />);
+    push();
+    await flush();
+    for (const hash of ["#/", "#/today", "#/stock", "#/prices", "#/orders", "#/audit", "#/forecast"]) {
+      go(hash);
+      expect(text(el)).not.toMatch(/Sign in|sign-in/);
+      expect(el.querySelector(".signin, .livepage")).toBeNull();
+    }
+    go("#/live");
+    expect(el.querySelector(".livepage")).not.toBeNull();
+    go("#/stock");
+    expect(h2s(el)).toEqual(["Stock"]);
   });
 
   it("stops listening when it unmounts", () => {

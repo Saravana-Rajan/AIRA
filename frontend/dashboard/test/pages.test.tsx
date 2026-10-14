@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, findAllByText, flush, mount, text } from "./helpers/render";
 import { StockPage } from "../src/pages/StockPage";
 import { TodayPage } from "../src/pages/TodayPage";
-import { OrdersPage } from "../src/pages/OrdersPage";
+import { OrdersPage, orderTone } from "../src/pages/OrdersPage";
 import { AuditPage } from "../src/pages/AuditPage";
 import { ForecastPage } from "../src/pages/ForecastPage";
 import { HomePage } from "../src/pages/HomePage";
@@ -13,6 +13,11 @@ import { buildViews } from "../src/lib/views";
 afterEach(cleanup);
 
 const heading = (el: HTMLElement) => text(el.querySelector("h2"));
+
+const emptyToday: TodaySummary = {
+  salesCount: 0, revenue: 0, revenueText: "₹0", topProduct: null, byMethod: { cash: 0, upi: 0 }, byMethodText: { cash: "₹0", upi: "₹0" },
+  avgText: "—", topProductQty: null, recent: [],
+};
 
 describe("StockPage", () => {
   const rows = [
@@ -63,32 +68,60 @@ describe("TodayPage", () => {
   const summary: TodaySummary = {
     salesCount: 2, revenue: 230, revenueText: "₹230", topProduct: "Arun ice cream box",
     byMethod: { cash: 50, upi: 180 }, byMethodText: { cash: "₹50", upi: "₹180" },
+    avgText: "₹115", topProductQty: "1 box",
+    recent: [
+      { id: "s2", time: "2:00 pm", items: "1 × Arun ice cream box", amountText: "₹180", method: "upi" },
+      { id: "s1", time: "1:00 pm", items: "2 × Aavin milk 500 ml", amountText: "₹50", method: "cash" },
+      { id: "s0", time: "12:30 pm", items: "1 × Sakthi curd 1 L", amountText: "₹60", method: "pending" },
+    ],
   };
 
-  it("shows revenue, sales count, top product and payments by method", () => {
+  it("shows four equal key numbers: revenue, sales, average sale and the top product with its units", () => {
     const el = mount(<TodayPage summary={summary} />);
     expect(heading(el)).toBe("Today");
-    expect(findAllByText(el, "dd", "₹230")).toHaveLength(1);
-    expect(findAllByText(el, "dd", "₹50")).toHaveLength(1);
-    expect(findAllByText(el, "dd", "₹180")).toHaveLength(1);
-    expect(findAllByText(el, "dd", "2")).toHaveLength(1);
-    expect(findAllByText(el, "dd", "Arun ice cream box")).toHaveLength(1);
-    expect(findAllByText(el, "dt", "Cash received")).toHaveLength(1);
-    expect(findAllByText(el, "dt", "UPI received")).toHaveLength(1);
+    const tiles = [...el.querySelectorAll(".kpis--today .kpi")];
+    expect(tiles).toHaveLength(4);
+    expect(tiles.map((t) => text(t.querySelector("dt")))).toEqual(["Revenue", "Sales", "Average sale", "Top product"]);
+    expect(tiles.map((t) => text(t.querySelector("dd.kpi__value")))).toEqual(["₹230", "2", "₹115", "Arun ice cream box"]);
+    expect(text(tiles[3])).toContain("1 box sold");
+    expect(tiles.every((t) => t.querySelector("svg[aria-hidden='true']"))).toBe(true);
   });
 
-  it("draws the cash/UPI split as a decorative bar with the share in proportion", () => {
+  it("shows the payments card: a stacked bar in proportion and a legend with amounts and shares", () => {
     const el = mount(<TodayPage summary={summary} />);
     const bar = el.querySelector(".split")!;
     expect(bar.getAttribute("aria-hidden")).toBe("true");
     const cash = bar.querySelector<HTMLElement>(".split__cash")!;
     expect(cash.style.width).toBe(`${(50 / 230) * 100}%`);
+    expect(findAllByText(el, ".paylegend dt", "Cash received")).toHaveLength(1);
+    expect(findAllByText(el, ".paylegend dt", "UPI received")).toHaveLength(1);
+    expect(text(el.querySelector(".paylegend__row--cash"))).toBe("Cash received ₹50 22%");
+    expect(text(el.querySelector(".paylegend__row--upi"))).toBe("UPI received ₹180 78%");
   });
 
-  it("reads plainly on a day with no sales", () => {
-    const el = mount(<TodayPage summary={{ ...summary, salesCount: 0, revenue: 0, revenueText: "₹0", topProduct: null, byMethod: { cash: 0, upi: 0 }, byMethodText: { cash: "₹0", upi: "₹0" } }} />);
-    expect(text(el)).toContain("No sales yet today");
+  it("lists today's sales in a captioned table, newest first, with a payment pill per row", () => {
+    const el = mount(<TodayPage summary={summary} />);
+    const table = el.querySelector(".subcard--sales table")!;
+    expect(text(table.querySelector("caption"))).toContain("Newest first");
+    expect([...table.querySelectorAll("thead th")].map((th) => text(th))).toEqual(["Time", "Items", "Amount", "Payment"]);
+    const rows = [...table.querySelectorAll("tbody tr")];
+    expect(rows).toHaveLength(3);
+    expect(text(rows[0].querySelector("th[scope='row']"))).toBe("2:00 pm");
+    expect(text(rows[0])).toContain("1 × Arun ice cream box");
+    expect(text(rows[0].querySelector(".num"))).toBe("₹180");
+    expect(rows.map((r) => text(r.querySelector(".badge")))).toEqual(["UPI", "Cash", "Pending"]);
+    expect(rows.map((r) => r.querySelector(".badge")!.className)).toEqual(["badge badge--upi", "badge badge--cash", "badge badge--pending"]);
+  });
+
+  it("reads plainly on a day with no sales: a neutral bar, no payments, and a friendly empty row", () => {
+    const el = mount(<TodayPage summary={{ ...summary, salesCount: 0, revenue: 0, revenueText: "₹0", topProduct: null, byMethod: { cash: 0, upi: 0 }, byMethodText: { cash: "₹0", upi: "₹0" }, avgText: "—", topProductQty: null, recent: [] }} />);
+    expect(text(el)).toContain("No sales yet today — sales made through AIRA appear here.");
+    expect(text(el)).toContain("No payments yet");
     expect(el.querySelector(".split")).toBeNull();
+    expect(el.querySelector(".split-empty")).not.toBeNull();
+    expect(findAllByText(el, "dd.kpi__value", "—")).toHaveLength(1);
+    expect(findAllByText(el, "dd.kpi__value", "None yet")).toHaveLength(1);
+    expect(el.querySelectorAll(".subcard--sales tbody tr")).toHaveLength(1);
   });
 });
 
@@ -135,6 +168,37 @@ describe("OrdersPage", () => {
   it("says when there are no orders yet", () => {
     const el = mount(<OrdersPage rows={[]} />);
     expect(text(el)).toContain("No supplier orders yet");
+  });
+
+  it("colours each card, its pill and its track by status; any mismatch is red", () => {
+    const base = { isDiscrepancy: false, discrepancyTexts: [] as string[] };
+    expect(orderTone({ ...base, state: "ORDER_PLACED" })).toBe("placed");
+    expect(orderTone({ ...base, state: "DELIVERY_PENDING" })).toBe("delivery");
+    expect(orderTone({ ...base, state: "DELIVERY_RECONCILED" })).toBe("checked");
+    expect(orderTone({ ...base, state: "PAYMENT_PENDING" })).toBe("payment");
+    expect(orderTone({ ...base, state: "PAYMENT_CONFIRMED" })).toBe("paid");
+    expect(orderTone({ ...base, state: "CLOSED" })).toBe("closed");
+    expect(orderTone({ ...base, state: "DISCREPANCY" })).toBe("problem");
+    expect(orderTone({ ...base, state: "DELIVERY_PENDING", discrepancyTexts: ["short"] })).toBe("problem");
+    expect(orderTone({ ...base, state: "SOMETHING_NEW" })).toBe("closed");
+    const el = mount(<OrdersPage rows={[row, { ...row, id: "o2", state: "PAYMENT_CONFIRMED", stateLabel: "Paid", stepIndex: 4, isDiscrepancy: false, discrepancyTexts: [], vendorReply: null }]} />);
+    const cards = [...el.querySelectorAll("article")];
+    expect(cards[0].className).toBe("order order--problem order--discrepancy");
+    expect(cards[1].className).toBe("order order--paid");
+    expect(cards.map((c) => c.querySelector(".order__state .badge")!.className)).toEqual(["badge badge--problem", "badge badge--paid"]);
+    // the status strip counts sent orders per status, mismatches first
+    const strip = [...el.querySelectorAll(".statusbar li")].map((li) => text(li));
+    expect(strip).toEqual(["Discrepancy 1", "Paid 1"]);
+  });
+
+  it("shows the vendor's reply as a quoted callout and the delivery time as a chip", () => {
+    const el = mount(<OrdersPage rows={[{ ...row, deliveryByText: "6 am tomorrow (12 Oct, 6:00 am)" }]} />);
+    const reply = el.querySelector(".reply")!;
+    expect(text(reply)).toBe("Vendor replied: OK, delivery at 6 pm");
+    expect(reply.querySelector("q")).not.toBeNull();
+    const chip = el.querySelector(".chip--deliver")!;
+    expect(text(chip)).toBe("Deliver by: 6 am tomorrow (12 Oct, 6:00 am)");
+    expect(chip.querySelector("svg[aria-hidden='true']")).not.toBeNull();
   });
 
   it("shows the delivery time and note as small read-only text, and nothing when absent", () => {
@@ -341,7 +405,7 @@ describe("overview cards stay short", () => {
 
   it("the overview puts orders with a discrepancy first, so a short list never hides one", () => {
     const rows = [order(1), order(2), order(3), { ...order(4), state: "DISCREPANCY", stateLabel: "Discrepancy", isDiscrepancy: true, stepIndex: 2 }];
-    const views = { stock: [], prices: [], audit: [], orders: rows, today: { salesCount: 0, revenue: 0, revenueText: "₹0", topProduct: null, byMethod: { cash: 0, upi: 0 }, byMethodText: { cash: "₹0", upi: "₹0" } } };
+    const views = { stock: [], prices: [], audit: [], orders: rows, today: emptyToday };
     const el = mount(<HomePage views={views} forecast={null} forecastLoading={false} resolveEvidence={async () => null} />);
     const titles = [...el.querySelectorAll("article h3")].map((h) => text(h));
     expect(titles).toEqual(["Vendor 4", "Vendor 1", "Vendor 2"]);
@@ -349,7 +413,7 @@ describe("overview cards stay short", () => {
 
   it("the overview also puts a short count first while the delivery is still being checked", () => {
     const short = { ...order(4), state: "DELIVERY_PENDING", stateLabel: "Delivery pending", stepIndex: 1, discrepancyTexts: ["Sakthi curd 1 L: counted 28 L of 30 L ordered"] };
-    const views = { stock: [], prices: [], audit: [], orders: [order(1), order(2), order(3), short], today: { salesCount: 0, revenue: 0, revenueText: "₹0", topProduct: null, byMethod: { cash: 0, upi: 0 }, byMethodText: { cash: "₹0", upi: "₹0" } } };
+    const views = { stock: [], prices: [], audit: [], orders: [order(1), order(2), order(3), short], today: emptyToday };
     const el = mount(<HomePage views={views} forecast={null} forecastLoading={false} resolveEvidence={async () => null} />);
     const titles = [...el.querySelectorAll("article h3")].map((h) => text(h));
     expect(titles).toEqual(["Vendor 4", "Vendor 1", "Vendor 2"]);
@@ -359,7 +423,7 @@ describe("overview cards stay short", () => {
   it("the overview's top orders are real orders: newer drafts the owner said no to never push them out", () => {
     const draft = (i: number): OrderRow => ({ ...order(i), supplierName: `Draft ${i}`, state: "DRAFT", stateLabel: "Draft", stepIndex: -1 });
     const rows = [draft(1), draft(2), draft(3), draft(4), order(5), order(6)];
-    const views = { stock: [], prices: [], audit: [], orders: rows, today: { salesCount: 0, revenue: 0, revenueText: "₹0", topProduct: null, byMethod: { cash: 0, upi: 0 }, byMethodText: { cash: "₹0", upi: "₹0" } } };
+    const views = { stock: [], prices: [], audit: [], orders: rows, today: emptyToday };
     const el = mount(<HomePage views={views} forecast={null} forecastLoading={false} resolveEvidence={async () => null} />);
     expect([...el.querySelectorAll("article h3")].map((h) => text(h))).toEqual(["Vendor 5", "Vendor 6"]);
     expect(el.querySelector(".drafts")).toBeNull();

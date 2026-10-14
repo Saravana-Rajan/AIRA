@@ -13,7 +13,7 @@ export const DESCRIBE_FPS = 1 / 3;
  *  queued: a frame is dropped while the socket is still busy with the last one), relayed to the monitor only. */
 export const PREVIEW_FPS = 8;
 
-/** Walk with me: one frame a second (the server pipelines up to two ER looks). */
+/** Walk with me: kept for older callers; a walk request no longer starts its own frame stream (see handle). */
 export const WALK_FPS = 1;
 
 export function continuousFps(purpose: FramePurpose): number {
@@ -81,6 +81,12 @@ export function createFrameRequestHandler(deps: RequestDeps): (m: FrameRequest) 
     }
     if (m.continuous) {
       running.get(m.purpose)?.();
+      // A walk is only a signal now (the bump guard turns urgent, see serverWalkChange): the server guides from the
+      // Live video it already gets, so no separate walk frame stream starts.
+      if (m.purpose === "walk") {
+        running.delete(m.purpose);
+        return;
+      }
       running.set(m.purpose, deps.startContinuous(m.purpose, continuousFps(m.purpose)));
       return;
     }

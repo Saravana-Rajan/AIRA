@@ -1,226 +1,176 @@
-"""Walk with me: the ER reply parser, the instruction builder and change-only speaking (vision/walk.py)."""
-import pytest
-
-from aira_live.vision import walk as w
-from aira_live.vision.gemini import VisionError
-from aira_live.vision.walk import Obstacle, Search, Speech, WalkView, decide, steps_for
+"""Walk with me: the navigation policy over Live's nav reports (vision/walk.py). Pure code, no model."""
+from aira_live.vision import walk as vwalk
+from aira_live.vision.walk import NavReport, Obstacle, Search, Speech, decide, gate, parse_report
 
 
-def view(point=None, box=None, obstacles=(), traj=()):
-    return WalkView(point, box, tuple(obstacles), tuple(traj))
+def rep(*obstacles, cid=1, visible=False, side="", size="", path="clear_in_view", view_ok=True) -> NavReport:
+    return NavReport(cid, visible, side, size, tuple(obstacles), path, view_ok)
 
 
-# --- parse ----------------------------------------------------------------------------------------------------------
-
-def test_parse_full_reply():
-    v = w.parse_walk({"target_visible": True, "target": {"point": [400, 500], "box_2d": [300, 420, 500, 580]},
-                      "obstacles": [{"label": "chair", "box_2d": [600, 400, 900, 600]}, {"label": "x"},
-                                    {"label": "fridge again", "box_2d": [300, 420, 500, 580]}],
-                      "trajectory": [[1000, 500], [800, 480], [500, 500], "bad"]})
-    assert v.target_point == (400, 500) and v.target_box == (300, 420, 500, 580)
-    assert [o.label for o in v.obstacles] == ["chair"]          # malformed and target-duplicate dropped
-    assert v.trajectory == ((1000, 500), (800, 480), (500, 500))
+CHAIR = Obstacle("chair", "ahead", True, "medium")
+CHAIR_LEFT = Obstacle("chair", "left", True, "medium")
+BOX_RIGHT = Obstacle("box", "right", False, "small")
 
 
-def test_parse_not_visible_and_junk():
-    v = w.parse_walk({"target_visible": False, "target": {"point": [1, 2]}, "obstacles": [], "trajectory": [[9, 9]]})
-    assert not v.has_target and v.trajectory == ()
-    assert w.parse_walk("nonsense") == WalkView()
-    assert w.parse_walk({"target": {"point": [2000, 5]}}).target_point is None
+# ---------- parsing ----------
+def test_parse_normalises_and_reads_none_as_not_visible():
+    r = parse_report("fridge", check_id="7", target_visible=True, target_side="LEFT", target_size="none",
+                     obstacles=[{"label": "  chair ", "side": "ahead", "in_path": True, "size": "large"},
+                                {"label": "crate", "side": "sideways", "in_path": "maybe", "size": "huge"},
+                                {"label": ""}, "junk", {"side": "left"}],
+                     path="blocked", view_ok=True)
+    assert r.check_id == 7 and r.target_visible and r.target_side == "left" and r.target_size == ""
+    # an unknown side / in_path / size reads cautiously: ahead, in the path, medium
+    assert r.obstacles == (Obstacle("chair", "ahead", True, "large"), Obstacle("crate", "ahead", True, "medium"))
+    assert r.path == "blocked" and r.usable
 
 
-# --- the instruction ------------------------------------------------------------------------------------------------
-
-def test_obstacle_in_corridor_stops_and_picks_the_side_with_room():
-    chair = Obstacle("chair", (600, 300, 900, 550))   # more room on its right
-    ins = decide(view((300, 500), (250, 450, 350, 550), [chair]), "fridge", "en")
-    assert ins.key == "walk.obstacle_right" and ins.urgent
-    assert ins.text == "Stop. chair in front. Move a little right."
-    chair2 = Obstacle("crate", (600, 450, 900, 750))
-    assert decide(view(obstacles=[chair2]), "fridge", "en").key == "walk.obstacle_left"
+def test_parse_defaults_are_cautious():
+    r = parse_report("fridge", check_id="x", path="looks fine", view_ok="?")
+    assert r.check_id == -1 and r.path == "uncertain" and not r.view_ok and not r.usable
+    assert parse_report("door", target_visible=False, target_side="left").target_side == ""
 
 
-def test_side_with_room_counts_other_obstacles():
-    mid = Obstacle("chair", (600, 300, 900, 550))
-    right = Obstacle("table", (500, 600, 900, 1000))       # the right side is blocked close by
-    assert w.side_with_room(mid, (mid, right)) == "left"
+def test_the_target_is_never_an_obstacle():
+    r = parse_report("fridge", obstacles=[{"label": "refrigerator", "side": "ahead", "in_path": True},
+                                          {"label": "the fridge door", "in_path": True},
+                                          {"label": "chair", "in_path": True}], path="blocked")
+    assert [o.label for o in r.obstacles] == ["chair"]
+    assert vwalk.same_thing("Refrigerators", "fridge") and vwalk.same_thing("curd shelf", "shelf")
+    assert not vwalk.same_thing("chair", "fridge") and not vwalk.same_thing("", "fridge")
 
 
-def test_obstacle_outside_corridor_is_ignored():
-    far = Obstacle("chair", (200, 450, 400, 550))          # ahead but far away
-    side = Obstacle("crate", (700, 0, 1000, 200))          # close but to the side
-    ins = decide(view((300, 500), (250, 450, 350, 550), [far, side]), "fridge", "en")
-    assert ins.key == "walk.ahead"
+# ---------- the instruction ----------
+def test_hazard_in_path_stops_on_one_report():
+    stairs = Obstacle("stairs", "ahead", True, "small")
+    ins = decide(rep(stairs, path="blocked"), "fridge")
+    assert ins.urgent and ins.kind == vwalk.HAZARD_KIND and ins.text == "Stop. Stairs ahead."
+    assert ins.facts["hazard"] == "stairs"
+    assert decide(rep(Obstacle("wet floor", "left", False)), "fridge").kind != vwalk.HAZARD_KIND  # not in path
 
 
-def test_hazard_says_stop_first():
-    step = Obstacle("step", (700, 300, 800, 700))
-    ins = decide(view((300, 500), (100, 300, 950, 700), [step]), "fridge", "en")   # even when "arrived"
-    assert ins.key == "walk.hazard" and ins.text.startswith("Stop.") and ins.urgent and not ins.arrived
-    person = Obstacle("person", (560, 400, 1000, 600))
-    assert decide(view(obstacles=[person]), "fridge", "en").key == "walk.hazard"
+def test_a_close_person_in_the_path_stops_at_once_by_name():
+    ins = decide(rep(Obstacle("man", "ahead", True, "large")), "fridge", name="Sam")
+    assert ins.urgent and ins.text == "Sam, stop. Someone is right in front of you." and ins.facts["address"] == "Sam"
 
 
-def test_target_left_right_ahead():
-    assert decide(view((400, 200), (350, 150, 450, 250)), "fridge", "en").text == \
-        "fridge on your left. Turn left a little."
-    assert decide(view((400, 800), (350, 750, 450, 850)), "fridge", "en").key == "walk.right"
-    ins = decide(view((400, 500), (300, 420, 500, 580)), "fridge", "en")
-    assert ins.key == "walk.ahead" and ins.steps == 3 and ins.text == "fridge ahead, about 3 steps."
+def test_a_small_obstacle_needs_two_of_three_reports():
+    first = rep(CHAIR)
+    ins = decide(first, "fridge", [first])
+    assert ins.kind == vwalk.HOLD_KIND and not ins.text and not ins.urgent        # nothing said, no direction
+    second = rep(CHAIR, cid=2)
+    ins = decide(second, "fridge", [first, second])
+    assert ins.urgent and ins.kind == vwalk.OBSTACLE_KIND and "chair" in ins.text
+    big = rep(Obstacle("table", "ahead", True, "large"))
+    assert decide(big, "fridge", [big]).urgent                                    # a large one: one report
 
 
-def test_steps_table_is_capped_and_unsure_without_box():
-    assert steps_for((0, 0, 400, 10)) == 1
-    assert steps_for((0, 0, 200, 10)) == 3
-    assert steps_for((0, 0, 60, 10)) == 6
-    assert steps_for((0, 0, 30, 10)) == w.MAX_STEPS == 8
-    assert steps_for((0, 0, 10, 10)) is None
-    assert steps_for(None) is None
-    ins = decide(view((400, 500), None), "fridge", "en")
-    assert ins.key == "walk.ahead_slow" and "Keep going slowly" in ins.text
+def test_direction_only_with_evidence():
+    a, b = rep(CHAIR_LEFT, path="blocked"), rep(CHAIR_LEFT, cid=2, path="blocked")
+    ins = decide(b, "fridge", [a, b])
+    assert ins.text == ("Stop. There's a chair ahead. The right side looks clearer in the current view. "
+                        "Step that way slowly.")
+    assert ins.facts["clearer_side"] == "right" and ins.urgent
 
 
-def test_arrived_when_big_or_low_and_centred():
-    ins = decide(view((500, 500), (200, 300, 700, 700)), "fridge", "en")
-    assert ins.arrived and ins.text == "Stop. The fridge is right in front of you. Reach forward."
-    assert decide(view((800, 520), (700, 400, 950, 650)), "fridge", "en").arrived      # bottom > 900
-    assert not decide(view((500, 150), (200, 0, 700, 300)), "fridge", "en").arrived  # big but off to the side
+def test_no_invented_direction_without_evidence():
+    # path not "blocked": open space is mentioned but the way is not confirmed
+    a, b = rep(CHAIR_LEFT, path="clear_in_view"), rep(CHAIR_LEFT, cid=2, path="clear_in_view")
+    ins = decide(b, "fridge", [a, b])
+    assert "clearer" not in ins.text and "can't confirm the way is clear" in ins.text
+    assert "more open space on your right" in ins.text and "Stay stopped" in ins.text
+    # the other side has an obstacle too: no side at all
+    a = rep(CHAIR_LEFT, Obstacle("box", "right", False), path="blocked")
+    b = rep(CHAIR_LEFT, Obstacle("box", "right", False), cid=2, path="blocked")
+    ins = decide(b, "fridge", [a, b])
+    assert ins.text == "Stop. There's an obstacle ahead: a chair. I can't confirm a clear way."
+    # an uncertain view never gives a side
+    a, b = rep(CHAIR_LEFT, path="uncertain"), rep(CHAIR_LEFT, cid=2, path="uncertain")
+    ins = decide(b, "fridge", [a, b])
+    assert ins.urgent and "side" not in ins.text and "open space" not in ins.text
 
 
-def test_not_visible_uses_memory_once_then_looks():
-    search = Search(memory_place="on your left, a few steps away", memory_side="left")
-    first = decide(view(), "fridge", "en", search)
-    assert first.key == "walk.memory"
-    assert first.text == "The fridge was last seen on your left, a few steps away. Turn slowly left. I'm looking."
-    again = decide(view(), "fridge", "en", search)
-    assert again.key == "walk.looking_left"
-    search.last_x = 800                                     # it was last seen on the right of the image
-    assert decide(view(), "fridge", "en", search).key == "walk.looking_right"
+def test_unusable_view_is_degraded_never_a_direction():
+    for r in (rep(visible=True, side="left", view_ok=False), rep(visible=True, side="left", path="uncertain")):
+        ins = decide(r, "fridge")
+        assert ins.kind == vwalk.DEGRADED_KIND and ins.urgent
+        assert ins.text == "I can't see the path clearly right now. Please stop for a moment."
 
 
-def test_not_found_after_8_seconds():
-    assert decide(view(), "fridge", "en", Search(lost_s=8.5)).key == "walk.not_found"
-    assert decide(view(), "fridge", "en", Search(lost_s=3)).key == "walk.looking_left"
+def test_arrival_is_only_a_candidate():
+    ins = decide(rep(visible=True, side="ahead", size="large"), "fridge")
+    assert ins.kind == vwalk.ARRIVAL_KIND and not ins.urgent
+    assert ins.text == "The fridge appears to be just ahead. Reach forward carefully to confirm."
+    assert ins.facts["arrived"] == "unconfirmed"
+    assert "arrived" not in ins.text.lower() and "you are" not in ins.text.lower()
 
 
-def test_lines_are_english_meanings_whatever_the_language():
-    """The key and step count are the facts; the text is only the English meaning Live says in his language."""
-    en = decide(view((400, 500), (300, 420, 500, 580)), "fridge", "en")
-    ta = decide(view((400, 500), (300, 420, 500, 580)), "fridge", "ta")
-    assert ta == en and en.key == "walk.ahead" and en.steps == 3 and en.text == "fridge ahead, about 3 steps."
+def test_target_sides_without_distances():
+    assert decide(rep(visible=True, side="left", size="medium"), "fridge").text == \
+        "The fridge is on your left. Turn left a little."
+    assert decide(rep(visible=True, side="right", size="large"), "fridge").text == \
+        "The fridge is on your right, and it looks close. Turn right a little."
+    ahead = decide(rep(visible=True, side="ahead", size="small"), "fridge")
+    assert ahead.key == "walk.ahead" and ahead.text == "The fridge is ahead. Keep going slowly."
+    for r in (rep(visible=True, side="left"), rep(visible=True, side="ahead", size="medium")):
+        text = decide(r, "fridge").text.lower()
+        assert "step" not in text and "metre" not in text and "meter" not in text
 
 
-# --- change-only speaking -------------------------------------------------------------------------------------------
-
-def test_speech_change_only_and_reassurance_every_4s():
-    sp = Speech("en")
-    ahead = decide(view((400, 500), (300, 420, 500, 580)), "fridge", "en")
-    assert sp.pick(ahead, 0.0) == ahead.text
-    assert sp.pick(ahead, 1.0) is None
-    assert sp.pick(ahead, 3.9) is None
-    assert sp.pick(ahead, 4.1) == "Keep going."
-    assert sp.pick(ahead, 5.0) is None
-    left = decide(view((400, 200), (350, 150, 450, 250)), "fridge", "en")
-    assert sp.pick(left, 5.5) == left.text                 # changed: at once
+def test_search_memory_once_then_looking_then_not_found():
+    s = Search(memory_place="on your right, near the counter", memory_side="right")
+    first = decide(rep(), "keys", search=s)
+    assert first.key == "walk.memory" and "last seen on your right, near the counter" in first.text
+    assert decide(rep(), "keys", search=s).key == "walk.looking_right"
+    s.lost_s = vwalk.NOT_FOUND_S
+    assert decide(rep(), "keys", search=s).key == "walk.not_found"
 
 
-def test_speech_small_step_jitter_is_not_a_change_but_two_steps_are():
-    sp = Speech("en")
-    three = decide(view((400, 500), (400, 450, 580, 550)), "fridge", "en")    # h 0.18 -> 3
-    four = decide(view((400, 500), (400, 450, 530, 550)), "fridge", "en")     # h 0.13 -> 4
-    one = decide(view((400, 500), (300, 400, 660, 600)), "fridge", "en")      # h 0.36 -> 1
-    assert (three.steps, four.steps, one.steps) == (3, 4, 1)
-    assert sp.pick(three, 0) is not None
-    assert sp.pick(four, 1) is None
-    assert sp.pick(one, 2) == one.text
+# ---------- speaking ----------
+def test_urgent_lines_are_never_suppressed_but_get_shorter():
+    sp = Speech()
+    a, b = rep(CHAIR), rep(CHAIR, cid=2)
+    ins = decide(b, "fridge", [a, b])
+    assert sp.pick(ins, 0.0) == ins.text
+    assert sp.pick(ins, 1.0) == "Stop. Chair ahead."            # again within 6 s: the short form, not silence
+    assert sp.pick(ins, 8.0) == ins.text
 
 
-def test_obstacle_overrides_at_once_and_repeats_after_4s():
-    sp = Speech("en")
-    ahead = decide(view((400, 500), (300, 420, 500, 580)), "fridge", "en")
-    stop = decide(view(obstacles=[Obstacle("chair", (600, 400, 900, 600))]), "fridge", "en")
-    sp.pick(ahead, 0)
-    assert sp.pick(stop, 0.5) == stop.text
-    assert sp.pick(stop, 1.5) is None
-    assert sp.pick(stop, 4.6) == stop.text                 # a safety line repeats itself, never "keep going"
+def test_non_urgent_dedupe_gap_and_new_keys():
+    sp = Speech()
+    left = decide(rep(visible=True, side="left"), "fridge")
+    right = decide(rep(visible=True, side="right"), "fridge")
+    assert sp.pick(left, 0.0) == left.text
+    assert sp.pick(left, 3.0) is None                            # same line within 6 s
+    assert sp.pick(right, 1.0) is None                           # within the 2 s gap
+    assert sp.pick(right, 2.5) == right.text                     # a new instruction goes after the gap
+    assert sp.pick(right, 9.0, reassure=False) is None           # a repeated direction: only as reassurance
+    assert sp.pick(right, 13.0, reassure=True) == "Keep going slowly."
 
 
-# --- overlay and the phone's fast stop ------------------------------------------------------------------------------
-
-def test_overlay_objects_target_obstacles_and_path():
-    objs = w.overlay_objects(view((400, 500), (300, 420, 500, 580),
-                                  [Obstacle("chair", (600, 400, 900, 600)), Obstacle("bag", (100, 0, 200, 100))],
-                                  [(1000, 500), (700, 500)]), "fridge")
-    assert objs[0]["label"] == "fridge" and objs[0]["box"] == [300, 420, 500, 580]
-    assert objs[1]["severity"] == "danger" and "severity" not in objs[2]
-    assert [o["label"] for o in objs[3:]] == ["path 1", "path 2"] and objs[3]["box"] is None
+def test_freshness_gate():
+    stop = decide(rep(Obstacle("stairs", "ahead", True)), "fridge")
+    turn = decide(rep(visible=True, side="left"), "fridge")
+    assert gate(stop, 30.0) is stop and gate(stop, None) is stop
+    assert gate(turn, 2.9) is turn and gate(turn, 3.1) is None and gate(turn, None) is None
+    assert gate(turn, float("nan")) is None and gate(turn, -1) is None
+    assert vwalk.WALK_DIRECTION_MAX_AGE_S == 3.0 and vwalk.WALK_MAX_AGE_S == 1.5
 
 
-def test_fast_stop_label():
-    assert w.fast_stop_label([{"label": "person", "box": [500, 400, 950, 600]}]) == "person"
-    assert w.fast_stop_label([{"label": "person", "box": [100, 400, 300, 600]}]) is None     # far
-    assert w.fast_stop_label([{"label": "cup", "box": [500, 400, 950, 600]}]) is None        # not a big thing
-    assert w.fast_stop_label([{"label": "box", "box": [600, 400, 700, 600], "severity": "danger"}]) == "box"
-    assert w.fast_stop_label([{"label": "x", "box": "bad"}]) is None
+# ---------- the phone's instant stop ----------
+def test_fast_stop_labels_are_coco_and_never_the_target():
+    close = [500, 400, 950, 600]
+    assert vwalk.fast_stop_label([{"label": "person", "box": close}]) == "person"
+    for label in ("refrigerator", "box", "crate"):
+        assert vwalk.fast_stop_label([{"label": label, "box": close}]) is None, label
+    assert vwalk.fast_stop_label([{"label": "chair", "box": close}], target="fridge") == "chair"
+    assert vwalk.fast_stop_label([{"label": "chair", "box": close}], target="chair") is None
+    danger = {"label": "refrigerator", "box": close, "severity": "danger"}
+    assert vwalk.fast_stop_label([danger]) == "refrigerator"
+    assert vwalk.fast_stop_label([danger], target="fridge") is None       # never stop for the target itself
+    assert vwalk.fast_stop_label([{"label": "cup", "box": [100, 0, 200, 100]}]) is None
 
 
-# --- the ER call ----------------------------------------------------------------------------------------------------
-
-async def test_look_is_one_er_call_with_the_schema(fake_genai, frame):
-    client = fake_genai('{"target_visible": true, "target": {"point": [400, 500], "box_2d": [300, 420, 500, 580]}, '
-                        '"obstacles": [], "trajectory": [[1000, 500], [400, 500]]}')
-    v = await w.look(frame, "curd shelf")
-    assert v.has_target and v.trajectory == ((1000, 500), (400, 500))
-    call = client.aio.models.calls[0]
-    assert call["model"] == "gemini-robotics-er-2-preview" and "curd shelf" in call["contents"][1]
-    assert call["config"].response_json_schema == w.WALK_JSON_SCHEMA
-
-
-async def test_look_failure_is_a_vision_error_without_fallback(fake_genai, frame):
-    client = fake_genai(RuntimeError("down"), '{"target_visible": false}')
-    with pytest.raises(VisionError):
-        await w.look(frame, "fridge")
-    assert len(client.aio.models.calls) == 1        # no retry, no Flash: the tick is skipped
-    fake_genai(0.2)
-    with pytest.raises(VisionError):
-        await w.look(frame, "fridge", timeout_s=0.05)
-
-
-# --- freshness: how old a look may be when its line is said ------------------------------------------------------
-
-def test_freshness_policy_per_instruction():
-    far = decide(view((400, 500), (300, 420, 500, 580)), "fridge")
-    assert far.key == "walk.ahead" and far.steps == 3
-    assert w.gate(far, 1.0, "fridge") is far                         # fresh: the step count is said
-    slow = w.gate(far, 2.5, "fridge")                                # aging: the direction only, no count
-    assert slow.key == "walk.ahead_slow" and slow.steps is None and "steps" not in slow.text
-    assert w.gate(far, 3.5, "fridge") is None                        # expired: never said as current
-    left = decide(view((400, 100)), "fridge")
-    assert w.gate(left, 2.9, "fridge") is left and w.gate(left, 3.1, "fridge") is None
-    looking = decide(view(), "fridge")
-    assert w.gate(looking, 2.0, "fridge") is looking and w.gate(looking, 4.0, "fridge") is None
-
-
-def test_stop_lines_are_said_however_old():
-    chair = decide(view(obstacles=[Obstacle("chair", (600, 300, 900, 550))]), "fridge")
-    wet = decide(view(obstacles=[Obstacle("wet floor", (600, 300, 900, 550))]), "fridge")
-    for ins in (chair, wet):
-        assert ins.urgent
-        for age in (0.1, 10.0, None, float("nan")):
-            assert w.gate(ins, age, "fridge") is ins
-
-
-def test_arrival_needs_a_fresh_look_else_hold_still():
-    there = decide(view((500, 500), (200, 300, 700, 700)), "fridge")
-    assert there.arrived and w.gate(there, 1.0, "fridge") is there
-    for age in (2.0, None):
-        held = w.gate(there, age, "fridge")
-        assert held.key == "walk.hold" and held.urgent and not held.arrived and "fridge" in held.text
-
-
-def test_missing_or_invalid_age_is_stale():
-    far = decide(view((400, 500), (300, 420, 500, 580)), "fridge")
-    for age in (None, float("nan"), float("inf"), -0.5):
-        assert w.gate(far, age, "fridge") is None and w.expired(age)
-    assert not w.expired(w.WALK_DIRECTION_MAX_AGE_S) and w.expired(w.WALK_DIRECTION_MAX_AGE_S + 0.01)
-    assert w.WALK_MAX_AGE_S == 1.5
+def test_the_policy_module_calls_no_model():
+    for name in ("look", "WALK_PROMPT", "WALK_JSON_SCHEMA", "gemini", "model_for", "parse_walk"):
+        assert not hasattr(vwalk, name), name

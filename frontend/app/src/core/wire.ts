@@ -14,11 +14,12 @@ import { requestMotionAccess } from "./motionPermission";
 import { ThinkingTimer } from "./thinking";
 import { ConfirmState } from "./confirm";
 import { createDispatcher } from "./dispatch";
-import type { AppApi, HapticName, Settings } from "./types";
+import type { AppApi, HapticName, Settings, UrgentInfo } from "./types";
 import { STRINGS } from "../i18n/strings";
-import { PlaybackQueue, type PlaybackOpts } from "../voice/playback";
+import { DEFAULT_MAX_HOLD_MS, PlaybackQueue, type PlaybackOpts } from "../voice/playback";
 import { playEarcon, type EarconName } from "../voice/earcons";
 import { startMic, type StartMicOpts } from "../voice/mic";
+import { watchHeadset, type DeviceSource } from "../voice/route";
 import { shareToneContext } from "../guidance/tones";
 import { announceToRegion } from "../ui/ScreenReaderRegion";
 import { initialScreen, reduceScreen, type LocalEvent, type ScreenState } from "../ui/screenState";
@@ -44,6 +45,13 @@ export const SPEAK_STALE_MS = 8_000;
 /** Live audio that ended less than this long ago still counts as busy: the next chunk is usually in flight. */
 export const SPEAK_WAIT_GAP_MS = 400;
 const SPEAK_POLL_MS = 250;
+/** An identical urgent (safety) line within this window is spoken once; a repeat after it always speaks. */
+export const URGENT_DEDUPE_MS = 2_000;
+/**
+ * After an urgent line, Live audio chunks that arrive are held back this long (then played in order), and
+ * non-urgent local lines wait: nothing talks over "Stop". About the length of the longest warning phrase.
+ */
+export const URGENT_QUIET_MS = 900;
 /**
  * Mic chunks are dropped only while more than MIC_MAX_BUFFERED_BYTES sit unsent on the socket (net/sendPriority).
  * Every camera stream stops well below that cap, so under congestion video is skipped first and the owner's speech
@@ -85,6 +93,8 @@ export interface WireEnv {
   /** Writes to the single aria-live region (screen-reader mode). */
   announce(text: string): void;
   startMic(opts: StartMicOpts): Promise<{ stop(): void }>;
+  /** navigator.mediaDevices, for the earphones watcher (voice/route). Missing or null: no watcher. */
+  mediaDevices?: DeviceSource | null;
   queueStore(): QueueStore;
   storage: Storage | null;
   win: Listenable;
@@ -176,6 +186,12 @@ export function browserEnv(): WireEnv {
   return {
     createSocket: (url) => new AiraSocket(url),
     createAudioContext: () => {
+      // iOS 16.4+: "play-and-record" keeps a paired Bluetooth headset for both directions (the default session
+      // type sends playback to the speaker once the mic opens). A no-op elsewhere.
+      try {
+        const session = (navigator as Navigator & { audioSession?: { type: string } }).audioSession;
+        if (session) session.type = "play-and-record";
+      } catch { /* not supported or read-only */ }
       const AC = globalThis.AudioContext ?? (globalThis as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
       return AC ? new AC() : null;
     },
@@ -201,6 +217,7 @@ export function browserEnv(): WireEnv {
       : null,
     announce: announceToRegion,
     startMic,
+    mediaDevices: typeof navigator === "undefined" ? null : navigator.mediaDevices ?? null,
     queueStore: () => defaultStore(),
     storage: safeStorage(),
     win: window,
@@ -324,7 +341,11 @@ export function wireApp(opts: WireOpts): WiredApp {
   //   lesser line arriving while it waits does not displace it (it is dropped instead).
   let waiting: { text: string; at: number; important: boolean } | null = null;
   let waitTimer: ReturnType<typeof setTimeout> | null = null;
-  const liveBusy = () => playback.msSinceAudio() < SPEAK_WAIT_GAP_MS;
+  // Urgent (safety) lines: until this wall-clock time Live chunks are held back and local lines wait.
+  let urgentQuietUntil = 0;
+  let lastUrgent: { key: string; at: number } | null = null;
+  const urgentQuiet = () => Date.now() < urgentQuietUntil;
+  const liveBusy = () => urgentQuiet() || playback.msSinceAudio() < SPEAK_WAIT_GAP_MS;
   const sayNow = (text: string) => {
     const now = Date.now();
     const key = normaliseSpeech(text);
@@ -371,10 +392,68 @@ export function wireApp(opts: WireOpts): WiredApp {
     waiting = { text, at: Date.now(), important }; // the newest line replaces an older one: TTS would cancel it anyway
     if (!waitTimer) drainWaiting();
   };
+  // A safety line never waits: it cuts Live audio (not held: AIRA's next chunks play once it has been said),
+  // drops any waiting local line, and is deduped only against the same urgent line within URGENT_DEDUPE_MS.
+  const speakUrgent = (text: string, info: UrgentInfo) => {
+    const now = Date.now();
+    const key = normaliseSpeech(text);
+    if (!key || disposed) return;
+    const kind = info.kind ?? "urgent";
+    const waitedMs = Math.max(0, Math.round(info.ageMs ?? 0));
+    const overLive = playback.msSinceAudio() < SPEAK_WAIT_GAP_MS || deferred.length > 0;
+    if (lastUrgent && lastUrgent.key === key && now - lastUrgent.at < URGENT_DEDUPE_MS) {
+      clientLog("guard_alert", { kind, deduped: true, waitedMs, overLive });
+      return;
+    }
+    lastUrgent = { key, at: now };
+    // A barge-in hold (talk, long-press stop, "interrupted") stays a hold: the cut answer must not come back.
+    if (overLive) tryRun(() => playback.flush({ holdUntilResume: Date.now() < bargeHeldUntil }));
+    deferred.length = 0; // chunks held behind an earlier urgent line belong to the cut answer
+    dropWaiting();
+    urgentQuietUntil = now + URGENT_QUIET_MS;
+    armDeferred();
+    wakeAudio(); // iOS: a suspended context would also mute the warn earcon
+    const sr = api.settings.screenReaderMode;
+    if (sr) env.announce(text);
+    else {
+      tryRun(() => env.speech?.cancel()); // the newest urgent line wins; nothing else is spoken
+      env.speech?.speak(text, uiLang, api.settings.speechRate);
+    }
+    clientLog("guard_alert", { kind, deduped: false, waitedMs, overLive });
+  };
+  // Live chunks that arrive inside the quiet window wait for it to end, then play in order (never dropped).
+  const deferred: string[] = [];
+  let bargeHeldUntil = 0; // wall clock: the playback queue drops the interrupted answer's chunks until then
+  let deferTimer: ReturnType<typeof setTimeout> | null = null;
+  const armDeferred = () => {
+    if (deferTimer) { clearTimeout(deferTimer); timers.delete(deferTimer); }
+    const id = setTimeout(() => {
+      timers.delete(id);
+      deferTimer = null;
+      if (disposed) return;
+      const chunks = deferred.splice(0);
+      for (const c of chunks) tryRun(() => playback.enqueue(c));
+    }, Math.max(0, urgentQuietUntil - Date.now()));
+    timers.add(id);
+    deferTimer = id;
+  };
+  const livePlayback = {
+    enqueue: (b64: string) => {
+      if (urgentQuiet()) { deferred.push(b64); return; }
+      playback.enqueue(b64);
+    },
+    flush: (o?: { holdUntilResume?: boolean }) => {
+      deferred.length = 0;
+      bargeHeldUntil = o?.holdUntilResume ? Date.now() + DEFAULT_MAX_HOLD_MS : 0;
+      playback.flush(o);
+    },
+    resume: () => { bargeHeldUntil = 0; playback.resume(); },
+  };
   const api = initApp({
     socket,
     settings,
     speakImpl: (text) => speakLocal(text),
+    speakUrgentImpl: (text, info) => speakUrgent(text, info),
     earconImpl: (n) => { if (ctx) tryRun(() => env.playEarcon(ctx!, n)); },
     hapticImpl: (n) => tryRun(() => env.vibrate(n)),
     langImpl: () => uiLang,
@@ -432,7 +511,7 @@ export function wireApp(opts: WireOpts): WiredApp {
 
   // ---- server messages ----
   const dispatch = createDispatcher({
-    playback,
+    playback: livePlayback,
     thinking,
     confirm,
     earcon: (n) => api.earcon(n),
@@ -573,6 +652,29 @@ export function wireApp(opts: WireOpts): WiredApp {
   const startSession = () => { listening = true; armWatchdog(); };
   const endSession = () => { listening = false; };
 
+  // ---- earphones come and go ----
+  // The OS routes audio (voice/mic.ts): earphones when paired, the loudspeaker otherwise. A stream opened
+  // before the change keeps its old route, so on every headset transition an open mic is reopened and the
+  // browser pairs it with the new output. When the earphones drop, a walker must hear at once where the next
+  // "Stop" will come from: said once per drop on the urgent path (never behind Live audio), with the warn
+  // earcon and haptic. Earphones arriving are quiet: he put them on himself.
+  const restartMic = () => {
+    if (!mic && !micOpen) return;
+    stopMic();
+    void openMic(true);
+  };
+  cleanups.push(
+    watchHeadset(env.mediaDevices, (present) => {
+      if (disposed) return;
+      clientLog("headset", { present });
+      restartMic();
+      if (present) return;
+      api.earcon("warn");
+      api.haptic("warn");
+      speakUrgent(STRINGS.earphonesLost[lang()], { kind: "headset.lost" });
+    }),
+  );
+
   // ---- hands-free start ----
   // No ack earcon and no thinking timer: nothing was asked yet. Audio output may still be locked (the
   // AudioContext was created without a gesture), but Chrome lets a page with a live getUserMedia stream start
@@ -615,7 +717,7 @@ export function wireApp(opts: WireOpts): WiredApp {
   const talk = () => {
     api.earcon("ack"); // < 150 ms acknowledgement, before anything async
     api.haptic("ack");
-    playback.flush({ holdUntilResume: true }); // an explicit talk cuts AIRA off
+    livePlayback.flush({ holdUntilResume: true }); // an explicit talk cuts AIRA off
     dropWaiting();
     env.speech?.cancel();
     local("talk");
@@ -628,7 +730,7 @@ export function wireApp(opts: WireOpts): WiredApp {
 
   const stop = () => {
     endSession();
-    playback.flush({ holdUntilResume: true });
+    livePlayback.flush({ holdUntilResume: true });
     thinking.disarm();
     dropWaiting();
     env.speech?.cancel();
@@ -697,8 +799,7 @@ export function wireApp(opts: WireOpts): WiredApp {
     socket.connect({
       t: "hello",
       uid: deviceUid(env.storage),
-      ...(key ? { idToken: key } : {}),
-      shopId: settings.shopId,
+      ...(key ? { idToken: key } : {}), // no shopId: there is one shop and the server picks it
       lang: uiLang, // only a hint for the first line; AIRA then follows the speaker
       verbosity: settings.verbosity,
       appVersion: APP_VERSION,

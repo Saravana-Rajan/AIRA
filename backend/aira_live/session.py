@@ -13,6 +13,7 @@ from pydantic import BaseModel
 from aira_live.contracts import Burst, RequestFrameMsg
 from aira_live.diag import diag
 from aira_live.frames import EXPIRED_KEEP_S, Frame, FrameStore
+from aira_live.scene_memory import SceneMemory
 from aira_live.i18n.detect import LangStep, judge_lang
 
 SendFn = Callable[[BaseModel], Awaitable[None]]
@@ -43,11 +44,13 @@ class Session:
         # ``session_id`` is given only when a hello resumes a session that just ended (sessions.take_ended).
         self.session_id = session_id or uuid.uuid4().hex[:12]
         self.uid, self.shop_id, self.lang, self.verbosity = uid, shop_id, lang, verbosity
+        self.started_at = time.time()  # epoch seconds; the monitor's ``session start`` carries it as ms
         self.lang_pending: str | None = None  # a language heard in the last utterance but not yet adopted
         # The languages this shop usually speaks (i18n.expected); None means any language switches as before.
         self.languages: list[str] | None = languages
         self.lang_streak = 0  # consecutive full sentences in a language outside ``languages``
         self.frames = FrameStore()
+        self.scene_memory = SceneMemory()  # what the camera saw in this conversation (aira_live.scene_watch)
         self.tool_results: list[dict] = []
         # Sent-notice ledger: notice key -> when it was last sent. ``sessions.register`` hands a resumed session
         # the ledger of the session it continues, so a reconnect never replays a notice the owner already heard.

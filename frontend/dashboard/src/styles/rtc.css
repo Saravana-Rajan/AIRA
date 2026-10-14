@@ -1,29 +1,9 @@
 /* WebRTC live video on the Live page (components/RtcVideo.tsx): the <video> sits where the JPEG canvas sits in
-   the camera card (live.css .camera / .camera__canvas), under the box overlay; a small badge on the picture says
-   which kind of picture this is. Light theme only, like the rest of the dashboard (tokens.css). */
+   the camera frame (live.css .camera / .camera__canvas). Light theme only, like the rest of the dashboard. */
 .camera__video {
   display: block;
   width: 100%;
   height: 100%;
   object-fit: contain;
   background: var(--lv-video, #14181C);
-}
-.camera__badge {
-  position: absolute;
-  left: 10px;
-  bottom: 10px;
-  padding: 3px 8px;
-  border-radius: 6px;
-  background: rgba(0, 0, 0, 0.6);
-  color: #fff;
-  font-size: 12px;
-  font-weight: 600;
-  letter-spacing: 0.02em;
-  pointer-events: none;
-}
-.camera__badge--webrtc {
-  background: var(--neu-ok, #0F6630);
-}
-.camera__badge--connecting {
-  opacity: 0.8;
 }

@@ -71,21 +71,30 @@ export function Sidebar(props: {
   shopName: string;
   status: LiveStatus;
   updatedText?: string;
+  /** Icon-only rail (desktop). The labels stay in the DOM for screen readers and as tooltips. */
+  collapsed?: boolean;
+  /** Shows the collapse/expand button when given. */
+  onToggle?: () => void;
 }) {
   return (
     <aside class="sidebar" id="sidebar">
       <div class="sidebar__brand">
-        <img class="sidebar__logo" src={`${import.meta.env.BASE_URL}aira-logo-192.png`} alt="" width={36} height={36} />
+        <img class="sidebar__logo" src={`${import.meta.env.BASE_URL}aira-logo-192.png`} alt="AIRA" width={36} height={36} />
         <div class="sidebar__names">
-          <span class="sidebar__app">AIRA</span>
           <span class="sidebar__shop">{props.shopName}</span>
         </div>
       </div>
-      <nav class="sidebar__nav" aria-label="Dashboard sections">
+      <nav class="sidebar__nav" id="sidebar-nav" aria-label="Dashboard sections">
         <ul class="nav">
           {props.routes.map((r) => (
             <li key={r.hash}>
-              <a class="nav__link" href={r.hash} title={r.label} aria-current={props.route === r.hash ? "page" : undefined}>
+              <a
+                class="nav__link"
+                href={r.hash}
+                title={r.label}
+                aria-label={r.label}
+                aria-current={props.route === r.hash ? "page" : undefined}
+              >
                 <svg
                   class="nav__icon"
                   viewBox="0 0 24 24"
@@ -93,7 +102,7 @@ export function Sidebar(props: {
                   height="20"
                   fill="none"
                   stroke="currentColor"
-                  stroke-width="1.8"
+                  stroke-width="1.5"
                   stroke-linecap="round"
                   stroke-linejoin="round"
                   aria-hidden="true"
@@ -107,6 +116,20 @@ export function Sidebar(props: {
           ))}
         </ul>
       </nav>
+      {props.onToggle && (
+        <button
+          type="button"
+          class="sidebar__toggle"
+          aria-label={props.collapsed ? "Expand menu" : "Collapse menu"}
+          aria-expanded={props.collapsed ? "false" : "true"}
+          aria-controls="sidebar-nav"
+          onClick={props.onToggle}
+        >
+          <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+            {props.collapsed ? <path d="M9 6l6 6-6 6" /> : <path d="M15 6l-6 6 6 6" />}
+          </svg>
+        </button>
+      )}
       <div class={`sidebar__foot live--${props.status}`} aria-hidden="true">
         <span class="live__dot" />
         <span class="sidebar__status">

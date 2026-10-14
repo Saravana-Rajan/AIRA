@@ -7,7 +7,7 @@ import { OrdersPage } from "./OrdersPage";
 import { ForecastPage } from "./ForecastPage";
 import { AuditPage, type ResolveEvidence } from "./AuditPage";
 
-export { DEMO_SHOP_ID } from "../lib/access";
+export { DEMO_SHOP_ID, SHOP_NAME } from "../lib/access";
 
 const OVERVIEW_ORDERS = 3;
 const OVERVIEW_ACTIONS = 8;

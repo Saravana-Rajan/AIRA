@@ -37,12 +37,13 @@ describe("Onboarding", () => {
     expect(root.textContent).toContain("any language");
   });
 
-  it("one Start tap finishes with the demo shop, no fixed language and onboarded=true", () => {
+  it("one Start tap finishes with no shop id, no fixed language and onboarded=true", () => {
     const onDone = vi.fn();
     mount({ onDone, languages: ["ta-IN"] });
     act(() => { startBtn().click(); });
     expect(onDone).toHaveBeenCalledTimes(1);
-    expect(onDone).toHaveBeenCalledWith({ ...DEFAULT_SETTINGS, lang: "auto", shopId: "sunrise_dairy", onboarded: true });
+    expect(onDone).toHaveBeenCalledWith({ ...DEFAULT_SETTINGS, lang: "auto", onboarded: true });
+    expect(onDone.mock.calls[0][0]).not.toHaveProperty("shopId");
   });
 
   it("the TalkBack switch turns on screen-reader mode", () => {

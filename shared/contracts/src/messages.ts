@@ -17,7 +17,8 @@ export type BoxObject = { label: string; box: Box; score?: number; severity?: Bo
 
 // ---------- client -> server ----------
 export type ClientMsg =
-  | { t: "hello"; uid: string; idToken?: string; shopId: string; lang: Lang; verbosity: Verbosity; appVersion: string; resume?: string }
+  // shopId: deprecated and ignored by the server (there is one shop; the server picks it). Older clients may still send it.
+  | { t: "hello"; uid: string; idToken?: string; shopId?: string; lang: Lang; verbosity: Verbosity; appVersion: string; resume?: string }
   | { t: "audio"; pcm16: string }
   // `changed`/`labels` only on purpose "live": the view settled on something new (labels: the phone's own
   // detector labels, at most MAX_FRAME_LABELS), so the server may nudge Live to speak up.
@@ -149,7 +150,7 @@ export function isClientMsg(x: unknown): x is ClientMsg {
   if (!isObj(x) || !inList(CLIENT_MSG_TYPES, x.t)) return false;
   switch (x.t as ClientMsgType) {
     case "hello":
-      return isStr(x.uid) && optional(x.idToken, isStr) && isStr(x.shopId) && inList(LANGS, x.lang) &&
+      return isStr(x.uid) && optional(x.idToken, isStr) && optional(x.shopId, isStr) && inList(LANGS, x.lang) &&
         inList(VERBOSITIES, x.verbosity) && isStr(x.appVersion) && optional(x.resume, isStr);
     case "audio":
       return isStr(x.pcm16);
@@ -231,14 +232,34 @@ export function parseClientMsg(raw: string): ClientMsg | null {
   }
 }
 
-// ---------- server -> monitor (GET /monitor?shop=<id>, then {t:"auth", key}; read-only) ----------
+// ---------- server -> monitor (GET /monitor[?shop=<id>]; read-only) ----------
+// There is one shop: `shop` may be left out (the server's demo shop); any other value is refused.
 // A projector view of one shop's live sessions. Every message is {t:"mon", kind, session, ts, ...}.
-// The monitor's first and only message is {t:"auth", key}: the server closes with 4403 when the key is wrong,
-// missing or late (5 s), and publishes nothing before it. The key never travels in the URL.
+//
+// Access: by default (the server runs without AIRA_MONITOR_AUTH; the owner's decision) there is no sign-in: the
+// feed starts as soon as the socket is open, and an {t:"auth", idToken} sent anyway is accepted and ignored.
+// The pre-handshake refusals (4403 for a bad Origin, shop or a full shop) still apply. Only when the server
+// runs with AIRA_MONITOR_AUTH=1 (and the dashboard is built with VITE_MONITOR_AUTH=1) is the auth message
+// required: then the first message a monitor sends, within 5 s of the upgrade, must be {t:"auth", idToken} with
+// a Firebase Authentication ID token (Google sign-in on the dashboard). The server verifies it (signature,
+// issuer, audience, expiry) and checks the account against its viewer allowlist (AIRA_MONITOR_VIEWERS); nothing
+// is sent before that. A missing, late, malformed, expired or otherwise invalid token closes the socket with
+// 4401; a valid token for an account that is not allowed closes it with 4403. The token never goes in the URL.
+// A token expires within an hour: the monitor sends a fresh {t:"auth", idToken} for the same account before
+// `exp` (the dashboard refreshes about five minutes early); without one the server closes with 4401 at `exp`
+// (plus a short grace), and a refresh naming a different account closes the socket too. Every reconnect
+// authenticates again.
 // Frames are sent only while a monitor is connected (<= 480 px wide, quality 0.6, <= 4 fps a session).
-// Mirrored in backend/aira_live/contracts.py; fixtures in ../fixtures/monitor_msgs.json.
-// After auth a monitor may also send rtc signalling for one of the shop's sessions (`to` = session id).
-export type MonitorClientMsg = { t: "auth"; key: string } | RtcClientMsg;
+// Mirrored in backend/aira_live/contracts.py; fixtures in ../fixtures/monitor_msgs.json and
+// ../fixtures/monitor_client_msgs.json.
+// What a monitor sends: the auth message, and rtc signalling for one of the shop's sessions (`to` = session id).
+export type MonitorAuthMsg = { t: "auth"; idToken: string };
+export type MonitorClientMsg = MonitorAuthMsg | RtcClientMsg;
+/** WebSocket close codes the server uses on /monitor after the upgrade. */
+export const MONITOR_CLOSE_UNAUTHENTICATED = 4401;
+export const MONITOR_CLOSE_UNAUTHORIZED = 4403;
+/** The server waits this long for the auth message after the upgrade. */
+export const MONITOR_AUTH_TIMEOUT_S = 5;
 export const MONITOR_KINDS = Object.freeze(["session", "transcript", "frame", "vision", "hand", "event", "status", "stats"] as const);
 export type MonitorKind = (typeof MONITOR_KINDS)[number];
 export const MONITOR_ROLES = Object.freeze(["owner", "customer", "aira"] as const);
@@ -267,8 +288,9 @@ export interface VisionObject {
 
 type MonBase = { t: "mon"; session: string; ts: number };
 export type MonitorMsg = MonBase & (
-  // uid "camera:<name>" marks a room camera's session.
-  | { kind: "session"; state: MonitorSessionState; lang: string; uid?: string }
+  // uid "camera:<name>" marks a room camera's session. startedAt: epoch ms when the phone session began; sent
+  // on start, so a monitor that joins late still knows how long it has been running.
+  | { kind: "session"; state: MonitorSessionState; lang: string; uid?: string; startedAt?: number }
   | { kind: "transcript"; role: MonitorRole; text: string; lang: string; final: boolean }
   | { kind: "frame"; jpeg_b64: string; w: number; h: number; purpose: FramePurpose }
   | { kind: "vision"; source: VisionSource; objects: VisionObject[]; target?: string; found?: boolean; severity?: BoxSeverity; context?: string; frameId?: string }
@@ -286,8 +308,22 @@ const isVisionObject = (o: unknown): o is VisionObject =>
   optional(o.score, isNum) && optional(o.severity, (v) => inList(BOX_SEVERITIES, v)) &&
   optional(o.distance, (v) => inList(VISION_DISTANCES, v));
 
+export function isMonitorAuthMsg(x: unknown): x is MonitorAuthMsg {
+  return isObj(x) && x.t === "auth" && isStr(x.idToken) && x.idToken.length > 0;
+}
+
 export function isMonitorClientMsg(x: unknown): x is MonitorClientMsg {
-  return (isObj(x) && x.t === "auth" && isStr(x.key)) || isRtcClientMsg(x);
+  return isMonitorAuthMsg(x) || isRtcClientMsg(x);
+}
+
+/** Parse one text frame a monitor sent. Returns null for bad JSON or an unknown/invalid message. */
+export function parseMonitorClientMsg(raw: string): MonitorClientMsg | null {
+  try {
+    const v: unknown = JSON.parse(raw);
+    return isMonitorClientMsg(v) ? v : null;
+  } catch {
+    return null;
+  }
 }
 
 /** One text frame of the /monitor feed: a monitor message, or rtc signalling from a phone session. */
@@ -304,7 +340,8 @@ export function isMonitorMsg(x: unknown): x is MonitorMsg {
   if (!isObj(x) || x.t !== "mon" || !inList(MONITOR_KINDS, x.kind) || !isStr(x.session) || !isNum(x.ts)) return false;
   switch (x.kind as MonitorKind) {
     case "session":
-      return inList(MONITOR_SESSION_STATES, x.state) && isStr(x.lang) && optional(x.uid, isStr);
+      return inList(MONITOR_SESSION_STATES, x.state) && isStr(x.lang) && optional(x.uid, isStr) &&
+        optional(x.startedAt, isNum);
     case "transcript":
       return inList(MONITOR_ROLES, x.role) && isStr(x.text) && isStr(x.lang) && isBool(x.final);
     case "frame":

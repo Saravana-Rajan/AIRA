@@ -1,40 +1,9 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { pickBuiltInMic, startMic, MIC_WORKLET_NAME, MIC_CHUNK_SAMPLES, MIC_RATE, type MicDeps } from "../src/voice/mic";
+import { startMic, MIC_WORKLET_NAME, MIC_CHUNK_SAMPLES, MIC_RATE, type MicDeps } from "../src/voice/mic";
 import { base64ToInt16 } from "../src/voice/pcm";
 
 const dev = (deviceId: string, label: string, kind: MediaDeviceKind = "audioinput"): MediaDeviceInfo =>
   ({ deviceId, label, kind, groupId: "g", toJSON() { return {}; } }) as MediaDeviceInfo;
-
-describe("pickBuiltInMic", () => {
-  it("prefers the built-in mic even when the Bluetooth headset comes first", () => {
-    const id = pickBuiltInMic([dev("bt1", "boAt Rockerz 255 (Bluetooth)"), dev("int1", "Built-in microphone")]);
-    expect(id).toBe("int1");
-  });
-  it("recognises common Android labels for the phone mic", () => {
-    expect(pickBuiltInMic([dev("h", "Headset earpiece"), dev("p", "Phone microphone")])).toBe("p");
-    expect(pickBuiltInMic([dev("b", "Bluetooth SCO"), dev("s", "Speakerphone")])).toBe("s");
-  });
-  it("never picks a bluetooth/headset device; falls back to 'default'", () => {
-    expect(pickBuiltInMic([dev("bt", "Bluetooth headset")])).toBe("default");
-    expect(pickBuiltInMic([])).toBe("default");
-  });
-  it("is order-independent and ignores output devices", () => {
-    const list = [dev("spk", "Built-in speaker", "audiooutput"), dev("bud", "Galaxy Buds2 Pro"), dev("int", "Built-in microphone")];
-    expect(pickBuiltInMic(list)).toBe("int");
-    expect(pickBuiltInMic([...list].reverse())).toBe("int");
-  });
-  it("prefers a real device id over the 'default' alias with the same label", () => {
-    const id = pickBuiltInMic([dev("default", "Default - Built-in microphone"), dev("int9", "Built-in microphone")]);
-    expect(id).toBe("int9");
-  });
-  it("does not mistake headphones for the phone mic", () => {
-    expect(pickBuiltInMic([dev("hp", "Wired headphones microphone"), dev("p", "Phone microphone")])).toBe("p");
-  });
-  it("prefers a clearly built-in mic over a generic 'microphone'", () => {
-    expect(pickBuiltInMic([dev("usb", "USB microphone"), dev("int", "Internal microphone")])).toBe("int");
-    expect(pickBuiltInMic([dev("usb", "USB microphone")])).toBe("usb");
-  });
-});
 
 describe("mic chunk sizing (latency)", () => {
   it("one chunk is 20-40 ms of 16 kHz PCM16: 640-1280 bytes, never a large batch", () => {
@@ -52,28 +21,16 @@ describe("mic chunk sizing (latency)", () => {
 
 type Frame = { samples: Float32Array; rate: number };
 
-function fakeEnv(opts: {
-  labelsVisible?: boolean;
-  devices?: MediaDeviceInfo[];
-  allow16k?: boolean;
-  failExact?: boolean;
-} = {}) {
-  const devices = opts.devices ?? [dev("bt1", "Bluetooth headset"), dev("int1", "Built-in microphone")];
-  let labelsVisible = opts.labelsVisible ?? false;
+function fakeEnv(opts: { devices?: MediaDeviceInfo[]; allow16k?: boolean } = {}) {
+  // Chrome Android lists communication routes, not microphones; a headset sits beside "Speakerphone".
+  const devices = opts.devices ?? [dev("spk", "Speakerphone"), dev("bt1", "Bluetooth headset"), dev("int1", "Built-in microphone")];
   const tracks: { stop: ReturnType<typeof vi.fn> }[] = [];
   const gumCalls: MediaStreamConstraints[] = [];
 
   const mediaDevices = {
-    enumerateDevices: vi.fn(async () =>
-      labelsVisible ? devices : devices.map((d) => dev("", "", d.kind)),
-    ),
+    enumerateDevices: vi.fn(async () => devices),
     getUserMedia: vi.fn(async (c: MediaStreamConstraints) => {
       gumCalls.push(c);
-      const a = c.audio as MediaTrackConstraints | boolean;
-      if (opts.failExact && typeof a === "object" && a.deviceId) {
-        throw Object.assign(new Error("overconstrained"), { name: "OverconstrainedError" });
-      }
-      labelsVisible = true;
       const t = { stop: vi.fn() };
       tracks.push(t);
       return { getTracks: () => [t] } as unknown as MediaStream;
@@ -115,38 +72,35 @@ function fakeEnv(opts: {
 describe("startMic", () => {
   afterEach(() => vi.restoreAllMocks());
 
-  it("probes permission once, then opens the built-in mic by exact id with voice processing", async () => {
+  it("opens the OS default input with voice processing: one getUserMedia, no deviceId, even with a headset listed", async () => {
     const env = fakeEnv();
     const mic = await startMic({ onChunk: () => {}, deps: env.deps });
-    expect(env.gumCalls).toHaveLength(2);
-    expect(env.gumCalls[0]).toEqual({ audio: true });
-    expect(env.tracks[0].stop).toHaveBeenCalled(); // probe released
-    const a = env.gumCalls[1].audio as MediaTrackConstraints;
-    expect(a.deviceId).toEqual({ exact: "int1" });
-    expect(a).toMatchObject({ echoCancellation: true, noiseSuppression: true, autoGainControl: true, channelCount: 1 });
-    expect(mic.deviceId).toBe("int1");
-    mic.stop();
-  });
-
-  it("skips the permission probe when device labels are already visible", async () => {
-    const env = fakeEnv({ labelsVisible: true });
-    const mic = await startMic({ onChunk: () => {}, deps: env.deps });
     expect(env.gumCalls).toHaveLength(1);
-    expect((env.gumCalls[0].audio as MediaTrackConstraints).deviceId).toEqual({ exact: "int1" });
-    mic.stop();
-  });
-
-  it("falls back to the default mic when the exact built-in device cannot be opened", async () => {
-    const env = fakeEnv({ labelsVisible: true, failExact: true });
-    const mic = await startMic({ onChunk: () => {}, deps: env.deps });
-    const last = env.gumCalls[env.gumCalls.length - 1].audio as MediaTrackConstraints;
-    expect(last.deviceId).toBeUndefined();
+    const a = env.gumCalls[0].audio as MediaTrackConstraints;
+    expect(a.deviceId).toBeUndefined(); // never "Speakerphone" by exact id: that would send AIRA's voice to the loudspeaker
+    expect(a).toMatchObject({ echoCancellation: true, noiseSuppression: true, autoGainControl: true, channelCount: 1 });
     expect(mic.deviceId).toBe("default");
     mic.stop();
   });
 
+  it("never picks a device by label, whatever the list holds (the OS pairs the earphone mic with its speaker)", async () => {
+    for (const devices of [
+      [dev("bt", "Bluetooth headset"), dev("p", "Phone microphone")],
+      [dev("int", "Built-in microphone")],
+      [dev("spk", "Speakerphone"), dev("ear", "Headset earpiece"), dev("sco", "Bluetooth SCO")],
+      [],
+    ]) {
+      const env = fakeEnv({ devices });
+      const mic = await startMic({ onChunk: () => {}, deps: env.deps });
+      expect(env.gumCalls).toHaveLength(1);
+      expect(JSON.stringify(env.gumCalls[0])).not.toContain("deviceId");
+      expect(env.mediaDevices.enumerateDevices).not.toHaveBeenCalled(); // no probe: nothing to choose
+      mic.stop();
+    }
+  });
+
   it("uses a 16 kHz context when allowed and emits one 512-sample chunk per 512 samples", async () => {
-    const env = fakeEnv({ labelsVisible: true, allow16k: true });
+    const env = fakeEnv({ allow16k: true });
     const chunks: string[] = [];
     const mic = await startMic({ onChunk: (b) => chunks.push(b), deps: env.deps });
     expect(env.createContext).toHaveBeenCalledWith({ sampleRate: 16000 });
@@ -165,7 +119,7 @@ describe("startMic", () => {
   });
 
   it("falls back to a native-rate context and streams 16 kHz PCM16 chunks, flushing the tail on stop", async () => {
-    const env = fakeEnv({ labelsVisible: true, allow16k: false });
+    const env = fakeEnv({ allow16k: false });
     const chunks: string[] = [];
     const levels: number[] = [];
     const mic = await startMic({ onChunk: (b) => chunks.push(b), onLevel: (l) => levels.push(l), deps: env.deps });
@@ -189,7 +143,7 @@ describe("startMic", () => {
   });
 
   it("releases the mic stream if the worklet fails to load", async () => {
-    const env = fakeEnv({ labelsVisible: true, allow16k: true });
+    const env = fakeEnv({ allow16k: true });
     env.deps.loadWorkletUrl = async () => { throw new Error("worklet 404"); };
     await expect(startMic({ onChunk: () => {}, deps: env.deps })).rejects.toThrow("worklet 404");
     expect(env.tracks[0].stop).toHaveBeenCalled();

@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { loadSettings, saveSettings, DEFAULT_SETTINGS, DEMO_SHOP_ID, SETTINGS_KEY } from "../src/core/settings";
+import { loadSettings, saveSettings, DEFAULT_SETTINGS, SHOP_NAME, SETTINGS_KEY } from "../src/core/settings";
 import { HAPTIC_PATTERNS, vibrate } from "../src/core/haptics";
 import { app, initApp } from "../src/core/app";
 
@@ -19,8 +19,18 @@ describe("settings", () => {
 
   it("returns defaults when nothing is stored", () => {
     expect(loadSettings(store)).toEqual(DEFAULT_SETTINGS);
-    expect(DEFAULT_SETTINGS.shopId).toBe("sunrise_dairy");
-    expect(DEMO_SHOP_ID).toBe("sunrise_dairy");
+    expect(DEFAULT_SETTINGS).not.toHaveProperty("shopId"); // one shop: the server picks it, the app never names it
+    expect(SHOP_NAME).toBe("Sunrise Dairy");
+  });
+
+  it("drops an older build's saved shopId without error and never writes one", () => {
+    store.setItem(SETTINGS_KEY, JSON.stringify({ lang: "ta", shopId: "sunrise_dairy", onboarded: true }));
+    const s = loadSettings(store);
+    expect(s).toEqual({ ...DEFAULT_SETTINGS, lang: "ta", onboarded: true });
+    expect(s).not.toHaveProperty("shopId");
+    saveSettings({ ...s, shopId: "legacy" }, store);
+    expect(JSON.parse(store.getItem(SETTINGS_KEY)!)).not.toHaveProperty("shopId");
+    expect(loadSettings(store)).not.toHaveProperty("shopId");
   });
 
   it("returns a fresh copy so callers cannot mutate the defaults", () => {
@@ -39,7 +49,7 @@ describe("settings", () => {
   });
 
   it("round-trips every field", () => {
-    const s = { lang: "hi" as const, verbosity: "detail" as const, screenReaderMode: true, speechRate: 1.25, shopId: "sunrise_dairy", onboarded: true, showBoxes: true };
+    const s = { lang: "hi" as const, verbosity: "detail" as const, screenReaderMode: true, speechRate: 1.25, onboarded: true, showBoxes: true };
     saveSettings(s, store);
     expect(loadSettings(store)).toEqual(s);
     expect(store.getItem(SETTINGS_KEY)).not.toBeNull();
@@ -63,7 +73,7 @@ describe("settings", () => {
   });
 
   it("falls back per field for bad types and non-finite rates", () => {
-    store.setItem("aira.settings", JSON.stringify({ verbosity: "loud", screenReaderMode: "yes", speechRate: "fast", shopId: "", onboarded: 1 }));
+    store.setItem("aira.settings", JSON.stringify({ verbosity: "loud", screenReaderMode: "yes", speechRate: "fast", shopId: "", onboarded: 1 }));  // shopId: an old build's field, ignored
     expect(loadSettings(store)).toEqual(DEFAULT_SETTINGS);
     store.setItem("aira.settings", JSON.stringify([1, 2]));
     expect(loadSettings(store)).toEqual(DEFAULT_SETTINGS);

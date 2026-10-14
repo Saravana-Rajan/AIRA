@@ -132,6 +132,45 @@ describe("todaySummary", () => {
     ];
     expect(todaySummary(todaySales, pays, products, NOW).byMethod).toEqual({ cash: 40, upi: 75 });
   });
+  it("averages the day's sales and counts the top product's units", () => {
+    const s = todaySummary(sales, payments, products, NOW);
+    expect(s.avgText).toBe("₹115");
+    expect(s.topProductQty).toBe("1 box");
+  });
+  it("lists today's sales newest first with IST times, item lines and the payment method", () => {
+    const s = todaySummary(sales, payments, products, NOW);
+    expect(s.recent.map((r) => r.id)).toEqual(["s2", "s1"]);
+    expect(s.recent[0]).toEqual({ id: "s2", time: "2:00 am", items: "1 × Arun ice cream box", amountText: "₹180", method: "pending" });
+    expect(s.recent[1]).toMatchObject({ time: "1:00 am", items: "2 × Aavin milk 500 ml", amountText: "₹50" });
+  });
+  it("maps a sale to its payment by paymentId or by the payment's sale reference, else Pending", () => {
+    const todaySales: any[] = [
+      { id: "s9", state: "SALE_COMPLETED", completedAt: START + 1_000, total: 75, items: [], paymentId: "pay_by_id" },
+      { id: "s10", state: "SALE_COMPLETED", completedAt: START + 2_000, total: 40, items: [] },
+      { id: "s11", state: "SALE_COMPLETED", completedAt: START + 3_000, total: 10, items: [] },
+    ];
+    const pays: any[] = [
+      { id: "pay_by_id", direction: "in", method: "upi", amount: 75, state: "CONFIRMED", refType: "other", refId: "x" },
+      { id: "pay_by_ref", direction: "in", method: "cash", amount: 40, state: "CONFIRMED", refType: "sale", refId: "s10" },
+      { id: "pay_pending", direction: "in", method: "upi", amount: 10, state: "PENDING", refType: "sale", refId: "s11" },
+    ];
+    const s = todaySummary(todaySales, pays, products, NOW);
+    expect(s.recent.map((r) => [r.id, r.method])).toEqual([["s11", "pending"], ["s10", "cash"], ["s9", "upi"]]);
+  });
+  it("keeps the items line short and the table to 20 rows", () => {
+    const many: any[] = Array.from({ length: 25 }, (_, i) => ({
+      id: `m${i}`, state: "SALE_COMPLETED", completedAt: START + 1_000 * (i + 1), total: 25,
+      items: [{ sku: "aavin_milk_500ml", qty: 2, lineTotal: 50 }, { sku: "sakthi_curd_1l", qty: 1, lineTotal: 60 }, { sku: "arun_icecream_box", qty: 3, lineTotal: 540 }],
+    }));
+    const s = todaySummary(many, [], products, NOW);
+    expect(s.recent).toHaveLength(20);
+    expect(s.recent[0].id).toBe("m24");
+    expect(s.recent[0].items.length).toBeLessThanOrEqual(60);
+    expect(s.recent[0].items.endsWith("…")).toBe(true);
+  });
+  it("has no average, no top product units and no rows on an empty day", () => {
+    expect(todaySummary([], [], products, NOW)).toMatchObject({ avgText: "—", topProductQty: null, recent: [] });
+  });
 });
 
 describe("orderRows", () => {

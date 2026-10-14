@@ -33,6 +33,7 @@ export const MIC_BACKLOG_MS = 1_500;
 let micPressureAt = -Infinity;
 let micDrops = 0;
 let speechAt = -Infinity;
+let walking = false;
 
 const clock = (): number => Date.now();
 
@@ -56,9 +57,16 @@ export function noteSpeech(now: number = clock()): void {
   speechAt = now;
 }
 
-/** True while the owner is speaking (or just stopped), or his mic audio is backed up: camera video waits. */
+/** A walk with me is running: the camera is his eyes, so video keeps flowing while he speaks (the server checks
+ *  the newest picture as soon as Live is free). Only a backed-up mic still pauses it: his words are never lost. */
+export function setWalkVideo(on: boolean): void {
+  walking = on;
+}
+
+/** True while the owner is speaking (or just stopped), or his mic audio is backed up: camera video waits.
+ *  During a walk only the mic backlog counts (setWalkVideo). */
 export function videoYields(now: number = clock()): boolean {
-  return now - speechAt < SPEECH_HOLD_MS || micBackedUp(now);
+  return (!walking && now - speechAt < SPEECH_HOLD_MS) || micBackedUp(now);
 }
 
 /** Total mic chunks dropped since load (the mic_drop diagnostics line). */
@@ -71,6 +79,7 @@ export function __resetSendPriority(): void {
   micPressureAt = -Infinity;
   micDrops = 0;
   speechAt = -Infinity;
+  walking = false;
 }
 
 export interface DrainOpts {

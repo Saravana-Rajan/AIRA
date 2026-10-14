@@ -36,28 +36,61 @@
    Page and cards share one base colour; depth comes only from a dark and a light shadow.
    Raised = sits above the surface (cards, KPI tiles, hover). Inset = pressed into it (active menu item,
    pills, table header). Text stays dark (light mode) or light (dark mode) and every coloured "ink" is
-   WCAG AA (4.5:1 or more) on --neu-bg. Reused by the Live page; light only, like the rest of the dashboard. */
+   WCAG AA (4.5:1 or more) on --neu-bg. Reused by the Live page; light only, like the rest of the dashboard.
+   Surface language: a soft grey page (a slight top-to-bottom gradient) and light frosted panels that float on
+   it: a faint white edge, one soft drop shadow, large corners. No pressed-in (inset) relief any more: "inset"
+   tokens are kept for the many rules that use them but now draw only a hair-line ring. */
 :root {
-  --neu-bg: #E0E0E0;
-  --neu-bg-sunken: #D7D7D7;
-  --neu-shadow-dark: rgba(163, 163, 163, 0.45);
-  --neu-shadow-light: rgba(255, 255, 255, 0.85);
-  --neu-text: #2D3436;        /* 9.6:1 on --neu-bg */
-  --neu-text-muted: #4F5A65;  /* 5.3:1 */
-  --neu-accent: #4338CA;      /* indigo, 6.0:1: active menu item, links, focus */
+  --neu-bg: #F2F4F7;          /* page (solid fallback); the body paints --page-gradient over it */
+  --page-gradient: linear-gradient(180deg, #F7F8FA, #EFF1F4);   /* soft, almost neutral light */
+  --page-end: #EFF1F4;        /* html ground beyond the page: the gradient's end colour */
+  --neu-surface: #FBFCFD;     /* panels, cards, chips (solid fallback) */
+  --panel-gradient: linear-gradient(180deg, #FFFFFF, #F7F9FC);
+  --panel-border: rgba(255, 255, 255, 0.7);
+  --neu-bg-sunken: #E7E9ED;   /* table header band, the camera frame */
+  --neu-white: #FFFFFF;       /* hover rows, secondary pills, inputs */
+  --neu-text: #1F2328;        /* 10.4:1 on the darkest page grey, 13:1 on a panel */
+  --neu-text-muted: #4F5663;  /* 4.9:1 on the darkest page grey, 6.2:1 on a panel */
+  --neu-table-head: #3A4049;  /* 8.6:1 on --neu-bg-sunken */
+  --table-head-bg: #111317;   /* table header band: the same near-black as the active pill */
+  --table-head-text: #FFFFFF; /* 18:1 on --table-head-bg */
+  --table-border: #D3DAE4;    /* table frame and cell lines */
+  --neu-accent: #111317;      /* near-black: primary actions, selected tabs, focus */
   --neu-ok: #0F6630;
   --neu-danger: #A11A10;
   --neu-warn: #8A3A08;
-  --neu-info: #1E4FB0;
-  --neu-divider: rgba(45, 52, 54, 0.09);
-  --neu-hover: rgba(45, 52, 54, 0.04);
+  --neu-info: #1E4FB0;        /* links, 6.9:1 on a panel */
+  --neu-divider: rgba(17, 19, 23, 0.06);
+  --neu-hover: #FFFFFF;
 
-  --neu-raised: 4px 4px 10px var(--neu-shadow-dark), -4px -4px 10px var(--neu-shadow-light);
-  --neu-raised-sm: 2px 2px 5px var(--neu-shadow-dark), -2px -2px 5px var(--neu-shadow-light);
-  --neu-inset: inset 3px 3px 6px var(--neu-shadow-dark), inset -3px -3px 6px var(--neu-shadow-light);
-  --neu-inset-sm: inset 1.5px 1.5px 3px var(--neu-shadow-dark), inset -1.5px -1.5px 3px var(--neu-shadow-light);
+  --neu-raised: 0 10px 30px rgba(20, 24, 31, 0.08);
+  --neu-raised-sm: 0 2px 8px rgba(20, 24, 31, 0.06);
+  --neu-inset: inset 0 0 0 1px rgba(17, 19, 23, 0.08);
+  --neu-inset-sm: inset 0 0 0 1px rgba(17, 19, 23, 0.06);
 
-  --neu-radius-card: 22px;
-  --neu-radius-item: 12px;
-  --neu-focus: 3px solid var(--neu-accent);
+  --neu-radius-card: 26px;
+  --neu-radius-item: 14px;
+  --neu-focus: 2px solid var(--neu-accent);
+
+  /* The left menu: a light frosted panel that floats over the grey page with a margin and large rounded
+     corners. Dark text, the open section on a solid black pill. Every text/icon pair is WCAG AA on its ground
+     (text 13:1 on the panel, white 18:1 on the black pill, muted 5.0:1). */
+  --side-width: 252px;
+  --side-rail: 76px;           /* the collapsed icon rail */
+  --side-margin: 16px;         /* gap between the panel and the window edges */
+  --side-radius: 30px;
+  --side-bg-top: #FFFFFF;
+  --side-bg-bottom: #F7F9FC;
+  --side-border: rgba(255, 255, 255, 0.7);
+  --side-shadow: 0 10px 30px rgba(20, 24, 31, 0.08);
+  --side-divider: rgba(31, 35, 40, 0.1);
+  --side-text: #1F2328;
+  --side-text-muted: #5B6472;
+  --side-hover: #FFFFFF;
+  --side-hover-shadow: 0 2px 8px rgba(20, 24, 31, 0.06);
+  --side-active-bg: #111317;
+  --side-active-text: #FFFFFF;
+  --side-active-shadow: 0 4px 12px rgba(20, 24, 31, 0.12); /* the white circle behind the active icon on the rail */
+  --side-focus: #111317;
+  --side-drawer-shadow: 0 10px 40px rgba(20, 24, 31, 0.22);
 }

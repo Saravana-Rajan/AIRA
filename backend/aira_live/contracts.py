@@ -90,7 +90,7 @@ class HelloMsg(_ClientWire):
     t: Literal["hello"]
     uid: StrictStr
     id_token: Optional[StrictStr] = None  # unused: no Firebase Auth (server checks AIRA_ALLOW_NO_TOKEN)
-    shop_id: StrictStr
+    shop_id: Optional[StrictStr] = None  # deprecated: ignored, the server picks the one shop (auth.verify_hello)
     lang: Lang
     verbosity: Verbosity
     app_version: StrictStr
@@ -343,9 +343,17 @@ ServerMsg = Annotated[
     Field(discriminator="t"),
 ]
 
-# ---------- server -> monitor (GET /monitor?shop=<id>, then {t:"auth", key}; read-only) ----------
-# Mirrors the MonitorMsg union in messages.ts and shared/contracts/fixtures/monitor_msgs.json.
-# Every message is {t:"mon", kind, session, ts, ...}; ``jpeg_b64`` keeps its snake_case name on the wire.
+# ---------- server -> monitor (GET /monitor[?shop=<id>]; read-only) ----------
+# There is one shop: ``shop`` may be left out (config demo_shop_id); any other value is refused. The auth message
+# ``MonAuthMsg`` (``{t:"auth", idToken}``, a Firebase Authentication ID token) is required only when the server
+# runs with AIRA_MONITOR_AUTH=1: then it must be the first message, within ``monitor.AUTH_TIMEOUT_S``, and
+# ``main.py`` / ``monitor.authenticate`` verify it and the viewer allowlist before anything is sent (close 4401 =
+# not authenticated, 4403 = not authorized); the same message refreshes the token before it expires. Without the
+# flag (the default) there is no sign-in: the feed starts at once, and an auth message is accepted and ignored.
+# Mirrors messages.ts and shared/contracts/fixtures/monitor_msgs.json / monitor_client_msgs.json.
+# Every server message is {t:"mon", kind, session, ts, ...}; ``jpeg_b64`` keeps its snake_case name on the wire.
+MONITOR_CLOSE_UNAUTHENTICATED = 4401
+MONITOR_CLOSE_UNAUTHORIZED = 4403
 MonitorRole = Literal["owner", "customer", "aira"]
 MonitorSessionState = Literal["start", "end"]
 # Who drew the boxes of a vision message: the phone's on-device MediaPipe detector, Gemini Robotics-ER 2, or
@@ -356,13 +364,14 @@ MonitorState = Literal["listening", "thinking", "guiding", "found", "idle"]
 
 
 class MonAuthMsg(_ClientWire):
-    """The monitor's first (and only) message: the key, compared in constant time to AIRA_MONITOR_KEY."""
+    """The monitor's credential: a Firebase Authentication ID token (``idToken`` on the wire). Sent first, and
+    again to refresh before the token expires. Never logged (``diag`` redacts ``id_token``)."""
 
     t: Literal["auth"]
-    key: StrictStr
+    id_token: StrictStr = Field(min_length=1)
 
 
-# What a monitor may send: its auth, then WebRTC signalling for one of the shop's sessions (``to`` = session id).
+# What a monitor may send: its auth message, and WebRTC signalling for one of the shop's sessions (``to`` = session id).
 MonitorClientMsg = Annotated[Union[MonAuthMsg, RtcMsg], Field(discriminator="t")]
 monitor_client_adapter: TypeAdapter[MonitorClientMsg] = TypeAdapter(MonitorClientMsg)
 
@@ -386,6 +395,9 @@ class MonSessionMsg(_MonWire):
     state: MonitorSessionState
     lang: StrictStr
     uid: Optional[StrictStr] = None  # "camera:<name>" marks a room camera (aira_live.cameras.sources)
+    # Epoch ms when the phone session began (``startedAt`` on the wire); sent on ``start``, so a monitor that
+    # joins late still knows how long the session has been running.
+    started_at: Optional[Num] = None
 
 
 class MonTranscriptMsg(_MonWire):

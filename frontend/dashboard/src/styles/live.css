@@ -1,27 +1,21 @@
 /* The Live page (#/live) in the dashboard's neumorphic surface system (tokens.css: --neu-*). Light only, like
    the rest of the dashboard. One base colour everywhere; depth comes only from the paired dark/light shadows:
-   panels (Sam's view, the conversation, the room camera) sit raised, pills and the camera frame are pressed in,
-   chat bubbles are soft and low. No hard borders anywhere. The brand blue -> purple gradient is spent on AIRA
-   itself: the AIRA avatar, the active step and the "guiding" pill. The camera stays a dark video area inside an
-   inset frame; box colours on it carry meaning and stay vivid: grey thin = MediaPipe on the phone, blue thick =
-   Gemini Robotics-ER 2, red = obstacle, green = found, orange = fingertip.
+   the camera panel sits raised, the people cards and the chip are raised pills, the camera frame is pressed
+   in. No hard borders anywhere. The brand black is spent on the followed person's card. Three rows, top to
+   bottom: the header, the people selector and the selected person's camera, as large as the width allows.
    Sits beside the left menu and fits 1280x720 and 1920x1080 without a horizontal scroll. */
 :root {
-  --lv-grad: linear-gradient(135deg, #1F6FFF, #7B4DFF);
+  --lv-grad: linear-gradient(135deg, #1F2328, #111317); /* AIRA's own mark: the primary black of the dashboard */
   --lv-video: #14181C;      /* the camera's dark ground */
-  --lv-ov-object: #1F6FFF;
-  --lv-ov-fast: #C7CED8;
-  --lv-ov-danger: #EF4444;
-  --lv-ov-found: #22C55E;
-  --lv-ov-hand: #FF8A3D;
-  --lv-purple: #7B4DFF;
+  --lv-live: #EF4444;       /* the live chip's dot */
+  --lv-connecting: #FF8A3D;
   --live-chrome: 84px;      /* the sticky header above the page */
 }
 
 .main--live {
   max-width: none;
   padding: 10px 28px 24px;
-  background: var(--neu-bg);
+  background: transparent;
   color: var(--neu-text);
 }
 .main--record {
@@ -30,45 +24,41 @@
   background: #000;
 }
 
+/* One column: the people row always spans the full width above the camera. */
 .livepage {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(300px, 380px);
-  grid-template-rows: auto minmax(0, 1fr) auto auto auto;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: auto auto minmax(0, 1fr);
   grid-template-areas:
-    "head head"
-    "cam chat"
-    "steps chat"
-    "tl chat"
-    "bar chat";
-  gap: 18px 22px;
+    "head"
+    "people"
+    "cam";
+  gap: 16px;
   width: 100%;
   min-width: 0;
   height: calc(100vh - var(--live-chrome) - 34px);
   min-height: 520px;
 }
-.livepage:has(.room) {
-  grid-template-rows: auto minmax(0, 1fr) auto auto auto auto;
-  grid-template-areas:
-    "head head"
-    "cam chat"
-    "room chat"
-    "steps chat"
-    "tl chat"
-    "bar chat";
-}
 @media (max-width: 1100px) {
-  .livepage,
-  .livepage:has(.room) {
-    grid-template-columns: minmax(0, 1fr);
+  .livepage {
     grid-template-rows: auto;
-    grid-template-areas: "head" "cam" "room" "steps" "tl" "chat" "bar";
+    grid-template-areas:
+      "head"
+      "people"
+      "cam";
     height: auto;
-  }
-  .livepage .chat {
-    max-height: 60vh;
   }
   .main--live {
     padding: 8px 16px 24px;
+  }
+}
+@media (min-width: 1101px) {
+  .livepage {
+    grid-template-areas:
+      "head"
+      "people"
+      "cam";
+    height: calc(100vh - var(--live-chrome) - 24px);
   }
 }
 
@@ -86,7 +76,7 @@
   height: 40px;
   padding: 2px;
   border-radius: var(--neu-radius-item);
-  background: var(--neu-bg);
+  background: var(--neu-surface);
   box-shadow: var(--neu-raised-sm);
 }
 .lv-title {
@@ -100,49 +90,6 @@
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.lv-pill {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  margin-left: 6px;
-  padding: 7px 14px 7px 11px;
-  border-radius: var(--radius-pill);
-  background: var(--neu-bg);
-  box-shadow: var(--neu-inset-sm);
-  color: var(--neu-info);
-  font-size: var(--text-small);
-  font-weight: 700;
-  white-space: nowrap;
-}
-.lv-pill__dot {
-  width: 9px;
-  height: 9px;
-  border-radius: 50%;
-  background: currentColor;
-}
-.lv-pill--listening .lv-pill__dot {
-  animation: live-pulse 1.6s ease-in-out infinite;
-}
-.lv-pill--thinking {
-  color: var(--neu-accent);
-}
-.lv-pill--thinking .lv-pill__dot {
-  animation: live-pulse 0.8s ease-in-out infinite;
-}
-.lv-pill--guiding {
-  background: var(--lv-grad);
-  box-shadow: var(--neu-raised-sm);
-  color: #fff;
-}
-.lv-pill--found {
-  color: var(--neu-ok);
-}
-.lv-pill--found .lv-pill__dot {
-  background: var(--lv-ov-found);
-}
-.lv-pill--idle {
-  color: var(--neu-text-muted);
-}
 .lv-conn {
   display: inline-flex;
   align-items: center;
@@ -150,7 +97,7 @@
   margin-left: auto;
   padding: 7px 14px;
   border-radius: var(--radius-pill);
-  background: var(--neu-bg);
+  background: var(--neu-surface);
   box-shadow: var(--neu-inset-sm);
   color: var(--neu-text-muted);
   font-size: var(--text-small);
@@ -165,33 +112,203 @@
 }
 .lv-conn__dot--on,
 .lv-conn__dot--live {
-  background: var(--lv-ov-found);
+  background: var(--neu-ok);
   box-shadow: 0 0 0 4px rgba(34, 197, 94, 0.18);
 }
 .lv-conn__dot--connecting,
 .lv-conn__dot--offline {
-  background: var(--lv-ov-hand);
+  background: var(--lv-connecting);
 }
-.lv-conn__dot--rejected {
-  background: var(--lv-ov-danger);
+.lv-conn__dot--rejected,
+.lv-conn__dot--unauthorized,
+.lv-conn__dot--unauthenticated {
+  background: var(--lv-live);
 }
 .lv-conn__lang {
   padding-left: 10px;
   box-shadow: -1px 0 0 var(--neu-divider);
   font-weight: 500;
 }
-.lv-session {
-  padding: 4px 10px;
+.lv-user {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+.lv-conn__user {
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--neu-text-muted);
+  font-size: var(--text-small);
+  font-weight: 600;
+}
+
+/* Buttons: raised at rest, pressed in while active. */
+.signin__btn,
+.lv-conn__signout {
+  padding: 10px 18px;
   border: 0;
   border-radius: var(--neu-radius-item);
-  background: var(--neu-bg);
+  background: var(--neu-surface);
+  box-shadow: var(--neu-raised-sm);
+  color: var(--neu-accent);
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+  transition: box-shadow 120ms;
+}
+.signin__btn:hover,
+.lv-conn__signout:hover {
+  background: var(--neu-hover);
+}
+.signin__btn:active,
+.lv-conn__signout:active {
+  box-shadow: var(--neu-inset-sm);
+}
+.signin__btn:focus-visible,
+.lv-conn__signout:focus-visible {
+  outline: var(--neu-focus);
+  outline-offset: 3px;
+}
+.lv-conn__signout {
+  padding: 6px 12px;
+  color: var(--neu-text);
+  font-size: var(--text-small);
+}
+
+/* ---------- the people using AIRA now: one card each, the followed one black like the menu's active pill ---------- */
+.people {
+  grid-area: people;
+  min-width: 0;
+  padding: 2px 6px;
+}
+.people__title {
+  margin: 0 0 10px;
+  color: var(--neu-text);
+  font-size: var(--text-small);
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  text-transform: uppercase;
+}
+.people__list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.people__item {
+  min-width: 0;
+}
+.people__empty {
+  margin: 0;
+  color: var(--neu-text-muted);
+  font-size: var(--text-body);
+}
+.person {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  max-width: 100%;
+  padding: 10px 14px;
+  border: 1px solid var(--neu-divider);
+  border-radius: var(--radius-pill);
+  background: var(--neu-surface);
   box-shadow: var(--neu-raised-sm);
   color: var(--neu-text);
   font: inherit;
   font-size: var(--text-small);
+  text-align: left;
+  cursor: pointer;
+  transition: box-shadow 120ms, background 120ms;
+}
+.person:hover {
+  background: var(--neu-hover);
+}
+.person:active {
+  box-shadow: var(--neu-inset-sm);
+}
+.person:focus-visible {
+  outline: var(--neu-focus);
+  outline-offset: 3px;
+}
+.person--on,
+.person--on:hover {
+  border-color: transparent;
+  background: var(--side-active-bg);
+  box-shadow: none;
+  color: var(--side-active-text);
+}
+.person__label {
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 700;
+}
+.person__meta {
+  display: inline-flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+  color: var(--neu-text-muted);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.25;
+  white-space: nowrap;
+}
+.person--on .person__meta {
+  color: rgba(255, 255, 255, 0.72);
+}
+/* What AIRA is doing for this person, on a small pill of its own. */
+.person__status {
+  padding: 4px 10px;
+  border-radius: var(--radius-pill);
+  background: var(--neu-surface);
+  box-shadow: var(--neu-inset-sm);
+  color: var(--neu-info);
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+.person__status--thinking {
+  color: var(--neu-accent);
+}
+.person__status--guiding {
+  background: var(--lv-grad);
+  box-shadow: var(--neu-raised-sm);
+  color: #fff;
+}
+.person__status--found {
+  color: var(--neu-ok);
+}
+.person__status--idle {
+  color: var(--neu-text-muted);
+}
+.person--on .person__status {
+  background: rgba(255, 255, 255, 0.12);
+  box-shadow: none;
+  color: #fff;
+}
+.person--on .person__status--guiding {
+  background: var(--lv-grad);
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.35);
+}
+@media (max-width: 600px) {
+  .person {
+    width: 100%;
+    justify-content: space-between;
+    border-radius: var(--neu-radius-item);
+  }
+  .people__item {
+    flex: 1 1 100%;
+  }
 }
 
-/* ---------- Sam's view ---------- */
+/* ---------- the selected person's camera ---------- */
 .cam {
   grid-area: cam;
   display: flex;
@@ -200,7 +317,7 @@
   min-height: 0;
   padding: 16px 18px 14px;
   border-radius: var(--neu-radius-card);
-  background: var(--neu-bg);
+  background: var(--neu-surface);
   box-shadow: var(--neu-raised);
 }
 .cam__head {
@@ -210,57 +327,48 @@
   gap: 12px;
   margin-bottom: 12px;
 }
-.cam__title,
-.chat__title {
+.cam__title {
   margin: 0;
   color: var(--neu-text);
   font-size: 17px;
   font-weight: 700;
   letter-spacing: -0.01em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
-.cam__live {
+/* The tiny status chip beside the title: live (red dot), connecting (orange), refused (red). */
+.cam__chip {
   display: inline-flex;
   align-items: center;
   gap: 7px;
   padding: 5px 12px 5px 10px;
   border-radius: var(--radius-pill);
-  background: var(--neu-bg);
+  background: var(--neu-surface);
   box-shadow: var(--neu-inset-sm);
   color: var(--neu-text-muted);
   font-size: 12px;
   font-weight: 700;
   letter-spacing: 0.02em;
+  white-space: nowrap;
 }
-.cam__live--on {
+.cam__chip--live {
   color: var(--neu-danger);
 }
-.cam__live-dot {
+.cam__chip-dot {
   width: 8px;
   height: 8px;
   border-radius: 50%;
-  background: currentColor;
-}
-.cam__live--on .cam__live-dot {
-  background: var(--lv-ov-danger);
+  background: var(--lv-live);
   animation: live-pulse 1.2s ease-in-out infinite;
 }
-.cam__age {
-  padding-left: 8px;
-  box-shadow: -1px 0 0 var(--neu-divider);
-  font-weight: 600;
-  font-variant-numeric: tabular-nums;
-  letter-spacing: 0;
+.cam__chip--connecting {
+  color: var(--lv-connecting);
 }
-.cam__paused {
-  padding: 5px 12px;
-  border-radius: var(--radius-pill);
-  background: var(--neu-bg);
-  box-shadow: var(--neu-inset-sm);
-  color: var(--neu-warn);
-  font-size: 12px;
-  font-weight: 700;
+.cam__chip--refused {
+  color: var(--neu-danger);
 }
-/* The inset frame the video sits in: pressed into the panel, the dark picture inside it. */
+/* The inset frame the picture sits in: pressed into the panel, the dark picture inside it. */
 .cam__view {
   position: relative;
   flex: 1;
@@ -268,24 +376,20 @@
   display: grid;
   place-items: center;
   padding: 12px;
-  border-radius: 18px;
+  border-radius: 20px;
   background: var(--neu-bg-sunken);
   box-shadow: var(--neu-inset);
 }
-
+/* The picture fills the width in its own aspect ratio (the frame's w/h or the stream's), capped by the panel's height. */
 .camera {
   position: relative;
+  width: 100%;
   max-width: 100%;
   max-height: 100%;
-  height: 100%;
   margin: 0 auto;
-  border-radius: 12px;
+  border-radius: 20px;
   background: var(--lv-video);
   overflow: hidden;
-}
-.camera--danger {
-  box-shadow: 0 0 0 4px var(--lv-ov-danger);
-  animation: live-danger 0.8s ease-in-out infinite;
 }
 .camera__canvas {
   display: block;
@@ -293,172 +397,6 @@
   height: 100%;
   object-fit: contain;
   background: var(--lv-video);
-}
-.camera__overlay {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  overflow: visible;
-}
-.ov rect,
-.ov circle,
-.ov line {
-  vector-effect: non-scaling-stroke;
-}
-.ov rect {
-  fill: none;
-  stroke-width: 3;
-}
-.ov text {
-  font-family: var(--font-sans);
-  font-weight: 700;
-  fill: #fff;
-}
-.ov .ov__tag {
-  stroke: none;
-}
-.ov--fast rect {
-  stroke: var(--lv-ov-fast);
-  stroke-width: 1.5;
-}
-.ov--fast text {
-  fill: #fff;
-  paint-order: stroke fill;
-  stroke: rgba(0, 0, 0, 0.7);
-  stroke-width: 3px;
-  stroke-linejoin: round;
-}
-.ov--object rect,
-.ov--target rect {
-  stroke: var(--lv-ov-object);
-}
-.ov--target rect {
-  stroke-width: 4;
-}
-.ov--object .ov__tag,
-.ov--target .ov__tag,
-.ov--object circle,
-.ov--target circle {
-  fill: var(--lv-ov-object);
-}
-.ov--danger rect {
-  stroke: var(--lv-ov-danger);
-  stroke-width: 4;
-  animation: live-danger 0.8s ease-in-out infinite;
-}
-.ov--danger .ov__tag,
-.ov--danger circle {
-  fill: var(--lv-ov-danger);
-}
-.ov--found rect {
-  stroke: var(--lv-ov-found);
-  stroke-width: 5;
-  fill: rgba(34, 197, 94, 0.16);
-}
-.ov--found .ov__tag,
-.ov--found circle {
-  fill: var(--lv-ov-found);
-}
-.ov--hand circle {
-  fill: var(--lv-ov-hand);
-  stroke: #fff;
-  stroke-width: 2;
-}
-.ov--line {
-  stroke: var(--lv-ov-hand);
-  stroke-width: 3;
-  stroke-dasharray: 10 8;
-  stroke-linecap: round;
-}
-.ov--object text,
-.ov--target text,
-.ov--danger text,
-.ov--found text {
-  paint-order: normal;
-  stroke: none;
-}
-
-.camera__found,
-.camera__seek {
-  position: absolute;
-  left: 14px;
-  bottom: 14px;
-  margin: 0;
-  padding: 9px 16px;
-  border-radius: var(--radius-pill);
-  font-size: 18px;
-  font-weight: 700;
-}
-.camera__found {
-  background: var(--lv-ov-found);
-  color: #fff;
-  box-shadow: 0 0 0 6px rgba(34, 197, 94, 0.3);
-}
-.camera__check {
-  margin-right: 4px;
-}
-.camera__seek {
-  background: rgba(224, 224, 224, 0.94);
-  color: var(--neu-text);
-  font-weight: 600;
-  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.35);
-}
-.camera__age {
-  position: absolute;
-  right: 10px;
-  bottom: 10px;
-  padding: 3px 8px;
-  border-radius: 6px;
-  background: rgba(0, 0, 0, 0.6);
-  color: #fff;
-  font-size: 12px;
-  font-weight: 600;
-  font-variant-numeric: tabular-nums;
-}
-
-.legend {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px 16px;
-  margin: 12px 0 0;
-  padding: 0 4px;
-  list-style: none;
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--neu-text-muted);
-}
-.legend__item {
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-}
-.legend__item::before {
-  content: "";
-  width: 16px;
-  height: 10px;
-  border: 3px solid currentColor;
-  border-radius: 3px;
-}
-.legend__item--fast::before {
-  border-width: 1.5px;
-  border-color: #8E99A8;
-}
-.legend__item--object::before {
-  border-color: var(--lv-ov-object);
-}
-.legend__item--danger::before {
-  border-color: var(--lv-ov-danger);
-}
-.legend__item--found::before {
-  border-color: var(--lv-ov-found);
-  background: rgba(34, 197, 94, 0.3);
-}
-.legend__item--hand::before {
-  width: 10px;
-  border-radius: 50%;
-  border-color: var(--lv-ov-hand);
-  background: var(--lv-ov-hand);
 }
 
 .cam__empty {
@@ -489,573 +427,52 @@
   font-size: var(--text-body);
 }
 
-.keyprompt {
+/* ---------- sign-in: who may watch (Google sign-in, checked by the server; the VITE_MONITOR_AUTH=1 build) ---------- */
+.signin {
   width: min(100%, 460px);
   padding: 24px;
   border-radius: var(--neu-radius-card);
-  background: var(--neu-bg);
+  background: var(--neu-surface);
   box-shadow: var(--neu-raised);
   color: var(--neu-text);
+  text-align: center;
 }
-.keyprompt__label {
-  display: block;
-  font-size: 18px;
+.signin__title {
+  margin: 0 0 6px;
+  font-size: 22px;
   font-weight: 700;
+  letter-spacing: -0.01em;
 }
-.keyprompt__help {
-  margin: 6px 0 14px;
+.signin__text {
+  margin: 0 auto 16px;
+  max-width: 40ch;
   color: var(--neu-text-muted);
+  font-size: var(--text-body);
 }
-.keyprompt__row {
-  display: flex;
-  gap: 10px;
-}
-.keyprompt__input {
-  flex: 1;
-  min-width: 0;
-  padding: 10px 14px;
-  border: 0;
-  border-radius: var(--neu-radius-item);
-  background: var(--neu-bg);
-  box-shadow: var(--neu-inset-sm);
-  color: var(--neu-text);
-  font: inherit;
-}
-/* Buttons: raised at rest, pressed in while active. */
-.keyprompt__btn,
-.bar__btn,
-.record__exit,
-.room__btn {
-  padding: 10px 18px;
-  border: 0;
-  border-radius: var(--neu-radius-item);
-  background: var(--neu-bg);
-  box-shadow: var(--neu-raised-sm);
-  color: var(--neu-accent);
-  font: inherit;
-  font-weight: 700;
-  cursor: pointer;
-  transition: box-shadow 120ms;
-}
-.keyprompt__btn:hover,
-.bar__btn:hover,
-.record__exit:hover,
-.room__btn:hover {
-  background: var(--neu-hover);
-}
-.keyprompt__btn:active,
-.bar__btn:active,
-.record__exit:active,
-.room__btn:active {
-  box-shadow: var(--neu-inset-sm);
-}
-.keyprompt__btn:focus-visible,
-.bar__btn:focus-visible,
-.record__exit:focus-visible,
-.room__btn:focus-visible,
-.keyprompt__input:focus-visible,
-.lv-session:focus-visible {
-  outline: var(--neu-focus);
-  outline-offset: 3px;
-}
-.keyprompt__btn {
-  background: var(--lv-grad);
-  color: #fff;
-}
-
-/* ---------- room camera ---------- */
-.room {
-  grid-area: room;
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 12px;
-  align-items: start;
-  min-width: 0;
-}
-.roomcam {
-  min-width: 0;
-  padding: 10px 14px 12px;
-  border-radius: var(--neu-radius-card);
-  background: var(--neu-bg);
-  box-shadow: var(--neu-raised);
-}
-.roomcam__title {
-  margin: 0 0 8px;
-  color: var(--neu-text);
-  font-size: var(--text-small);
-  font-weight: 700;
-}
-.camera--room {
-  height: auto;
-  max-height: 24vh;
-  border-radius: 12px;
-  box-shadow: var(--neu-inset-sm);
-}
-.roomcam__empty {
-  margin: 0;
+.signin__who {
+  margin: -8px 0 14px;
   color: var(--neu-text-muted);
   font-size: var(--text-small);
-}
-.room__pick {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-.room__btn {
-  color: var(--neu-text);
-}
-.room__btn--on {
-  box-shadow: var(--neu-inset-sm);
-  color: var(--neu-accent);
-}
-
-/* ---------- the task stepper: a soft bar of chips ---------- */
-.steps {
-  grid-area: steps;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
-  margin: 0;
-  padding: 8px;
-  border-radius: var(--radius-pill);
-  background: var(--neu-bg);
-  box-shadow: var(--neu-inset-sm);
-  list-style: none;
-  overflow: hidden;
-}
-.step {
-  display: inline-flex;
-  flex: 1;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  min-width: 0;
-  padding: 7px 14px;
-  border-radius: var(--radius-pill);
-  background: var(--neu-bg);
-  box-shadow: var(--neu-raised-sm);
-  color: var(--neu-text-muted);
-  font-size: var(--text-small);
-  font-weight: 600;
-  white-space: nowrap;
-}
-.step__mark {
-  display: inline-grid;
-  place-items: center;
-  flex: none;
-  width: 22px;
-  height: 22px;
-  border-radius: 50%;
-  background: var(--neu-bg);
-  box-shadow: var(--neu-inset-sm);
-  font-size: 12px;
-  font-weight: 800;
-  font-variant-numeric: tabular-nums;
-  color: var(--neu-text-muted);
-}
-.step--done {
-  color: var(--neu-ok);
-}
-.step--done .step__mark {
-  background: var(--lv-ov-found);
-  box-shadow: none;
-  color: #fff;
-}
-.step--active {
-  background: var(--lv-grad);
-  box-shadow: var(--neu-raised-sm);
-  color: #fff;
-}
-.step--active .step__mark {
-  background: rgba(255, 255, 255, 0.22);
-  box-shadow: none;
-  color: #fff;
-  animation: live-pulse 1.4s ease-in-out infinite;
-}
-.step__time {
-  padding: 1px 7px;
-  border-radius: var(--radius-pill);
-  background: var(--neu-bg);
-  box-shadow: var(--neu-inset-sm);
-  color: var(--neu-ok);
-  font-size: 12px;
-  font-variant-numeric: tabular-nums;
-}
-.step__time--live {
-  background: rgba(255, 255, 255, 0.22);
-  box-shadow: none;
-  color: #fff;
-}
-.steps--idle .step {
-  flex: none;
-  font-weight: 500;
-}
-
-/* ---------- the activity timeline: a slim strip of icon chips ---------- */
-.tl {
-  grid-area: tl;
-  min-width: 0;
-}
-.tl__empty {
-  margin: 0;
-  padding: 2px 6px;
-  color: var(--neu-text-muted);
-  font-size: var(--text-small);
-}
-.tl__list {
-  display: flex;
-  gap: 10px;
-  margin: 0;
-  padding: 8px 10px 10px;
-  list-style: none;
-  overflow-x: auto;
-  scroll-behavior: smooth;
-  scrollbar-width: thin;
-}
-.tl__item {
-  display: inline-flex;
-  flex: none;
-  align-items: center;
-  gap: 8px;
-  max-width: 280px;
-  padding: 6px 12px 6px 8px;
-  border-radius: var(--radius-pill);
-  background: var(--neu-bg);
-  box-shadow: var(--neu-raised-sm);
-  color: var(--neu-text);
-  font-size: 13px;
-  white-space: nowrap;
-}
-.tl__icon {
-  flex: none;
-  width: 24px;
-  height: 24px;
-  padding: 5px;
-  border-radius: 50%;
-  background: var(--neu-bg);
-  box-shadow: var(--neu-inset-sm);
-  color: var(--neu-info);
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 1.5;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-}
-.tl__item--sam .tl__icon {
-  color: var(--neu-text);
-}
-.tl__item--aira .tl__icon {
-  background: var(--lv-grad);
-  box-shadow: none;
-  color: #fff;
-}
-.tl__item--customer .tl__icon {
-  color: var(--neu-accent);
-}
-.tl__item--tool .tl__icon {
-  color: var(--neu-text-muted);
-}
-.tl__item--vision .tl__icon {
-  color: var(--neu-ok);
-}
-.tl__item--order .tl__icon {
-  color: var(--neu-warn);
-}
-.tl__body {
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-  line-height: 1.25;
-}
-.tl__label {
-  font-weight: 700;
-}
-.tl__detail {
-  max-width: 180px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  color: var(--neu-text-muted);
-  font-size: 12px;
-}
-.tl__time {
-  padding-left: 8px;
-  box-shadow: -1px 0 0 var(--neu-divider);
-  color: var(--neu-text-muted);
-  font-size: 12px;
-  font-variant-numeric: tabular-nums;
-}
-
-/* ---------- the conversation: chat bubbles ---------- */
-.chat {
-  grid-area: chat;
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-  min-height: 0;
-  padding: 16px 18px 18px;
-  border-radius: var(--neu-radius-card);
-  background: var(--neu-bg);
-  box-shadow: var(--neu-raised);
-}
-.chat__title {
-  margin-bottom: 12px;
-}
-.chat__empty {
-  margin: 0;
-  color: var(--neu-text-muted);
-  font-size: var(--text-small);
-}
-.chat__list {
-  display: flex;
-  flex: 1;
-  flex-direction: column;
-  gap: 14px;
-  min-height: 0;
-  margin: 0;
-  padding: 10px 8px;
-  list-style: none;
-  overflow-y: auto;
-  scroll-behavior: smooth;
-}
-.msg {
-  display: flex;
-  align-items: flex-end;
-  gap: 8px;
-  max-width: 88%;
-}
-.msg--aira {
-  align-self: flex-start;
-}
-.msg--owner {
-  align-self: flex-end;
-  flex-direction: row-reverse;
-}
-.msg--customer {
-  align-self: flex-end;
-  flex-direction: row-reverse;
-}
-.msg__avatar {
-  display: inline-grid;
-  place-items: center;
-  flex: none;
-  width: 28px;
-  height: 28px;
-  border-radius: 50%;
-  background: var(--lv-grad);
-  box-shadow: var(--neu-raised-sm);
-  color: #fff;
-  font-size: 13px;
-  font-weight: 800;
-}
-/* Soft bubbles: AIRA's is raised off the panel; Sam's and the customer's are pressed in and tinted by their ink. */
-.msg__bubble {
-  min-width: 0;
-  padding: 10px 14px 11px;
-  border-radius: 18px;
-  background: var(--neu-bg);
-  box-shadow: var(--neu-raised-sm);
-  color: var(--neu-text);
-}
-.msg--aira .msg__bubble {
-  border-bottom-left-radius: 6px;
-}
-.msg--owner .msg__bubble {
-  border-bottom-right-radius: 6px;
-  box-shadow: var(--neu-inset-sm);
-}
-.msg--owner .msg__who {
-  color: var(--neu-info);
-}
-.msg--customer .msg__bubble {
-  border-bottom-right-radius: 6px;
-  box-shadow: var(--neu-inset-sm);
-}
-.msg--customer .msg__who {
-  color: var(--neu-accent);
-}
-.msg--aira .msg__who {
-  color: var(--lv-purple);
-}
-.msg__meta {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  margin-bottom: 2px;
-  font-size: 12px;
-  font-weight: 700;
-}
-.msg__lang {
-  padding: 0 6px;
-  border-radius: var(--radius-pill);
-  background: var(--neu-divider);
-  color: var(--neu-text-muted);
-  font-weight: 600;
-  text-transform: uppercase;
-  font-size: 10px;
-  letter-spacing: 0.04em;
-}
-.msg__text {
-  margin: 0;
-  font-size: 16px;
-  line-height: 1.4;
   overflow-wrap: anywhere;
 }
-.msg--partial .msg__text {
-  font-style: italic;
-  color: var(--neu-text-muted);
-}
-
-/* ---------- bottom bar ---------- */
-.bar {
-  grid-area: bar;
-  display: flex;
-  align-items: center;
-  gap: 12px;
-}
-.bar__btn {
-  color: var(--neu-text);
-}
-.bar__btn[aria-pressed="true"] {
-  box-shadow: var(--neu-inset-sm);
-  color: var(--neu-warn);
-}
-
-/* ---------- record mode: cameras and captions only, 16:9 ---------- */
-.livepage--record {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  grid-template-rows: minmax(0, 1fr) auto;
-  grid-template-areas: "cams" "captions";
-  width: 100vw;
-  height: 100vh;
-  aspect-ratio: 16 / 9;
-  background: #000;
+.signin__btn {
+  background: var(--lv-grad);
   color: #fff;
 }
-.record__cams {
-  grid-area: cams;
-  display: grid;
-  grid-auto-flow: column;
-  grid-auto-columns: minmax(0, 1fr);
-  gap: 8px;
-  min-height: 0;
-  padding: 8px;
-}
-.record__cams .roomcam {
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
-  padding: 0;
-  background: #000;
-  box-shadow: none;
-}
-.record__cams .roomcam__title {
-  padding: 6px 10px;
-  color: #cbd5e1;
-}
-.record__cams .camera--room {
-  flex: 1;
-  max-height: none;
-  height: 100%;
-  box-shadow: none;
-}
-.record__sam {
-  position: relative;
-  display: grid;
-  place-items: center;
-  min-height: 0;
-}
-.record__sam .camera,
-.record__sam .camera__canvas {
-  background: #000;
-}
-.captions {
-  grid-area: captions;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  min-height: 112px;
-  margin: 0;
-  padding: 10px 24px 18px;
-  list-style: none;
-}
-.caption {
-  display: flex;
-  gap: 12px;
-  align-items: baseline;
-  font-size: 26px;
-  line-height: 1.25;
-}
-.caption__who {
-  flex: none;
-  min-width: 110px;
-  font-size: 15px;
-  font-weight: 700;
-  color: #cbd5e1;
-}
-.caption--aira .caption__who {
-  color: #93c5fd;
-}
-.caption--customer .caption__who {
-  color: #d8b4fe;
-}
-.caption--partial .caption__text {
-  color: #cbd5e1;
-  font-style: italic;
-}
-.record__exit {
-  position: fixed;
-  top: 10px;
-  right: 10px;
-  opacity: 0;
-  transition: opacity 150ms;
-}
-.record__exit:hover,
-.record__exit:focus-visible {
-  opacity: 1;
+.signin__error {
+  margin: 14px 0 0;
+  color: var(--neu-danger);
+  font-size: var(--text-small);
+  font-weight: 600;
 }
 
-/* live-pulse is defined in app.css */
-@keyframes live-danger {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.55; }
+@keyframes live-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.45; transform: scale(0.8); }
 }
 @media (prefers-reduced-motion: reduce) {
-  .lv-pill__dot,
-  .cam__live-dot,
-  .cam__pulse,
-  .step__mark,
-  .camera--danger,
-  .ov--danger rect {
+  .cam__chip-dot,
+  .cam__pulse {
     animation: none;
-  }
-  .chat__list,
-  .tl__list {
-    scroll-behavior: auto;
-  }
-}
-
-/* Big camera, big conversation: the chat runs the full height beside the camera (about 60 / 40). */
-@media (min-width: 1101px) {
-  .livepage {
-    grid-template-columns: minmax(0, 1.55fr) minmax(380px, 1fr);
-    grid-template-areas:
-      "head chat"
-      "cam chat"
-      "steps chat"
-      "tl chat"
-      "bar chat";
-    gap: 14px 20px;
-    height: calc(100vh - var(--live-chrome) - 24px);
-  }
-  .livepage:has(.room) {
-    grid-template-areas:
-      "head chat"
-      "cam chat"
-      "room chat"
-      "steps chat"
-      "tl chat"
-      "bar chat";
   }
 }

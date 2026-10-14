@@ -15,7 +15,7 @@ import { OrdersPage } from "../pages/OrdersPage";
 import { AuditPage, type ResolveEvidence } from "../pages/AuditPage";
 import { ForecastPage } from "../pages/ForecastPage";
 import { LivePage } from "../pages/LivePage";
-import { useMonitor } from "../lib/useMonitor";
+import { useMonitor, type MonitorDeps } from "../lib/useMonitor";
 
 export type { ListenFn };
 
@@ -26,16 +26,16 @@ export interface AppProps {
   loadForecast: (shopId: string) => Promise<Forecast | null>;
   resolveEvidence?: ResolveEvidence;
   now?: () => number;
+  /** The Live page's socket, timers and sign-in (tests pass fakes; the browser uses WebSocket and Firebase). */
+  monitorDeps?: MonitorDeps;
 }
 
 /** Re-derive time-based text ("Expires today", today's totals) every minute, even with no new data. */
 const TICK_MS = 60_000;
 
-export function App({ listen, loadForecast, resolveEvidence = publicEvidenceUrl, now = Date.now }: AppProps) {
-  // No sign-in in this build: every visitor gets the read-only demo shop, whatever the URL asks for.
-  const [access] = useState(() =>
-    resolveAccess({ uid: null, userDoc: null, wantDemo: new URLSearchParams(location.search).get("demo") === "1" }),
-  );
+export function App({ listen, loadForecast, resolveEvidence = publicEvidenceUrl, now = Date.now, monitorDeps }: AppProps) {
+  // No sign-in in this build: every visitor gets the one shop, read-only, whatever the URL asks for.
+  const [access] = useState(() => resolveAccess());
   const [route, setRoute] = useState<Route>(() => parseRoute(location.hash) ?? "#/");
   const [data, setData] = useState<ShopData | null>(null);
   const [status, setStatus] = useState<LiveStatus>("connecting");
@@ -43,7 +43,7 @@ export function App({ listen, loadForecast, resolveEvidence = publicEvidenceUrl,
   const [clock, setClock] = useState(now);
   const [forecast, setForecast] = useState<Forecast | null>(null);
   const [forecastLoading, setForecastLoading] = useState(true);
-  const shopId = access.mode === "denied" ? null : access.shopId;
+  const shopId = access.shopId;
 
   useEffect(() => {
     const onHash = () => {
@@ -57,7 +57,6 @@ export function App({ listen, loadForecast, resolveEvidence = publicEvidenceUrl,
   }, []);
 
   useEffect(() => {
-    if (!shopId) return;
     return listen(
       shopId,
       (d) => {
@@ -71,7 +70,6 @@ export function App({ listen, loadForecast, resolveEvidence = publicEvidenceUrl,
   }, [shopId]);
 
   useEffect(() => {
-    if (!shopId) return;
     let alive = true;
     setForecastLoading(true);
     loadForecast(shopId)
@@ -93,16 +91,7 @@ export function App({ listen, loadForecast, resolveEvidence = publicEvidenceUrl,
 
   const views = useMemo(() => (data ? buildViews(data, clock) : null), [data, clock]);
   // The Live page listens to aira-live's /monitor channel only while it is open.
-  const monitor = useMonitor(route === "#/live" && access.mode !== "denied", shopId);
-  const [record, setRecord] = useState(false);
-
-  if (access.mode === "denied") {
-    return (
-      <main id="main" class="main main--single">
-        <p role="alert" class="notice notice--error">{access.reason}</p>
-      </main>
-    );
-  }
+  const monitor = useMonitor(route === "#/live", shopId, undefined, monitorDeps);
 
   const forecastPage = (
     <ForecastPage items={forecast?.items ?? null} demoHistory={forecast?.demoHistory ?? false} loading={forecastLoading} />
@@ -110,7 +99,13 @@ export function App({ listen, loadForecast, resolveEvidence = publicEvidenceUrl,
   let body;
   if (route === "#/forecast") body = forecastPage;
   else if (route === "#/live") {
-    body = <LivePage state={monitor.state} conn={monitor.conn} video={monitor.video} keyNeeded={monitor.keyNeeded} configured={monitor.configured} onKey={monitor.setKey} onFollow={monitor.follow} record={record} onRecord={setRecord} shopName={shopName(shopId)} />;
+    body = (
+      <LivePage
+        state={monitor.state} conn={monitor.conn} video={monitor.video} configured={monitor.configured} onFollow={monitor.follow}
+        auth={{ status: monitor.auth.status, user: monitor.auth.user, error: monitor.auth.error, onSignIn: monitor.auth.signIn, onSignOut: monitor.auth.signOut }}
+        shopName={shopName()}
+      />
+    );
   }
   else if (!views) {
     body =
@@ -131,7 +126,7 @@ export function App({ listen, loadForecast, resolveEvidence = publicEvidenceUrl,
   }
 
   return (
-    <Layout access={access} route={route} status={status} updatedText={updatedAt !== null ? formatTimeIST(updatedAt) : undefined} bare={route === "#/live" && record}>
+    <Layout access={access} route={route} status={status} updatedText={updatedAt !== null ? formatTimeIST(updatedAt) : undefined}>
       {body}
     </Layout>
   );

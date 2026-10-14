@@ -6,9 +6,13 @@ type S = Record<Lang, string>;
 
 /** Spoken (or written to the screen-reader region) for local status the server cannot know. */
 export const STRINGS: Record<
-  "offline" | "online" | "reconnecting" | "paused" | "listening" | "confirmPending" | "micBlocked" | "notSent" | "greeting" | "tapToStart",
+  | "offline" | "online" | "reconnecting" | "paused" | "listening" | "confirmPending" | "micBlocked" | "notSent" | "greeting"
+  | "tapToStart" | "earphonesLost",
   S
 > = {
+  // Earphones dropped mid-session (core/wire, voice/route): said on the urgent path so a walker learns at once
+  // where the next "Stop" will come from.
+  earphonesLost:  { en: "Your earphones disconnected. I'll speak on the phone speaker.", ta: "உங்கள் இயர்போன் துண்டிக்கப்பட்டது. போன் ஸ்பீக்கரில் பேசுகிறேன்.", hi: "आपके ईयरफ़ोन डिस्कनेक्ट हो गए। मैं फ़ोन स्पीकर पर बोलूँगा।" },
   // hands-free start (core/autostart.ts): AIRA's first line when the app opened straight into listening, and
   // the one-line instruction when the browser wanted a tap first.
   greeting:       { en: "AIRA is ready. Just talk.", ta: "AIRA தயார். பேசுங்கள்.", hi: "AIRA तैयार है। बोलिए।" },

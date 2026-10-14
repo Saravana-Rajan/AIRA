@@ -285,10 +285,7 @@ describe("audio unlock and Safari's interrupted state", () => {
     };
     const track = { stop: vi.fn() };
     const deps: MicDeps = {
-      mediaDevices: {
-        enumerateDevices: async () => [{ deviceId: "d", label: "iPhone Microphone", kind: "audioinput" } as MediaDeviceInfo],
-        getUserMedia: async () => ({ getTracks: () => [track] }) as unknown as MediaStream,
-      },
+      mediaDevices: { getUserMedia: async () => ({ getTracks: () => [track] }) as unknown as MediaStream },
       createContext: () => ctx as unknown as AudioContext,
       createWorkletNode: () => node as unknown as AudioWorkletNode,
       loadWorkletUrl: async () => "blob:w",

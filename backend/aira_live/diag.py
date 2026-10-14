@@ -23,7 +23,7 @@ MAX_DEPTH = 4
 REDACT_KEYS = frozenset({
     "jpeg", "jpeg_b64", "frame_b64", "pcm16", "pcm24", "audio", "image", "bytes_b64",
     "idtoken", "id_token", "token", "key", "api_key", "apikey", "secret", "password", "authorization",
-    "gemini_api_key", "app_key", "job_token", "monitor_key",
+    "gemini_api_key", "app_key", "job_token",
 })
 
 

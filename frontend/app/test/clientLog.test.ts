@@ -22,7 +22,7 @@ const logs = (sent: ClientMsg[], tag?: string): LogMsg[] =>
   sent.filter((m): m is LogMsg => m.t === "log" && (tag === undefined || m.tag === tag));
 
 const SETTINGS: Settings = {
-  lang: "en", verbosity: "short", screenReaderMode: false, speechRate: 1, shopId: "sunrise_dairy", onboarded: true, showBoxes: false,
+  lang: "en", verbosity: "short", screenReaderMode: false, speechRate: 1, onboarded: true, showBoxes: false,
 };
 
 function fakeSocket() {

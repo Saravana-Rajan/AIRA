@@ -47,3 +47,23 @@ def test_frame_keeps_snake_case_jpeg_key():
 def test_rejects_bad_messages(bad):
     with pytest.raises(ValidationError):
         monitor_adapter.validate_python(bad)
+
+
+def _client_fixtures() -> list[dict]:
+    for parent in Path(__file__).resolve().parents:
+        f = parent / "shared" / "contracts" / "fixtures" / "monitor_client_msgs.json"
+        if f.is_file():
+            return json.loads(f.read_text(encoding="utf-8"))
+    raise RuntimeError("monitor_client_msgs.json not found above this test")
+
+
+def test_monitor_client_fixtures_parse_and_cover_auth_and_rtc():
+    """What a monitor sends: its Firebase ID token ({t:"auth", idToken}) and rtc signalling, in lockstep with TS."""
+    raws = _client_fixtures()
+    parsed = [contracts.parse_monitor_client_msg(json.dumps(raw)) for raw in raws]
+    assert all(m is not None for m in parsed)
+    assert {m.t for m in parsed} == {"auth", "rtc"}
+    auth = next(m for m in parsed if isinstance(m, contracts.MonAuthMsg))
+    assert auth.id_token == next(r["idToken"] for r in raws if r["t"] == "auth")
+    assert contracts.parse_monitor_client_msg(json.dumps({"t": "auth", "idToken": ""})) is None
+    assert contracts.parse_monitor_client_msg(json.dumps({"t": "auth", "key": "k"})) is None

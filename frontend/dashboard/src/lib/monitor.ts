@@ -1,13 +1,18 @@
 // The Live page's model: a pure reducer over /monitor messages, coordinate mapping for the camera
-// overlay, the monitor key, the WebSocket URL and a reconnecting client that authenticates with its
-// first message. Nothing here touches the DOM except the client's WebSocket/timer hooks, which are
-// injected so tests drive them.
+// overlay, the WebSocket URL and a reconnecting client. By default (no token source) the socket is live as
+// soon as it opens and the server sends every live session of the shop at once: no sign-in, no key. Only the
+// VITE_MONITOR_AUTH=1 build gives the client a token source; then the first thing it sends on every socket is
+// {t:"auth", idToken} (the viewer's Firebase ID token, from lib/viewerAuth) and the server verifies it and
+// its viewer allowlist before it sends a single line, closing with 4401 / 4403 otherwise.
+// Nothing here touches the DOM except the client's WebSocket/timer hooks, which are injected so tests drive them.
 import {
-  NORM_MAX, parseMonitorFeedMsg,
-  type Box, type MonitorMsg, type MonitorRole, type MonitorState, type Point, type VisionObject, type VisionSource,
+  MONITOR_CLOSE_UNAUTHENTICATED, MONITOR_CLOSE_UNAUTHORIZED, NORM_MAX, parseMonitorFeedMsg,
+  type Box, type MonitorAuthMsg, type MonitorMsg, type MonitorRole, type MonitorState, type Point, type VisionObject, type VisionSource,
 } from "@aira/contracts";
+import { formatTimeIST } from "./format";
 import { advanceTask, type Task } from "./liveTask";
 import type { SignalPort } from "./rtcViewer";
+import { refreshDelayMs, tokenExp } from "./viewerAuth";
 
 export type { MonitorMsg, MonitorRole, MonitorState, VisionObject, VisionSource };
 
@@ -46,7 +51,18 @@ export function activityTag(name: string, d: Record<string, unknown>): ActivityT
 }
 
 export interface Frame { src: string; w: number; h: number; purpose: string; ts: number }
-export interface SessionInfo { id: string; uid: string | null; lang: string; startedAt: number }
+/** One person using AIRA now: a phone session the shop announced (room cameras live in `rooms`, not here). */
+export interface SessionInfo {
+  id: string;
+  uid: string | null;
+  lang: string;
+  /** When the phone session began (the server's `startedAt`, else the announcement's time). */
+  startedAt: number;
+  /** The last status or transcript heard from it (its start before any). */
+  lastSeenAt: number;
+  /** What AIRA is doing for this person, from its own `status` lines; "idle" until the first one. */
+  status: MonitorState;
+}
 export interface Stats { turns: number; er2Calls: number; flashCalls: number; visionMs: number | null; fps: number; ts: number }
 export interface VisionLayer { objects: VisionObject[]; ts: number }
 export interface LiveState {
@@ -105,7 +121,33 @@ function clearedSession(s: LiveState, sessions: Record<string, SessionInfo> = s.
 export function follow(s: LiveState, id: string): LiveState {
   const info = s.sessions[id];
   if (!info || s.session === id) return s;
-  return { ...clearedSession(s), session: id, sessionStartedAt: info.startedAt, lang: info.lang, status: "listening" };
+  return { ...clearedSession(s), session: id, sessionStartedAt: info.startedAt, lang: info.lang, status: info.status };
+}
+
+/** The listed sessions newest first (the latest to start on top), as the people panel shows them. */
+export function listSessions(sessions: Record<string, SessionInfo>): SessionInfo[] {
+  return Object.values(sessions).sort((a, b) => b.startedAt - a.startedAt || a.id.localeCompare(b.id));
+}
+
+/** A short name for a person: their uid when the phone sent one, else the first 6 characters of the session id. */
+export function sessionLabel(info: Pick<SessionInfo, "id" | "uid">): string {
+  return info.uid && !isCamera(info.uid) ? info.uid : info.id.slice(0, 6);
+}
+
+/** "since 14:02" (IST) for a session that began at `startedAt`, or "just now" within its first minute. */
+export function sinceText(startedAt: number, now: number): string {
+  return now - startedAt < 60_000 ? "just now" : `since ${formatTimeIST(startedAt)}`;
+}
+
+/** The server's `startedAt` (epoch ms when the phone session began) when the message carries a usable one, else `fallback`. */
+function startedAtOf(m: { startedAt?: unknown }, fallback: number): number {
+  return typeof m.startedAt === "number" && Number.isFinite(m.startedAt) ? m.startedAt : fallback;
+}
+
+/** `sessions` with the entry for `id` patched, or unchanged when `id` is not listed. */
+function patchSession(sessions: Record<string, SessionInfo>, id: string, patch: Partial<SessionInfo>): Record<string, SessionInfo> {
+  const info = sessions[id];
+  return info ? { ...sessions, [id]: { ...info, ...patch } } : sessions;
 }
 
 let nextId = 1;
@@ -153,8 +195,10 @@ function logActivity(s: LiveState, name: string, detail: string, ts: number, tag
  * room camera's session only touch `rooms`.
  *
  * Session scope: the page follows one phone session. The first session heard is followed; a later one is
- * only listed in `sessions` until the user picks it (`follow`), and its messages are dropped. When the
- * followed session ends everything it produced is cleared (nothing of a session outlives it in memory).
+ * only listed in `sessions` until the user picks it (`follow`); its `status` lines keep its list entry's
+ * status current and everything else from it is dropped (nothing of it touches the page or `lastMsgAt`).
+ * When the followed session ends everything it produced is cleared (nothing of a session outlives it in
+ * memory) and the newest of the remaining sessions is followed from a clean slate.
  */
 export function reduce(s: LiveState, m: MonitorMsg): LiveState {
   const base = { ...s, lastMsgAt: m.ts };
@@ -177,7 +221,10 @@ export function reduce(s: LiveState, m: MonitorMsg): LiveState {
       return { ...base, rooms, activity: logActivity(s, started ? "room_start" : "room_end", roomName(m.uid!), m.ts, "vision") };
     }
     if (started) {
-      const sessions = { ...s.sessions, [m.session]: { id: m.session, uid: m.uid ?? null, lang: m.lang, startedAt: m.ts } };
+      const startedAt = startedAtOf(m, m.ts);
+      const known = s.sessions[m.session];
+      const info: SessionInfo = { id: m.session, uid: m.uid ?? null, lang: m.lang, startedAt, lastSeenAt: m.ts, status: known?.status ?? "idle" };
+      const sessions = { ...s.sessions, [m.session]: info };
       if (s.session !== null && s.session !== m.session) return { ...base, sessions }; // another phone: listed, not followed
       // The first session, or the followed one announced again (the monitor reconnected): a fresh camera, the same conversation.
       const same = s.session === m.session;
@@ -185,7 +232,7 @@ export function reduce(s: LiveState, m: MonitorMsg): LiveState {
       return {
         ...clearedSession(s, sessions),
         session: m.session,
-        sessionStartedAt: same && s.sessionStartedAt !== null ? s.sessionStartedAt : m.ts,
+        sessionStartedAt: same && s.sessionStartedAt !== null ? s.sessionStartedAt : startedAt,
         lang: m.lang,
         status: "listening",
         transcript: kept.transcript,
@@ -196,15 +243,26 @@ export function reduce(s: LiveState, m: MonitorMsg): LiveState {
     const sessions = { ...s.sessions };
     delete sessions[m.session];
     if (s.session !== m.session) return { ...base, sessions }; // a session the page was not following ended
-    return { ...clearedSession(s, sessions), lastMsgAt: m.ts };
+    const next = listSessions(sessions)[0]; // the newest of the rest takes the page, from scratch
+    if (!next) return { ...clearedSession(s, sessions), lastMsgAt: m.ts };
+    return { ...clearedSession(s, sessions), session: next.id, sessionStartedAt: next.startedAt, lang: next.lang, status: next.status, lastMsgAt: m.ts };
   }
   if (s.session === null) s = { ...s, session: m.session }; // nothing followed yet: this session is the one
-  else if (s.session !== m.session) return s; // another session's line: not the one on screen
+  else if (s.session !== m.session) return reduceOther(s, m); // another session's line: only its list entry may change
   return reduceOwn(s, m);
 }
 
+/** A line from a listed session the page is not following: its status and last-seen time, nothing else. */
+function reduceOther(s: LiveState, m: Exclude<MonitorMsg, { kind: "session" }>): LiveState {
+  if (!s.sessions[m.session]) return s;
+  if (m.kind === "status") return { ...s, sessions: patchSession(s.sessions, m.session, { status: m.state, lastSeenAt: m.ts }) };
+  if (m.kind === "transcript") return { ...s, sessions: patchSession(s.sessions, m.session, { lastSeenAt: m.ts }) };
+  return s;
+}
+
 function reduceOwn(s: LiveState, m: Exclude<MonitorMsg, { kind: "session" }>): LiveState {
-  const base = { ...s, lastMsgAt: m.ts };
+  const sessions = m.kind === "transcript" ? patchSession(s.sessions, m.session, { lastSeenAt: m.ts }) : s.sessions;
+  const base = { ...s, sessions, lastMsgAt: m.ts };
   switch (m.kind) {
     case "transcript": {
       const i = s.transcript.findIndex((l) => !l.final && l.role === m.role);
@@ -246,7 +304,10 @@ function reduceOwn(s: LiveState, m: Exclude<MonitorMsg, { kind: "session" }>): L
       return next;
     }
     case "status": {
-      const next: LiveState = { ...base, status: m.state, found: m.state === "found" ? s.found || s.target !== null : m.state === "guiding" ? false : s.found };
+      const next: LiveState = {
+        ...base, status: m.state, found: m.state === "found" ? s.found || s.target !== null : m.state === "guiding" ? false : s.found,
+        sessions: patchSession(s.sessions, m.session, { status: m.state, lastSeenAt: m.ts }), // the list entry says the same
+      };
       next.task = advanceTask(s.task, { kind: "status", state: m.state }, m.ts);
       return next;
     }
@@ -326,68 +387,11 @@ export function overlayShapes(
   return out;
 }
 
-// ---------- key and URL ----------
-export const KEY_STORAGE = "aira.monitorKey";
-export const KEY_PARAM = "key";
-
-type StorageLike = Pick<Storage, "getItem" | "setItem" | "removeItem">;
-
-const KEY_IN_HASH = /(^#|[?&#])key=([^&#]*)/;
-
-/** The key in a URL fragment: "#key=abc", "#/live?key=abc" or "#/live&key=abc". Null when absent. */
-export function keyFromHash(hash: string): string | null {
-  const m = KEY_IN_HASH.exec(hash);
-  if (!m) return null;
-  try {
-    return decodeURIComponent(m[2]).trim() || null;
-  } catch {
-    return m[2].trim() || null;
-  }
-}
-
-/**
- * The fragment with key= removed ("#/live?key=abc" -> "#/live"; "#/live#key=abc" -> "#/live"; "#key=abc" -> "").
- * Never the query string.
- */
-export function stripKey(hash: string): string {
-  const out = hash
-    .replace(/\?key=[^&#]*&/, "?")
-    .replace(/([?&#])key=[^&#]*/, (_m, lead: string, at: number) => (lead === "#" && at === 0 ? "#" : ""))
-    .replace(/\?&/, "?")
-    .replace(/[?&#]$/, "");
-  return out === "#" ? "" : out;
-}
-
-/**
- * The monitor key from the URL fragment (#key=..., never the query string: a fragment is not sent to the
- * server or written to access logs), saved for the tab; else the one saved earlier in this tab; else null.
- */
-export function readKey(hash: string, storage: StorageLike | null | undefined): string | null {
-  const fromUrl = keyFromHash(hash);
-  if (fromUrl) {
-    storeKey(fromUrl, storage);
-    return fromUrl;
-  }
-  try {
-    return storage?.getItem(KEY_STORAGE)?.trim() || null;
-  } catch {
-    return null;
-  }
-}
-
-/** Remembers the key for this tab only; a blocked storage is not an error. */
-export function storeKey(key: string | null, storage: StorageLike | null | undefined): void {
-  try {
-    if (key) storage?.setItem(KEY_STORAGE, key);
-    else storage?.removeItem(KEY_STORAGE);
-  } catch {
-    /* private window or blocked storage: the key lives in memory only */
-  }
-}
-
+// ---------- URL ----------
 /**
  * The /monitor WebSocket URL from the app's VITE_AIRA_LIVE_WS (wss://host/ws -> wss://host/monitor?shop=).
- * The key is never part of it: the client sends it as its first message. Null when nothing usable is configured.
+ * Nothing else goes in it: the credential travels in the first message, never the URL. Null when nothing
+ * usable is configured.
  */
 export function monitorUrl(env: Record<string, unknown>, shopId: string): string | null {
   const raw = typeof env.VITE_AIRA_LIVE_WS === "string" ? env.VITE_AIRA_LIVE_WS.trim() : "";
@@ -414,8 +418,13 @@ export function backoffMs(attempt: number): number {
   return Math.min(BACKOFF_MAX_MS, BACKOFF_BASE_MS * 2 ** Math.max(0, attempt));
 }
 
-/** waiting: no key or URL yet · connecting: socket opening · live: open · offline: closed, retrying · rejected: the key was refused. */
-export type Connection = "waiting" | "connecting" | "live" | "offline" | "rejected";
+/**
+ * waiting: no URL (or, in the sign-in build, no sign-in yet) · connecting: socket opening or signing in · live:
+ * the feed runs · offline: closed, retrying · rejected: the server refused this page (Origin, shop or capacity;
+ * every 4403 in the default build), no retry · unauthenticated: the server did not accept the token (4401) ·
+ * unauthorized: the signed-in account is not on the server's viewer list (4403 after auth), no retry.
+ */
+export type Connection = "waiting" | "connecting" | "live" | "offline" | "rejected" | "unauthenticated" | "unauthorized";
 
 /** The slice of WebSocket the client uses; a real WebSocket satisfies it, and tests pass a fake. */
 export interface SocketLike {
@@ -431,31 +440,92 @@ export interface ClientDeps {
   connect: (url: string) => SocketLike;
   setTimer?: (fn: () => void, ms: number) => unknown;
   clearTimer?: (t: unknown) => void;
-  /** WebRTC signalling (rtcViewer): attached once a socket is open, told every {t:"rtc"} line, detached on close. */
+  /** WebRTC signalling (rtcViewer): attached once a socket is authenticated, told every {t:"rtc"} line, detached on close. */
   signal?: SignalPort;
+  /**
+   * The viewer's Firebase ID token (lib/viewerAuth); `force` asks for a freshly minted one. Rejects when signed
+   * out. Given only by the VITE_MONITOR_AUTH=1 build: without it no auth line is ever sent and a socket is live
+   * as soon as it opens.
+   */
+  getToken?: (force?: boolean) => Promise<string>;
+  /** The clock the refresh schedule reads (tests). */
+  now?: () => number;
 }
 
-/** WebSocket close codes the server uses to refuse the key: policy violation or auth-style. */
-const REJECT_CODES = new Set([1008, 4401, 4403]);
+/** A close before the handshake completed: the server's Origin / shop / capacity guard (a policy close, or 4403 before any auth). */
+const POLICY_CLOSE = 1008;
+
+const authLine = (idToken: string): string => JSON.stringify({ t: "auth", idToken } satisfies MonitorAuthMsg);
 
 /**
- * Keeps one /monitor socket open: as soon as it opens it sends {t:"auth", key} (the server closes with 4403
- * within 5 s otherwise); on every other close it waits backoffMs(attempt) and connects again, resetting the
- * attempt count once a socket opens. stop() closes it for good.
+ * Keeps one /monitor socket open. Without a token source (deps.getToken, the default build) a socket is
+ * "live" the moment it opens, the WebRTC signal port is attached and the feed is read at once: nothing is
+ * sent first, nothing is scheduled. With a token source (the VITE_MONITOR_AUTH=1 build) the first message on
+ * every open is {t:"auth", idToken}; only then is the connection "live" and the port attached. The token's
+ * `exp` schedules a refresh (refreshDelayMs): a fresh token (getToken(true)) goes out as another auth message
+ * on the same socket, and the next refresh is scheduled from it. Closes: 4403 (or a 1008 policy close)
+ * before any auth line went out is "rejected" (Origin, shop or capacity; no retry), 4403 after it is
+ * "unauthorized" (no retry), 4401 is "unauthenticated" (no retry here; the hook decides whether to try a
+ * fresh token), a failing getToken closes the socket as "unauthenticated", and every other close waits
+ * backoffMs(attempt) and connects again (the attempt count resets once a socket is live). stop() closes it
+ * for good. The token never reaches the URL, storage or the console.
  */
 export function openMonitor(
   url: string,
-  key: string,
   onMsg: (m: MonitorMsg) => void,
   onConn: (c: Connection, attempt: number) => void,
   deps: ClientDeps,
 ): () => void {
   const setTimer = deps.setTimer ?? ((fn, ms) => setTimeout(fn, ms));
   const clearTimer = deps.clearTimer ?? ((t) => clearTimeout(t as ReturnType<typeof setTimeout>));
+  const now = deps.now ?? Date.now;
+  const getToken = deps.getToken ?? null;
   let attempt = 0;
   let stopped = false;
   let sock: SocketLike | null = null;
   let timer: unknown = null;
+  let refresh: unknown = null;
+
+  const clearRefresh = () => {
+    if (refresh !== null) clearTimer(refresh);
+    refresh = null;
+  };
+
+  /** Sends `idToken` on `s` and books the next refresh from its expiry. */
+  const sendAuth = (s: SocketLike, idToken: string): boolean => {
+    if (stopped || sock !== s) return false;
+    try {
+      s.send(authLine(idToken));
+    } catch {
+      return false;
+    }
+    clearRefresh();
+    const exp = tokenExp(idToken);
+    if (exp !== null && getToken) {
+      refresh = setTimer(() => {
+        refresh = null;
+        if (stopped || sock !== s) return;
+        getToken(true).then(
+          (fresh) => { sendAuth(s, fresh); },
+          () => { closeAs(s, "unauthenticated"); },
+        );
+      }, refreshDelayMs(exp, now()));
+    }
+    return true;
+  };
+
+  const closeAs = (s: SocketLike, c: Connection) => {
+    if (stopped || sock !== s) return;
+    sock = null;
+    clearRefresh();
+    deps.signal?.detach();
+    try {
+      s.close();
+    } catch {
+      /* already closed */
+    }
+    onConn(c, attempt);
+  };
 
   const dial = () => {
     if (stopped) return;
@@ -468,13 +538,10 @@ export function openMonitor(
       return;
     }
     sock = s;
-    s.onopen = () => {
-      if (stopped) return;
-      try {
-        s.send(JSON.stringify({ t: "auth", key }));
-      } catch {
-        /* the socket closed under us: onclose follows */
-      }
+    let authSent = false;
+    let live = false;
+    const goLive = () => {
+      live = true;
       attempt = 0;
       onConn("live", 0);
       deps.signal?.attach((m) => {
@@ -487,8 +554,23 @@ export function openMonitor(
         }
       });
     };
+    s.onopen = () => {
+      if (stopped || sock !== s) return;
+      if (!getToken) {
+        goLive(); // no sign-in in this build: the server streams from the open
+        return;
+      }
+      getToken().then(
+        (idToken) => {
+          if (!sendAuth(s, idToken)) return;
+          authSent = true;
+          goLive();
+        },
+        () => { closeAs(s, "unauthenticated"); },
+      );
+    };
     s.onmessage = (ev) => {
-      if (stopped || typeof ev.data !== "string") return;
+      if (stopped || sock !== s || !live || typeof ev.data !== "string") return;
       const m = parseMonitorFeedMsg(ev.data);
       if (!m) return;
       if (m.t === "rtc") deps.signal?.receive(m);
@@ -498,9 +580,15 @@ export function openMonitor(
     s.onclose = (ev) => {
       if (stopped || sock !== s) return;
       sock = null;
+      clearRefresh();
       deps.signal?.detach();
-      if (REJECT_CODES.has(ev?.code ?? 0)) {
-        onConn("rejected", attempt);
+      const code = ev?.code ?? 0;
+      if (code === MONITOR_CLOSE_UNAUTHENTICATED) {
+        onConn("unauthenticated", attempt);
+        return;
+      }
+      if (code === MONITOR_CLOSE_UNAUTHORIZED || code === POLICY_CLOSE) {
+        onConn(authSent ? "unauthorized" : "rejected", attempt);
         return;
       }
       retry();
@@ -523,6 +611,7 @@ export function openMonitor(
     stopped = true;
     if (timer !== null) clearTimer(timer);
     timer = null;
+    clearRefresh();
     const s = sock;
     sock = null;
     deps.signal?.detach();

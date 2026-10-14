@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 import type { ClientMsg, ServerMsg } from "@aira/contracts";
-import { wireApp, type WireEnv, type WiredApp, MIC_IDLE_MS, MIC_WATCHDOG_MS, THINKING_LOOP_MS, MIC_MAX_BUFFERED_BYTES } from "../src/core/wire";
+import { wireApp, type WireEnv, type WiredApp, MIC_IDLE_MS, MIC_WATCHDOG_MS, THINKING_LOOP_MS, MIC_MAX_BUFFERED_BYTES, URGENT_DEDUPE_MS } from "../src/core/wire";
+import { GLOBAL_COOLDOWN_MS } from "../src/walk/bump";
 import type { PlaybackOpts } from "../src/voice/playback";
 import { app } from "../src/core/app";
 import { DEFAULT_SETTINGS, SETTINGS_KEY } from "../src/core/settings";
@@ -97,13 +98,14 @@ const flush = async () => { for (let i = 0; i < 10; i++) await Promise.resolve()
 const CONFIRM: ServerMsg = { t: "confirm", id: "c1", kind: "sale", prompt: "Sell 2 Sakthi curd for 120 rupees?" };
 
 describe("wireApp: connection", () => {
-  it("says hello for the demo shop with a stable device uid, and no idToken when no app key is built in", () => {
+  it("says hello with a stable device uid and no shop, and no idToken when no app key is built in", () => {
     vi.stubEnv("VITE_AIRA_APP_KEY", "");
     const storage = new MemStorage();
     const a = setup({ storage, settings: { lang: "ta" } });
     const h = a.socket.hello!;
-    expect(h).toMatchObject({ t: "hello", shopId: "sunrise_dairy", lang: "ta", verbosity: "short" });
+    expect(h).toMatchObject({ t: "hello", lang: "ta", verbosity: "short" });
     expect("idToken" in h).toBe(false);
+    expect("shopId" in h).toBe(false); // one shop: the server picks it
     expect(h.uid).toMatch(/^owner-/);
     expect(a.socket.url).toBe("ws://test/ws");
     const b = setup({ storage });
@@ -613,5 +615,131 @@ describe("wireApp: dispose", () => {
     expect(a.mic.stop).toHaveBeenCalled();
     a.win.dispatchEvent(new Event("offline"));
     expect(a.spoken()).not.toContain(STRINGS.offline.en);
+  });
+});
+
+describe("wireApp: earphones come and go (voice/route)", () => {
+  const dev = (label: string, kind: MediaDeviceKind = "audioinput"): MediaDeviceInfo =>
+    ({ deviceId: "d", label, kind, groupId: "g", toJSON() { return {}; } }) as MediaDeviceInfo;
+  const PHONE = [dev("Speakerphone"), dev("Built-in speaker", "audiooutput")];
+  const WITH_BT = [...PHONE, dev("Bluetooth headset"), dev("Bluetooth headset", "audiooutput")];
+  function devices(initial: MediaDeviceInfo[]) {
+    let list = initial;
+    const listeners = new Set<() => void>();
+    const md = {
+      enumerateDevices: vi.fn(async () => list),
+      addEventListener: vi.fn((_t: "devicechange", fn: () => void) => { listeners.add(fn); }),
+      removeEventListener: vi.fn((_t: "devicechange", fn: () => void) => { listeners.delete(fn); }),
+    };
+    return {
+      md, listeners,
+      set: (l: MediaDeviceInfo[]) => { list = l; },
+      change: async () => { listeners.forEach((fn) => fn()); await flush(); },
+    };
+  }
+  const opens = (a: ReturnType<typeof setup>) => (a.env.startMic as ReturnType<typeof vi.fn>).mock.calls.length;
+  const warned = (a: ReturnType<typeof setup>) => a.spoken().filter((s) => s === STRINGS.earphonesLost.en).length;
+
+  it("earphones dropping mid-session: the mic is reopened (the OS re-routes) and the owner is told once, urgently", async () => {
+    vi.useFakeTimers();
+    const d = devices(WITH_BT);
+    const a = setup({ env: { mediaDevices: d.md } });
+    await a.w.startListening();
+    await flush();
+    expect(opens(a)).toBe(1);
+    d.set(PHONE);
+    await d.change();
+    expect(a.mic.stop).toHaveBeenCalledTimes(1);
+    expect(opens(a)).toBe(2); // reopened at once, not left to the 2 s watchdog
+    expect(a.spoken()).toEqual([STRINGS.greeting.en, STRINGS.earphonesLost.en]);
+    expect(a.env.speech!.cancel).toHaveBeenCalled(); // the urgent path: nothing talks over it
+    expect(a.earcons()).toContain("warn");
+    expect(a.haptics()).toContain("warn");
+    const kinds = a.socket.sent.flatMap((m) => (m.t === "log" && m.tag === "guard_alert" ? [m.data.kind] : []));
+    expect(kinds).toEqual(["headset.lost"]);
+    await d.change(); // the same list again: no second warning, no second reopen
+    await d.change();
+    expect(warned(a)).toBe(1);
+    expect(opens(a)).toBe(2);
+  });
+
+  it("the warning is said on every drop (drop, back, drop = twice); earphones coming back are quiet", async () => {
+    vi.useFakeTimers();
+    const d = devices(WITH_BT);
+    const a = setup({ env: { mediaDevices: d.md } });
+    await a.w.startListening();
+    await flush();
+    d.set(PHONE);
+    await d.change();
+    vi.advanceTimersByTime(3_000); // past URGENT_DEDUPE_MS
+    d.set(WITH_BT);
+    await d.change();
+    expect(opens(a)).toBe(3); // reopened so AIRA's voice moves into the earphones...
+    expect(warned(a)).toBe(1); // ...with nothing said
+    d.set(PHONE);
+    await d.change();
+    expect(warned(a)).toBe(2);
+    expect(opens(a)).toBe(4);
+  });
+
+  it("with no mic open the drop is still announced but nothing is opened", async () => {
+    const d = devices(WITH_BT);
+    const a = setup({ env: { mediaDevices: d.md } });
+    await flush();
+    d.set(PHONE);
+    await d.change();
+    expect(opens(a)).toBe(0);
+    expect(a.spoken()).toEqual([STRINGS.earphonesLost.en]);
+  });
+
+  it("in screen-reader mode the warning goes to the live region", async () => {
+    const d = devices(WITH_BT);
+    const a = setup({ settings: { screenReaderMode: true }, env: { mediaDevices: d.md } });
+    await flush();
+    d.set(PHONE);
+    await d.change();
+    expect(a.env.announce).toHaveBeenCalledWith(STRINGS.earphonesLost.en);
+    expect(a.spoken()).toEqual([]);
+  });
+
+  it("dispose removes the devicechange listener; no mediaDevices means no watcher", async () => {
+    const d = devices(WITH_BT);
+    const a = setup({ env: { mediaDevices: d.md } });
+    await flush();
+    expect(d.listeners.size).toBe(1);
+    a.w.dispose();
+    expect(d.listeners.size).toBe(0);
+    expect(() => setup({ env: { mediaDevices: null } })).not.toThrow();
+  });
+});
+
+describe("wireApp: the bump guard's urgent path (walk with me safety layer)", () => {
+  it("a guard 'Stop' is spoken at once over Live audio and a waiting local line; a repeat past the dedupe window speaks again", async () => {
+    vi.useFakeTimers();
+    const a = setup();
+    await flush();
+    const before = a.spoken().length;
+    a.playback.msSinceAudio.mockReturnValue(0);           // AIRA is mid-answer
+    app.speak("The curd is 30 rupees.");                   // a normal local line waits behind Live audio
+    expect(a.spoken().length).toBe(before);
+    app.speakUrgent("Stop", { kind: "bump.stop", ageMs: 40 });
+    expect(a.spoken().slice(before)).toEqual(["Stop"]);    // not scheduled: said now
+    expect(a.env.speech!.cancel).toHaveBeenCalled();
+    expect(a.playback.flush).toHaveBeenCalled();           // the answer is cut, not talked over
+    const alerts = () => a.socket.sent.flatMap((m) => (m.t === "log" && m.tag === "guard_alert" ? [m.data] : []));
+    expect(alerts()).toEqual([{ kind: "bump.stop", deduped: false, waitedMs: 40, overLive: true }]);
+    vi.advanceTimersByTime(URGENT_DEDUPE_MS - 500);
+    app.speakUrgent("Stop", { kind: "bump.stop", ageMs: 30 });
+    expect(a.spoken().slice(before)).toEqual(["Stop"]);    // the same line within the window: once
+    expect(alerts()[1]).toMatchObject({ kind: "bump.stop", deduped: true });
+    vi.advanceTimersByTime(600);
+    app.speakUrgent("Stop", { kind: "bump.stop", ageMs: 30 });
+    expect(a.spoken().slice(before)).toEqual(["Stop", "Stop"]);   // a later warning is never swallowed
+    vi.advanceTimersByTime(60_000);                        // the waiting local line never comes back
+    expect(a.spoken().slice(before)).toEqual(["Stop", "Stop"]);
+  });
+
+  it("the guard's own global cooldown is longer than the urgent dedupe: every guard warning is heard", () => {
+    expect(GLOBAL_COOLDOWN_MS).toBeGreaterThan(URGENT_DEDUPE_MS);
   });
 });

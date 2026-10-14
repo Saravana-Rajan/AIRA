@@ -173,8 +173,35 @@ class LiveBridge:
     def user_speaking(self) -> bool:
         return bool(self._in_partial)
 
+    @property
+    def stopped(self) -> bool:
+        """A long-press stop holds (until the owner's next real turn)."""
+        return self._stopped
+
+    @property
+    def closed(self) -> bool:
+        """Closed for good (``close()``, or the reconnects ran out): a walk (tools.walk) ends on it, since no
+        voice is left to guide with."""
+        return self._closed
+
     def lang_name(self) -> str:
         return self._lang_name()
+
+    async def request_nav_check(self, text: str) -> bool:
+        """Send one walk ``[NAV CHECK n]`` note (tools.walk.NavChecker) into Live, only while Live is idle: not
+        answering (client text would cut the answer), the owner not speaking, no long-press stop, connected. Sent
+        as plain text (with ADK on Gemini 3.x Live that is ``send_realtime_input(text=...)``, verified to make
+        Live call nav_report silently): never a notice and never an owner turn, so it lifts no stop. False when it
+        could not go now. The one place to change if the Live call for checks changes."""
+        if (self._closed or not self._connected or self._backend is None or self._stopped or self._answering
+                or self._in_partial or _monotonic() - self.last_speech_at < NAV_QUIET_S):
+            return False
+        try:
+            await self._backend.send_text(text)
+        except Exception as exc:  # the pump notices a dead connection and reconnects
+            log.debug("nav check send failed: %s", exc)
+            return False
+        return True
 
     # ---------- lifecycle ----------
     async def start(self) -> None:
@@ -720,6 +747,10 @@ def live_extras(types, model: str | None = None) -> dict:
     return {"proactivity": types.ProactivityConfig(proactive_audio=True)}
 
 
+# A walk nav check waits this long after the last words heard or AIRA's answer ending. Measured on the real
+# Live API (2026-10-14): a check sent while AIRA answered cut her answer and got no nav_report; one sent while
+# the owner spoke swallowed his question (Live answered only the check). So checks go only in quiet moments.
+NAV_QUIET_S = 0.8
 VAD_SILENCE_MS = 500        # end of the owner's turn after this much silence (Live's default waits longer)
 VAD_PREFIX_PADDING_MS = 200
 

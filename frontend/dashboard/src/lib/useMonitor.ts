@@ -1,68 +1,58 @@
-// Wires the Live page to /monitor: the key from the URL fragment or the tab, the socket URL from the app's
-// VITE_AIRA_LIVE_WS, one reconnecting client that authenticates with its first message, and the reducer's
-// state.
+// Wires the Live page to /monitor: the socket URL from the app's VITE_AIRA_LIVE_WS, one reconnecting client,
+// and the reducer's state. By default (VITE_MONITOR_AUTH unset) there is no sign-in: the page connects as
+// soon as it is open, the server streams every live session of the shop, and lib/firebaseAuth is never
+// loaded (its dynamic import below is only reachable in the sign-in build, so it stays an unfetched chunk).
+// With VITE_MONITOR_AUTH=1 the viewer's Google sign-in (lib/viewerAuth; lib/firebaseAuth in the browser,
+// loaded only here and only with a Firebase config) is required: the client authenticates with its first
+// message and connects only while a viewer is signed in; the server checks the account against its viewer
+// list. An injected fake sign-in (tests) counts only in that build: the flag decides.
 //
 // What the page hears is sensitive (the shop's conversations and the owner's camera), so it lives in memory
 // only and never outlives the connection: the reducer keeps the last frame and at most MAX_LINES transcript
 // lines, and the state is dropped whenever the socket is not open (every close, the Live page being left, the
-// page being unloaded (pagehide), access denied). A tab that is merely hidden stays connected. Nothing of it is
-// written to any storage, the URL or the console.
-// The monitor key is kept in sessionStorage for this tab only, read off the fragment once and removed from
-// the address bar, forgotten when the server refuses it, and never logged.
+// page being unloaded (pagehide), signing out, access denied). A tab that is merely hidden stays connected.
+// Nothing of it, and never the ID token, is written to any storage, the URL or the console.
 //
 // Live video: a WebRTC viewer (lib/rtcViewer) rides on the same socket for signalling. It asks the followed
 // session for video, and its state (`video`) says whether the page shows the peer-to-peer picture or the JPEG
 // preview. It is stopped (bye, connection closed) whenever the socket is dropped, so nothing outlives the page.
 import { useEffect, useMemo, useState } from "preact/hooks";
 import {
-  follow as followSession, initialState, monitorUrl, openMonitor, readKey, reduce, storeKey, stripKey,
+  follow as followSession, initialState, monitorUrl, openMonitor, reduce,
   type ClientDeps, type Connection, type LiveState, type SocketLike,
 } from "./monitor";
 import { createRtcViewer, type PeerCtor, type VideoState } from "./rtcViewer";
+import { authConfigured, authErrorText, monitorAuthRequired, type AuthStatus, type ViewerAuth, type ViewerUser } from "./viewerAuth";
+
+export interface MonitorAuth {
+  status: AuthStatus;
+  user: ViewerUser | null;
+  /** Why the last sign-in attempt failed, in words for the page; null otherwise. */
+  error: string | null;
+  signIn: () => void;
+  signOut: () => void;
+}
 
 export interface Monitor {
   state: LiveState;
   conn: Connection;
-  keyNeeded: boolean;
   /** False when the app has no usable VITE_AIRA_LIVE_WS: there is nothing to connect to. */
   configured: boolean;
-  setKey: (k: string) => void;
+  auth: MonitorAuth;
   /** Follow another of the shop's live sessions (one of `state.sessions`); the current one's state is dropped. */
   follow: (sessionId: string) => void;
   /** The WebRTC picture: "webrtc" with a stream to play, else the JPEG preview ("connecting" while trying). */
   video: VideoState;
 }
 
-/** Test hooks: the socket factory and timers, plus a fake RTCPeerConnection for the viewer. */
-export type MonitorDeps = ClientDeps & { peer?: PeerCtor };
+/** Test hooks: the socket factory and timers, a fake RTCPeerConnection for the viewer, and a fake sign-in. */
+export type MonitorDeps = ClientDeps & { peer?: PeerCtor; auth?: ViewerAuth };
 
-function sessionStore(): Storage | null {
-  try {
-    return typeof sessionStorage === "undefined" ? null : sessionStorage;
-  } catch {
-    return null;
-  }
-}
-
-/**
- * Takes #key=... off the address bar once it has been read (saved for this tab), without reloading. Called
- * from main.tsx before the first render, so the router never sees the key and it never reaches history.
- */
-export function captureMonitorKey(): void {
-  try {
-    if (typeof location === "undefined") return;
-    const key = readKey(location.hash, sessionStore());
-    if (!key || !location.hash.includes("key=")) return;
-    const hash = stripKey(location.hash);
-    history.replaceState(history.state, "", `${location.pathname}${location.search}${hash}`);
-  } catch {
-    /* a sandboxed frame: the key stays visible until the next navigation, which is harmless */
-  }
-}
-
-/** Forgets the key kept for this tab (a refused key, or leaving). */
-export function forgetMonitorKey(): void {
-  storeKey(null, sessionStore());
+/** The browser sign-in, loaded on first use (one promise for the page's life). */
+let browserAuth: Promise<ViewerAuth> | null = null;
+function loadBrowserAuth(): Promise<ViewerAuth> {
+  browserAuth ??= import("./firebaseAuth").then((m) => m.createViewerAuth());
+  return browserAuth;
 }
 
 /**
@@ -91,17 +81,61 @@ const browserDeps: ClientDeps = {
   connect: (u) => new WebSocket(u) as unknown as SocketLike,
 };
 
+/**
+ * The sign-in to use: none when the build asks for no sign-in (status "off", nothing loaded), else the
+ * injected fake, the browser one when the build is configured, or "unconfigured".
+ */
+function useViewerAuth(required: boolean, enabled: boolean, env: Record<string, unknown>, injected?: ViewerAuth) {
+  const configured = required && (Boolean(injected) || authConfigured(env));
+  const [auth, setAuth] = useState<ViewerAuth | null>(required ? injected ?? null : null);
+  const [status, setStatus] = useState<AuthStatus>(!required ? "off" : configured ? "loading" : "unconfigured");
+  const [user, setUser] = useState<ViewerUser | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!required || injected || !configured || !enabled || auth) return;
+    let alive = true;
+    loadBrowserAuth().then(
+      (a) => { if (alive) setAuth(a); },
+      () => { if (alive) setStatus("unconfigured"); },
+    );
+    return () => {
+      alive = false;
+    };
+  }, [required, injected, configured, enabled, auth]);
+
+  useEffect(() => {
+    if (!auth) return;
+    return auth.subscribe((u) => {
+      setUser(u);
+      setStatus(u ? "signed_in" : "signed_out");
+      if (u) setError(null);
+    });
+  }, [auth]);
+
+  const signIn = () => {
+    if (!auth) return;
+    setError(null);
+    auth.signIn().catch((err: unknown) => setError(authErrorText(err)));
+  };
+  const signOut = () => {
+    auth?.signOut().catch(() => undefined);
+  };
+  return { auth, status, user, error, signIn, signOut };
+}
+
 export function useMonitor(
   enabled: boolean,
   shopId: string | null,
   env: Record<string, unknown> = import.meta.env,
   deps?: MonitorDeps,
 ): Monitor {
-  const [key, setKeyState] = useState<string | null>(() => readKey(typeof location === "undefined" ? "" : location.hash, sessionStore()));
   const [state, setState] = useState<LiveState>(initialState);
   const [conn, setConn] = useState<Connection>("waiting");
   const visible = usePageVisible();
   const url = useMemo(() => (shopId ? monitorUrl(env, shopId) : null), [shopId]);
+  const authRequired = monitorAuthRequired(env);
+  const { auth, status, user, error, signIn, signOut } = useViewerAuth(authRequired, enabled, env, deps?.auth);
   const viewer = useMemo(
     () => createRtcViewer({ ...(deps?.peer ? { PeerConnection: deps.peer } : {}), setTimer: deps?.setTimer, clearTimer: deps?.clearTimer }),
     [deps],
@@ -113,41 +147,56 @@ export function useMonitor(
   }, [viewer, state.session]);
 
   useEffect(() => {
-    if (key) captureMonitorKey();
-  }, [key]);
-
-  useEffect(() => {
-    const canConnect = enabled && visible && url && key && (deps || typeof WebSocket !== "undefined");
+    // Without sign-in the page connects as soon as it is open; with it, only while a viewer is signed in.
+    const signedIn = authRequired ? auth !== null && status === "signed_in" : true;
+    const canConnect = enabled && visible && url && signedIn && (deps || typeof WebSocket !== "undefined");
     if (!canConnect) {
-      setConn((c) => (c === "rejected" && !key ? c : "waiting"));
+      setConn("waiting");
       setState(initialState());
       return;
     }
-    const stop = openMonitor(
-      url,
-      key,
-      (m) => setState((s) => reduce(s, m)),
-      (c) => {
-        setConn(c);
-        if (c !== "live") setState(initialState()); // nothing of a session is kept while the socket is not open
-        if (c === "rejected") {
-          forgetMonitorKey(); // a refused key is not kept for a retry
-          setKeyState(null);
-        }
-      },
-      { ...(deps ?? browserDeps), signal: viewer },
-    );
+    // One socket at a time. In the sign-in build a 4401 (the server did not take the token: expired, or minted
+    // before a sign-in change) gets one silent retry with a freshly minted token; a 4401 straight after that
+    // retry is shown to the viewer. The retry is earned back once the feed delivered something or after an
+    // ordinary drop. Without sign-in there is no token to retry with: a 4401 is shown as it comes.
+    let stop: (() => void) | null = null;
+    let retried = false;
+    let gone = false;
+    const open = (force: boolean) => {
+      // The token source is given only in the sign-in build: without it the client never sends an auth line.
+      const getToken = authRequired && auth ? (force ? () => auth.idToken(true) : (f?: boolean) => auth.idToken(f)) : undefined;
+      stop = openMonitor(
+        url,
+        (m) => {
+          retried = false;
+          setState((s) => reduce(s, m));
+        },
+        (c) => {
+          if (gone) return;
+          if (c === "offline") retried = false;
+          if (c === "unauthenticated" && getToken && !retried) {
+            retried = true;
+            stop?.();
+            setState(initialState());
+            setConn("connecting");
+            open(true);
+            return;
+          }
+          setConn(c);
+          if (c !== "live") setState(initialState()); // nothing of a session is kept while the socket is not open
+        },
+        { ...(deps ?? browserDeps), signal: viewer, getToken },
+      );
+    };
+    open(false);
     return () => {
+      gone = true;
       viewer.stop(); // bye while the socket is still open, then the connection is closed
-      stop();
+      stop?.();
       setState(initialState());
     };
-  }, [enabled, visible, url, key, deps]);
+  }, [enabled, visible, url, deps, auth, status, authRequired]);
 
-  const setKey = (k: string) => {
-    storeKey(k, sessionStore());
-    setKeyState(k);
-  };
   const follow = (sessionId: string) => setState((s) => followSession(s, sessionId));
-  return { state, conn, keyNeeded: !key, configured: url !== null, setKey, follow, video };
+  return { state, conn, configured: url !== null, auth: { status, user, error, signIn, signOut }, follow, video };
 }

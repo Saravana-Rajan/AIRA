@@ -21,7 +21,7 @@ import { startTiltHints } from "./tilt";
 import { createGuidanceSession } from "../guidance/session";
 import { freshHand, trackFingertip } from "../guidance/hands";
 import { clientLog } from "../core/clientLog";
-import { videoYields } from "../net/sendPriority";
+import { setWalkVideo, videoYields } from "../net/sendPriority";
 import { guideTo, stopTone } from "../guidance/tones";
 import { boxStore } from "../walk/boxes";
 import { parseWalkingModeCommand, walkingMode } from "../walk/mode";
@@ -206,6 +206,21 @@ export function wireCameraAndGuidance(opts: WireOptions = {}): CameraWiring {
   return self;
 }
 
+/** A server walk that never sent its stop (a lost message) stops counting as active after this long. */
+export const SERVER_WALK_MAX_MS = 15 * 60_000;
+
+/**
+ * Server walk ("walk with me") from the frame requests the phone already gets: request_frame purpose "walk"
+ * continuous starts it, the same purpose with stop ends it, and a new session (`ready`) ends it. null: not a
+ * walk message.
+ */
+export function serverWalkChange(m: ServerMsg): boolean | null {
+  if (m.t === "ready") return false;
+  if (m.t !== "request_frame" || m.purpose !== "walk") return null;
+  if (m.stop) return false;
+  return m.continuous ? true : null;
+}
+
 /** How long the red "Stop!" chip stays up after a bump warning: short, so it clears before the next look. */
 export const BUMP_CHIP_MS = 1200;
 
@@ -252,12 +267,25 @@ export function wireCameraIntoApp(w: WiredHooks, opts: PhoneWireOptions = {}): P
   });
   let disposed = false;
   let chipTimer: ReturnType<typeof setTimeout> | null = null;
+  // A server walk keeps the bump guard in urgent sensitivity, and walking, for its whole duration.
+  let serverWalk = false;
+  let walkTimer: ReturnType<typeof setTimeout> | null = null;
+  const setServerWalk = (on: boolean) => {
+    if (walkTimer) clearTimeout(walkTimer);
+    walkTimer = on ? setTimeout(() => { walkTimer = null; setServerWalk(false); }, SERVER_WALK_MAX_MS) : null;
+    if (serverWalk !== on) clientLog("guard_walk", { on });
+    serverWalk = on;
+    setWalkVideo(on);   // the camera keeps feeding Live while he talks during a walk
+    guard?.setServerWalk(on);
+  };
 
   const offNear = cam.onHandNear((n) => guard?.setHandNearTarget(n));
   // The server may only RAISE urgency (`cue: "warn"`); nothing it sends can mute the guard, except the
   // owner's own walking-mode command relayed as a `state` message ("WALKING_MODE on|off", like OPEN_URL).
   const offServer = app.socket.on((m) => {
     guard?.onServerMsg(m);
+    const walk = serverWalkChange(m);
+    if (walk !== null && (walk || serverWalk)) setServerWalk(walk);
     if (m.t === "state") {
       const on = parseWalkingModeCommand(m.summary);
       if (on !== null) walkingMode.set(on);
@@ -282,6 +310,7 @@ export function wireCameraIntoApp(w: WiredHooks, opts: PhoneWireOptions = {}): P
           if (disposed) { g.dispose(); return; }
           guard = g;
           g.setHandNearTarget(cam.isHandNearTarget());
+          if (serverWalk) g.setServerWalk(true);   // the walk began while the detector was loading
         },
         report("bump guard did not start; camera and guidance keep working"),
       )
@@ -296,6 +325,8 @@ export function wireCameraIntoApp(w: WiredHooks, opts: PhoneWireOptions = {}): P
     disposed = true;
     if (chipTimer) clearTimeout(chipTimer);
     chipTimer = null;
+    if (walkTimer) clearTimeout(walkTimer);
+    walkTimer = null;
     offNear();
     offServer();
     offMode();
@@ -311,6 +342,7 @@ export function wireCameraIntoApp(w: WiredHooks, opts: PhoneWireOptions = {}): P
   };
   w.onStop = () => {
     cam.guidance.end();
+    if (!w.confirm.pending && serverWalk) setServerWalk(false);   // a hard stop ends the walk on the server too
     appStop();
   };
   w.dispose = () => {

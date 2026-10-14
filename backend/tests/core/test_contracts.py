@@ -98,6 +98,18 @@ def test_hello_is_valid_without_id_token():
     assert hello.id_token is None and hello.shop_id == "sunrise_dairy" and hello.app_version == "0.1.0"
 
 
+def test_hello_is_valid_without_a_shop_id():
+    """One shop: the server picks it, so shopId is optional (an older client may still send it)."""
+    hello = client_adapter.validate_python(
+        {"t": "hello", "uid": "u1", "lang": "ta", "verbosity": "short", "appVersion": "0.1.0"}
+    )
+    assert hello.shop_id is None and hello.uid == "u1"
+    with pytest.raises(Exception):
+        client_adapter.validate_python(
+            {"t": "hello", "uid": "u1", "shopId": 5, "lang": "ta", "verbosity": "short", "appVersion": "0.1.0"}
+        )
+
+
 # ---------- enums mirror enums.ts ----------
 @pytest.mark.parametrize(
     "alias, ts_const",
@@ -129,7 +141,7 @@ def test_norm_max_matches_ts():
 BAD_CLIENT = [
     {"t": "nope"},
     {"t": "frame", "id": "f", "jpeg": "x", "w": 1, "h": 1, "ts": 1, "purpose": "selfie"},
-    {"t": "hello", "uid": "u", "lang": "ta", "verbosity": "short", "appVersion": "0"},
+    {"t": "hello", "uid": "u", "lang": "ta", "verbosity": "short", "appVersion": "0", "shopId": 5},
     {"t": "hello", "uid": "u", "shopId": "s", "lang": "fr", "verbosity": "short", "appVersion": "0"},
     {"t": "hello", "uid": "u", "shopId": "s", "lang": "ta", "verbosity": "short", "appVersion": "0", "idToken": 5},
     {"t": "confirm", "id": "c", "answer": "maybe"},

@@ -1,9 +1,13 @@
 import { describe, expect, it, vi } from "vitest";
 import type { MonitorMsg } from "@aira/contracts";
 import {
-  MAX_LINES, backoffMs, detailText, eventLabel, follow, frameAge, initialState, keyFromHash, monitorUrl, openMonitor, overlayShapes,
-  readKey, reduce, sessionClock, storeKey, stripKey, toRect, toXY, type LiveState, type SocketLike,
+  MAX_LINES, backoffMs, detailText, eventLabel, follow, frameAge, initialState, listSessions, monitorUrl, openMonitor, overlayShapes,
+  reduce, sessionClock, sessionLabel, sinceText, toRect, toXY, type LiveState, type SocketLike,
 } from "../src/lib/monitor";
+import { jwt } from "./helpers/jwt";
+
+/** 2026-10-10 06:30 UTC = 12:00 pm IST. */
+const T_IST = Date.UTC(2026, 9, 10, 6, 30);
 
 type MonInput = MonitorMsg extends infer M ? (M extends MonitorMsg ? Omit<M, "t" | "session" | "ts"> & { ts?: number; session?: string } : never) : never;
 const mon = (m: MonInput): MonitorMsg =>
@@ -202,14 +206,15 @@ describe("reduce: camera, vision, hand, status, stats, events and sessions", () 
     ]);
     expect(s.session).toBe("s1");
     expect(Object.keys(s.sessions)).toEqual(["s1", "s2"]);
-    expect(s.sessions.s2).toEqual({ id: "s2", uid: "u2", lang: "ta", startedAt: 3 });
+    // Its list entry still follows what it says (status, last heard), nothing else does.
+    expect(s.sessions.s2).toEqual({ id: "s2", uid: "u2", lang: "ta", startedAt: 3, lastSeenAt: 6, status: "thinking" });
     expect(s.transcript.map((l) => l.text)).toEqual(["hi from s1"]);
     expect(s.frame).toBeNull();
     expect(s.status).toBe("listening");
     expect(s.stats).toBeNull();
     expect(s.lastMsgAt).toBe(3); // the dropped lines did not touch the page
     const picked = follow(s, "s2");
-    expect(picked).toMatchObject({ session: "s2", sessionStartedAt: 3, lang: "ta", status: "listening", transcript: [], frame: null, activity: [] });
+    expect(picked).toMatchObject({ session: "s2", sessionStartedAt: 3, lang: "ta", status: "thinking", transcript: [], frame: null, activity: [] });
     expect(picked.sessions).toEqual(s.sessions);
     expect(follow(s, "s1")).toBe(s);
     expect(follow(s, "nope")).toBe(s);
@@ -256,46 +261,68 @@ describe("reduce: camera, vision, hand, status, stats, events and sessions", () 
   });
 });
 
-describe("key handling (the fragment, never the query string)", () => {
-  const mem = () => {
-    const m = new Map<string, string>();
-    return { getItem: (k: string) => m.get(k) ?? null, setItem: (k: string, v: string) => void m.set(k, v), removeItem: (k: string) => void m.delete(k), m };
-  };
-  it("reads #key= in its three spellings", () => {
-    expect(keyFromHash("#key=abc123")).toBe("abc123");
-    expect(keyFromHash("#/live?key=abc123")).toBe("abc123");
-    expect(keyFromHash("#/live#key=abc123")).toBe("abc123");
-    expect(keyFromHash("#/live?shop=x&key=a%20b")).toBe("a b");
-    expect(keyFromHash("#/live")).toBeNull();
-    expect(keyFromHash("")).toBeNull();
-    expect(keyFromHash("#/live?monkey=1")).toBeNull();
+describe("reduce: everyone using AIRA (the session list)", () => {
+  const start = (session: string, ts: number, extra: Record<string, unknown> = {}) =>
+    mon({ kind: "session", state: "start", lang: "ta", uid: `u-${session}`, session, ts, ...extra } as MonInput);
+
+  it("a session start carries the server's startedAt into the list and the page clock, falling back to the message time", () => {
+    const s = apply([start("s1", 50, { startedAt: 10 }), start("s2", 60), start("s3", 70, { startedAt: "soon" })]);
+    expect(s.sessions.s1).toEqual({ id: "s1", uid: "u-s1", lang: "ta", startedAt: 10, lastSeenAt: 50, status: "idle" });
+    expect(s.sessions.s2.startedAt).toBe(60);
+    expect(s.sessions.s3.startedAt).toBe(70); // a startedAt that is not a number is ignored
+    expect(s).toMatchObject({ session: "s1", sessionStartedAt: 10 });
+    expect(follow(s, "s2").sessionStartedAt).toBe(60);
   });
-  it("takes the key from the fragment and remembers it for the tab", () => {
-    const st = mem();
-    expect(readKey("#/live?key=abc123", st)).toBe("abc123");
-    expect(st.m.get("aira.monitorKey")).toBe("abc123");
-    expect(readKey("#/live", st)).toBe("abc123");
+
+  it("a status from a session it is not following updates that entry only; the page and lastMsgAt are untouched", () => {
+    const s0 = apply([start("s1", 1), start("s2", 2), mon({ kind: "status", state: "guiding", ts: 3 })]);
+    expect(s0.sessions.s1.status).toBe("guiding"); // the followed one's entry says what the page says
+    const s = apply([
+      mon({ kind: "status", state: "thinking", session: "s2", ts: 9 }),
+      mon({ kind: "frame", jpeg_b64: "S2", w: 1, h: 1, purpose: "ask", session: "s2", ts: 10 }),
+      mon({ kind: "event", name: "order_sent", detail: {}, session: "s2", ts: 11 }),
+    ], s0);
+    expect(s.sessions.s2).toMatchObject({ status: "thinking", lastSeenAt: 9 });
+    expect(s.sessions.s1).toBe(s0.sessions.s1);
+    expect(s).toMatchObject({ session: "s1", status: "guiding", frame: null, activity: s0.activity, lastMsgAt: 3 });
+    expect(reduce(s, mon({ kind: "status", state: "idle", session: "nobody", ts: 12 }))).toBe(s); // not listed: nothing to update
   });
-  it("returns null with no key anywhere, and survives a throwing storage", () => {
-    expect(readKey("#/live", mem())).toBeNull();
-    const broken = { getItem: () => { throw new Error("blocked"); }, setItem: () => { throw new Error("blocked"); }, removeItem: () => {} };
-    expect(readKey("#key=k", broken)).toBe("k");
-    expect(readKey("", broken)).toBeNull();
-    expect(() => storeKey("k", broken)).not.toThrow();
-    expect(readKey("#key=k", null)).toBe("k");
+
+  it("when the followed session ends, the newest of the rest is followed from a clean slate; sessions leave the list as they end", () => {
+    const s0 = apply([
+      start("old", 1, { startedAt: 100 }),
+      start("mid", 2, { startedAt: 300 }),
+      start("new", 3, { startedAt: 200 }), // announced last, but began before "mid"
+      mon({ kind: "transcript", role: "owner", text: "hello", lang: "ta", final: true, session: "old", ts: 4 }),
+      mon({ kind: "frame", jpeg_b64: "OLD", w: 1, h: 1, purpose: "ask", session: "old", ts: 5 }),
+      mon({ kind: "status", state: "thinking", session: "mid", ts: 6 }),
+    ]);
+    expect(s0.session).toBe("old");
+    const s1 = reduce(s0, mon({ kind: "session", state: "end", lang: "ta", session: "old", ts: 7 }));
+    expect(Object.keys(s1.sessions).sort()).toEqual(["mid", "new"]);
+    expect(s1).toMatchObject({ session: "mid", sessionStartedAt: 300, lang: "ta", status: "thinking", frame: null, transcript: [], activity: [], lastMsgAt: 7 });
+    expect(reduce(s1, mon({ kind: "frame", jpeg_b64: "MID", w: 1, h: 1, purpose: "ask", session: "mid", ts: 8 })).frame?.src).toContain("MID");
+    const s2 = reduce(s1, mon({ kind: "session", state: "end", lang: "ta", session: "mid", ts: 9 }));
+    expect(s2).toMatchObject({ session: "new", sessionStartedAt: 200 });
+    const s3 = reduce(s2, mon({ kind: "session", state: "end", lang: "ta", session: "new", ts: 10 }));
+    expect(s3).toMatchObject({ session: null, sessions: {}, status: "idle" });
   });
-  it("strips key= from the fragment and nothing else", () => {
-    expect(stripKey("#/live?key=abc")).toBe("#/live");
-    expect(stripKey("#/live?shop=x&key=abc")).toBe("#/live?shop=x");
-    expect(stripKey("#/live?key=abc&shop=x")).toBe("#/live?shop=x");
-    expect(stripKey("#key=abc")).toBe("");
-    expect(stripKey("#/live#key=abc")).toBe("#/live");
-    expect(stripKey("#/live")).toBe("#/live");
+
+  it("lists people newest first and names them: the uid, else a short id; room cameras are never people", () => {
+    const s = apply([start("a1", 1, { startedAt: 100 }), start("b2b2b2b2", 2, { startedAt: 300, uid: undefined }), start("c3", 3, { startedAt: 200 })]);
+    expect(listSessions(s.sessions).map((p) => p.id)).toEqual(["b2b2b2b2", "c3", "a1"]);
+    expect(sessionLabel(s.sessions.a1)).toBe("u-a1");
+    expect(sessionLabel(s.sessions.b2b2b2b2)).toBe("b2b2b2");
+    expect(sessionLabel({ id: "cam123456", uid: "camera:front" })).toBe("cam123");
+    const withCam = reduce(s, mon({ kind: "session", state: "start", lang: "en", uid: "camera:front", session: "cam1", ts: 4 }));
+    expect(Object.keys(withCam.sessions)).not.toContain("cam1");
+    expect(sinceText(T_IST, T_IST + 59_000)).toBe("just now");
+    expect(sinceText(T_IST, T_IST + 60_000)).toBe("since 12:00 pm");
   });
 });
 
 describe("monitorUrl", () => {
-  it("replaces /ws with /monitor and adds the shop, never the key", () => {
+  it("replaces /ws with /monitor and adds the shop, nothing else (the token never goes in the URL)", () => {
     expect(monitorUrl({ VITE_AIRA_LIVE_WS: "wss://aira-live-abc.a.run.app/ws" }, "sunrise_dairy")).toBe(
       "wss://aira-live-abc.a.run.app/monitor?shop=sunrise_dairy",
     );
@@ -317,7 +344,7 @@ describe("clocks", () => {
   });
 });
 
-describe("reconnect backoff and auth", () => {
+describe("reconnect backoff, sign-in and refusal", () => {
   it("doubles from 1 s and caps at 15 s", () => {
     expect([0, 1, 2, 3, 4, 9].map(backoffMs)).toEqual([1000, 2000, 4000, 8000, 15000, 15000]);
   });
@@ -329,73 +356,219 @@ describe("reconnect backoff and auth", () => {
       close() { this.closed = true; },
     };
   }
+  const tick = () => new Promise((r) => setTimeout(r, 0));
+  const T0 = 1_760_000_000_000;
+  const token = (exp: number, tag = "t") => jwt({ sub: "u1", exp: Math.floor(exp / 1000), tag });
+  const authLine = (idToken: string) => JSON.stringify({ t: "auth", idToken });
 
-  it("sends {t:auth, key} as its first message, reconnects after each close with growing delays, resets after an open, and stops cleanly", () => {
+  function rig(getToken = vi.fn(async (_force?: boolean) => token(T0 + 3_600_000))) {
     const sockets: ReturnType<typeof fakeSocket>[] = [];
-    const timers: Array<{ fn: () => void; ms: number }> = [];
+    const timers: Array<{ fn: () => void; ms: number; id: number }> = [];
+    const cleared: number[] = [];
     const onMsg = vi.fn();
     const onConn = vi.fn();
-    const stop = openMonitor(
-      "ws://x/monitor?shop=s",
-      "k-secret",
-      onMsg,
-      onConn,
-      { connect: () => { const s = fakeSocket(); sockets.push(s); return s; }, setTimer: (fn: () => void, ms: number) => { timers.push({ fn, ms }); return timers.length; }, clearTimer: vi.fn() },
-    );
-    expect(onConn).toHaveBeenLastCalledWith("connecting", 0);
-    sockets[0].onclose!({ code: 1006 });
-    expect(onConn).toHaveBeenLastCalledWith("offline", 0);
-    expect(timers.map((t) => t.ms)).toEqual([1000]);
-    timers[0].fn();
-    sockets[1].onclose!({ code: 1006 });
-    expect(timers.map((t) => t.ms)).toEqual([1000, 2000]);
-    timers[1].fn();
-    sockets[2].onopen!({});
-    expect(sockets[2].sent).toEqual([JSON.stringify({ t: "auth", key: "k-secret" })]);
-    expect(onConn).toHaveBeenLastCalledWith("live", 0);
-    sockets[2].onmessage!({ data: JSON.stringify({ t: "mon", kind: "status", session: "s", ts: 1, state: "thinking" }) });
-    sockets[2].onmessage!({ data: "not json" });
-    expect(onMsg).toHaveBeenCalledTimes(1);
-    expect(onMsg.mock.calls[0][0]).toMatchObject({ kind: "status", state: "thinking" });
-    sockets[2].onclose!({ code: 1006 });
-    expect(timers.map((t) => t.ms)).toEqual([1000, 2000, 1000]); // attempt count reset by the open
-    stop();
-    timers[2].fn();
-    expect(sockets).toHaveLength(3); // no dial after stop
-  });
-
-  it("hands rtc lines to the signal port, attaches it once a socket is open and detaches it on close and stop", () => {
-    const sockets: ReturnType<typeof fakeSocket>[] = [];
-    const onMsg = vi.fn();
     const port = { attach: vi.fn(), detach: vi.fn(), receive: vi.fn() };
-    const stop = openMonitor("ws://x", "k", onMsg, vi.fn(), {
-      connect: () => { const s = fakeSocket(); sockets.push(s); return s; }, setTimer: vi.fn(), clearTimer: vi.fn(), signal: port,
+    const stop = openMonitor("ws://x/monitor?shop=s", onMsg, onConn, {
+      connect: () => { const s = fakeSocket(); sockets.push(s); return s; },
+      setTimer: (fn: () => void, ms: number) => { const id = timers.length + 1; timers.push({ fn, ms, id }); return id; },
+      clearTimer: (t: unknown) => { cleared.push(t as number); },
+      signal: port, getToken, now: () => T0,
     });
-    expect(port.attach).not.toHaveBeenCalled();
-    sockets[0].onopen!({});
-    expect(port.attach).toHaveBeenCalledTimes(1);
-    const send = port.attach.mock.calls[0][0] as (m: unknown) => boolean;
+    return { sockets, timers, cleared, onMsg, onConn, port, stop, getToken };
+  }
+
+  it("sends the ID token as its first message, reports live and attaches the signal port only after it, and schedules the refresh", async () => {
+    const r = rig();
+    expect(r.onConn).toHaveBeenLastCalledWith("connecting", 0);
+    r.sockets[0].onopen!({});
+    expect(r.sockets[0].sent).toEqual([]); // the token is fetched first
+    expect(r.port.attach).not.toHaveBeenCalled();
+    await tick();
+    expect(r.getToken).toHaveBeenCalledWith();
+    expect(r.sockets[0].sent).toEqual([authLine(token(T0 + 3_600_000))]);
+    expect(r.onConn).toHaveBeenLastCalledWith("live", 0);
+    expect(r.port.attach).toHaveBeenCalledTimes(1);
+    expect(r.timers.map((t) => t.ms)).toEqual([55 * 60_000]); // exp - 5 min
+    const send = r.port.attach.mock.calls[0][0] as (m: unknown) => boolean;
     expect(send({ t: "rtc", kind: "want", to: "s1" })).toBe(true);
-    expect(sockets[0].sent.at(-1)).toBe(JSON.stringify({ t: "rtc", kind: "want", to: "s1" }));
-    const offer = { t: "rtc", kind: "offer", from: "s1", to: "m1", sdp: "v=0" };
-    sockets[0].onmessage!({ data: JSON.stringify(offer) });
-    sockets[0].onmessage!({ data: JSON.stringify({ t: "mon", kind: "status", session: "s1", ts: 1, state: "idle" }) });
-    expect(port.receive).toHaveBeenCalledWith(offer);
-    expect(onMsg).toHaveBeenCalledTimes(1);
-    expect(onMsg).not.toHaveBeenCalledWith(expect.objectContaining({ t: "rtc" }));
-    sockets[0].onclose!({ code: 1006 });
-    expect(port.detach).toHaveBeenCalledTimes(1);
-    expect(send({ t: "rtc", kind: "bye", to: "s1" })).toBe(false); // a dead socket's send is refused
-    stop();
-    expect(port.detach).toHaveBeenCalledTimes(2);
+    expect(r.sockets[0].sent[0]).toContain('"t":"auth"'); // auth stays first
+    expect(r.sockets[0].sent[1]).toBe(JSON.stringify({ t: "rtc", kind: "want", to: "s1" }));
   });
 
-  it("reports a refused key instead of retrying", () => {
-    const onConn = vi.fn();
-    const s = fakeSocket();
-    openMonitor("ws://x", "k", vi.fn(), onConn, { connect: () => s, setTimer: vi.fn(), clearTimer: vi.fn() });
-    s.onopen!({});
-    s.onclose!({ code: 4403 });
-    expect(onConn).toHaveBeenLastCalledWith("rejected", 0);
+  it("refreshes with a freshly minted token before expiry, on the same socket, and books the next refresh from it", async () => {
+    let n = 0;
+    const getToken = vi.fn(async (force?: boolean) => token(T0 + (force ? 7_200_000 : 3_600_000), `t${n++}`));
+    const r = rig(getToken);
+    r.sockets[0].onopen!({});
+    await tick();
+    expect(r.timers).toHaveLength(1);
+    r.timers[0].fn();
+    await tick();
+    expect(getToken).toHaveBeenLastCalledWith(true);
+    expect(r.sockets[0].sent).toHaveLength(2);
+    expect(JSON.parse(r.sockets[0].sent[1])).toMatchObject({ t: "auth" });
+    expect(r.sockets[0].sent[1]).toContain(token(T0 + 7_200_000, "t1"));
+    expect(r.timers.map((t) => t.ms)).toEqual([55 * 60_000, 115 * 60_000]);
+    expect(r.sockets).toHaveLength(1); // no reconnect: the refresh rides the open socket
+    r.sockets[0].onclose!({ code: 1006 });
+    expect(r.cleared).toContain(2); // the pending refresh is cancelled with the socket
+  });
+
+  it("drops messages that arrive before the token went out, and hands rtc lines to the port after", async () => {
+    const r = rig();
+    r.sockets[0].onopen!({});
+    r.sockets[0].onmessage!({ data: JSON.stringify({ t: "mon", kind: "status", session: "s", ts: 1, state: "thinking" }) });
+    expect(r.onMsg).not.toHaveBeenCalled();
+    await tick();
+    r.sockets[0].onmessage!({ data: JSON.stringify({ t: "mon", kind: "status", session: "s", ts: 1, state: "thinking" }) });
+    r.sockets[0].onmessage!({ data: "not json" });
+    const offer = { t: "rtc", kind: "offer", from: "s1", to: "m1", sdp: "v=0" };
+    r.sockets[0].onmessage!({ data: JSON.stringify(offer) });
+    expect(r.onMsg).toHaveBeenCalledTimes(1);
+    expect(r.onMsg.mock.calls[0][0]).toMatchObject({ kind: "status", state: "thinking" });
+    expect(r.port.receive).toHaveBeenCalledWith(offer);
+    r.sockets[0].onclose!({ code: 1006 });
+    expect(r.port.detach).toHaveBeenCalledTimes(1);
+    const send = r.port.attach.mock.calls[0][0] as (m: unknown) => boolean;
+    expect(send({ t: "rtc", kind: "bye", to: "s1" })).toBe(false); // a dead socket's send is refused
+    r.stop();
+    expect(r.port.detach).toHaveBeenCalledTimes(2);
+  });
+
+  it("reconnects after each ordinary close with growing delays, signs in again on every socket, resets after an open, and stops cleanly", async () => {
+    const r = rig();
+    r.sockets[0].onclose!({ code: 1006 });
+    expect(r.onConn).toHaveBeenLastCalledWith("offline", 0);
+    expect(r.timers.map((t) => t.ms)).toEqual([1000]);
+    r.timers[0].fn();
+    r.sockets[1].onclose!({ code: 1006 });
+    expect(r.timers.map((t) => t.ms)).toEqual([1000, 2000]);
+    r.timers[1].fn();
+    r.sockets[2].onopen!({});
+    await tick();
+    expect(r.sockets[2].sent).toEqual([authLine(token(T0 + 3_600_000))]); // every socket authenticates from scratch
+    expect(r.onConn).toHaveBeenLastCalledWith("live", 0);
+    r.sockets[2].onclose!({ code: 1006 });
+    expect(r.timers.map((t) => t.ms)).toEqual([1000, 2000, 55 * 60_000, 1000]); // attempt count reset by the open
+    r.stop();
+    r.timers[3].fn();
+    expect(r.sockets).toHaveLength(3); // no dial after stop
+  });
+
+  it("closes as unauthenticated when no token can be had", async () => {
+    const r = rig(vi.fn(async () => { throw new Error("signed out"); }));
+    r.sockets[0].onopen!({});
+    await tick();
+    expect(r.sockets[0].closed).toBe(true);
+    expect(r.sockets[0].sent).toEqual([]);
+    expect(r.onConn).toHaveBeenLastCalledWith("unauthenticated", 0);
+    expect(r.sockets).toHaveLength(1);
+  });
+
+  it("4403 before the token went out is a refusal of the page (Origin or shop); after it, the account is not allowed; neither retries", async () => {
+    const a = rig();
+    a.sockets[0].onclose!({ code: 4403 });
+    expect(a.onConn).toHaveBeenLastCalledWith("rejected", 0);
+    const b = rig();
+    b.sockets[0].onclose!({ code: 1008 });
+    expect(b.onConn).toHaveBeenLastCalledWith("rejected", 0);
+    const c = rig();
+    c.sockets[0].onopen!({});
+    await tick();
+    c.sockets[0].onclose!({ code: 4403 });
+    expect(c.onConn).toHaveBeenLastCalledWith("unauthorized", 0);
+    expect(c.sockets).toHaveLength(1);
+    expect(c.timers.map((t) => t.ms)).toEqual([55 * 60_000]); // only the (now cancelled) refresh: no reconnect timer
+    expect(c.cleared).toEqual([1]);
+  });
+
+  it("4401 (the server did not accept the token) is reported as unauthenticated without a retry of its own", async () => {
+    const r = rig();
+    r.sockets[0].onopen!({});
+    await tick();
+    r.sockets[0].onclose!({ code: 4401 });
+    expect(r.onConn).toHaveBeenLastCalledWith("unauthenticated", 0);
+    expect(r.sockets).toHaveLength(1);
+  });
+
+  it("never puts the token anywhere but the socket", async () => {
+    const r = rig();
+    r.sockets[0].onopen!({});
+    await tick();
+    const t = token(T0 + 3_600_000);
+    expect(r.sockets[0].sent[0]).toContain(t);
+    expect(location.href).not.toContain(t);
+    expect(sessionStorage.length).toBe(0);
+    expect(Object.keys(localStorage)).toEqual([]);
+  });
+
+  describe("without a token source (the default build: no sign-in)", () => {
+    function openRig() {
+      const sockets: ReturnType<typeof fakeSocket>[] = [];
+      const timers: Array<{ fn: () => void; ms: number }> = [];
+      const onMsg = vi.fn();
+      const onConn = vi.fn();
+      const port = { attach: vi.fn(), detach: vi.fn(), receive: vi.fn() };
+      const stop = openMonitor("ws://x/monitor?shop=s", onMsg, onConn, {
+        connect: () => { const s = fakeSocket(); sockets.push(s); return s; },
+        setTimer: (fn: () => void, ms: number) => { timers.push({ fn, ms }); return timers.length; },
+        clearTimer: () => {},
+        signal: port, now: () => T0,
+      });
+      return { sockets, timers, onMsg, onConn, port, stop };
+    }
+
+    it("is live the moment the socket opens: nothing sent, the port attached, messages delivered, no timer booked", () => {
+      const r = openRig();
+      expect(r.onConn).toHaveBeenLastCalledWith("connecting", 0);
+      r.sockets[0].onmessage!({ data: JSON.stringify({ t: "mon", kind: "status", session: "s", ts: 1, state: "thinking" }) });
+      expect(r.onMsg).not.toHaveBeenCalled(); // not open yet
+      r.sockets[0].onopen!({});
+      expect(r.onConn).toHaveBeenLastCalledWith("live", 0);
+      expect(r.sockets[0].sent).toEqual([]);
+      expect(r.port.attach).toHaveBeenCalledTimes(1);
+      expect(r.timers).toEqual([]);
+      r.sockets[0].onmessage!({ data: JSON.stringify({ t: "mon", kind: "session", session: "s1", ts: 1, state: "start", lang: "ta", startedAt: 0 }) });
+      const offer = { t: "rtc", kind: "offer", from: "s1", to: "m1", sdp: "v=0" };
+      r.sockets[0].onmessage!({ data: JSON.stringify(offer) });
+      expect(r.onMsg).toHaveBeenCalledTimes(1);
+      expect(r.onMsg.mock.calls[0][0]).toMatchObject({ kind: "session", state: "start", startedAt: 0 });
+      expect(r.port.receive).toHaveBeenCalledWith(offer);
+      const send = r.port.attach.mock.calls[0][0] as (m: unknown) => boolean;
+      expect(send({ t: "rtc", kind: "want", to: "s1" })).toBe(true);
+      expect(r.sockets[0].sent).toEqual([JSON.stringify({ t: "rtc", kind: "want", to: "s1" })]); // the only thing ever sent
+      expect(r.sockets[0].sent.join("")).not.toContain('"auth"');
+      r.stop();
+      expect(r.sockets[0].closed).toBe(true);
+      expect(r.port.detach).toHaveBeenCalled();
+    });
+
+    it("4403 and 1008 are the server's refusal of the page (rejected), before and after the open; 4401 still reads unauthenticated; other closes retry", () => {
+      const a = openRig();
+      a.sockets[0].onclose!({ code: 4403 });
+      expect(a.onConn).toHaveBeenLastCalledWith("rejected", 0);
+      expect(a.sockets).toHaveLength(1);
+      const b = openRig();
+      b.sockets[0].onopen!({});
+      b.sockets[0].onclose!({ code: 4403 });
+      expect(b.onConn).toHaveBeenLastCalledWith("rejected", 0); // never "unauthorized": no account was offered
+      expect(b.timers).toEqual([]);
+      const c = openRig();
+      c.sockets[0].onopen!({});
+      c.sockets[0].onclose!({ code: 1008 });
+      expect(c.onConn).toHaveBeenLastCalledWith("rejected", 0);
+      const d = openRig();
+      d.sockets[0].onclose!({ code: 4401 });
+      expect(d.onConn).toHaveBeenLastCalledWith("unauthenticated", 0);
+      const e = openRig();
+      e.sockets[0].onopen!({});
+      e.sockets[0].onclose!({ code: 1006 });
+      expect(e.onConn).toHaveBeenLastCalledWith("offline", 0);
+      expect(e.timers.map((t) => t.ms)).toEqual([1000]);
+      e.timers[0].fn();
+      e.sockets[1].onopen!({});
+      expect(e.sockets[1].sent).toEqual([]);
+      expect(e.onConn).toHaveBeenLastCalledWith("live", 0);
+    });
   });
 });

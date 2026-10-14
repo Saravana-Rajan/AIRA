@@ -1,6 +1,7 @@
 # Security note: one demo phone on a public URL
 
-AIRA has **no login** in this build (build overrides §1: no Firebase Auth). The `aira-live` service is deployed
+The phone app has **no login** in this build (build overrides §1: no Firebase Auth); the dashboard's live feed is
+the one exception (§2a: a signed-in, listed Google account). The `aira-live` service is deployed
 `--allow-unauthenticated`, and `AIRA_ALLOW_NO_TOKEN=1` makes every accepted `hello` land in the demo shop as its
 owner. That is right for a one-user demo, and it means anyone who finds the Cloud Run URL could try to open the
 WebSocket. Three layers in `backend/aira_live/main.py` and `auth.py` keep that out without a login step.
@@ -53,6 +54,101 @@ So another web page cannot embed or script the demo shop, and a bare script that
 before it can even try a hello. The phone app is a Trusted Web Activity (Chrome) on the hosting site, so its
 Origin is `https://aira-shop.web.app` and the owner never notices the check. For a local run, the Vite dev server
 (`:5173`) and preview (`:4173`) are already allowed. `ws_smoke` sends the hosting site's Origin (`--origin`).
+
+## 2a. The dashboard's live feed (`/monitor`): open by default, Google sign-in as an opt-in
+
+**Default: no authentication.** This is the owner's explicit decision, taken after being told the privacy risk
+twice: with `AIRA_MONITOR_AUTH` unset on the `aira-live` service, **anyone who can open the dashboard address can
+watch the live camera, hear and read the conversations and see every box AIRA draws.** No key, no sign-in, no
+viewer list. What still applies: the Origin allowlist below (which is **not** authentication: a script can send
+any Origin it likes), the shop binding (`?shop=` is optional; in tokenless / demo mode only the demo shop may be
+named) and `MAX_MONITORS_PER_SHOP`. The socket is subscribed as soon as it is open; an `{t:"auth", idToken}`
+message sent anyway is accepted and ignored.
+
+**Opt-in: `AIRA_MONITOR_AUTH=1`** on the `aira-live` service, plus `AIRA_MONITOR_VIEWERS`, the Firebase setup
+in *Owner setup* below, and the dashboard built with `VITE_MONITOR_AUTH=1`, turns the Google sign-in gate back
+on exactly as described in the rest of this section: a viewer signs in with Google on the dashboard (Firebase
+Authentication, in the same Firebase project and with the same `VITE_FIREBASE_*` config the dashboard already
+uses for Firestore) and the server verifies that account itself. There is **no key and no shared secret** in
+either mode (the monitor key was removed by the owner's decision).
+
+How the sign-in works (with `AIRA_MONITOR_AUTH=1`):
+
+1. The browser opens `wss://<aira-live>/monitor?shop=<id>` from the hosting site (the Origin allowlist below).
+2. Its **first message, within 5 s**, is `{t:"auth", idToken}` with the signed-in user's Firebase ID token. The
+   token never goes in the URL, in storage or in a log line.
+3. `aira_live.auth.verify_firebase_user` checks it server-side with the official Google library
+   (`google.oauth2.id_token.verify_firebase_token`: RS256 signature against Google's `securetoken` certificates,
+   which are cached in process for their `Cache-Control: max-age`; `aud` = the Firebase project; `exp` / `iat`)
+   and then `iss` (`https://securetoken.google.com/<project>`), a non-empty `sub` and an `auth_time` that is not
+   in the future. The project is `AIRA_FIREBASE_PROJECT`, else `GCP_PROJECT`.
+4. `aira_live.auth.monitor_viewer_allowed` checks the account against **`AIRA_MONITOR_VIEWERS`**: comma-separated
+   emails (matched lowercased, and only when the token says the email is verified, which a Google sign-in does)
+   or `uid:<Firebase uid>` entries. **Unset or empty = nobody may watch.**
+5. Only then is the socket subscribed: nothing (no session list, no frame, no transcript, no WebRTC signalling)
+   is sent or relayed before. A missing, late, malformed, expired or otherwise invalid token closes the socket
+   with **4401**; a valid token for an account that is not listed closes it with **4403**.
+6. An ID token lives at most an hour. The dashboard refreshes it about five minutes early and sends a fresh
+   `{t:"auth", idToken}` on the same socket; the server verifies it again (same account required) and extends
+   the deadline. Without a refresh the server closes the socket with 4401 at `exp` (+ 30 s grace). A refresh
+   naming a different account closes it too, and every reconnect authenticates from scratch.
+
+The WebRTC signalling relay (`rtc.py`) and the phone's preview stream only ever reach a monitor that passed this
+check (a monitor exists in the relay only after `monitor.subscribe`, which runs after `monitor.authenticate`), so
+the peer-to-peer video and the JPEG frames are behind the same gate. Logs carry a SHA-256 prefix of the uid and
+the outcome, never the token or the email (`diag` also redacts `idToken` / `id_token` at any depth).
+
+### Owner setup for the opt-in sign-in (one time; nothing in the repo can do this for you)
+
+Only needed with `AIRA_MONITOR_AUTH=1`. In that mode, until all of these are done the Live page **fails closed**:
+the server refuses every viewer (4401 / 4403) and the dashboard says sign-in is not configured or not enabled.
+
+1. **Enable Firebase Authentication** for the project: Firebase console → *Build* → *Authentication* → *Get
+   started* → *Sign-in method* → enable the **Google** provider (pick the support email) → Save. (Identity Toolkit
+   currently answers `CONFIGURATION_NOT_FOUND` for this project: this step has not been done yet.)
+2. **Authorized domains** (same page → *Settings* → *Authorized domains*): add `aira-shop.web.app` (the hosting
+   site; `aira-shop.firebaseapp.com` is there by default) and `localhost` for a local dashboard.
+3. **List the viewers** on the `aira-live` Cloud Run service (your approval is needed for a service change):
+   `AIRA_MONITOR_VIEWERS=you@gmail.com,someone@yourshop.in` (or `uid:<uid>` from *Authentication* → *Users*).
+   Set `AIRA_FIREBASE_PROJECT` only if the Firebase project differs from `GCP_PROJECT` (it does not today).
+   Removing an entry stops that account at its next reconnect or token refresh (within an hour at most).
+4. **Dashboard build** with `VITE_MONITOR_AUTH=1`. The Live page then uses the `VITE_FIREBASE_API_KEY`,
+   `VITE_FIREBASE_AUTH_DOMAIN` and `VITE_FIREBASE_PROJECT_ID` that `deploy.yml` already bakes in for Firestore.
+   Without them the page shows "Live Monitor sign-in isn't configured". The sign-in opens a popup and falls back
+   to a redirect (mobile Safari).
+
+| Env var on `aira-live` | Default | Meaning |
+|---|---|---|
+| `AIRA_MONITOR_AUTH` | unset = **no authentication** (the owner's decision) | `1` = the live feed requires the Google sign-in and the viewer list below |
+| `AIRA_MONITOR_VIEWERS` | unset = **nobody** (with `AIRA_MONITOR_AUTH=1`; ignored otherwise) | the Google accounts (emails or `uid:<uid>`) that may watch the live feed |
+| `AIRA_FIREBASE_PROJECT` | `GCP_PROJECT` | the Firebase project whose ID tokens are accepted (`aud` / `iss`) |
+| `AIRA_MONITOR_ORIGINS` (comma-separated; **replaces** the default; `:*` = any port) | `https://aira-shop.web.app,https://aira-shop.firebaseapp.com` | the browser Origin allowlist below |
+
+### Origin allowlist: defence in depth only
+
+`monitor.origin_allowed` still refuses an upgrade whose Origin is missing or off `AIRA_MONITOR_ORIGINS` (the socket
+is accepted and closed with 4403 at once, nothing sent, before any token is read; the code rather than an HTTP 403 so the
+dashboard can say "this address isn't allowed" instead of retrying forever). Localhost is **not** on the default list: for a local dashboard
+set `AIRA_MONITOR_ORIGINS=https://aira-shop.web.app,https://aira-shop.firebaseapp.com,http://localhost:*,http://127.0.0.1:*`
+(see `shared/.env.example`). This is a cross-site-WebSocket guard, not authentication: a tool that sets its own
+`Origin` passes it, and passing it admits nobody; the token check above is the gate only with
+`AIRA_MONITOR_AUTH=1` (by default there is no gate: passing the Origin check is all it takes). The shop is still bound
+(`?shop=` is optional; in tokenless / demo mode only the demo shop may be named) and `MAX_MONITORS_PER_SHOP`
+still caps the watchers.
+
+### What is and is not checked (honestly)
+
+- **Default mode (`AIRA_MONITOR_AUTH` unset): nothing identifies the viewer.** Origin, shop and the cap only.
+- With `AIRA_MONITOR_AUTH=1`, **checked**: signature, issuer, audience, expiry, issued-at, auth time, a verified email for an email entry,
+  and the allowlist; again on every refresh and every reconnect.
+- **Not checked: revocation.** `google-auth` verifies the token itself; it does not ask Firebase whether the
+  session was revoked or the user disabled or deleted (that needs `firebase-admin`'s
+  `verify_id_token(check_revoked=True)`, which is not installed). A revoked or deleted account keeps watching
+  until its current token expires, at most an hour, and cannot get a new one. To cut someone off at once, remove
+  them from `AIRA_MONITOR_VIEWERS` (the next refresh, within the hour, is refused with 4403) and, for a lost
+  device, revoke their sessions in the console.
+- The phone's own `/ws` is unchanged and out of this scope: it has no user login (§1: the shared `AIRA_APP_KEY`
+  as `hello.idToken`, the §2 Origin allowlist and the §3 caps).
 
 ## 3. Session caps
 

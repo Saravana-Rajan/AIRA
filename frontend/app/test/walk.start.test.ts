@@ -4,7 +4,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 const video = { readyState: 4, videoWidth: 1280, videoHeight: 720 };
 const paused = vi.hoisted(() => ({ on: false }));
 vi.mock("../src/camera/capture", () => ({ startCamera: vi.fn(async () => video), detectionPaused: () => paused.on }));
-vi.mock("../src/core/app", () => ({ app: { earcon: vi.fn(), speak: vi.fn(), settings: { lang: "auto" }, lang: () => "en" } }));
+vi.mock("../src/core/app", () => ({ app: { earcon: vi.fn(), speak: vi.fn(), speakUrgent: vi.fn(), settings: { lang: "auto" }, lang: () => "en" } }));
 
 import { grabFrame, startBumpGuard } from "../src/walk/start";
 import { startCamera } from "../src/camera/capture";
@@ -94,13 +94,14 @@ describe("startBumpGuard", () => {
     const g = await startBumpGuard({ detector, onWarn, motion: walkingSensor });
     g.stop();
     const { app } = await import("../src/core/app");
-    vi.mocked(app.speak).mockClear();
+    vi.mocked(app.speakUrgent).mockClear();
     g.process({ ts: 0, floor: null, dets: [{ label: "crate", score: 0.9, box: [300, 200, 800, 420] }] });
     expect(seen).toEqual([]);                       // one frame is not enough
     g.process({ ts: 125, floor: null, dets: [{ label: "crate", score: 0.9, box: [300, 200, 800, 420] }] });
     expect(seen).toEqual(["warn:bump.left_right:vibrated=1"]);
     expect(app.earcon).toHaveBeenCalledWith("warn");
-    expect(app.speak).toHaveBeenCalledWith("Obstacle left");
+    expect(app.speakUrgent).toHaveBeenCalledWith("Obstacle left", expect.objectContaining({ kind: "bump.left_right" }));
+    expect(app.speak).not.toHaveBeenCalledWith("Obstacle left");   // safety lines never take the waiting path
     expect(err).toHaveBeenCalled();
     g.dispose();
     err.mockRestore();

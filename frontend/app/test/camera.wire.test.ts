@@ -40,7 +40,9 @@ import { captureToolFrame, setQualityListener, startContinuous, stopCamera } fro
 import { trackFingertip } from "../src/guidance/hands";
 import { guideTo, stopTone } from "../src/guidance/tones";
 import { startBumpGuard } from "../src/walk/start";
-import { wireCameraAndGuidance, wireCameraIntoApp, BUMP_CHIP_MS, type CameraWiring } from "../src/camera/wire";
+import {
+  wireCameraAndGuidance, wireCameraIntoApp, BUMP_CHIP_MS, SERVER_WALK_MAX_MS, serverWalkChange, type CameraWiring,
+} from "../src/camera/wire";
 import { walkingMode } from "../src/walk/mode";
 
 type Handler = (m: ServerMsg) => void;
@@ -57,7 +59,7 @@ function fakeSocket() {
 }
 
 const SETTINGS: Settings = {
-  lang: "en", verbosity: "short", screenReaderMode: false, speechRate: 1, shopId: "sunrise_dairy", onboarded: true, showBoxes: false,
+  lang: "en", verbosity: "short", screenReaderMode: false, speechRate: 1, onboarded: true, showBoxes: false,
 };
 
 let socket: ReturnType<typeof fakeSocket>;
@@ -473,5 +475,66 @@ describe("wireCameraIntoApp", () => {
     expect(said).toEqual(["5"]);
     p.dispose();
     err.mockRestore();
+  });
+});
+
+describe("server walk keeps the bump guard urgent", () => {
+  const walkStart: ServerMsg = { t: "request_frame", purpose: "walk", continuous: true };
+  const walkStop: ServerMsg = { t: "request_frame", purpose: "walk", stop: true };
+  const withWalk = () => Object.assign(fakeGuard(), { setServerWalk: vi.fn() });
+
+  it("walk start (continuous walk frames) turns server-walk on; its stop turns it off", async () => {
+    const g = withWalk();
+    guardStarter(g);
+    const { w } = fakeWired();
+    const p = wireCameraIntoApp(w as never, { devtools: false });
+    await p.ready;
+    socket.emit(walkStart);
+    expect(g.setServerWalk).toHaveBeenLastCalledWith(true);
+    socket.emit({ t: "request_frame", purpose: "ask" });
+    expect(g.setServerWalk).toHaveBeenCalledTimes(1);
+    socket.emit(walkStop);
+    expect(g.setServerWalk).toHaveBeenLastCalledWith(false);
+    p.dispose();
+  });
+
+  it("a walk that began while the detector loaded is applied when the guard starts; a long-press ends it", async () => {
+    let resolve!: (g: unknown) => void;
+    const g = withWalk();
+    vi.mocked(startBumpGuard).mockImplementation((() => new Promise((r) => { resolve = r; })) as never);
+    const { w } = fakeWired();
+    const p = wireCameraIntoApp(w as never, { devtools: false });
+    socket.emit(walkStart);
+    resolve(g);
+    await p.ready;
+    expect(g.setServerWalk).toHaveBeenLastCalledWith(true);
+    w.onStop();
+    expect(g.setServerWalk).toHaveBeenLastCalledWith(false);
+    p.dispose();
+  });
+
+  it("a new session (ready) or a lost stop past the cap ends the walk", async () => {
+    vi.useFakeTimers();
+    const g = withWalk();
+    guardStarter(g);
+    const { w } = fakeWired();
+    const p = wireCameraIntoApp(w as never, { devtools: false });
+    await p.ready;
+    socket.emit(walkStart);
+    socket.emit({ t: "ready", sessionId: "s", resume: "s", mock: false });
+    expect(g.setServerWalk).toHaveBeenLastCalledWith(false);
+    socket.emit(walkStart);
+    expect(g.setServerWalk).toHaveBeenLastCalledWith(true);
+    vi.advanceTimersByTime(SERVER_WALK_MAX_MS + 1);
+    expect(g.setServerWalk).toHaveBeenLastCalledWith(false);
+    p.dispose();
+  });
+
+  it("serverWalkChange reads only walk frame requests and ready", () => {
+    expect(serverWalkChange(walkStart)).toBe(true);
+    expect(serverWalkChange(walkStop)).toBe(false);
+    expect(serverWalkChange({ t: "request_frame", purpose: "walk" })).toBeNull();
+    expect(serverWalkChange({ t: "request_frame", purpose: "describe", continuous: true })).toBeNull();
+    expect(serverWalkChange({ t: "cue", cue: "warn" })).toBeNull();
   });
 });

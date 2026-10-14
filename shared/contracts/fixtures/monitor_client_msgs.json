@@ -1,0 +1,7 @@
+[
+  {"t":"auth","idToken":"eyJhbGciOiJSUzI1NiIsImtpZCI6ImsxIiwidHlwIjoiSldUIn0.eyJzdWIiOiJ1aWQtMSJ9.c2ln"},
+  {"t":"rtc","kind":"want","to":"s1"},
+  {"t":"rtc","kind":"answer","to":"s1","sdp":"v=0\r\no=- 1 1 IN IP4 127.0.0.1\r\ns=-\r\n"},
+  {"t":"rtc","kind":"ice","to":"s1","candidate":{"candidate":"candidate:1 1 udp 2122260223 192.0.2.1 50000 typ host","sdpMid":"0","sdpMLineIndex":0}},
+  {"t":"rtc","kind":"bye","to":"s1"}
+]

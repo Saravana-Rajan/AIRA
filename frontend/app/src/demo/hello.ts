@@ -1,13 +1,10 @@
 import type { ClientMsg } from "@aira/contracts";
 import { langFromPhone, phoneLanguages } from "../core/lang";
-import { DEMO_SHOP_ID } from "../core/settings";
 import { appKey } from "../core/wire";
 
 type Hello = Extract<ClientMsg, { t: "hello" }>;
 type UidStore = Pick<Storage, "getItem" | "setItem">;
 
-/** The seeded demo shop (overrides §1). The server maps a token-less hello to it. */
-export { DEMO_SHOP_ID };
 const UID_KEY = "aira.demo.uid";
 
 function freshUid(): string {
@@ -34,13 +31,14 @@ export function demoUid(store: UidStore | null = tabStore()): string {
 }
 
 /**
- * The `hello` a judge sends: no user token (overrides §1: no Firebase Auth), only the built-in demo key.
- * `lang` is the browser's locale, a hint for AIRA's first line only: it then follows whoever speaks.
+ * The `hello` a judge sends: no user token (overrides §1: no Firebase Auth), only the built-in demo key, and no
+ * shop: there is one, and the server picks it. `lang` is the browser's locale, a hint for AIRA's first line only:
+ * it then follows whoever speaks.
  */
 export function demoHello(appVersion: string, uid: string = demoUid(), languages: readonly string[] = phoneLanguages()): Hello {
   const key = appKey();
   return {
-    t: "hello", uid, ...(key ? { idToken: key } : {}), shopId: DEMO_SHOP_ID, lang: langFromPhone(languages),
+    t: "hello", uid, ...(key ? { idToken: key } : {}), lang: langFromPhone(languages),
     verbosity: "short", appVersion,
   };
 }

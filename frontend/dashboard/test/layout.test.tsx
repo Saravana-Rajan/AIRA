@@ -52,6 +52,32 @@ describe("Layout", () => {
     expect(text(current[0])).toBe("Stock");
   });
 
+  it("collapses the menu to an icon rail from a button that says what it does, and remembers the choice", () => {
+    localStorage.removeItem("aira.dashboard.menu");
+    const el = view();
+    const btn = el.querySelector<HTMLButtonElement>("button.sidebar__toggle")!;
+    expect(btn.getAttribute("aria-label")).toBe("Collapse menu");
+    expect(el.querySelector(".shell")!.className).not.toContain("shell--compact");
+    act(() => {
+      btn.click();
+    });
+    expect(btn.getAttribute("aria-label")).toBe("Expand menu");
+    expect(el.querySelector(".shell")!.className).toContain("shell--compact");
+    expect(localStorage.getItem("aira.dashboard.menu")).toBe("collapsed");
+    // the active link keeps its name and aria-current on the rail, where only the icon shows
+    const current = el.querySelector("nav a[aria-current='page']")!;
+    expect(current.getAttribute("aria-label")).toBe("Stock");
+    cleanup();
+    const again = view();
+    expect(again.querySelector(".shell")!.className).toContain("shell--compact");
+    expect(again.querySelector("button.sidebar__toggle")!.getAttribute("aria-label")).toBe("Expand menu");
+    act(() => {
+      again.querySelector<HTMLButtonElement>("button.sidebar__toggle")!.click();
+    });
+    expect(localStorage.getItem("aira.dashboard.menu")).toBe("expanded");
+    localStorage.removeItem("aira.dashboard.menu");
+  });
+
   it("has no demo shop banner", () => {
     const el = view();
     expect(text(el)).not.toMatch(/Demo shop/);

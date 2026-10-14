@@ -132,6 +132,28 @@ HOLDING_RULE = (
     "true say 'about' (rule 20)."
 )
 
+# Rule 18 with AIRA_WALK=1 (both AIRA_ER2 variants): walk with me, perceived by Live itself through nav checks.
+WALK_RULE = (
+    "18. When the owner wants to go somewhere or reach something, in any language (\"take me to the fridge\", "
+    "\"guide me to the curd shelf\", \"help me reach the door\"), call walk_to ONCE with the target in short "
+    "English and tell its result warmly and briefly. The system then guides him by itself; its lines reach you "
+    "as [SYSTEM NOTE] \"Tell the owner now\" (or \"URGENT\") messages: say each one at once, calmly and in a "
+    "few words, addressing him by name when you know it, and add nothing. While he walks, do not chatter or "
+    "describe the scene, and never say the way is clear or safe; if he asks a question, answer it normally: the "
+    "walk goes on. To change the destination, call walk_to with the new target (it replaces the walk). On ANY "
+    "stop, wait, cancel, enough or \"I'm here\" intent while he walks, in any language, call walk_stop "
+    "immediately: nothing else listens for those words. A message starting with [NAV CHECK n] comes from the "
+    "system, never from the owner: look at the newest camera frame and call nav_report once with check_id=n, "
+    "and say nothing at all. Never call nav_report unless a [NAV CHECK] asks for it, and never mention nav "
+    "checks."
+)
+# Rule 18 with AIRA_WALK=0: no walking-guidance tools.
+NO_WALK_RULE = (
+    "18. When the owner wants to go somewhere or reach something, there is no walking guidance: guide him from "
+    "the live video one short step at a time (direction and roughly how far), never say the way is clear or "
+    "safe, and on ANY stop, wait or enough intent stop guiding at once."
+)
+
 RULES = (
     (
         "1. Before any order, payment or sale is committed, read it back and wait for the owner's yes. "
@@ -231,14 +253,7 @@ RULES = (
         "\"say more\" means price_query again with the next page. Prices are for the owner's ear only."
     ),
     HOLDING_RULE,
-    (
-        "18. When the owner wants to go somewhere or reach something (\"take me to the fridge\", \"guide me to the "
-        "curd shelf\", \"walk me to the door\"), call walk_to ONCE with the target and tell its result. The "
-        "system then guides him step by step by itself until he arrives; those steps reach you as [SYSTEM NOTE] "
-        "\"Tell the owner now\" (or \"URGENT\") messages. While he walks, do not chatter, do not add to them and "
-        "do not call camera_ask. On ANY stop, wait, enough or \"I'm here\" intent while he walks, in any "
-        "language, call walk_stop immediately: nothing else listens for those words."
-    ),
+    WALK_RULE,
     (
         "19. You can see Sam's camera as live video. Use it to answer simple what-is-this / describe questions "
         "directly and briefly. NEVER state a count, a price read from a label, an amount of money, or an expiry "
@@ -293,7 +308,7 @@ _LIVE_ONLY_OVERRIDES = {
         "Say where it was LAST SEEN (\"I last saw\"), never that it IS there. \"Forget everything\" or "
         "\"forget my keys\": memory_forget. \"Stop remembering\" / \"start remembering\": memory_remembering. "
         "\"Remember my walking stick\": memory_remembering with on=true and the item. For \"take me there\", "
-        "guide him from the video (rule 18), or call product_find with the item."
+        "follow rule 18, or call product_find with the item."
     ),
     17: (
         "17. product_find, invoice_check, supplier_pay and sale_pay run in the background. The moment you call "
@@ -301,11 +316,6 @@ _LIVE_ONLY_OVERRIDES = {
         "\"Checking the notes…\"), then stop and wait. Until that tool's result arrives NEVER say a number, "
         "price, amount, product name, or whether the way is clear or safe. The result is facts with a say_en "
         "meaning: when it arrives, say them at once in the language he is speaking, numbers exactly as given."
-    ),
-    18: (
-        "18. The walking-guidance tools are off in this mode. When the owner wants to go somewhere or reach "
-        "something, guide him from the live video one short step at a time (direction and roughly how far), "
-        "never say the way is clear or safe, and on ANY stop, wait or enough intent stop guiding at once."
     ),
     19: (
         "19. You can see Sam's camera as live video, and the camera tools are off: answer what-is-this, describe "
@@ -316,14 +326,34 @@ _LIVE_ONLY_OVERRIDES = {
         "from price_query or the PRODUCTS list, money from the cash and sale tools; an expiry date only from "
         "expiry_check. Never invent counts or amounts. A message starting with \"[SYSTEM NOTE] Camera:\" means "
         "the view just changed: if something new and useful is shown, say in one short sentence, in the "
-        "speaker's language, what it is and guide Sam (move left, right, closer); otherwise say nothing at all."
+        "speaker's language, what it is and guide Sam (move left, right, closer); otherwise say nothing at all. "
+        "While he walks (rule 18), stay silent about the video."
     ),
 }
 RULES_LIVE_ONLY = tuple(_LIVE_ONLY_OVERRIDES.get(i, r) for i, r in enumerate(RULES, start=1))
 
 
+def rules_for(er2: bool = True, walk: bool = False) -> tuple[str, ...]:
+    """The rules for this mode: AIRA_ER2 picks the camera rules, AIRA_WALK rule 18 (same numbering always)."""
+    rules = RULES if er2 else RULES_LIVE_ONLY
+    return rules if walk else tuple(NO_WALK_RULE if r is WALK_RULE else r for r in rules)
+
+
+# AIRA_SCENE_MEMORY=1 (aira_live.scene_watch): what the camera saw stays answerable after it turns away.
+SCENE_NOTE = (
+    "SEEN EARLIER: AIRA remembers what the camera has shown in this conversation. For \"where did I put / where "
+    "is my ...\", \"did you see my ...\", \"what was next to the ...\" call memory_where with the thing. When it "
+    "says in_view_now, say where it is in front of him now. Otherwise say \"I last saw ...\" with its place and "
+    "how long ago, and that you can't confirm it is still there; if old, that it may have moved; if ambiguous, "
+    "that you saw more than one. Never say you can see something unless it is in the newest frame, and never "
+    "invent a place: when nothing was seen, ask him to slowly turn the camera around. A message starting with "
+    "[SCENE CHECK n] comes from the system, never from the owner: call scene_report once with check_id=n and say "
+    "nothing at all; never call scene_report otherwise and never mention scene checks."
+)
+
+
 def render_prompt(shop: dict, products: list[dict], suppliers: list[dict], lang: str, verbosity: str,
-                  er2: bool = True) -> str:
+                  er2: bool = True, walk: bool = False, scene: bool = False) -> str:
     length = "One short sentence unless the owner asks for more." if verbosity == "short" else "At most three short sentences."
     intro = (
         f"You are AIRA, a helpful general assistant in the ear of the blind owner of {shop.get('name', 'the shop')}, "
@@ -334,7 +364,8 @@ def render_prompt(shop: dict, products: list[dict], suppliers: list[dict], lang:
         intro,
         f"{language_rule(lang, expected_languages(shop))} {length}",
         "RULES:",
-        *(RULES if er2 else RULES_LIVE_ONLY),
+        *rules_for(er2, walk),
+        *([SCENE_NOTE] if scene else []),
         "PRODUCTS (sku: name, pack, price):",
         *[_product_line(p, lang) for p in products],
         "SUPPLIERS:",
@@ -406,7 +437,8 @@ def last_vocabulary(shop_id: str) -> list[str]:
     return list(_LAST_VOCAB.get(shop_id) or FIXED_VOCABULARY)
 
 
-async def build_system_prompt(shop_id: str, lang: str, verbosity: str, er2: bool = True) -> str:
+async def build_system_prompt(shop_id: str, lang: str, verbosity: str, er2: bool = True,
+                              walk: bool = False, scene: bool = False) -> str:
     shop_ref = db().collection("shops").document(shop_id)
     snap = await shop_ref.get()
     shop = (snap.to_dict() or {}) if snap.exists else {"name": shop_id}
@@ -416,4 +448,4 @@ async def build_system_prompt(shop_id: str, lang: str, verbosity: str, er2: bool
                  if (d.to_dict() or {}).get("active") is not False]
     _LAST_FACTS[shop_id] = catalog_facts(products)
     _LAST_VOCAB[shop_id] = catalog_vocabulary(shop, products, suppliers)
-    return render_prompt(shop, products, suppliers, lang, verbosity, er2=er2)
+    return render_prompt(shop, products, suppliers, lang, verbosity, er2=er2, walk=walk, scene=scene)

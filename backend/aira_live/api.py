@@ -1,9 +1,9 @@
 """Read-only HTTP API for the Shop Dashboard (mounted by main.py through OPTIONAL_ROUTERS).
 
-GET /api/forecast?shop=<id> -> {"items": [{sku, name, dailyDemand, onHand, suggestedOrder}, ...],
+GET /api/forecast[?shop=<id>] -> {"items": [{sku, name, dailyDemand, onHand, suggestedOrder}, ...],
                                 "demoHistory": bool}
-  The dashboard's Forecast card (frontend/dashboard/src/lib/forecast.ts). Only the demo shop is served; any other
-  shop id is refused (403). A SKU with no forecast (not enough sales history, mock mode) is left out, so the
+  The dashboard's Forecast card (frontend/dashboard/src/lib/forecast.ts). There is one shop: ``shop`` may be left
+  out (the demo shop, config ``demo_shop_id``); any other shop id is refused (403). A SKU with no forecast (not enough sales history, mock mode) is left out, so the
   card never shows an invented number. Numbers are in the product's selling unit (litres for milk and curd).
   ``demoHistory`` is true when backfilled demo sales (shared/scripts/backfill_demo_sales.py, rows labelled demo:true)
   feed the numbers; the card then says "demo history" instead of presenting them as real shop sales.
@@ -30,8 +30,11 @@ SHOP_ID = r"^[A-Za-z0-9_-]{1,64}$"  # a Firestore doc id with no "/" (no path in
 
 
 @router.get("/api/forecast")
-async def forecast_items(shop: Annotated[str, Query(pattern=SHOP_ID)]) -> dict:
-    if shop != config.load().demo_shop_id:
+async def forecast_items(shop: Annotated[str | None, Query(pattern=SHOP_ID)] = None) -> dict:
+    demo_shop = config.load().demo_shop_id
+    if shop is None:
+        shop = demo_shop  # one shop: the dashboard need not name it
+    elif shop != demo_shop:
         raise HTTPException(status_code=403, detail="only the demo shop is served")
     demand = await forecast.daily_demand_all(shop)  # {} in mock mode or when Firestore can't be read
     demo = await forecast.demo_history(shop)

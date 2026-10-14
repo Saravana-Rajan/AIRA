@@ -39,6 +39,11 @@ export interface BumpGuardDeps {
   /** Sharp warn earcon. */
   earcon: () => void;
   speak: (text: string) => void;
+  /**
+   * The urgent speech path (core/wire speakUrgent): said at once over Live audio. When given, warnings use it
+   * instead of `speak`, with the phrase key and the frame → alert age for the guard_alert diagnostic.
+   */
+  speakUrgent?: (text: string, info: { kind: string; ageMs: number }) => void;
   lang: () => Lang;
   /** Monotonic ms clock, e.g. performance.now(). */
   now: () => number;
@@ -71,6 +76,13 @@ export interface BumpGuard {
   raiseUrgency(forMs?: number): void;
   /** Server messages may only RAISE urgency (`cue: "warn"`); nothing from the server mutes the guard. */
   onServerMsg(m: ServerMsg): void;
+  /**
+   * A server walk ("walk with me", request_frame purpose "walk" continuous) is running: the guard stays in its
+   * urgent sensitivity for the whole walk and counts the owner as walking even when the step counter (or a
+   * missing sensor) says otherwise, and even if walking mode was switched off. Off ⇒ back to normal.
+   */
+  setServerWalk(on: boolean): void;
+  isServerWalk(): boolean;
   /** One detector result → at most one alert. Exposed for tests and the bench. */
   process(r: DetectResult): BumpWarning | null;
   /** Recent frame → vibrate latencies in ms (bench). */
@@ -100,6 +112,8 @@ export function createBumpGuard(deps: BumpGuardDeps): BumpGuard {
   const tracker = createTracker(deps.tracker);
   const floor = deps.floor === false ? null : createFloorCheck(deps.floor);
   let state: BumpState = { ...initialBumpState(), walkingMode: deps.walkingMode ?? true };
+  let ownerMode = deps.walkingMode ?? true;   // the owner's switch; a server walk overrides it while it lasts
+  let serverWalk = false;
   let running = false;
   let busy = false;
   let timer: ReturnType<typeof setTimeout> | null = null;
@@ -112,14 +126,20 @@ export function createBumpGuard(deps: BumpGuardDeps): BumpGuard {
     lat.push(ms);
     if (lat.length > LATENCY_KEEP) lat.shift();
     deps.onLatency?.(ms, c.warn);
+    // The earcon is the instant cue where there is no vibration (iPhone Safari); it plays everywhere.
     try { deps.earcon(); } catch { /* audio problems must not block the phrase */ }
-    deps.speak(bumpText(c.warn.phrase, c.warn.side, deps.lang()));
+    const text = bumpText(c.warn.phrase, c.warn.side, deps.lang());
+    if (deps.speakUrgent) deps.speakUrgent(text, { kind: c.warn.phrase, ageMs: ms });
+    else deps.speak(text);
   }
 
   function process(r: DetectResult): BumpWarning | null {
     const motion = deps.motion;
     const hasSensor = motion?.available === true;
-    state = { ...state, hasSensor, walking: hasSensor ? motion!.isWalking(r.ts) : false };
+    state = serverWalk
+      // A server walk: he is walking (perhaps shuffling slowly), whatever the step counter says.
+      ? raise({ ...state, hasSensor: true, walking: true, walkingMode: true }, r.ts + SERVER_URGENCY_MS)
+      : { ...state, hasSensor, walking: hasSensor ? motion!.isWalking(r.ts) : false, walkingMode: ownerMode };
     const cands: Candidate[] = [];
     const seen = new Set<string>();
     const reports: BoxReport[] = [];
@@ -189,8 +209,19 @@ export function createBumpGuard(deps: BumpGuardDeps): BumpGuard {
     },
     isRunning: () => running,
     setHandNearTarget(near) { state = { ...state, handNearTarget: near }; },
-    setWalkingMode(on) { if (state.walkingMode !== on) state = { ...state, walkingMode: on, streak: {} }; },
-    isWalkingMode: () => state.walkingMode,
+    setWalkingMode(on) {
+      if (ownerMode === on) return;
+      ownerMode = on;
+      if (!serverWalk) state = { ...state, walkingMode: on, streak: {} };
+    },
+    isWalkingMode: () => ownerMode,
+    setServerWalk(on) {
+      if (serverWalk === on) return;
+      serverWalk = on;
+      if (on) state = raise({ ...state, walkingMode: true }, deps.now() + SERVER_URGENCY_MS);
+      else state = { ...state, walkingMode: ownerMode, ...(ownerMode ? {} : { streak: {} }) };
+    },
+    isServerWalk: () => serverWalk,
     raiseUrgency(forMs = SERVER_URGENCY_MS) { state = raise(state, deps.now() + forMs); },
     onServerMsg(m) {
       if (m.t === "cue" && m.cue === "warn") state = raise(state, deps.now() + SERVER_URGENCY_MS);

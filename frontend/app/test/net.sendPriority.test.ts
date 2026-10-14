@@ -154,6 +154,20 @@ describe("the owner's speech goes before video", () => {
     expect(sp.videoYields(10_000 + sp.SPEECH_HOLD_MS + 1)).toBe(false);
   });
 
+  it("during a walk the camera keeps flowing while he speaks; only a mic backlog pauses it", async () => {
+    const sp = await import("../src/net/sendPriority");
+    sp.__resetSendPriority();
+    sp.setWalkVideo(true);
+    sp.noteSpeech(20_000);
+    expect(sp.videoYields(20_000)).toBe(false);                 // his eyes stay open while he talks
+    sp.micMaySend(sp.MIC_PRESSURE_BYTES + 1, 20_000);
+    expect(sp.videoYields(20_000)).toBe(true);                  // but his words are never buried
+    sp.setWalkVideo(false);
+    sp.noteSpeech(30_000);
+    expect(sp.videoYields(30_000)).toBe(true);                  // walk over: speech goes first again
+    sp.__resetSendPriority();
+  });
+
   it("a mic backlog still makes video yield", async () => {
     const sp = await import("../src/net/sendPriority");
     sp.__resetSendPriority();
