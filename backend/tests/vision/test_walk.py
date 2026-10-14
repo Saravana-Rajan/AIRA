@@ -127,13 +127,28 @@ def test_search_memory_once_then_looking_then_not_found():
 
 
 # ---------- speaking ----------
-def test_urgent_lines_are_never_suppressed_but_get_shorter():
+def test_urgent_lines_are_never_dropped_but_a_held_repeat_does_not_chop_the_audio():
     sp = Speech()
     a, b = rep(CHAIR), rep(CHAIR, cid=2)
     ins = decide(b, "fridge", [a, b])
-    assert sp.pick(ins, 0.0) == ins.text
-    assert sp.pick(ins, 1.0) == "Stop. Chair ahead."            # again within 6 s: the short form, not silence
-    assert sp.pick(ins, 8.0) == ins.text
+    assert ins.urgent
+    assert sp.pick(ins, 0.0) == ins.text                        # the stop is said at once
+    assert sp.pick(ins, 1.0) is None                            # same stop, still in view: held, not a fresh copy
+    assert sp.pick(ins, 4.0) is None                            #   over the warning still playing (that cracks)
+    assert sp.pick(ins, 5.5) == "Stop. Chair ahead."            # re-stated in short form after URGENT_REPEAT_S
+    assert sp.pick(ins, 12.0) == ins.text                       # a long gap: the full line again
+
+
+def test_a_new_hazard_cuts_in_during_a_same_hazard_hold():
+    sp = Speech()
+    chair = decide(rep(CHAIR, cid=2), "fridge", [rep(CHAIR), rep(CHAIR, cid=2)])
+    assert chair.urgent
+    assert sp.pick(chair, 0.0) == chair.text
+    assert sp.pick(chair, 1.0) is None                          # the same chair is held
+    person = Obstacle("person", "ahead", True, "large")
+    other = decide(rep(person, cid=3), "fridge", [rep(person, cid=3)])
+    assert other.urgent and other.key != chair.key
+    assert sp.pick(other, 1.5) == other.text                    # a different hazard is never held: it cuts in
 
 
 def test_non_urgent_dedupe_gap_and_new_keys():

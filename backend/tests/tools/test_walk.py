@@ -367,14 +367,17 @@ async def test_a_silent_owner_keeps_getting_checks_and_a_new_obstacle_is_warned(
     assert facts["action"] == "stop" and facts["obstacle"] == "chair"
 
 
-async def test_urgent_hazard_preempts_on_one_report_and_repeats_shorter(session):
+async def test_urgent_hazard_is_said_at_once_held_briefly_then_restated(session):
     s, rec = session
     clock, fb = Clock(), FakeBridge()
     loop = make(s, clock, fb)
     await look(loop, clock, obstacles=STAIRS, path="blocked", target_visible=True, target_side="ahead")
     assert fb.notices == [('{"action": "stop", "hazard": "stairs"} (meaning: Stop. Stairs ahead.)', True)]
+    await look(loop, clock, obstacles=STAIRS, path="blocked")               # same hazard ~2 s later
+    assert len(fb.notices) == 1                                             # held: no fresh copy chopping its audio
+    clock.t += 6.0                                                          # past URGENT_REPEAT_S
     await look(loop, clock, obstacles=STAIRS, path="blocked")
-    assert fb.meanings()[-1] == "Stop. Stairs." and fb.notices[-1][1]       # never suppressed near a hazard
+    assert len(fb.notices) == 2 and fb.notices[-1][1]                       # re-stated, still urgent: never dropped
 
 
 async def test_obstacle_clears_after_two_fresh_reports_then_resume_line(session):
