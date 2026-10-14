@@ -31,6 +31,8 @@ class Settings:
     # AIRA_WALK=1: "walk with me" guidance (walk_to / walk_stop / nav_report), perceived by Gemini Live itself
     # (no Robotics-ER), with AIRA_ER2 on or off. Off by default.
     walk: bool = False
+    # AIRA_OWNER_NAME: how walking stops address the owner ("Sam, stop."). Unset: just "Stop."
+    owner_name: str | None = None
 
 
 def _env(name: str) -> str | None:
@@ -58,4 +60,5 @@ def load() -> Settings:
         precount=os.getenv("AIRA_PRECOUNT", "1") != "0",
         er2=os.getenv("AIRA_ER2", "1") != "0",
         walk=os.getenv("AIRA_WALK", "0") == "1",
+        owner_name=_env("AIRA_OWNER_NAME"),
     )

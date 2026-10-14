@@ -45,6 +45,7 @@ from collections import deque
 from collections.abc import Awaitable, Callable
 from typing import Literal
 
+from aira_live import config
 from aira_live.contracts import CueMsg, RequestFrameMsg, TranscriptMsg
 from aira_live.diag import diag
 from aira_live.session import Session, get_session, notice_key
@@ -123,7 +124,7 @@ class WalkLoop:
         self._clock, self._sleep = clock, sleep
         self._bridge = bridge or (lambda: _bridge_of(session))
         self.checker = checker or NavChecker(self._bridge)
-        self.owner_name: str | None = getattr(session, "owner_name", None) or None
+        self.owner_name: str | None = getattr(session, "owner_name", None) or config.load().owner_name
         self.hazard_label: str | None = None   # what the last stop was for (the resume line names it)
         self.interval_s, self.check_timeout_s, self.max_s = interval_s, check_timeout_s, max_s
         self.started_at = clock()
@@ -219,8 +220,9 @@ class WalkLoop:
         if self.active and self._clock() - self.last_check_at >= CHANGED_CHECK_GAP_S:
             await self.maybe_check("changed")
 
-    async def on_report(self, report: vwalk.NavReport) -> str:
-        """Live's ``nav_report`` for a check: acted on only when it answers the check in flight."""
+    async def on_report(self, report: vwalk.NavReport, *, empty: bool = False) -> str:
+        """Live's ``nav_report`` for a check: acted on only when it answers the check in flight. An ``empty`` one
+        (Live sent only check_id: seen on a real first check) is no observation: it counts as a failed look."""
         if not self.active:
             return "inactive"
         if self.pending is None or report.check_id != self.pending[0]:
@@ -229,6 +231,9 @@ class WalkLoop:
             return "stale"
         _, sent_at, frame_at = self.pending
         self.pending = None
+        if empty:
+            await self._failed("empty")
+            return "empty"
         self.fails = 0
         now = self._clock()
         await self.process(report, now - frame_at, ms=round((now - sent_at) * 1000))
@@ -580,5 +585,7 @@ async def nav_report(target_visible: bool = False,
         report = vwalk.parse_report(loop.target, check_id=check_id, target_visible=target_visible,
                                     target_side=target_side, target_size=target_size, obstacles=obstacles,
                                     path=path, view_ok=view_ok)
-        await loop.on_report(report)
+        empty = (target_visible is False and target_side == "none" and target_size == "none" and not obstacles
+                 and path == "uncertain" and view_ok is True)
+        await loop.on_report(report, empty=empty)
     return {"status": "ok", "retryable": False, "message": ""}

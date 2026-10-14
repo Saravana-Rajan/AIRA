@@ -597,3 +597,31 @@ async def test_full_journey_to_the_fridge(session, no_models, monkeypatch):
         await check(loop, clock)
     assert len(fb.checks) == checks and len(fb.notices) == notices and loop.state == walk.STOPPED
     assert any(isinstance(m, RequestFrameMsg) and m.purpose == "walk" and m.stop for m in rec.msgs)
+
+
+async def test_stop_uses_configured_owner_name_when_session_has_none(session, monkeypatch):
+    """AIRA_OWNER_NAME addresses the owner by name ("Sam, stop."); unset, the stop is just "Stop."."""
+    from aira_live import config
+
+    s, _ = session
+    s.owner_name = None
+    monkeypatch.setenv("AIRA_OWNER_NAME", "Sam")
+    assert walk.WalkLoop(s, "fridge").owner_name == "Sam"
+    monkeypatch.delenv("AIRA_OWNER_NAME")
+    assert config.load().owner_name is None
+    assert walk.WalkLoop(s, "fridge").owner_name is None
+
+
+async def test_an_empty_report_is_a_failed_look_not_an_uncertain_view(session):
+    """Real Live once answered a first check with check_id only: no evidence, so no degraded line at once."""
+    s, rec = session
+    clock, fb = Clock(), FakeBridge()
+    loop = make(s, clock, fb)
+    await look(loop, clock)                              # nav_report(check_id=n) and nothing else
+    assert fb.notices == [] and loop.fails == 1 and loop.pending is None
+    await look(loop, clock, **CLEAR)                     # a real report resets the count
+    assert loop.fails == 0
+    for _ in range(3):
+        await look(loop, clock)
+    assert loop.state == walk.DEGRADED
+    assert fb.meanings() == ["I can't see the path clearly right now. Please stop for a moment."]
