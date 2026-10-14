@@ -54,9 +54,12 @@ def nudge_text(labels: Iterable[str] | None, lang_name: str) -> str:
     seen = labels_key(labels)
     hint = f" (the phone's detector guesses: {seen.replace(',', ', ')})" if seen else ""
     return (f"{NUDGE_PREFIX}: something is being shown to the camera right now{hint}. Look at the latest video "
-            f"frame and say in ONE short sentence, in {lang_name}, what is being shown. Price or stock only from "
-            "your tools: never read a count, a price, money or an expiry date off the video and never invent "
-            "one. If nothing new is being shown, stay silent.")
+            f"frame. SAFETY FIRST: if he is moving toward an obstacle in his path (a chair, table, person, wall, "
+            f"step, pole, open door), warn him at once, unasked, in a few words in {lang_name} (\"Stop, chair "
+            f"right ahead, step left\"), and never say the way is clear or safe. Otherwise say in ONE short "
+            f"sentence, in {lang_name}, what is being shown. Price or stock only from your tools: never read a "
+            "count, a price, money or an expiry date off the video and never invent one. If nothing new is being "
+            "shown, stay silent.")
 
 
 def narrates(bridge: object | None) -> bool:

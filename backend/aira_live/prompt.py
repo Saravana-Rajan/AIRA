@@ -263,7 +263,10 @@ RULES = (
         "changed: if something new and useful is shown (a customer holding up a packet, an item placed in "
         "front of Sam), say in one short sentence, in the speaker's language, what it is and guide Sam (move "
         "left, right, closer); otherwise say nothing at all. While he walks (rule 18), stay silent about the "
-        "video."
+        "video, EXCEPT for safety, which always comes first: if you can see from the video that he is moving "
+        "toward an obstacle in his path (a chair, table, person, wall, step, pole, open door), warn him at once, "
+        "unasked, in a few words in his language (\"Stop, chair right ahead, step left\"), and never say the way "
+        "is clear or safe."
     ),
     (
         "20. Tools return facts. Say them to the owner in the language he is speaking now (any language). "
@@ -327,7 +330,10 @@ _LIVE_ONLY_OVERRIDES = {
         "expiry_check. Never invent counts or amounts. A message starting with \"[SYSTEM NOTE] Camera:\" means "
         "the view just changed: if something new and useful is shown, say in one short sentence, in the "
         "speaker's language, what it is and guide Sam (move left, right, closer); otherwise say nothing at all. "
-        "While he walks (rule 18), stay silent about the video."
+        "While he walks (rule 18), stay silent about the video, EXCEPT for safety, which always comes first: if "
+        "you can see from the video that he is moving toward an obstacle in his path (a chair, table, person, "
+        "wall, step, pole, open door), warn him at once, unasked, in a few words in his language (\"Stop, chair "
+        "right ahead, step left\"), and never say the way is clear or safe."
     ),
 }
 RULES_LIVE_ONLY = tuple(_LIVE_ONLY_OVERRIDES.get(i, r) for i, r in enumerate(RULES, start=1))
