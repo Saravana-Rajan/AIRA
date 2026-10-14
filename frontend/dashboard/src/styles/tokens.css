@@ -41,16 +41,19 @@
    it: a faint white edge, one soft drop shadow, large corners. No pressed-in (inset) relief any more: "inset"
    tokens are kept for the many rules that use them but now draw only a hair-line ring. */
 :root {
-  --neu-bg: #D4D6DC;          /* page (solid fallback); the body paints --page-gradient over it */
-  --page-gradient: linear-gradient(180deg, #D9DBE0, #CFD2D8);
-  --neu-surface: #F1F2F5;     /* panels, cards, chips (solid fallback) */
-  --panel-gradient: linear-gradient(180deg, #F4F5F7, #ECEDF0);
+  --neu-bg: #EDF1F6;          /* page (solid fallback); the body paints --page-gradient over it */
+  --page-gradient: linear-gradient(180deg, #F4F7FB, #E7ECF3);   /* bright, cool light: no dull grey */
+  --neu-surface: #FBFCFD;     /* panels, cards, chips (solid fallback) */
+  --panel-gradient: linear-gradient(180deg, #FFFFFF, #F7F9FC);
   --panel-border: rgba(255, 255, 255, 0.7);
   --neu-bg-sunken: #E7E9ED;   /* table header band, the camera frame */
   --neu-white: #FFFFFF;       /* hover rows, secondary pills, inputs */
   --neu-text: #1F2328;        /* 10.4:1 on the darkest page grey, 13:1 on a panel */
   --neu-text-muted: #4F5663;  /* 4.9:1 on the darkest page grey, 6.2:1 on a panel */
   --neu-table-head: #3A4049;  /* 8.6:1 on --neu-bg-sunken */
+  --table-head-bg: #111317;   /* table header band: the same near-black as the active pill */
+  --table-head-text: #FFFFFF; /* 18:1 on --table-head-bg */
+  --table-border: #D3DAE4;    /* table frame and cell lines */
   --neu-accent: #111317;      /* near-black: primary actions, selected tabs, focus */
   --neu-ok: #0F6630;
   --neu-danger: #A11A10;
@@ -75,8 +78,8 @@
   --side-rail: 76px;           /* the collapsed icon rail */
   --side-margin: 16px;         /* gap between the panel and the window edges */
   --side-radius: 30px;
-  --side-bg-top: #F4F5F7;
-  --side-bg-bottom: #ECEDF0;
+  --side-bg-top: #FFFFFF;
+  --side-bg-bottom: #F7F9FC;
   --side-border: rgba(255, 255, 255, 0.7);
   --side-shadow: 0 10px 30px rgba(20, 24, 31, 0.08);
   --side-divider: rgba(31, 35, 40, 0.1);
