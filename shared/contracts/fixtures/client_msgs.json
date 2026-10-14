@@ -1,6 +1,6 @@
 [
   {"t":"hello","uid":"u1","shopId":"sunrise_dairy","lang":"ta","verbosity":"short","appVersion":"0.1.0"},
-  {"t":"hello","uid":"u1","shopId":"sunrise_dairy","lang":"en","verbosity":"detail","appVersion":"0.1.0","resume":"s1"},
+  {"t":"hello","uid":"u1","lang":"en","verbosity":"detail","appVersion":"0.1.0","resume":"s1"},
   {"t":"audio","pcm16":"AAAA"},
   {"t":"frame","id":"f1","jpeg":"/9j/4AAQ","w":640,"h":480,"ts":1760000000000,"purpose":"count"},
   {"t":"frame","id":"f2","jpeg":"/9j/4AAQ","w":1280,"h":720,"ts":1760000000400,"purpose":"cash"},

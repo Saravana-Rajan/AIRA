@@ -684,6 +684,11 @@ async def _handle_report(loop: WalkLoop, args: dict) -> None:
     try:
         a["check_id"] = int(a["check_id"])
         report = vwalk.parse_report(loop.target, **a)
+        obstacles = [o for o in (a["obstacles"] or []) if isinstance(o, dict) and o.get("label")]
+        if obstacles:   # what the walk saw on the floor stays answerable later ("where was the box?")
+            loop.session.scene_memory.observe(
+                [{"name": o["label"], "on": "the floor", "side": o.get("side")} for o in obstacles],
+                replace_view=False)
         empty = all(a[k] == d for k, d in _REPORT_DEFAULTS.items() if k not in ("check_id", "obstacles")) \
             and not a["obstacles"]
         await loop.on_report(report, empty=empty)

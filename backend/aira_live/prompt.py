@@ -339,8 +339,21 @@ def rules_for(er2: bool = True, walk: bool = False) -> tuple[str, ...]:
     return rules if walk else tuple(NO_WALK_RULE if r is WALK_RULE else r for r in rules)
 
 
+# AIRA_SCENE_MEMORY=1 (aira_live.scene_watch): what the camera saw stays answerable after it turns away.
+SCENE_NOTE = (
+    "SEEN EARLIER: AIRA remembers what the camera has shown in this conversation. For \"where did I put / where "
+    "is my ...\", \"did you see my ...\", \"what was next to the ...\" call memory_where with the thing. When it "
+    "says in_view_now, say where it is in front of him now. Otherwise say \"I last saw ...\" with its place and "
+    "how long ago, and that you can't confirm it is still there; if old, that it may have moved; if ambiguous, "
+    "that you saw more than one. Never say you can see something unless it is in the newest frame, and never "
+    "invent a place: when nothing was seen, ask him to slowly turn the camera around. A message starting with "
+    "[SCENE CHECK n] comes from the system, never from the owner: call scene_report once with check_id=n and say "
+    "nothing at all; never call scene_report otherwise and never mention scene checks."
+)
+
+
 def render_prompt(shop: dict, products: list[dict], suppliers: list[dict], lang: str, verbosity: str,
-                  er2: bool = True, walk: bool = False) -> str:
+                  er2: bool = True, walk: bool = False, scene: bool = False) -> str:
     length = "One short sentence unless the owner asks for more." if verbosity == "short" else "At most three short sentences."
     intro = (
         f"You are AIRA, a helpful general assistant in the ear of the blind owner of {shop.get('name', 'the shop')}, "
@@ -352,6 +365,7 @@ def render_prompt(shop: dict, products: list[dict], suppliers: list[dict], lang:
         f"{language_rule(lang, expected_languages(shop))} {length}",
         "RULES:",
         *rules_for(er2, walk),
+        *([SCENE_NOTE] if scene else []),
         "PRODUCTS (sku: name, pack, price):",
         *[_product_line(p, lang) for p in products],
         "SUPPLIERS:",
@@ -424,7 +438,7 @@ def last_vocabulary(shop_id: str) -> list[str]:
 
 
 async def build_system_prompt(shop_id: str, lang: str, verbosity: str, er2: bool = True,
-                              walk: bool = False) -> str:
+                              walk: bool = False, scene: bool = False) -> str:
     shop_ref = db().collection("shops").document(shop_id)
     snap = await shop_ref.get()
     shop = (snap.to_dict() or {}) if snap.exists else {"name": shop_id}
@@ -434,4 +448,4 @@ async def build_system_prompt(shop_id: str, lang: str, verbosity: str, er2: bool
                  if (d.to_dict() or {}).get("active") is not False]
     _LAST_FACTS[shop_id] = catalog_facts(products)
     _LAST_VOCAB[shop_id] = catalog_vocabulary(shop, products, suppliers)
-    return render_prompt(shop, products, suppliers, lang, verbosity, er2=er2, walk=walk)
+    return render_prompt(shop, products, suppliers, lang, verbosity, er2=er2, walk=walk, scene=scene)

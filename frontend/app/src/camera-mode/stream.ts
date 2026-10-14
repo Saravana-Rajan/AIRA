@@ -32,8 +32,7 @@ export function normalizeCameraName(raw: string): string {
 export function cameraHello(name: string, settings: Settings): Hello {
   return {
     t: "hello",
-    uid: CAMERA_UID_PREFIX + normalizeCameraName(name),
-    shopId: settings.shopId,
+    uid: CAMERA_UID_PREFIX + normalizeCameraName(name), // no shopId: the server picks the one shop
     lang: settings.lang === "auto" ? langFromPhone(phoneLanguages()) : settings.lang,
     verbosity: "short",
     appVersion: APP_VERSION,

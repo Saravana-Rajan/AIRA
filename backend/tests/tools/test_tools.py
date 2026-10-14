@@ -32,6 +32,8 @@ EXPECTED = {
     # the walk's perception: Live answers a [NAV CHECK] with it (tools/walk.py; SILENT response)
     "nav_report": ["target_visible", "target_side", "target_size", "obstacles", "path", "view_ok", "check_id"],
     "scene_recall": ["item"],  # what AIRA last counted, with age and evidence (tools/camera.py; read-only)
+    # Live's silent answer to a [SCENE CHECK]: what it sees, for the last-seen memory (tools/memory.py)
+    "scene_report": ["check_id", "items"],
 }
 
 OPTIONAL_DEFAULTS = {
@@ -50,6 +52,7 @@ OPTIONAL_DEFAULTS = {
     ("nav_report", "target_visible"): False, ("nav_report", "target_side"): "none",
     ("nav_report", "target_size"): "none", ("nav_report", "obstacles"): None,
     ("nav_report", "path"): "uncertain", ("nav_report", "view_ok"): True, ("nav_report", "check_id"): 0,
+    ("scene_report", "check_id"): 0, ("scene_report", "items"): None,
 }
 
 LITERALS = {

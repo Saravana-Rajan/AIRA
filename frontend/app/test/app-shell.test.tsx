@@ -75,7 +75,7 @@ describe("AppShell", () => {
     act(() => { render(<AppShell deviceCheck={null} wire={wire} onWired={onWired} wsUrl="ws://x/ws" languages={["ta-IN"]} initial={{ ...DEFAULT_SETTINGS }} />, root); });
     act(() => { startBtn().click(); });
     expect(wire).toHaveBeenCalledTimes(1);
-    expect(wire.mock.calls[0][0]).toMatchObject({ wsUrl: "ws://x/ws", settings: { lang: "auto", shopId: "sunrise_dairy", onboarded: true } });
+    expect(wire.mock.calls[0][0]).toMatchObject({ wsUrl: "ws://x/ws", settings: { lang: "auto", onboarded: true } });
     expect(onWired).toHaveBeenCalledWith(f.w);
     // ONE gesture surface; the only other button is the helper's "Hide camera" toggle, outside it
     const buttons = root.querySelectorAll("button");
@@ -155,7 +155,7 @@ describe("AppShell: hands-free start", () => {
     act(() => { render(<AppShell deviceCheck={null} wire={wire} onWired={onWired} autoStart languages={["ta-IN"]} initial={ONBOARDED} />, root); });
     await settle();
     expect(wire).toHaveBeenCalledTimes(1);
-    expect(wire.mock.calls[0][0].settings).toMatchObject({ onboarded: true, shopId: "sunrise_dairy" });
+    expect(wire.mock.calls[0][0].settings).toMatchObject({ onboarded: true });
     expect(onWired).toHaveBeenCalledWith(f.w);
     expect(f.raw.startListening).toHaveBeenCalledTimes(1);
     expect(root.querySelector("button.onboard__start")).toBeNull();

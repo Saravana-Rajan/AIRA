@@ -710,13 +710,25 @@ def test_monitor_refused_when_auth_is_late(monkeypatch):
     assert not monitor.monitored(SHOP)
 
 
-@pytest.mark.parametrize("query", ["", f"key={KEY}"])
-def test_monitor_refused_without_a_shop(monkeypatch, query):
+@pytest.mark.parametrize("query", ["", f"key={KEY}", "shop="])
+def test_monitor_without_a_shop_watches_the_demo_shop(monkeypatch, query):
+    """One shop: ``?shop=`` is optional; left out, the demo shop is watched (the key is still that shop's)."""
     monkeypatch.setenv("AIRA_MONITOR_KEY", "m-secret")
-    with pytest.raises(WebSocketDisconnect) as closed:
-        with TestClient(main_mod.app).websocket_connect(f"/monitor?{query}", headers=ORIGIN):
-            pass
+    with TestClient(main_mod.app).websocket_connect(f"/monitor?{query}", headers=ORIGIN) as mon:
+        mon.send_json(AUTH)
+        _wait(lambda: monitor.monitored(SHOP))
+        assert monitor.monitors(SHOP) == 1
+    _wait(lambda: not monitor.monitored(SHOP))
+
+
+def test_monitor_without_a_shop_still_needs_the_demo_shop_key(monkeypatch):
+    monkeypatch.setenv("AIRA_MONITOR_KEY", "m-secret")
+    with TestClient(main_mod.app).websocket_connect("/monitor", headers=ORIGIN) as mon:
+        mon.send_json({"t": "auth", "key": OTHER_KEY})
+        with pytest.raises(WebSocketDisconnect) as closed:
+            mon.receive_json()
     assert closed.value.code == 4403
+    assert not monitor.monitored(SHOP)
 
 
 def test_monitor_refused_for_a_shop_that_is_not_the_demo_shop(monkeypatch):

@@ -81,8 +81,33 @@ async def test_forecast_refuses_other_shops_and_bad_ids(store, demand):
     async with client() as c:
         other = await c.get("/api/forecast", params={"shop": "other_shop"})
         path = await c.get("/api/forecast", params={"shop": "../x"})
+        empty = await c.get("/api/forecast", params={"shop": ""})
+    assert other.status_code == 403 and path.status_code == 422 and empty.status_code == 422
+
+
+async def test_forecast_without_a_shop_param_serves_the_demo_shop(store, demand):
+    """One shop: the dashboard need not name it. The answer is the demo shop's, the same as with ?shop=<demo>."""
+    async with client() as c:
         none = await c.get("/api/forecast")
-    assert other.status_code == 403 and path.status_code == 422 and none.status_code == 422
+        named = await c.get("/api/forecast", params={"shop": DEMO})
+    assert none.status_code == 200 and none.json() == named.json()
+    assert none.json()["items"][0]["sku"] == CURD
+
+
+async def test_forecast_without_a_shop_param_follows_the_configured_demo_shop(store, monkeypatch):
+    asked = []
+
+    async def fake(shop_id, *, ops=False):
+        asked.append(shop_id)
+        return {}
+
+    monkeypatch.setattr(forecast, "daily_demand_all", fake)
+    monkeypatch.setenv("AIRA_DEMO_SHOP", "other_shop")
+    async with client() as c:
+        none = await c.get("/api/forecast")
+        old = await c.get("/api/forecast", params={"shop": DEMO})
+    assert none.status_code == 200 and none.json()["items"] == [] and asked == ["other_shop"]
+    assert old.status_code == 403  # a shop value that is not the configured one is still refused
 
 
 async def test_forecast_is_empty_without_history(store, monkeypatch):

@@ -90,7 +90,7 @@ class HelloMsg(_ClientWire):
     t: Literal["hello"]
     uid: StrictStr
     id_token: Optional[StrictStr] = None  # unused: no Firebase Auth (server checks AIRA_ALLOW_NO_TOKEN)
-    shop_id: StrictStr
+    shop_id: Optional[StrictStr] = None  # deprecated: ignored, the server picks the one shop (auth.verify_hello)
     lang: Lang
     verbosity: Verbosity
     app_version: StrictStr
@@ -343,7 +343,8 @@ ServerMsg = Annotated[
     Field(discriminator="t"),
 ]
 
-# ---------- server -> monitor (GET /monitor?shop=<id>, then {t:"auth", key}; read-only) ----------
+# ---------- server -> monitor (GET /monitor[?shop=<id>], then {t:"auth", key}; read-only) ----------
+# There is one shop: ``shop`` may be left out (config demo_shop_id); any other value is refused.
 # Mirrors the MonitorMsg union in messages.ts and shared/contracts/fixtures/monitor_msgs.json.
 # Every message is {t:"mon", kind, session, ts, ...}; ``jpeg_b64`` keeps its snake_case name on the wire.
 MonitorRole = Literal["owner", "customer", "aira"]

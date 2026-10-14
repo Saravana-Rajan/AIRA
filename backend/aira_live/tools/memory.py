@@ -6,6 +6,7 @@ always "I last saw", never "it is": a sighting is not proof the item is still th
 """
 from __future__ import annotations
 
+from aira_live.diag import diag
 from aira_live.memory import items
 from aira_live.session import get_session
 
@@ -26,6 +27,10 @@ async def memory_where(item: str) -> dict:
     the landmark, then product_find with the item.
     """
     s = get_session()
+    scene = getattr(s, "scene_memory", None)
+    seen = scene.recall(item) if scene is not None else {"found": False}
+    if seen["found"]:   # seen in this conversation (scene_report): in view now, or where it was last seen
+        return seen
     cfg = await items.settings(s.shop_id)
     name = await _item(item, cfg["items"])
     now = items._utcnow()
@@ -70,3 +75,20 @@ async def memory_remembering(on: bool, item: str | None = None) -> dict:
     else:
         say_en = "Okay. I stopped remembering. Nothing new will be saved."
     return {"ok": True, "remembering": bool(on), "item": name, "say_en": say_en}
+
+
+async def scene_report(check_id: int = 0, items: list[dict] | None = None) -> dict:
+    """System only: call it ONLY when a "[SCENE CHECK n]" message asks, once, with check_id=n, and never speak
+    about it. List the objects you can clearly see in the newest camera frame that the owner might ask about
+    later, each as {name, on: what it is on or in, near: [what is next to it], side: left|ahead|right}. Only what
+    you clearly see; an empty list when nothing is clear. Never guess."""
+    from aira_live import scene_watch
+
+    s = get_session()
+    try:
+        if scene_watch.watcher(s.session_id).accept(check_id):
+            n = s.scene_memory.observe(items or []) if getattr(s, "scene_memory", None) is not None else 0
+            diag("scene_report", session=s.session_id, check=check_id, objects=n)
+    except Exception:   # noqa: BLE001 - never an error inside the Live run loop
+        diag("scene_report", severity="WARNING", session=s.session_id, check=check_id, error=True)
+    return {"status": "ok", "retryable": False, "message": ""}

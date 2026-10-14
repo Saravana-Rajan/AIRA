@@ -29,8 +29,8 @@ log = logging.getLogger(__name__)
 # AIRA's walking prompt in front of it, in most of them ("ahead, clear_in_view").
 NAV_SYSTEM = (
     "THIS SESSION: you are only the camera checker of a walking aid for a blind shop owner. You receive his "
-    "chest camera as live video. You never speak and nobody hears you. When a message starts with [NAV CHECK n], look at the newest "
-    "camera frame and call nav_report exactly once with check_id=n. Report only what you can see; never guess a "
+    "chest camera as live video. You never speak and nobody hears you. When a message starts with "
+    "[NAV CHECK n], look at the newest camera frame and call nav_report exactly once with check_id=n. Report only what you can see; never guess a "
     "side, a size or a clear path: when unsure, path is uncertain. Do nothing else."
 )
 OPEN_TIMEOUT_S = 8.0

@@ -6,7 +6,9 @@ import { Onboarding, shopName } from "./Onboarding";
 import { Screen } from "./Screen";
 import { ScreenReaderRegion } from "./ScreenReaderRegion";
 import { BoxOverlay } from "./BoxOverlay";
-import { CameraPreview, CameraToggle, usePreviewShown } from "./CameraPreview";
+import { CameraPreview, CameraToggle, useCameraOn, useFullScreen, usePreviewShown } from "./CameraPreview";
+import { FullScreenButton, LiveScreen } from "./LiveScreen";
+import { getVideo } from "../camera/capture";
 import type { ScreenState } from "./screenState";
 import { statusLabel, type CountProgress } from "./view";
 import { LABELS, STRINGS } from "../i18n/strings";
@@ -92,6 +94,10 @@ type Props = {
    * voice and the AI must see through the camera before anything is wired. null skips it (tests of the wiring).
    */
   deviceCheck?: ((p: DeviceCheckProps) => JSX.Element) | null;
+  /** The shared camera <video> (default: camera/capture getVideo()); tests inject one with a stream. */
+  cameraVideo?: () => HTMLVideoElement | null;
+  /** How often the camera is looked for (ms). */
+  cameraPollMs?: number;
 };
 
 /** Best-effort local speech for the Start screen (no wiring yet); silent where blocked or unsupported. */
@@ -129,7 +135,10 @@ function unlockInTap(): void {
  * (status chip, voice orb, captions, task card) plus the screen-reader live region.
  * main.tsx only has to render <AppShell />.
  */
-export function AppShell({ wire = wireApp, wsUrl, connect, initial, languages, onWired, autoStart, deviceCheck = DeviceCheck }: Props) {
+export function AppShell({
+  wire = wireApp, wsUrl, connect, initial, languages, onWired, autoStart, deviceCheck = DeviceCheck,
+  cameraVideo = getVideo, cameraPollMs = 1000,
+}: Props) {
   const [saved] = useState<Settings>(() => initial ?? loadSettings());
   const [w, setW] = useState<WiredApp | null>(null);
   const [settings, setSettings] = useState<Settings>(saved);
@@ -142,6 +151,8 @@ export function AppShell({ wire = wireApp, wsUrl, connect, initial, languages, o
   const Check = deviceCheck;
   const view = useWiredView(w);
   const [previewShown, togglePreview] = usePreviewShown();
+  const [fullScreen, toggleFullScreen] = useFullScreen();
+  const cameraOn = useCameraOn(cameraVideo, cameraPollMs);
 
   useEffect(() => () => { w?.dispose(); }, [w]);
 
@@ -249,21 +260,50 @@ export function AppShell({ wire = wireApp, wsUrl, connect, initial, languages, o
   }
 
   const v = view ?? w.view.get();
+  const state = localizeStatus(v.screen, v.lang, v.progress);
+
+  // While the camera runs (and the helper has not hidden it or left full screen), the live picture is the whole
+  // screen and the chip, captions and controls float over it (ui/LiveScreen). Otherwise the phone column.
+  if (previewShown && fullScreen && cameraOn) {
+    return (
+      <>
+        <ScreenReaderRegion />
+        <LiveScreen
+          state={state}
+          level={v.level}
+          lang={v.lang}
+          progress={v.progress}
+          confirmPending={v.confirmPending}
+          preview={<CameraPreview fill video={cameraVideo} pollMs={cameraPollMs} />}
+          previewShown={previewShown}
+          onTogglePreview={togglePreview}
+          onTalk={w.onTalk}
+          onStop={w.onStop}
+          onExit={toggleFullScreen}
+        />
+      </>
+    );
+  }
+
   return (
     <>
       <ScreenReaderRegion />
       <Screen
-        state={localizeStatus(v.screen, v.lang, v.progress)}
+        state={state}
         level={v.level}
         shopName={shopName(settings.shopId)}
         lang={v.lang}
         progress={v.progress}
         confirmPending={v.confirmPending}
-        preview={previewShown ? <CameraPreview /> : null}
+        preview={previewShown ? <CameraPreview video={cameraVideo} pollMs={cameraPollMs} /> : null}
         onTalk={w.onTalk}
         onStop={w.onStop}
       />
-      <CameraToggle shown={previewShown} onToggle={togglePreview} />
+      <div class="cam-controls">
+        {/* Back into full screen: only once the camera runs (there is nothing to fill the screen with before). */}
+        {previewShown && cameraOn && !fullScreen ? <FullScreenButton onClick={toggleFullScreen} /> : null}
+        <CameraToggle shown={previewShown} onToggle={togglePreview} />
+      </div>
       {/* The small corner preview only when the big card is hidden: never two previews at once. */}
       {settings.showBoxes && !previewShown && <BoxOverlay />}
     </>

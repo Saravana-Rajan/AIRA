@@ -1,13 +1,14 @@
 import { describe, it, expect, vi } from "vitest";
 import type { ClientMsg } from "@aira/contracts";
-import { demoHello, demoUid, DEMO_SHOP_ID } from "../src/demo/hello";
+import { demoHello, demoUid } from "../src/demo/hello";
 import { connectDemo, demoWireOpts } from "../src/demo/connectDemo";
 
-describe("demo hello (overrides §1: no Firebase Auth, shop sunrise_dairy)", () => {
-  it("joins the seeded demo shop without an ID token", () => {
+describe("demo hello (overrides §1: no Firebase Auth, one shop picked by the server)", () => {
+  it("joins the seeded demo shop without an ID token and without naming a shop", () => {
     const h = demoHello("0.1.0", "judge-abc");
-    expect(h).toEqual({ t: "hello", uid: "judge-abc", shopId: "sunrise_dairy", lang: "en", verbosity: "short", appVersion: "0.1.0" });
+    expect(h).toEqual({ t: "hello", uid: "judge-abc", lang: "en", verbosity: "short", appVersion: "0.1.0" });
     expect("idToken" in h).toBe(false);
+    expect("shopId" in h).toBe(false);
   });
 
   it("the hello language is only a hint for the first line: the judge's browser locale, English otherwise", () => {
@@ -22,7 +23,6 @@ describe("demo hello (overrides §1: no Firebase Auth, shop sunrise_dairy)", () 
     } finally {
       vi.unstubAllEnvs();
     }
-    expect(DEMO_SHOP_ID).toBe("sunrise_dairy");
   });
 
   it("keeps one judge uid per tab and survives blocked storage", () => {
@@ -47,7 +47,8 @@ describe("connectDemo", () => {
     };
     await connectDemo("0.1.0", socket);
     expect(calls).toEqual(["close", "connect"]);
-    expect(hello).toMatchObject({ t: "hello", shopId: "sunrise_dairy", lang: "en", appVersion: "0.1.0" });
+    expect(hello).toMatchObject({ t: "hello", lang: "en", appVersion: "0.1.0" });
+    expect(hello).not.toHaveProperty("shopId");
     expect(hello!.uid).toMatch(/^judge-/);
   });
 
@@ -61,7 +62,8 @@ describe("demoWireOpts", () => {
     const o = demoWireOpts("ws://test/ws");
     expect(o.connect).toBe(false);
     expect(o.wsUrl).toBe("ws://test/ws");
-    expect(o.settings).toMatchObject({ shopId: "sunrise_dairy", lang: "auto", verbosity: "short", onboarded: true });
+    expect(o.settings).toMatchObject({ lang: "auto", verbosity: "short", onboarded: true });
+    expect(o.settings).not.toHaveProperty("shopId");
     // The owner's saved settings and offline ops on this browser are never touched.
     expect(o.env?.storage).toBeNull();
     expect(await o.env!.queueStore!().all()).toEqual([]);

@@ -15,8 +15,11 @@ export interface Settings {
   screenReaderMode: boolean;
   /** 0.5–2.0. Applies only to text the client speaks itself (local status, fallbacks). */
   speechRate: number;
-  /** "sunrise_dairy" by default (the demo shop). */
-  shopId: string;
+  /**
+   * @deprecated There is one shop and the server picks it; the app never sets or sends this. Only read (and
+   * ignored) by older code paths; an old saved value is dropped on load.
+   */
+  shopId?: string;
   onboarded: boolean;
   /** Draw the MediaPipe and ER 2 boxes over a small camera preview (for sighted helpers and the video). Off by default. */
   showBoxes: boolean;

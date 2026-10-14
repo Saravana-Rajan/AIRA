@@ -103,6 +103,13 @@ describe("contract fixtures", () => {
     expect(hellos.some((m) => m.idToken === undefined)).toBe(true);
   });
 
+  it("hello is valid without a shopId (one shop: the server picks it; an old client may still send one)", () => {
+    const hellos = client.filter((m) => m.t === "hello");
+    expect(hellos.some((m) => m.shopId === undefined)).toBe(true);
+    expect(hellos.some((m) => m.shopId === "sunrise_dairy")).toBe(true);
+    expect(isClientMsg({ t: "hello", uid: "u", lang: "ta", verbosity: "short", appVersion: "0" })).toBe(true);
+  });
+
   it("rejects unknown types, bad purposes and out-of-range points", () => {
     expect(isClientMsg({ t: "nope" })).toBe(false);
     expect(isClientMsg({ t: "frame", id: "f", jpeg: "x", w: 1, h: 1, ts: 1, purpose: "selfie" })).toBe(false);
@@ -117,7 +124,7 @@ describe("contract fixtures", () => {
     expect(isClientMsg(null)).toBe(false);
     expect(isClientMsg([])).toBe(false);
     expect(isClientMsg("hello")).toBe(false);
-    expect(isClientMsg({ t: "hello", uid: "u", lang: "ta", verbosity: "short", appVersion: "0" })).toBe(false);
+    expect(isClientMsg({ t: "hello", uid: "u", lang: "ta", verbosity: "short", appVersion: "0", shopId: 5 })).toBe(false);
     expect(isClientMsg({ t: "hello", uid: "u", shopId: "s", lang: "fr", verbosity: "short", appVersion: "0" })).toBe(false);
     expect(isClientMsg({ t: "hello", uid: "u", shopId: "s", lang: "ta", verbosity: "short", appVersion: "0", idToken: 5 })).toBe(false);
     expect(isClientMsg({ t: "confirm", id: "c", answer: "maybe" })).toBe(false);

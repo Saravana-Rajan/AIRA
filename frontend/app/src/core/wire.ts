@@ -799,8 +799,7 @@ export function wireApp(opts: WireOpts): WiredApp {
     socket.connect({
       t: "hello",
       uid: deviceUid(env.storage),
-      ...(key ? { idToken: key } : {}),
-      shopId: settings.shopId,
+      ...(key ? { idToken: key } : {}), // no shopId: there is one shop and the server picks it
       lang: uiLang, // only a hint for the first line; AIRA then follows the speaker
       verbosity: settings.verbosity,
       appVersion: APP_VERSION,

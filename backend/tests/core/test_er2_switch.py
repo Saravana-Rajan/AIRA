@@ -14,7 +14,7 @@ def test_er2_is_on_by_default(monkeypatch):
 
 
 def test_active_tools_keeps_everything_with_er2_and_drops_the_er_tools_without():
-    assert [f.__name__ for f in active_tools(True, walk=True)] == [f.__name__ for f in TOOL_FUNCS]
+    assert [f.__name__ for f in active_tools(True, walk=True, scene=True)] == [f.__name__ for f in TOOL_FUNCS]
     names = {f.__name__ for f in active_tools(False)}
     assert not names & ER_TOOLS
     assert {"sale_start", "price_query", "stock_query", "web_search"} <= names

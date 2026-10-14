@@ -35,7 +35,7 @@ describe("camera name and hello", () => {
     expect(h.lang).toBe("ta");
     expect(h.verbosity).toBe("short");
     expect("idToken" in h).toBe(false);
-    expect(h.shopId).toBe(DEFAULT_SETTINGS.shopId);
+    expect("shopId" in h).toBe(false); // one shop: the server picks it
   });
 });
 

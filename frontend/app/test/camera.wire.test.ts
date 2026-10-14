@@ -59,7 +59,7 @@ function fakeSocket() {
 }
 
 const SETTINGS: Settings = {
-  lang: "en", verbosity: "short", screenReaderMode: false, speechRate: 1, shopId: "sunrise_dairy", onboarded: true, showBoxes: false,
+  lang: "en", verbosity: "short", screenReaderMode: false, speechRate: 1, onboarded: true, showBoxes: false,
 };
 
 let socket: ReturnType<typeof fakeSocket>;

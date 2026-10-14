@@ -2,7 +2,8 @@ import { LANGS, type Lang } from "@aira/contracts";
 import type { Settings } from "./types";
 
 export const SETTINGS_KEY = "aira.settings";
-export const DEMO_SHOP_ID = "sunrise_dairy";
+/** The one shop this build serves, as shown on screen. Its id lives on the server (config demo_shop_id). */
+export const SHOP_NAME = "Sunrise Dairy";
 
 /** Treat as read-only: copy it (`{ ...DEFAULT_SETTINGS }`) before changing anything. */
 export const DEFAULT_SETTINGS: Readonly<Settings> = {
@@ -11,7 +12,6 @@ export const DEFAULT_SETTINGS: Readonly<Settings> = {
   verbosity: "short",
   screenReaderMode: false,
   speechRate: 1,
-  shopId: DEMO_SHOP_ID,
   onboarded: false,
   showBoxes: false,
 };
@@ -42,16 +42,17 @@ export function loadSettings(store: Storage | null = defaultStore()): Settings {
     verbosity: r.verbosity === "detail" ? "detail" : "short",
     screenReaderMode: r.screenReaderMode === true,
     speechRate: clampRate(r.speechRate),
-    shopId: typeof r.shopId === "string" && r.shopId ? r.shopId : DEFAULT_SETTINGS.shopId,
+    // an older build's shopId is dropped: there is one shop and the server picks it
     onboarded: r.onboarded === true,
     showBoxes: r.showBoxes === true,
   };
 }
 
-/** Persists settings (speechRate clamped). Storage failures are ignored: settings stay in memory. */
+/** Persists settings (speechRate clamped, no shopId). Storage failures are ignored: settings stay in memory. */
 export function saveSettings(s: Settings, store: Storage | null = defaultStore()): void {
   try {
-    store?.setItem(SETTINGS_KEY, JSON.stringify({ ...s, speechRate: clampRate(s.speechRate) }));
+    const { shopId: _dropped, ...rest } = s;
+    store?.setItem(SETTINGS_KEY, JSON.stringify({ ...rest, speechRate: clampRate(s.speechRate) }));
   } catch {
     /* private mode or quota: keep going with in-memory settings */
   }

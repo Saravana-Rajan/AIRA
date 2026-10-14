@@ -21,7 +21,7 @@ from aira_live import main as main_mod
 from aira_live.system_lines import line as t
 from aira_live.live_bridge import NOTICE_PREFIX, LiveEvent
 from aira_live.tool_runtime import live_tools
-from aira_live.tools import NON_BLOCKING_TOOLS, TOOL_FUNCS, WALK_TOOLS
+from aira_live.tools import NON_BLOCKING_TOOLS, SCENE_TOOLS, TOOL_FUNCS, WALK_TOOLS
 
 DEMO = "sunrise_dairy"
 HELLO = {"t": "hello", "uid": "u1", "shopId": DEMO, "lang": "en", "verbosity": "short", "appVersion": "0.1.0"}
@@ -157,6 +157,13 @@ async def test_mock_mode_without_token_lands_in_the_demo_shop():
     assert r.shop_id == DEMO and r.uid == "dev"
 
 
+async def test_hello_without_a_shop_id_lands_in_the_demo_shop(monkeypatch):
+    """One shop: a hello that names no shop is served the demo shop like every other."""
+    monkeypatch.setenv("AIRA_ALLOW_NO_TOKEN", "1")
+    assert await auth.verify_hello(None, "u1", None, mock=False) == auth.AuthResult(uid="u1", shop_id=DEMO, role="owner")
+    assert (await auth.verify_hello(None, "u1", mock=True)).shop_id == DEMO
+
+
 @pytest.mark.parametrize("token", [None, ""])
 async def test_no_token_is_refused_when_tokenless_mode_is_off(token):
     with pytest.raises(auth.AuthError):
@@ -270,6 +277,16 @@ def test_real_mode_tokenless_hello_ignores_the_client_shop(real_mode):
         assert ready["sessionId"] in _registered(DEMO) and _registered("other_shop") == []
 
 
+def test_real_mode_hello_without_shop_id_uses_the_demo_shop(real_mode):
+    hello = {k: v for k, v in HELLO.items() if k != "shopId"}
+    with TestClient(main_mod.app).websocket_connect("/ws", headers=ORIGIN) as ws:
+        ws.send_json(hello)
+        ready = ws.receive_json()
+        assert ready["t"] == "ready" and ready["mock"] is False
+        assert real_mode[0].system_prompt == f"prompt for {DEMO}"
+        assert ready["sessionId"] in _registered(DEMO)
+
+
 def test_hello_without_token_is_refused_and_closed_when_tokenless_mode_is_off(real_mode, monkeypatch):
     monkeypatch.delenv("AIRA_ALLOW_NO_TOKEN")
     with TestClient(main_mod.app).websocket_connect("/ws", headers=ORIGIN) as ws:
@@ -288,9 +305,9 @@ def test_ws_real_mode_wires_bridge_audio_text_and_transcripts(real_mode):
         sid = ready["sessionId"]
         fb = real_mode[0]
         assert ready["t"] == "ready" and ready["mock"] is False
-        # AIRA_WALK is off by default: every tool but the walk ones (tests/tools/test_walk.py covers AIRA_WALK=1)
+        # AIRA_WALK and AIRA_SCENE_MEMORY are off by default: every tool but the walk and scene-report ones
         assert sorted(_tool_name(x) for x in fb.tools) == sorted(f.__name__ for f in TOOL_FUNCS
-                                                                 if f.__name__ not in WALK_TOOLS)
+                                                                 if f.__name__ not in WALK_TOOLS | SCENE_TOOLS)
         ws.send_json({"t": "audio", "pcm16": base64.b64encode(b"\x00\x01").decode()})
         _wait(lambda: fb.sent_audio)
         assert fb.sent_audio == [b"\x00\x01"]

@@ -36,6 +36,9 @@ class Settings:
     # AIRA_WALK_NAV_SESSION (on unless "0"): a walk gets its own navigation-only Live session (aira_live.nav_session)
     # so it keeps seeing while the owner talks; "0" checks through the conversation session in quiet moments only.
     walk_nav_session: bool = True
+    # AIRA_SCENE_MEMORY=1: Live silently reports what it sees (scene_report) so AIRA can say where it last saw
+    # something after the camera turned away (aira_live.scene_watch / scene_memory). Off by default.
+    scene_memory: bool = False
 
 
 def _env(name: str) -> str | None:
@@ -65,4 +68,5 @@ def load() -> Settings:
         walk=os.getenv("AIRA_WALK", "0") == "1",
         owner_name=_env("AIRA_OWNER_NAME"),
         walk_nav_session=os.getenv("AIRA_WALK_NAV_SESSION", "1") != "0",
+        scene_memory=os.getenv("AIRA_SCENE_MEMORY", "0") == "1",
     )

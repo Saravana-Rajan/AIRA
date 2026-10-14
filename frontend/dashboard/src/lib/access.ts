@@ -1,34 +1,16 @@
-// Pure access resolution for the Shop Dashboard.
-// Build overrides: no Firebase Auth. One owner runs one shop, so every visitor is signed out
-// and reads sunrise_dairy, read-only, as its owner. The family branch stays for a later
-// signed-in mode and is never reached in this build.
+// Access for the Shop Dashboard. Build overrides: no Firebase Auth. There is one shop, so every visitor
+// reads it, read-only, as its owner; nothing in the URL or a user record can point the page elsewhere.
 
+/** The one shop's Firestore id (shops/{id}/...), the same value aira-live serves as its demo shop. */
 export const DEMO_SHOP_ID = "sunrise_dairy";
+/** The one shop's display name (header, menu, Live page, phone app). */
+export const SHOP_NAME = "Sunrise Dairy";
 
-export type AccessRole = "owner" | "family";
+export type AccessRole = "owner";
 
-export type Access =
-  | { mode: "demo"; shopId: typeof DEMO_SHOP_ID; role: "owner" }
-  | { mode: "family"; shopId: string; uid: string; role: AccessRole }
-  | { mode: "denied"; reason: string };
+export type Access = { mode: "demo"; shopId: typeof DEMO_SHOP_ID; role: AccessRole };
 
-const NO_SHOP = "No shop is linked to this account.";
-
-function demo(): Access {
+/** Always the one shop as its owner. The argument (an older signature's sign-in state) is ignored. */
+export function resolveAccess(_input?: unknown): Access {
   return { mode: "demo", shopId: DEMO_SHOP_ID, role: "owner" };
-}
-
-export function resolveAccess(input: {
-  uid: string | null;
-  userDoc: { shopId?: string; role?: string } | null;
-  wantDemo: boolean;
-}): Access {
-  // Signed-out visitors (and ?demo=1) only ever get the demo shop, whatever else is asked for.
-  if (input.wantDemo || !input.uid) return demo();
-  const doc = input.userDoc;
-  if (doc?.role === "demo") return demo();
-  if (doc && (doc.role === "owner" || doc.role === "family") && doc.shopId) {
-    return { mode: "family", shopId: doc.shopId, uid: input.uid, role: doc.role };
-  }
-  return { mode: "denied", reason: NO_SHOP };
 }

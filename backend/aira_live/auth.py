@@ -3,7 +3,7 @@
 There is one user and one shop. A ``hello`` is accepted only in mock mode or when ``AIRA_ALLOW_NO_TOKEN=1`` (set
 on the deployed service), and it always lands in the configured demo shop (env ``AIRA_DEMO_SHOP``, default
 ``sunrise_dairy``) as its owner. The ``shopId`` the client sends is ignored, so no phone can reach another
-shop's data by naming it.
+shop's data by naming it (newer clients send no ``shopId`` at all).
 
 Without Firebase Auth there is no user identity to verify. What keeps a stranger with the URL out is the shared
 demo key: when ``AIRA_APP_KEY`` is set (Secret Manager ``aira-app-key``), ``hello.idToken`` must equal it. The
@@ -38,13 +38,15 @@ def _app_key_ok(id_token: str | None, app_key: str) -> bool:
     return bool(id_token) and hmac.compare_digest(id_token.encode(), app_key.encode())
 
 
-async def verify_hello(id_token: str | None, uid: str, shop_id: str, mock: bool) -> AuthResult:
-    """Accept a ``hello`` into the demo shop, or raise ``AuthError`` (the socket then gets ``error/permission``)."""
+async def verify_hello(id_token: str | None, uid: str, shop_id: str | None = None, mock: bool = False) -> AuthResult:
+    """Accept a ``hello`` into the demo shop, or raise ``AuthError`` (the socket then gets ``error/permission``).
+
+    ``shop_id`` is what an older client put in ``hello.shopId``; it is never used to pick the shop."""
     settings = config.load()
     if not (mock or settings.allow_no_token):
         raise AuthError("hello refused: tokenless mode is off and there is no Firebase Auth to check a token")
     if not mock and settings.app_key and not _app_key_ok(id_token, settings.app_key):
         raise AuthError("hello refused: idToken does not match AIRA_APP_KEY")
-    if shop_id != settings.demo_shop_id:
+    if shop_id and shop_id != settings.demo_shop_id:  # an old client naming another shop: served the one shop
         log.info("hello for shop %r served as demo shop %r", shop_id, settings.demo_shop_id)
     return AuthResult(uid=uid, shop_id=settings.demo_shop_id, role="owner")

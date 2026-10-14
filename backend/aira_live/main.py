@@ -215,7 +215,8 @@ async def _ambient_hook(name: str, *args) -> None:
 
 
 async def live_frame(session: Session, bridge: LiveBridge | None, frame: Frame, *, video: bool,
-                     changed: bool = False, labels: list[str] | None = None, precount_on: bool = False) -> bool:
+                     changed: bool = False, labels: list[str] | None = None, precount_on: bool = False,
+                     scene_on: bool = False) -> bool:
     """A ``live`` frame (the 1 fps camera video): cached as the session's newest frame for the tools
     (``Session.latest_frame``), then forwarded into Gemini Live when ``video`` (AIRA_LIVE_VIDEO) is on and a
     bridge runs. Never stored in the tool ring buffer and never relayed to the monitor: the dashboard has its
@@ -234,6 +235,8 @@ async def live_frame(session: Session, bridge: LiveBridge | None, frame: Frame, 
     sent = await bridge.video.offer(bridge, frame.jpeg_b64, changed=changed, labels=labels)
     if sent and session.walking:  # walk with me: Live just got a new picture (a "changed" one asks for a check)
         await _lane_hook("aira_live.tools.walk", "on_live_frame", session, changed, frame.jpeg_b64)
+    if sent and scene_on:  # scene memory: a quiet moment after a scene change asks Live, silently, what it sees
+        await _lane_hook("aira_live.scene_watch", "on_live_frame", session, bridge, changed)
     return sent
 
 
@@ -251,9 +254,11 @@ async def _start_live(session: Session, resume_handle: str | None = None) -> Liv
         settings = config.load()
         er2 = settings.er2  # AIRA_ER2=0: Live-only test mode, no Robotics-ER tools
         walk = settings.walk  # AIRA_WALK=1: walk with me (Live-only perception), with or without ER2
+        scene = settings.scene_memory  # AIRA_SCENE_MEMORY=1: Live silently reports what it sees
         prompt = await build_system_prompt(session.shop_id, session.lang, session.verbosity,
-                                           **({} if er2 else {"er2": False}), **({"walk": True} if walk else {}))
-        tools = live_tools(active_tools(er2, walk), session, NON_BLOCKING_TOOLS, SILENT_TOOLS)
+                                           **({} if er2 else {"er2": False}), **({"walk": True} if walk else {}),
+                                           **({"scene": True} if scene else {}))
+        tools = live_tools(active_tools(er2, walk, scene), session, NON_BLOCKING_TOOLS, SILENT_TOOLS)
         bridge = LiveBridge(session, lambda: app.state.backend_factory(session), prompt, tools,
                             resume_handle=resume_handle, live_nudge=_live_nudge_on())
         await bridge.start()
@@ -280,6 +285,7 @@ async def _end_session(session: Session, bridge: LiveBridge | None) -> None:
     precount.forget(session.session_id)
     tool_runtime.end_session(session.session_id)  # running tool calls cancelled, their results dropped
     await _lane_hook("aira_live.tools.walk", "stop_session", session)
+    await _lane_hook("aira_live.scene_watch", "forget", session.session_id)
     if bridge is not None:
         await bridge.close()
     monitor.session_ended(session)
@@ -340,7 +346,7 @@ async def ws_endpoint(ws: WebSocket) -> None:
                 continue
 
             if isinstance(msg, HelloMsg):
-                try:  # the client's shopId is never trusted: verify_hello picks the shop
+                try:  # the client's shopId (optional, deprecated) is never trusted: verify_hello picks the shop
                     who = await verify_hello(msg.id_token, msg.uid, msg.shop_id, settings.mock)
                 except AuthError as exc:
                     log.warning("hello refused: %s", exc)
@@ -417,7 +423,8 @@ async def ws_endpoint(ws: WebSocket) -> None:
                     continue
                 if msg.purpose == live_video.PURPOSE:
                     await live_frame(session, bridge, frame, video=settings.live_video,
-                                     changed=bool(msg.changed), labels=msg.labels, precount_on=settings.precount and settings.er2)
+                                     changed=bool(msg.changed), labels=msg.labels, precount_on=settings.precount and settings.er2,
+                                     scene_on=settings.scene_memory)
                     continue
                 stored = session.frames.add(frame)  # "stale"/"too_old"/"duplicate": never given to a tool
                 diag("frame", session=session.session_id, purpose=msg.purpose, id=msg.id, bytes=len(msg.jpeg),
@@ -470,10 +477,11 @@ async def ws_endpoint(ws: WebSocket) -> None:
 
 @app.websocket("/monitor")
 async def monitor_endpoint(ws: WebSocket) -> None:
-    """``GET /monitor?shop=<id>``, then ``{t:"auth", key}``: the dashboard's read-only live feed of one shop.
+    """``GET /monitor[?shop=<id>]``, then ``{t:"auth", key}``: the dashboard's read-only live feed of one shop.
 
-    Guards, in order: the browser Origin allowlist (like ``/ws``), a ``shop`` that may be watched (in tokenless /
-    demo mode only ``AIRA_DEMO_SHOP``: ``monitor.shop_allowed``) and ``monitor.MAX_MONITORS_PER_SHOP`` (each
+    Guards, in order: the browser Origin allowlist (like ``/ws``), a ``shop`` that may be watched (there is one
+    shop: left out it is ``AIRA_DEMO_SHOP``; in tokenless / demo mode only that shop may be named:
+    ``monitor.shop_allowed``) and ``monitor.MAX_MONITORS_PER_SHOP`` (each
     refusal closes with 4403 before the handshake), then the first message: ``{t:"auth", key}`` within
     ``monitor.AUTH_TIMEOUT_S``, compared in constant time to that shop's key, ``monitor.shop_key`` =
     HMAC(``AIRA_MONITOR_KEY``, shop) (with the env unset nobody gets in; a key for another shop is refused). A
@@ -485,11 +493,7 @@ async def monitor_endpoint(ws: WebSocket) -> None:
         log.warning("monitor refused: origin %r is missing or not in AIRA_ALLOWED_ORIGINS", origin)
         await ws.close(code=4403)
         return
-    shop = (ws.query_params.get("shop") or "").strip()
-    if not shop:
-        log.warning("monitor refused: no shop")
-        await ws.close(code=4403)
-        return
+    shop = (ws.query_params.get("shop") or "").strip() or config.load().demo_shop_id  # one shop: naming it is optional
     if not monitor.shop_allowed(shop):
         log.warning("monitor refused: shop %r is not the demo shop", shop)
         await ws.close(code=4403)

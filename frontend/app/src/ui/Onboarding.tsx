@@ -3,15 +3,15 @@ import { useEffect, useRef, useState } from "preact/hooks";
 import type { Lang } from "@aira/contracts";
 import type { Settings } from "../core/types";
 import { langFromPhone, phoneLanguages } from "../core/lang";
-import { DEFAULT_SETTINGS, DEMO_SHOP_ID } from "../core/settings";
+import { DEFAULT_SETTINGS, SHOP_NAME } from "../core/settings";
 import { ONBOARDING } from "../i18n/strings";
 import { VoiceOrb } from "./VoiceOrb";
 
 export { langFromPhone };
 
-/** Shop names shown on screen. One user, one shop in this build. */
-export const SHOP_NAMES: Record<string, string> = { [DEMO_SHOP_ID]: "Sunrise Dairy" };
-export const shopName = (id: string): string => SHOP_NAMES[id] ?? id;
+export { SHOP_NAME };
+/** The shop name shown on screen. One user, one shop in this build; the id argument is legacy and ignored. */
+export const shopName = (_id?: string): string => SHOP_NAME;
 
 type Props = {
   onDone(s: Settings): void;
@@ -49,7 +49,7 @@ export function Onboarding({ onDone, initial, languages }: Props) {
   const finish = () => {
     if (done.current) return; // a double tap must not run setup twice
     done.current = true;
-    onDone({ ...base, screenReaderMode: srMode, showBoxes, shopId: base.shopId || DEMO_SHOP_ID, onboarded: true });
+    onDone({ ...base, screenReaderMode: srMode, showBoxes, onboarded: true });
   };
 
   const t = (k: keyof typeof ONBOARDING) => ONBOARDING[k][lang];
@@ -61,7 +61,7 @@ export function Onboarding({ onDone, initial, languages }: Props) {
           <img class="onboard__logo" src="/icons/aira-logo-192.png" alt="" width={40} height={40} />
           <span class="onboard__titles">
             <h1 class="onboard__title">AIRA</h1>
-            <span class="onboard__shop">{shopName(base.shopId || DEMO_SHOP_ID)}</span>
+            <span class="onboard__shop">{shopName()}</span>
           </span>
         </header>
 

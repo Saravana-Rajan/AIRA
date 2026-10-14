@@ -32,10 +32,8 @@ export interface AppProps {
 const TICK_MS = 60_000;
 
 export function App({ listen, loadForecast, resolveEvidence = publicEvidenceUrl, now = Date.now }: AppProps) {
-  // No sign-in in this build: every visitor gets the read-only demo shop, whatever the URL asks for.
-  const [access] = useState(() =>
-    resolveAccess({ uid: null, userDoc: null, wantDemo: new URLSearchParams(location.search).get("demo") === "1" }),
-  );
+  // No sign-in in this build: every visitor gets the one shop, read-only, whatever the URL asks for.
+  const [access] = useState(() => resolveAccess());
   const [route, setRoute] = useState<Route>(() => parseRoute(location.hash) ?? "#/");
   const [data, setData] = useState<ShopData | null>(null);
   const [status, setStatus] = useState<LiveStatus>("connecting");
@@ -43,7 +41,7 @@ export function App({ listen, loadForecast, resolveEvidence = publicEvidenceUrl,
   const [clock, setClock] = useState(now);
   const [forecast, setForecast] = useState<Forecast | null>(null);
   const [forecastLoading, setForecastLoading] = useState(true);
-  const shopId = access.mode === "denied" ? null : access.shopId;
+  const shopId = access.shopId;
 
   useEffect(() => {
     const onHash = () => {
@@ -57,7 +55,6 @@ export function App({ listen, loadForecast, resolveEvidence = publicEvidenceUrl,
   }, []);
 
   useEffect(() => {
-    if (!shopId) return;
     return listen(
       shopId,
       (d) => {
@@ -71,7 +68,6 @@ export function App({ listen, loadForecast, resolveEvidence = publicEvidenceUrl,
   }, [shopId]);
 
   useEffect(() => {
-    if (!shopId) return;
     let alive = true;
     setForecastLoading(true);
     loadForecast(shopId)
@@ -93,16 +89,8 @@ export function App({ listen, loadForecast, resolveEvidence = publicEvidenceUrl,
 
   const views = useMemo(() => (data ? buildViews(data, clock) : null), [data, clock]);
   // The Live page listens to aira-live's /monitor channel only while it is open.
-  const monitor = useMonitor(route === "#/live" && access.mode !== "denied", shopId);
+  const monitor = useMonitor(route === "#/live", shopId);
   const [record, setRecord] = useState(false);
-
-  if (access.mode === "denied") {
-    return (
-      <main id="main" class="main main--single">
-        <p role="alert" class="notice notice--error">{access.reason}</p>
-      </main>
-    );
-  }
 
   const forecastPage = (
     <ForecastPage items={forecast?.items ?? null} demoHistory={forecast?.demoHistory ?? false} loading={forecastLoading} />
@@ -110,7 +98,7 @@ export function App({ listen, loadForecast, resolveEvidence = publicEvidenceUrl,
   let body;
   if (route === "#/forecast") body = forecastPage;
   else if (route === "#/live") {
-    body = <LivePage state={monitor.state} conn={monitor.conn} video={monitor.video} keyNeeded={monitor.keyNeeded} configured={monitor.configured} onKey={monitor.setKey} onFollow={monitor.follow} record={record} onRecord={setRecord} shopName={shopName(shopId)} />;
+    body = <LivePage state={monitor.state} conn={monitor.conn} video={monitor.video} keyNeeded={monitor.keyNeeded} configured={monitor.configured} onKey={monitor.setKey} onFollow={monitor.follow} record={record} onRecord={setRecord} shopName={shopName()} />;
   }
   else if (!views) {
     body =

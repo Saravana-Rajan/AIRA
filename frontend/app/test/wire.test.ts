@@ -97,13 +97,14 @@ const flush = async () => { for (let i = 0; i < 10; i++) await Promise.resolve()
 const CONFIRM: ServerMsg = { t: "confirm", id: "c1", kind: "sale", prompt: "Sell 2 Sakthi curd for 120 rupees?" };
 
 describe("wireApp: connection", () => {
-  it("says hello for the demo shop with a stable device uid, and no idToken when no app key is built in", () => {
+  it("says hello with a stable device uid and no shop, and no idToken when no app key is built in", () => {
     vi.stubEnv("VITE_AIRA_APP_KEY", "");
     const storage = new MemStorage();
     const a = setup({ storage, settings: { lang: "ta" } });
     const h = a.socket.hello!;
-    expect(h).toMatchObject({ t: "hello", shopId: "sunrise_dairy", lang: "ta", verbosity: "short" });
+    expect(h).toMatchObject({ t: "hello", lang: "ta", verbosity: "short" });
     expect("idToken" in h).toBe(false);
+    expect("shopId" in h).toBe(false); // one shop: the server picks it
     expect(h.uid).toMatch(/^owner-/);
     expect(a.socket.url).toBe("ws://test/ws");
     const b = setup({ storage });

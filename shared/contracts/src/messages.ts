@@ -17,7 +17,8 @@ export type BoxObject = { label: string; box: Box; score?: number; severity?: Bo
 
 // ---------- client -> server ----------
 export type ClientMsg =
-  | { t: "hello"; uid: string; idToken?: string; shopId: string; lang: Lang; verbosity: Verbosity; appVersion: string; resume?: string }
+  // shopId: deprecated and ignored by the server (there is one shop; the server picks it). Older clients may still send it.
+  | { t: "hello"; uid: string; idToken?: string; shopId?: string; lang: Lang; verbosity: Verbosity; appVersion: string; resume?: string }
   | { t: "audio"; pcm16: string }
   // `changed`/`labels` only on purpose "live": the view settled on something new (labels: the phone's own
   // detector labels, at most MAX_FRAME_LABELS), so the server may nudge Live to speak up.
@@ -149,7 +150,7 @@ export function isClientMsg(x: unknown): x is ClientMsg {
   if (!isObj(x) || !inList(CLIENT_MSG_TYPES, x.t)) return false;
   switch (x.t as ClientMsgType) {
     case "hello":
-      return isStr(x.uid) && optional(x.idToken, isStr) && isStr(x.shopId) && inList(LANGS, x.lang) &&
+      return isStr(x.uid) && optional(x.idToken, isStr) && optional(x.shopId, isStr) && inList(LANGS, x.lang) &&
         inList(VERBOSITIES, x.verbosity) && isStr(x.appVersion) && optional(x.resume, isStr);
     case "audio":
       return isStr(x.pcm16);
@@ -231,7 +232,8 @@ export function parseClientMsg(raw: string): ClientMsg | null {
   }
 }
 
-// ---------- server -> monitor (GET /monitor?shop=<id>, then {t:"auth", key}; read-only) ----------
+// ---------- server -> monitor (GET /monitor[?shop=<id>], then {t:"auth", key}; read-only) ----------
+// There is one shop: `shop` may be left out (the server's demo shop); any other value is refused.
 // A projector view of one shop's live sessions. Every message is {t:"mon", kind, session, ts, ...}.
 // The monitor's first and only message is {t:"auth", key}: the server closes with 4403 when the key is wrong,
 // missing or late (5 s), and publishes nothing before it. The key never travels in the URL.
