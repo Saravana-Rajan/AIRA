@@ -65,6 +65,16 @@ describe("request_frame handler", () => {
     expect(s.stops).toEqual(["describe"]);                                 // guide keeps running
   });
 
+  it("a walk request is only a signal: no walk frame stream starts, and its stop is harmless", async () => {
+    const s = setup();
+    await s.handle({ t: "request_frame", purpose: "walk", continuous: true });
+    expect(s.deps.startContinuous).not.toHaveBeenCalled();
+    expect(s.deps.capture).not.toHaveBeenCalled();
+    expect(s.sent).toEqual([]);
+    await s.handle({ t: "request_frame", purpose: "walk", stop: true });
+    expect(s.stops).toEqual([]);
+  });
+
   it("the monitor preview streams at 8 frames a second and stops like any other purpose", async () => {
     expect(PREVIEW_FPS).toBe(8);
     expect(continuousFps("preview")).toBe(PREVIEW_FPS);
