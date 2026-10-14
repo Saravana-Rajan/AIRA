@@ -15,7 +15,7 @@ from aira_live.tools.products import location_remember, product_find, product_id
 from aira_live.tools.sales import sale_add, sale_start
 from aira_live.tools.search import web_search
 from aira_live.tools.stock import expiry_check, stock_query
-from aira_live.tools.walk import walk_stop, walk_to
+from aira_live.tools.walk import nav_report, walk_stop, walk_to
 
 TOOL_FUNCS: list[Callable[..., Awaitable[dict]]] = [
     order_create, order_status, delivery_start, delivery_count, invoice_check,
@@ -28,20 +28,27 @@ TOOL_FUNCS: list[Callable[..., Awaitable[dict]]] = [
     # catalog by voice (confirm-gated: each proposes, then commits after the owner's yes)
     product_add, product_update, product_disable, stock_add, supplier_add,
     price_query,  # the owner's price board, spoken (read-only: prices come from the products in Firestore)
-    walk_to, walk_stop,  # "walk with me": continuous guidance to a place (background loop, read-only)
+    walk_to, walk_stop, nav_report,  # "walk with me": guidance from Live's own video (background loop, read-only)
     scene_recall,  # what was last counted, with age and evidence (read-only, not ER: also in Live-only mode)
 ]
 TOOLS_BY_NAME: dict[str, Callable[..., Awaitable[dict]]] = {f.__name__: f for f in TOOL_FUNCS}
-# Tools that work through Robotics-ER (camera questions, identification, walking, narration, delivery counts).
+# Tools that work through Robotics-ER (camera questions, identification, narration, delivery counts).
 # AIRA_ER2=0 leaves them out so Gemini Live answers from its own video (config.Settings.er2).
 ER_TOOLS: frozenset[str] = frozenset({
-    "camera_ask", "product_identify", "walk_to", "walk_stop", "describe_mode", "delivery_count",
+    "camera_ask", "product_identify", "describe_mode", "delivery_count",
 })
+# "Walk with me" (tools.walk): Gemini Live only, no Robotics-ER. Gated by AIRA_WALK (config.Settings.walk,
+# default off), independent of AIRA_ER2.
+WALK_TOOLS: frozenset[str] = frozenset({"walk_to", "walk_stop", "nav_report"})
+# Responses scheduled SILENT (and NON_BLOCKING): nav_report answers a [NAV CHECK]; Live never speaks it.
+SILENT_TOOLS: frozenset[str] = frozenset({"nav_report"})
 
 
-def active_tools(er2: bool = True) -> list[Callable[..., Awaitable[dict]]]:
-    """The Live tool list: every tool, or without the Robotics-ER ones in the Live-only test mode."""
-    return list(TOOL_FUNCS) if er2 else [f for f in TOOL_FUNCS if f.__name__ not in ER_TOOLS]
+def active_tools(er2: bool = True, walk: bool = False) -> list[Callable[..., Awaitable[dict]]]:
+    """The Live tool list: without the Robotics-ER tools when ``er2`` is off (the Live-only mode) and without
+    the walk tools when ``walk`` is off."""
+    off = (frozenset() if er2 else ER_TOOLS) | (frozenset() if walk else WALK_TOOLS)
+    return [f for f in TOOL_FUNCS if f.__name__ not in off]
 # Live tools that run in the background (Live NON_BLOCKING behaviour): the conversation goes on while
 # delivery_count streams counts, sale_pay waits for the soundbox, walk_to starts the walk loop, and every camera / vision tool that takes
 # over ~1.5 s (frames + a model call) runs while AIRA says a short holding line, so the owner hears AIRA within

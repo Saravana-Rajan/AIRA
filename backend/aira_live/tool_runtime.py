@@ -235,18 +235,28 @@ def wrap_tool(fn: Callable[..., Any], session: Session) -> ToolFn:
 
 
 def live_tools(fns: list[Callable[..., Any]], session: Session,
-               non_blocking: frozenset[str] = frozenset()) -> list:
+               non_blocking: frozenset[str] = frozenset(), silent: frozenset[str] = frozenset()) -> list:
     """The tools handed to the Live agent for ``session``, each wrapped by ``wrap_tool``.
 
     A tool named in ``non_blocking`` becomes an ADK ``FunctionTool`` with Live behaviour ``NON_BLOCKING``, so
     the model keeps talking while it runs. Its result is scheduled ``WHEN_IDLE`` (spoken as soon as the holding
     line ends), or ``INTERRUPT`` when it is a path / safety result (``is_urgent``): that one cuts in at once.
-    The others stay plain callables (ADK wraps them itself).
+    A tool named in ``silent`` (the walk's ``nav_report``: a system observation, never spoken) is also
+    NON_BLOCKING and its response is always scheduled ``SILENT``. The others stay plain callables (ADK wraps
+    them itself).
     """
     out: list = []
     for fn in fns:
         wrapped = wrap_tool(fn, session)
-        if fn.__name__ in non_blocking:
+        if fn.__name__ in silent:
+            from google.adk.tools import FunctionTool
+            from google.genai import types
+
+            tool = FunctionTool(_silent(wrapped))
+            tool.behavior = types.Behavior.NON_BLOCKING
+            tool.response_scheduling = types.FunctionResponseScheduling.SILENT
+            out.append(tool)
+        elif fn.__name__ in non_blocking:
             from google.adk.tools import FunctionTool
             from google.genai import types
 
@@ -262,6 +272,20 @@ def live_tools(fns: list[Callable[..., Any]], session: Session,
 def is_urgent(result: Any) -> bool:
     """A result about the way ahead or a hazard: it must interrupt whatever AIRA is saying."""
     return isinstance(result, dict) and (result.get("kind") == "path" or bool(result.get("urgent")))
+
+
+def _silent(wrapped: ToolFn) -> ToolFn:
+    """``wrapped`` whose result always goes back as a SILENT ``FunctionResponse``: Live never speaks it."""
+    from google.genai import types
+
+    @functools.wraps(wrapped)
+    async def run(*args: Any, **kwargs: Any) -> Any:
+        result = await wrapped(*args, **kwargs)
+        return types.FunctionResponse(response=result if isinstance(result, dict) else {"result": result},
+                                      scheduling=types.FunctionResponseScheduling.SILENT)
+
+    run.__signature__ = wrapped.__signature__  # type: ignore[attr-defined]
+    return run
 
 
 def _scheduled(wrapped: ToolFn) -> ToolFn:

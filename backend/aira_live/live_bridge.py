@@ -173,8 +173,29 @@ class LiveBridge:
     def user_speaking(self) -> bool:
         return bool(self._in_partial)
 
+    @property
+    def stopped(self) -> bool:
+        """A long-press stop holds (until the owner's next real turn)."""
+        return self._stopped
+
     def lang_name(self) -> str:
         return self._lang_name()
+
+    async def request_nav_check(self, text: str) -> bool:
+        """Send one walk ``[NAV CHECK n]`` note (tools.walk.NavChecker) into Live, only while Live is idle: not
+        answering (client text would cut the answer), the owner not speaking, no long-press stop, connected. Sent
+        as plain text (with ADK on Gemini 3.x Live that is ``send_realtime_input(text=...)``, verified to make
+        Live call nav_report silently): never a notice and never an owner turn, so it lifts no stop. False when it
+        could not go now. The one place to change if the Live call for checks changes."""
+        if (self._closed or not self._connected or self._backend is None or self._stopped or self._answering
+                or self._in_partial):
+            return False
+        try:
+            await self._backend.send_text(text)
+        except Exception as exc:  # the pump notices a dead connection and reconnects
+            log.debug("nav check send failed: %s", exc)
+            return False
+        return True
 
     # ---------- lifecycle ----------
     async def start(self) -> None:
