@@ -328,15 +328,20 @@ DEDUPE_S = 6.0           # the same non-urgent instruction again only after this
 MIN_GAP_S = 2.0          # never two guidance lines this close, unless the second is urgent
 REASSURE_S = 10.0        # a repeated direction becomes "Keep going slowly." at most this often (quiet stretches)
 ARRIVAL_REPEAT_S = 15.0  # the arrival-candidate line again only after this long
+URGENT_REPEAT_S = 5.0    # the SAME stop is re-stated at most this often: a hazard that is still there must not
+                         # send a fresh copy on every 2 s check, cutting off the warning already playing (the
+                         # audio cracks). A new or changed hazard (a different key) still cuts in at once.
 
 
 @dataclass
 class Speech:
-    """Pacing. Urgent lines (stops) are NEVER suppressed: said again soon after, they take their short form.
-    Non-urgent: a new key goes at once (after the 2 s gap); the same key waits ``DEDUPE_S``; a repeated direction
-    becomes "Keep going slowly." only when ``reassure`` allows."""
+    """Pacing. An urgent line (a stop) is never dropped: a new or changed stop is said at once, and a stop that
+    stays in view is re-stated every ``URGENT_REPEAT_S`` in its short form (not on every check, which would chop
+    the audio). Non-urgent: a new key goes at once (after the 2 s gap); the same key waits ``DEDUPE_S``; a
+    repeated direction becomes "Keep going slowly." only when ``reassure`` allows."""
     dedupe_s: float = DEDUPE_S
     min_gap_s: float = MIN_GAP_S
+    urgent_repeat_s: float = URGENT_REPEAT_S
     last_at: float = field(default=float("-inf"))      # any guidance line
     last_key: str | None = None
     said: dict[str, float] = field(default_factory=dict)
@@ -344,6 +349,11 @@ class Speech:
     def pick(self, ins: Instruction, now: float, reassure: bool = False) -> str | None:
         last = self.said.get(ins.key, float("-inf"))
         if ins.urgent:
+            # The same stop, still the latest line and said within URGENT_REPEAT_S, is held: the owner is already
+            # hearing it, and a fresh copy every 2 s check only cuts its own audio off. A new or changed stop (a
+            # different key, or one not said this recently) is never held — it is said at once.
+            if ins.key == self.last_key and now - last < self.urgent_repeat_s:
+                return None
             text = ins.short if (ins.short and now - last < self.dedupe_s) else ins.text
             self.mark(ins.key, now)
             return text
