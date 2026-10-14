@@ -63,6 +63,8 @@ CLEAR_TO_RESUME = 2        # fresh usable reports without the hazard before dire
 MAX_S = 300.0
 STILL_GUIDING_SILENT_S = 20.0
 STILL_GUIDING_EVERY_S = 60.0
+HOLD_SILENT_S = 15.0       # stopped (HAZARD / DEGRADED) and silent this long: "Stay stopped..." again
+HOLD_TEXT = "Stay stopped. I'm still checking the way."
 MEMORY_TIMEOUT_S = 1.5
 FAST_STOP_GAP_S = 3.0
 MAX_IN_FLIGHT = 1          # nav checks in flight at once
@@ -136,6 +138,7 @@ class WalkLoop:
         self.frame_at: float | None = None     # when the newest live frame was forwarded to Live (loop clock)
         self.check_seq = 0
         self.pending: tuple[int, float, float] | None = None   # (check id, sent at, frame forwarded at)
+        self._checking = False                 # a check is being handed to Live (tick and changed-frame race)
         self.last_check_at = float("-inf")
         self.last_check_frame_at = float("-inf")
         self.checks_sent = 0
@@ -150,6 +153,7 @@ class WalkLoop:
         self.degraded_said = False
         self.last_spoken_at = self.started_at
         self.last_still_at = self.started_at
+        self.last_hold_at = self.started_at     # "Stay stopped" reminder while HAZARD / DEGRADED
         self.fast_stop_at = float("-inf")
         self.fast_stop_label = ""
 
@@ -183,8 +187,15 @@ class WalkLoop:
 
     async def maybe_check(self, reason: str = "tick") -> bool:
         """Send one nav check into Live when none is in flight and the voice channel is free. True when sent."""
-        if not self.active or self.pending is not None:
+        if not self.active or self.pending is not None or self._checking:
             return False
+        self._checking = True
+        try:
+            return await self._send_check(reason)
+        finally:
+            self._checking = False
+
+    async def _send_check(self, reason: str) -> bool:
         now = self._clock()
         if self._bridge() is None:
             self.last_check_at = now
@@ -278,7 +289,9 @@ class WalkLoop:
             return None, None
         # A usable view with nothing in the path.
         if self.state in (HAZARD, DEGRADED):
-            self.resume_streak = self.resume_streak + 1 if fresh else 0
+            if not fresh:
+                return None, None             # too old to count either way: the streak waits for a fresh one
+            self.resume_streak += 1
             if self.resume_streak < CLEAR_TO_RESUME:
                 return None, None
             was = self.state
@@ -339,6 +352,10 @@ class WalkLoop:
             self.last_still_at = now
             await self._say(f"Still guiding you to the {self.target}.",
                             facts={"action": "still_guiding", "target": self.target})
+        if (self.active and self.state in (HAZARD, DEGRADED)
+                and now - self.last_spoken_at > HOLD_SILENT_S and now - self.last_hold_at >= HOLD_SILENT_S):
+            self.last_hold_at = now               # never silent for long while he waits stopped
+            await self._say(HOLD_TEXT, facts={"action": "stay_stopped", "reason": "checking_the_way"})
 
     async def run(self) -> None:
         deadline = self.started_at + self.max_s
@@ -587,5 +604,8 @@ async def nav_report(target_visible: bool = False,
                                     path=path, view_ok=view_ok)
         empty = (target_visible is False and target_side == "none" and target_size == "none" and not obstacles
                  and path == "uncertain" and view_ok is True)
-        await loop.on_report(report, empty=empty)
+        try:
+            await loop.on_report(report, empty=empty)
+        except Exception:   # never an error inside the Live run loop: the check times out and counts as failed
+            log.warning("walk: nav_report failed for %s", s.session_id, exc_info=True)
     return {"status": "ok", "retryable": False, "message": ""}

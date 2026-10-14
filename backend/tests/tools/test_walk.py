@@ -625,3 +625,54 @@ async def test_an_empty_report_is_a_failed_look_not_an_uncertain_view(session):
         await look(loop, clock)
     assert loop.state == walk.DEGRADED
     assert fb.meanings() == ["I can't see the path clearly right now. Please stop for a moment."]
+
+
+async def test_a_tick_and_a_changed_frame_never_send_two_checks(session):
+    """Review finding: the tick and a changed frame raced through the await and sent the same check twice."""
+    s, rec = session
+    clock, fb = Clock(), FakeBridge()
+    gate = asyncio.Event()
+
+    class SlowBridge(FakeBridge):
+        async def request_nav_check(self, text):
+            await gate.wait()
+            return await super().request_nav_check(text)
+
+    fb = SlowBridge()
+    loop = make(s, clock, fb)
+    clock.t += 2.0
+    loop.on_live_frame()
+    a = asyncio.create_task(loop.maybe_check("tick"))
+    await asyncio.sleep(0)
+    b = asyncio.create_task(loop.maybe_check("changed"))
+    await asyncio.sleep(0)
+    gate.set()
+    assert sorted([await a, await b]) == [False, True]
+    assert len(fb.checks) == 1 and loop.pending[0] == loop.check_seq == 1
+
+
+async def test_slow_clear_reports_never_leave_him_stopped_in_silence(session):
+    """Review finding: stale clear reports reset the resume streak; now they are skipped, and while stopped he
+    hears "Stay stopped" every 15 s of silence instead of nothing until the walk times out."""
+    s, rec = session
+    clock, fb = Clock(), FakeBridge()
+    loop = make(s, clock, fb)
+    await look(loop, clock, target_visible=True, target_side="ahead", path="blocked", obstacles=CHAIR)
+    await look(loop, clock, target_visible=True, target_side="ahead", path="blocked", obstacles=CHAIR)
+    assert loop.state == walk.HAZARD
+    n = len(fb.notices)
+    await look(loop, clock, **CLEAR)                                     # fresh clear: 1 of 2
+    cid = await check(loop, clock)
+    await answer(loop, clock, cid, latency=3.5, **CLEAR)                # stale clear: skipped, streak kept
+    assert loop.state == walk.HAZARD and loop.resume_streak == 1
+    await look(loop, clock, **CLEAR)                                     # fresh clear: 2 of 2 -> resume
+    assert loop.state == walk.NAVIGATING and len(fb.notices) == n + 1
+
+    loop2_clock, fb2 = Clock(), FakeBridge()
+    walk._ACTIVE.clear()
+    loop2 = make(s, loop2_clock, fb2)
+    loop2._to(walk.HAZARD, "test")
+    for _ in range(40):                                                  # 20 s, Live never answers usefully
+        loop2_clock.t += 0.5
+        await loop2.tick()
+    assert walk.HOLD_TEXT in fb2.meanings()
