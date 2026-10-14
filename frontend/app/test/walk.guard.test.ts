@@ -244,3 +244,57 @@ describe("bump guard loop", () => {
     expect(s.latencies[0]).toBeLessThanOrEqual(150);
   });
 });
+
+describe("bump guard during a server walk, and the urgent speech path", () => {
+  // TTC ~1.5 s: silent at normal sensitivity, a warning while urgent (see the server-urgency test above)
+  const slowApproach = (s: ReturnType<typeof setup>, t0: number) => {
+    s.at(t0 + 400);
+    s.g.process(res(t0, [sq(100)]));
+    s.g.process(res(t0 + 250, [sq(120)]));
+    return s.g.process(res(t0 + 375, [sq(130)]));
+  };
+
+  it("walk start raises urgency for the whole walk and keeps the guard active with no steps counted", () => {
+    const s = setup();
+    s.setWalking(false);                       // the step counter says he is standing (shuffling slowly)
+    s.at(0);
+    s.g.setServerWalk(true);
+    expect(s.g.isServerWalk()).toBe(true);
+    expect(slowApproach(s, 20_000)).not.toBeNull();   // long after a 3 s cue-raised urgency would have ended
+    expect(s.said).toEqual(["Stop"]);
+    s.g.setServerWalk(false);
+    expect(slowApproach(s, 60_000)).toBeNull();       // walk over, standing: silent again
+  });
+
+  it("without a server walk the same slow approach while standing is silent", () => {
+    const s = setup();
+    s.setWalking(false);
+    expect(slowApproach(s, 20_000)).toBeNull();
+  });
+
+  it("a server walk also works with no motion sensor and with walking mode switched off", () => {
+    const s = setup({ motion: { available: false, isWalking: () => false }, walkingMode: false });
+    s.g.setServerWalk(true);
+    expect(slowApproach(s, 10_000)).not.toBeNull();
+    s.g.setServerWalk(false);
+    expect(s.g.isWalkingMode()).toBe(false);
+    expect(slowApproach(s, 40_000)).toBeNull();
+  });
+
+  it("warnings go to the urgent speech path with their kind and age", () => {
+    const urgent: Array<[string, { kind: string; ageMs: number }]> = [];
+    const s = setup({ speakUrgent: (t: string, i: { kind: string; ageMs: number }) => { urgent.push([t, i]); } });
+    s.at(5);   s.g.process(res(0, [sq(100)]));
+    s.at(260); s.g.process(res(250, [sq(150)]));
+    s.at(395); s.g.process(res(375, [sq(175)]));
+    expect(urgent).toEqual([["Stop", { kind: "bump.stop", ageMs: 20 }]]);
+    expect(s.said).toEqual([]);                 // not the normal path
+  });
+
+  it("no vibration (iPhone Safari): the warn earcon still plays, before the phrase", () => {
+    const s = setup({ vibrate: () => { /* navigator.vibrate missing */ } });
+    s.g.process(res(0, [[300, 450, 800, 550]]));
+    s.g.process(res(125, [[300, 450, 800, 550]]));
+    expect(s.calls).toEqual(["earcon", "speak"]);
+  });
+});

@@ -26,10 +26,20 @@ export interface AppDeps {
   socket: Pick<AiraSocket, "send">;
   settings: Settings;
   speakImpl: (text: string, s: Settings) => void;
+  /** Safety lines (bump guard): spoken at once, over Live audio. Default: `speakImpl`. */
+  speakUrgentImpl?: (text: string, info: UrgentInfo) => void;
   earconImpl: (n: EarconName) => void;
   hapticImpl: (n: HapticName) => void;
   /** The label language right now (the one the server last detected). Default: from `settings.lang`. */
   langImpl?: () => Lang;
+}
+
+/** What an urgent line is, for the guard_alert diagnostic (no content). */
+export interface UrgentInfo {
+  /** e.g. "bump.stop" / "bump.left_right". */
+  kind?: string;
+  /** How long ago the danger was seen (frame timestamp → this call), ms. */
+  ageMs?: number;
 }
 
 /** The `app` singleton shape from the interfaces file. */
@@ -37,6 +47,11 @@ export interface AppApi {
   socket: AiraSocket;
   settings: Settings;
   speak(text: string): void;
+  /**
+   * A safety line ("Stop", "Obstacle left"): spoken immediately even while AIRA's Live audio plays (Live is cut
+   * for it), deduped only within URGENT_DEDUPE_MS, newest wins. Every other line goes through `speak`.
+   */
+  speakUrgent(text: string, info?: UrgentInfo): void;
   earcon(n: EarconName): void;
   haptic(n: HapticName): void;
   send(m: ClientMsg): boolean;

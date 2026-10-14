@@ -16,6 +16,8 @@ export function initApp(deps: AppDeps): AppApi {
     socket: deps.socket as AppApi["socket"],
     settings: deps.settings,
     speak: (text) => deps.speakImpl(text, app.settings),
+    speakUrgent: (text, info = {}) =>
+      deps.speakUrgentImpl ? deps.speakUrgentImpl(text, info) : deps.speakImpl(text, app.settings),
     earcon: (n) => deps.earconImpl(n),
     haptic: (n) => deps.hapticImpl(n),
     send: (m) => app.socket.send(m),
