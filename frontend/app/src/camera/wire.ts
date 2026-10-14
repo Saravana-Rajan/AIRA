@@ -21,7 +21,7 @@ import { startTiltHints } from "./tilt";
 import { createGuidanceSession } from "../guidance/session";
 import { freshHand, trackFingertip } from "../guidance/hands";
 import { clientLog } from "../core/clientLog";
-import { videoYields } from "../net/sendPriority";
+import { setWalkVideo, videoYields } from "../net/sendPriority";
 import { guideTo, stopTone } from "../guidance/tones";
 import { boxStore } from "../walk/boxes";
 import { parseWalkingModeCommand, walkingMode } from "../walk/mode";
@@ -275,6 +275,7 @@ export function wireCameraIntoApp(w: WiredHooks, opts: PhoneWireOptions = {}): P
     walkTimer = on ? setTimeout(() => { walkTimer = null; setServerWalk(false); }, SERVER_WALK_MAX_MS) : null;
     if (serverWalk !== on) clientLog("guard_walk", { on });
     serverWalk = on;
+    setWalkVideo(on);   // the camera keeps feeding Live while he talks during a walk
     guard?.setServerWalk(on);
   };
 

@@ -233,7 +233,7 @@ async def live_frame(session: Session, bridge: LiveBridge | None, frame: Frame, 
             precount.tick(session)
     sent = await bridge.video.offer(bridge, frame.jpeg_b64, changed=changed, labels=labels)
     if sent and session.walking:  # walk with me: Live just got a new picture (a "changed" one asks for a check)
-        await _lane_hook("aira_live.tools.walk", "on_live_frame", session, changed)
+        await _lane_hook("aira_live.tools.walk", "on_live_frame", session, changed, frame.jpeg_b64)
     return sent
 
 

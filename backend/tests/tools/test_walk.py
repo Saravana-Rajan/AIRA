@@ -231,6 +231,11 @@ async def test_request_nav_check_sends_one_text_only_while_idle(mk_session):
     bridge._in_partial = "how much is"                         # the owner is speaking
     assert await bridge.request_nav_check("[NAV CHECK 3] look") is False
     bridge._in_partial = ""
+    from aira_live import live_bridge as lb
+    bridge.last_speech_at = lb._monotonic()                    # words just heard / an answer just ended
+    assert await bridge.request_nav_check("[NAV CHECK 3] look") is False
+    bridge.last_speech_at = lb._monotonic() - lb.NAV_QUIET_S - 0.1   # a quiet moment: the check goes
+    assert await bridge.request_nav_check("[NAV CHECK 3] look") is True
     await bridge.hard_stop()                                   # long-press
     sent = len(b.sent_text)
     assert await bridge.request_nav_check("[NAV CHECK 4] look") is False
@@ -676,3 +681,131 @@ async def test_slow_clear_reports_never_leave_him_stopped_in_silence(session):
         loop2_clock.t += 0.5
         await loop2.tick()
     assert walk.HOLD_TEXT in fb2.meanings()
+
+
+# ---------- conversation during a walk ----------
+# Real Live (2026-10-14): a check sent while AIRA answered cut her answer; one in flight while the owner spoke could
+# swallow his question. So checks wait for a quiet voice channel, the newest frame is checked the moment it is
+# quiet, and the phone's on-device detector covers the gap.
+
+@pytest.fixture
+def checks_log(monkeypatch):
+    lines: list[dict] = []
+    real = walk.diag
+
+    def capture(kind, **kw):
+        if kind == "walk_check":
+            lines.append(kw)
+        return real(kind, **kw)
+
+    monkeypatch.setattr(walk, "diag", capture)
+    return lines
+
+
+async def busy_for(loop, clock, fb, seconds, *, speaking=False, answering=False):
+    """The voice channel is busy for ``seconds``: a live frame reaches Live every second, the loop ticks."""
+    fb.user_speaking, fb.answering = speaking, answering
+    for i in range(int(seconds / 0.5)):
+        clock.t += 0.5
+        if i % 2:
+            loop.on_live_frame()
+        await loop.tick()
+    fb.user_speaking = fb.answering = False
+
+
+async def test_no_check_while_sam_speaks_then_one_check_on_the_newest_frame(session, checks_log):
+    s, rec = session
+    clock, fb = Clock(), FakeBridge()
+    loop = make(s, clock, fb)
+    await busy_for(loop, clock, fb, 8, speaking=True)
+    assert fb.checks == [] and loop.pending is None and loop.fails == 0       # waiting is not failing
+    assert [c.get("skipped") for c in checks_log] == ["busy"]                 # one line per busy stretch
+    newest = loop.frame_at
+    clock.t += 0.5
+    await loop.tick()                                                         # quiet again: checks at once
+    assert len(fb.checks) == 1 and loop.pending[2] == newest
+    assert checks_log[-1]["sent"] is True and checks_log[-1]["deferred_ms"] >= 7000
+
+
+async def test_no_check_while_aira_answers_and_the_walk_goes_on_after(session):
+    s, rec = session
+    clock, fb = Clock(), FakeBridge()
+    loop = make(s, clock, fb)
+    await look(loop, clock, **CLEAR)
+    await look(loop, clock, **CLEAR)
+    assert loop.state == walk.NAVIGATING
+    sent = len(fb.checks)
+    await busy_for(loop, clock, fb, 12, answering=True)
+    assert len(fb.checks) == sent and loop.fails == 0 and loop.state == walk.NAVIGATING
+    await look(loop, clock, target_visible=True, target_side="ahead", path="blocked",
+               obstacles=[{"label": "box", "side": "ahead", "in_path": True, "size": "large"}])
+    assert fb.notices[-1][1] is True and loop.state == walk.HAZARD           # the first look after it stops him
+
+
+async def test_urgent_obstacle_while_sam_speaks_is_said_at_once(session):
+    """The phone's fast stop never waits for the conversation, and no check is queued in front of it."""
+    s, rec = session
+    clock, fb = Clock(), FakeBridge()
+    loop = make(s, clock, fb)
+    fb.user_speaking = fb.answering = True
+    clock.t += 1.0
+    assert await loop.on_phone_boxes([{"label": "person", "box": [500, 400, 950, 600]}])
+    assert fb.notices[-1][1] is True and fb.meanings()[-1].startswith("Stop")
+    assert fb.checks == [] and loop.state == walk.HAZARD
+
+
+async def test_a_check_overtaken_by_speech_is_cancelled_not_failed(session, checks_log):
+    s, rec = session
+    clock, fb = Clock(), FakeBridge()
+    loop = make(s, clock, fb)
+    cid = await check(loop, clock)
+    assert cid is not None and loop.pending is not None
+    fb.user_speaking = True                                                   # Sam starts talking mid-check
+    clock.t += 0.5
+    await loop.tick()
+    assert loop.pending is None and loop.fails == 0 and loop.preempted == 1
+    assert checks_log[-1]["skipped"] == "preempted"
+    fb.user_speaking = False
+    late = vwalk.parse_report("fridge", check_id=cid, target_visible=True, target_side="ahead")
+    assert await loop.on_report(late) == "stale"                              # its late answer is ignored
+    for _ in range(3):                                                        # overtaken every time: no DEGRADED
+        await check(loop, clock)
+        fb.user_speaking = True
+        clock.t += 0.5
+        await loop.tick()
+        fb.user_speaking = False
+    assert loop.state != walk.DEGRADED and loop.fails == 0 and fb.notices == []
+
+
+async def test_a_waiting_check_follows_a_new_target_and_dies_with_the_walk(session):
+    s, rec = session
+    clock, fb = Clock(), FakeBridge()
+    loop = make(s, clock, fb)
+    await busy_for(loop, clock, fb, 4, speaking=True)
+    loop.retarget("counter")
+    clock.t += 0.5
+    loop.on_live_frame()
+    await loop.tick()
+    assert len(fb.checks) == 1 and "counter" in fb.checks[0] and "fridge" not in fb.checks[0]
+    await answer(loop, clock, **CLEAR)
+    await busy_for(loop, clock, fb, 4, answering=True)
+    await walk.stop_walk(s)
+    for _ in range(6):
+        clock.t += 0.5
+        loop.on_live_frame()
+        await loop.tick()
+    assert len(fb.checks) == 1                                                # nothing goes after the stop
+
+
+async def test_a_long_conversation_costs_no_checks_and_leaves_no_backlog(session):
+    """A minute of talk sends zero checks; afterwards exactly one goes (no queue, no burst, bounded cost)."""
+    s, rec = session
+    clock, fb = Clock(), FakeBridge()
+    loop = make(s, clock, fb)
+    await busy_for(loop, clock, fb, 30, speaking=True)
+    await busy_for(loop, clock, fb, 30, answering=True)
+    assert fb.checks == []
+    for _ in range(3):
+        clock.t += 0.25
+        await loop.tick()
+    assert len(fb.checks) == 1

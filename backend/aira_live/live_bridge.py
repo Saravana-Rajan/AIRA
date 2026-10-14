@@ -188,7 +188,7 @@ class LiveBridge:
         Live call nav_report silently): never a notice and never an owner turn, so it lifts no stop. False when it
         could not go now. The one place to change if the Live call for checks changes."""
         if (self._closed or not self._connected or self._backend is None or self._stopped or self._answering
-                or self._in_partial):
+                or self._in_partial or _monotonic() - self.last_speech_at < NAV_QUIET_S):
             return False
         try:
             await self._backend.send_text(text)
@@ -741,6 +741,10 @@ def live_extras(types, model: str | None = None) -> dict:
     return {"proactivity": types.ProactivityConfig(proactive_audio=True)}
 
 
+# A walk nav check waits this long after the last words heard or AIRA's answer ending. Measured on the real
+# Live API (2026-10-14): a check sent while AIRA answered cut her answer and got no nav_report; one sent while
+# the owner spoke swallowed his question (Live answered only the check). So checks go only in quiet moments.
+NAV_QUIET_S = 0.8
 VAD_SILENCE_MS = 500        # end of the owner's turn after this much silence (Live's default waits longer)
 VAD_PREFIX_PADDING_MS = 200
 

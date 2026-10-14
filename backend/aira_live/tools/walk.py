@@ -37,6 +37,7 @@ The phone signal: walk start sends ``RequestFrameMsg(purpose="walk", continuous=
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import logging
 import re
@@ -59,6 +60,7 @@ CHECK_INTERVAL_S = 2.0     # a nav check at most this often (one in flight at a 
 CHANGED_CHECK_GAP_S = 0.75  # a "changed" live frame triggers a check this soon after the previous one
 CHECK_TIMEOUT_S = 4.0      # a check without its nav_report after this long counts as a failed look
 MAX_FAILS = 3              # failed looks in a row -> DEGRADED
+NAV_WARMUP_CHECKS = 3      # a new navigation session's first empty answers are warm-up, not failed looks
 CLEAR_TO_RESUME = 2        # fresh usable reports without the hazard before directions resume
 MAX_S = 300.0
 STILL_GUIDING_SILENT_S = 20.0
@@ -101,14 +103,22 @@ def _bridge_of(s: Session):
 
 
 class NavChecker:
-    """How a nav check reaches Live. The default asks the bridge (``LiveBridge.request_nav_check``), which sends
-    only while Live is idle (not answering, the owner not speaking, not stopped) and never lifts a long-press stop
-    or counts as an owner turn. ``request`` returns False when the check could not go now (try again later)."""
+    """How a nav check reaches Live. With the walk's own navigation session alive (aira_live.nav_session) the check
+    goes there, whatever the conversation is doing. Otherwise it asks the conversation bridge
+    (``LiveBridge.request_nav_check``), which sends only in a quiet moment (not answering, the owner not speaking,
+    not just after words, not stopped) and never lifts a long-press stop or counts as an owner turn. ``request``
+    returns False when the check could not go now (try again later)."""
 
-    def __init__(self, bridge: Callable[[], object]):
+    def __init__(self, bridge: Callable[[], object], nav: Callable[[], object] | None = None):
         self._bridge = bridge
+        self._nav = nav or (lambda: None)
 
     async def request(self, check_id: int, target: str) -> bool:
+        nav = self._nav()
+        if nav is not None and getattr(nav, "alive", False):
+            if not getattr(nav, "ready", True):
+                return False          # opened, not holding a picture yet: the next tick tries again
+            return bool(await nav.request(check_text(check_id, target)))
         bridge = self._bridge()
         send = getattr(bridge, "request_nav_check", None)
         if send is None:
@@ -121,11 +131,14 @@ class WalkLoop:
                  sleep: Callable[[float], Awaitable] = asyncio.sleep, bridge: Callable[[], object] | None = None,
                  interval_s: float = CHECK_INTERVAL_S, check_timeout_s: float = CHECK_TIMEOUT_S,
                  max_s: float = MAX_S, memory_place: str | None = None, memory_side: str | None = None,
-                 checker: NavChecker | None = None):
+                 checker: NavChecker | None = None, nav_factory: Callable[["WalkLoop"], object] | None = None):
         self.session, self.target = session, target
         self._clock, self._sleep = clock, sleep
         self._bridge = bridge or (lambda: _bridge_of(session))
-        self.checker = checker or NavChecker(self._bridge)
+        self.nav = None                          # the walk's own navigation Live session, once open
+        self._nav_factory = nav_factory if nav_factory is not None else default_nav_factory
+        self._nav_task: asyncio.Task | None = None
+        self.checker = checker or NavChecker(self._bridge, lambda: self.nav)
         self.owner_name: str | None = getattr(session, "owner_name", None) or config.load().owner_name
         self.hazard_label: str | None = None   # what the last stop was for (the resume line names it)
         self.interval_s, self.check_timeout_s, self.max_s = interval_s, check_timeout_s, max_s
@@ -139,6 +152,8 @@ class WalkLoop:
         self.check_seq = 0
         self.pending: tuple[int, float, float] | None = None   # (check id, sent at, frame forwarded at)
         self._checking = False                 # a check is being handed to Live (tick and changed-frame race)
+        self.deferred_since: float | None = None  # when checks started waiting for a quiet voice channel
+        self.preempted = 0                     # checks the conversation overtook (not failures)
         self.last_check_at = float("-inf")
         self.last_check_frame_at = float("-inf")
         self.checks_sent = 0
@@ -185,6 +200,23 @@ class WalkLoop:
         """A live frame was just forwarded to Live (main.live_frame)."""
         self.frame_at = self._clock() if now is None else now
 
+    def nav_alive(self) -> bool:
+        return self.nav is not None and bool(getattr(self.nav, "alive", False))
+
+    async def open_nav(self) -> None:
+        """Open the walk's navigation session (in the background: the walk never waits for it)."""
+        nav = self._nav_factory(self)
+        if nav is None:
+            return
+        if await nav.start() and self.active:
+            self.nav = nav
+            return
+        await nav.close()
+
+    async def on_nav_report(self, args: dict) -> None:
+        """A nav_report from the navigation session: the same handling as the conversation session's tool."""
+        await _handle_report(self, args)
+
     async def maybe_check(self, reason: str = "tick") -> bool:
         """Send one nav check into Live when none is in flight and the voice channel is free. True when sent."""
         if not self.active or self.pending is not None or self._checking:
@@ -201,6 +233,11 @@ class WalkLoop:
             self.last_check_at = now
             await self._failed("no_live")
             return False
+        if not self.nav_alive() and self._voice_busy():   # waiting for a quiet moment is never a failed look
+            if self.deferred_since is None:
+                self.deferred_since = now
+                diag("walk_check", session=self.session.session_id, sent=False, reason=reason, skipped="busy")
+            return False
         if self.frame_at is None or self.frame_at <= self.last_check_frame_at:
             self.last_check_at = now      # no new picture: try again next interval
             await self._failed("no_frame")
@@ -216,14 +253,18 @@ class WalkLoop:
         if not self.active:
             return False
         if not sent:   # Live is answering, the owner is speaking or a stop holds: try again on the next tick
-            diag("walk_check", session=self.session.session_id, sent=False, reason=reason, skipped="busy")
+            if self.deferred_since is None:   # one diag line per busy stretch, not one per tick
+                self.deferred_since = now
+                diag("walk_check", session=self.session.session_id, sent=False, reason=reason, skipped="busy")
             return False
+        deferred_ms = round((now - self.deferred_since) * 1000) if self.deferred_since is not None else None
+        self.deferred_since = None
         self.check_seq = check_id
         self.pending = (check_id, now, frame_at)
         self.last_check_at, self.last_check_frame_at = now, frame_at
         self.checks_sent += 1
         diag("walk_check", session=self.session.session_id, sent=True, reason=reason, check=check_id,
-             frame_age_ms=round((now - frame_at) * 1000))
+             frame_age_ms=round((now - frame_at) * 1000), deferred_ms=deferred_ms)
         return True
 
     async def on_changed_frame(self) -> None:
@@ -243,6 +284,11 @@ class WalkLoop:
         _, sent_at, frame_at = self.pending
         self.pending = None
         if empty:
+            if self.nav_alive() and getattr(self.nav, "checks", 0) <= NAV_WARMUP_CHECKS:
+                # a new navigation session's first answers came back empty on real Live (warm-up): not yet a
+                # failed look; empties after that count (3 in a row: "I can't see the path clearly")
+                diag("walk_tick", session=self.session.session_id, state=self.state, key="nav.warmup", said=None)
+                return "empty"
             await self._failed("empty")
             return "empty"
         self.fails = 0
@@ -337,8 +383,21 @@ class WalkLoop:
                                 facts={"action": "stop", "reason": "camera_unclear", "wait_for": "clear_view"})
 
     # ---------- the loop ----------
+    def _voice_busy(self) -> bool:
+        """The owner is talking or Live is answering him (the bridge's own view)."""
+        b = self._bridge()
+        return b is not None and bool(getattr(b, "answering", False) or getattr(b, "user_speaking", False))
+
     async def tick(self) -> None:
         now = self._clock()
+        if self.pending is not None and not self.nav_alive() and self._voice_busy():
+            # The conversation overtook the check (measured on real Live: a check in flight when the owner starts
+            # talking is either dropped or answered late). Not a failed look: forget it (a late report is then
+            # rejected as stale) and check again as soon as the voice channel is quiet.
+            diag("walk_check", session=self.session.session_id, sent=False, check=self.pending[0],
+                 skipped="preempted")
+            self.pending = None
+            self.preempted += 1
         if self.pending is not None and now - self.pending[1] > self.check_timeout_s:
             diag("walk_check", session=self.session.session_id, sent=False, check=self.pending[0],
                  skipped="timeout")
@@ -451,6 +510,11 @@ class WalkLoop:
             log.debug("walk: stop not sent to session %s: %s", self.session.session_id, exc)
         if self.task is not None and self.task is not asyncio.current_task() and not self.task.done():
             self.task.cancel()
+        if self._nav_task is not None and not self._nav_task.done():
+            self._nav_task.cancel()
+        nav, self.nav = self.nav, None
+        if nav is not None:
+            await nav.close()
 
 
 # --- the saved location (Firestore only, no model) -----------------------------------------------------------------
@@ -494,6 +558,7 @@ async def start(session: Session, target: str, run: bool = True, **kw) -> WalkLo
     _ACTIVE[session.session_id] = loop
     if run:
         loop.task = asyncio.create_task(loop.run(), name=f"walk-{session.session_id}")
+        loop._nav_task = asyncio.create_task(loop.open_nav(), name=f"walk-nav-{session.session_id}")
     diag("walk_start", session=session.session_id, memory=kw.get("memory_place") is not None)
     diag("walk_state", session=session.session_id, frm=None, to=ACQUIRING, why="start")
     return loop
@@ -525,12 +590,15 @@ async def on_phone_boxes(session: Session, msg) -> None:
         log.warning("walk: phone boxes failed for %s", session.session_id, exc_info=True)
 
 
-async def on_live_frame(session: Session, changed: bool = False) -> None:
-    """main.py hook: a live frame was forwarded into Live during a walk (and ``changed``: check now)."""
+async def on_live_frame(session: Session, changed: bool = False, jpeg_b64: str | None = None) -> None:
+    """main.py hook: a live frame was forwarded into Live during a walk (and ``changed``: check now). The same
+    picture goes to the walk's navigation session, so both sessions see the same camera."""
     loop = active(session)
     if loop is None:
         return
     try:
+        if jpeg_b64 and loop.nav_alive():
+            await loop.nav.send_frame(base64.b64decode(jpeg_b64))
         loop.on_live_frame()
         if changed:
             await loop.on_changed_frame()
@@ -599,13 +667,35 @@ async def nav_report(target_visible: bool = False,
     s: Session = get_session()
     loop = active(s)
     if loop is not None:
-        report = vwalk.parse_report(loop.target, check_id=check_id, target_visible=target_visible,
-                                    target_side=target_side, target_size=target_size, obstacles=obstacles,
-                                    path=path, view_ok=view_ok)
-        empty = (target_visible is False and target_side == "none" and target_size == "none" and not obstacles
-                 and path == "uncertain" and view_ok is True)
-        try:
-            await loop.on_report(report, empty=empty)
-        except Exception:   # never an error inside the Live run loop: the check times out and counts as failed
-            log.warning("walk: nav_report failed for %s", s.session_id, exc_info=True)
+        await _handle_report(loop, dict(target_visible=target_visible, target_side=target_side,
+                                        target_size=target_size, obstacles=obstacles, path=path, view_ok=view_ok,
+                                        check_id=check_id))
     return {"status": "ok", "retryable": False, "message": ""}
+
+
+_REPORT_DEFAULTS = dict(target_visible=False, target_side="none", target_size="none", obstacles=None,
+                        path="uncertain", view_ok=True, check_id=0)
+
+
+async def _handle_report(loop: WalkLoop, args: dict) -> None:
+    """One nav_report (from either Live session) into the walk. Missing fields take the tool's defaults; a
+    report with nothing but check_id is no observation. Never raises."""
+    a = {k: args.get(k, d) if args.get(k) is not None else d for k, d in _REPORT_DEFAULTS.items()}
+    try:
+        a["check_id"] = int(a["check_id"])
+        report = vwalk.parse_report(loop.target, **a)
+        empty = all(a[k] == d for k, d in _REPORT_DEFAULTS.items() if k not in ("check_id", "obstacles")) \
+            and not a["obstacles"]
+        await loop.on_report(report, empty=empty)
+    except Exception:   # never an error inside a Live run loop: the check times out and counts as failed
+        log.warning("walk: nav_report failed for %s", loop.session.session_id, exc_info=True)
+
+
+def default_nav_factory(loop: WalkLoop):
+    """The walk's navigation Live session, or None (AIRA_WALK_NAV_SESSION=0, mock mode, or no API key)."""
+    settings = config.load()
+    if not settings.walk_nav_session or settings.mock:
+        return None
+    from aira_live.nav_session import NavSession
+
+    return NavSession(loop.session.session_id, loop.on_nav_report)

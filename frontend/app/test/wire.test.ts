@@ -615,3 +615,98 @@ describe("wireApp: dispose", () => {
     expect(a.spoken()).not.toContain(STRINGS.offline.en);
   });
 });
+
+describe("wireApp: earphones come and go (voice/route)", () => {
+  const dev = (label: string, kind: MediaDeviceKind = "audioinput"): MediaDeviceInfo =>
+    ({ deviceId: "d", label, kind, groupId: "g", toJSON() { return {}; } }) as MediaDeviceInfo;
+  const PHONE = [dev("Speakerphone"), dev("Built-in speaker", "audiooutput")];
+  const WITH_BT = [...PHONE, dev("Bluetooth headset"), dev("Bluetooth headset", "audiooutput")];
+  function devices(initial: MediaDeviceInfo[]) {
+    let list = initial;
+    const listeners = new Set<() => void>();
+    const md = {
+      enumerateDevices: vi.fn(async () => list),
+      addEventListener: vi.fn((_t: "devicechange", fn: () => void) => { listeners.add(fn); }),
+      removeEventListener: vi.fn((_t: "devicechange", fn: () => void) => { listeners.delete(fn); }),
+    };
+    return {
+      md, listeners,
+      set: (l: MediaDeviceInfo[]) => { list = l; },
+      change: async () => { listeners.forEach((fn) => fn()); await flush(); },
+    };
+  }
+  const opens = (a: ReturnType<typeof setup>) => (a.env.startMic as ReturnType<typeof vi.fn>).mock.calls.length;
+  const warned = (a: ReturnType<typeof setup>) => a.spoken().filter((s) => s === STRINGS.earphonesLost.en).length;
+
+  it("earphones dropping mid-session: the mic is reopened (the OS re-routes) and the owner is told once, urgently", async () => {
+    vi.useFakeTimers();
+    const d = devices(WITH_BT);
+    const a = setup({ env: { mediaDevices: d.md } });
+    await a.w.startListening();
+    await flush();
+    expect(opens(a)).toBe(1);
+    d.set(PHONE);
+    await d.change();
+    expect(a.mic.stop).toHaveBeenCalledTimes(1);
+    expect(opens(a)).toBe(2); // reopened at once, not left to the 2 s watchdog
+    expect(a.spoken()).toEqual([STRINGS.greeting.en, STRINGS.earphonesLost.en]);
+    expect(a.env.speech!.cancel).toHaveBeenCalled(); // the urgent path: nothing talks over it
+    expect(a.earcons()).toContain("warn");
+    expect(a.haptics()).toContain("warn");
+    const kinds = a.socket.sent.flatMap((m) => (m.t === "log" && m.tag === "guard_alert" ? [m.data.kind] : []));
+    expect(kinds).toEqual(["headset.lost"]);
+    await d.change(); // the same list again: no second warning, no second reopen
+    await d.change();
+    expect(warned(a)).toBe(1);
+    expect(opens(a)).toBe(2);
+  });
+
+  it("the warning is said on every drop (drop, back, drop = twice); earphones coming back are quiet", async () => {
+    vi.useFakeTimers();
+    const d = devices(WITH_BT);
+    const a = setup({ env: { mediaDevices: d.md } });
+    await a.w.startListening();
+    await flush();
+    d.set(PHONE);
+    await d.change();
+    vi.advanceTimersByTime(3_000); // past URGENT_DEDUPE_MS
+    d.set(WITH_BT);
+    await d.change();
+    expect(opens(a)).toBe(3); // reopened so AIRA's voice moves into the earphones...
+    expect(warned(a)).toBe(1); // ...with nothing said
+    d.set(PHONE);
+    await d.change();
+    expect(warned(a)).toBe(2);
+    expect(opens(a)).toBe(4);
+  });
+
+  it("with no mic open the drop is still announced but nothing is opened", async () => {
+    const d = devices(WITH_BT);
+    const a = setup({ env: { mediaDevices: d.md } });
+    await flush();
+    d.set(PHONE);
+    await d.change();
+    expect(opens(a)).toBe(0);
+    expect(a.spoken()).toEqual([STRINGS.earphonesLost.en]);
+  });
+
+  it("in screen-reader mode the warning goes to the live region", async () => {
+    const d = devices(WITH_BT);
+    const a = setup({ settings: { screenReaderMode: true }, env: { mediaDevices: d.md } });
+    await flush();
+    d.set(PHONE);
+    await d.change();
+    expect(a.env.announce).toHaveBeenCalledWith(STRINGS.earphonesLost.en);
+    expect(a.spoken()).toEqual([]);
+  });
+
+  it("dispose removes the devicechange listener; no mediaDevices means no watcher", async () => {
+    const d = devices(WITH_BT);
+    const a = setup({ env: { mediaDevices: d.md } });
+    await flush();
+    expect(d.listeners.size).toBe(1);
+    a.w.dispose();
+    expect(d.listeners.size).toBe(0);
+    expect(() => setup({ env: { mediaDevices: null } })).not.toThrow();
+  });
+});

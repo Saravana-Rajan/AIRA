@@ -33,6 +33,9 @@ class Settings:
     walk: bool = False
     # AIRA_OWNER_NAME: how walking stops address the owner ("Sam, stop."). Unset: just "Stop."
     owner_name: str | None = None
+    # AIRA_WALK_NAV_SESSION (on unless "0"): a walk gets its own navigation-only Live session (aira_live.nav_session)
+    # so it keeps seeing while the owner talks; "0" checks through the conversation session in quiet moments only.
+    walk_nav_session: bool = True
 
 
 def _env(name: str) -> str | None:
@@ -61,4 +64,5 @@ def load() -> Settings:
         er2=os.getenv("AIRA_ER2", "1") != "0",
         walk=os.getenv("AIRA_WALK", "0") == "1",
         owner_name=_env("AIRA_OWNER_NAME"),
+        walk_nav_session=os.getenv("AIRA_WALK_NAV_SESSION", "1") != "0",
     )

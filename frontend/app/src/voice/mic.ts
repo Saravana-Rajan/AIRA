@@ -10,35 +10,16 @@ export interface MicFrame {
   rate: number;
 }
 
-// Anything that would pull Bluetooth earphones out of stereo A2DP into HFP/SCO.
-const BAD =
-  /(bluetooth|headset|head-?phones?|ear-?phones?|ear-?buds?|\bbuds?\d*\b|airpods|\bsco\b|\bhfp\b|hands-?free|rockerz|wireless)/i;
-// Labels that clearly mean the phone's own mic.
-const STRONG = /(built-?in|internal|integrated|\bphone\b|speakerphone|bottom)/i;
-// A generic mic label: acceptable when nothing stronger exists.
-const GENERIC = /(microphone|\bmic\b)/i;
-// Ids that follow the OS default and can jump to a Bluetooth mic later.
-const ALIASES = new Set(["default", "communications", ""]);
-
-/**
- * Pure: choose the phone's own mic so Bluetooth earphones stay in stereo (A2DP).
- * Never returns a Bluetooth/headset device. Order-independent. Returns "default"
- * when no input is clearly built-in.
- */
-export function pickBuiltInMic(devices: MediaDeviceInfo[]): string {
-  let best: { id: string; score: number } | null = null;
-  for (const d of devices) {
-    if (d.kind !== "audioinput" || BAD.test(d.label)) continue;
-    let score = STRONG.test(d.label) ? 20 : GENERIC.test(d.label) ? 10 : 0;
-    if (!score) continue;
-    if (!ALIASES.has(d.deviceId)) score += 1;
-    if (!best || score > best.score) best = { id: d.deviceId, score };
-  }
-  return best && best.id ? best.id : "default";
-}
+// The mic is always the OS default input, never a device picked by label. Bluetooth or wired earphones
+// then carry both AIRA's voice and Sam's mic: on Chrome Android the input list is the communication route
+// list ("Speakerphone", "Bluetooth headset", ...) and forcing "Speakerphone" sends ALL playback to the
+// loudspeaker; on iOS Safari forcing the built-in mic breaks the HFP pair and output falls back to the
+// speaker too. The default also follows the OS order (wired > USB > Bluetooth > phone), so a headset mic
+// sits closer to the mouth than the phone's: a help on a noisy street. No output-device API exists on these
+// phones (setSinkId is unsupported), so the OS decides where audio plays and the mic simply follows it.
 
 export interface MicDeps {
-  mediaDevices: Pick<MediaDevices, "getUserMedia" | "enumerateDevices">;
+  mediaDevices: Pick<MediaDevices, "getUserMedia">;
   createContext(opts?: AudioContextOptions): AudioContext;
   createWorkletNode(ctx: AudioContext, name: string): AudioWorkletNode;
   loadWorkletUrl(): Promise<string>;
@@ -57,7 +38,7 @@ export interface MicHandle {
   /** Stops capture, sends any partial chunk, releases the mic and closes the context. Idempotent. */
   stop(): void;
   ctx: AudioContext;
-  /** The device actually opened ("default" if no built-in mic was identified). */
+  /** Always "default": the OS picks the input, so an earphone mic and its speaker stay paired. */
   deviceId: string;
 }
 
@@ -107,33 +88,10 @@ function release(stream: MediaStream | null): void {
   stream?.getTracks().forEach((t) => t.stop());
 }
 
-const hasLabels = (ds: MediaDeviceInfo[]) => ds.some((d) => d.kind === "audioinput" && d.label);
-
-async function openStream(md: MicDeps["mediaDevices"], deviceId: string): Promise<{ stream: MediaStream; deviceId: string }> {
-  if (deviceId !== "default") {
-    try {
-      const stream = await md.getUserMedia({ audio: { ...VOICE, deviceId: { exact: deviceId } } });
-      return { stream, deviceId };
-    } catch (e) {
-      if ((e as { name?: string })?.name === "NotAllowedError") throw e;
-      // Device vanished or is busy: fall through to the default mic.
-    }
-  }
-  return { stream: await md.getUserMedia({ audio: { ...VOICE } }), deviceId: "default" };
-}
-
 export async function startMic(opts: StartMicOpts): Promise<MicHandle> {
   const d = resolveDeps(opts.deps);
-  const md = d.mediaDevices;
-
-  // Labels are empty until permission is granted: probe once, then enumerate again.
-  let devices = await md.enumerateDevices();
-  if (!hasLabels(devices)) {
-    release(await md.getUserMedia({ audio: true }));
-    devices = await md.enumerateDevices();
-  }
-  const opened = await openStream(md, pickBuiltInMic(devices));
-  const stream = opened.stream;
+  // One getUserMedia, no deviceId: the OS default input (see the note at the top).
+  const stream = await d.mediaDevices.getUserMedia({ audio: { ...VOICE } });
 
   let ctx: AudioContext | null = null;
   try {
@@ -176,7 +134,7 @@ export async function startMic(opts: StartMicOpts): Promise<MicHandle> {
     live.addEventListener?.("statechange", onState);
     return {
       ctx: live,
-      deviceId: opened.deviceId,
+      deviceId: "default",
       stop() {
         if (stopped) return;
         stopped = true;

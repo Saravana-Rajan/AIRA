@@ -19,6 +19,7 @@ import { STRINGS } from "../i18n/strings";
 import { DEFAULT_MAX_HOLD_MS, PlaybackQueue, type PlaybackOpts } from "../voice/playback";
 import { playEarcon, type EarconName } from "../voice/earcons";
 import { startMic, type StartMicOpts } from "../voice/mic";
+import { watchHeadset, type DeviceSource } from "../voice/route";
 import { shareToneContext } from "../guidance/tones";
 import { announceToRegion } from "../ui/ScreenReaderRegion";
 import { initialScreen, reduceScreen, type LocalEvent, type ScreenState } from "../ui/screenState";
@@ -92,6 +93,8 @@ export interface WireEnv {
   /** Writes to the single aria-live region (screen-reader mode). */
   announce(text: string): void;
   startMic(opts: StartMicOpts): Promise<{ stop(): void }>;
+  /** navigator.mediaDevices, for the earphones watcher (voice/route). Missing or null: no watcher. */
+  mediaDevices?: DeviceSource | null;
   queueStore(): QueueStore;
   storage: Storage | null;
   win: Listenable;
@@ -183,6 +186,12 @@ export function browserEnv(): WireEnv {
   return {
     createSocket: (url) => new AiraSocket(url),
     createAudioContext: () => {
+      // iOS 16.4+: "play-and-record" keeps a paired Bluetooth headset for both directions (the default session
+      // type sends playback to the speaker once the mic opens). A no-op elsewhere.
+      try {
+        const session = (navigator as Navigator & { audioSession?: { type: string } }).audioSession;
+        if (session) session.type = "play-and-record";
+      } catch { /* not supported or read-only */ }
       const AC = globalThis.AudioContext ?? (globalThis as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
       return AC ? new AC() : null;
     },
@@ -208,6 +217,7 @@ export function browserEnv(): WireEnv {
       : null,
     announce: announceToRegion,
     startMic,
+    mediaDevices: typeof navigator === "undefined" ? null : navigator.mediaDevices ?? null,
     queueStore: () => defaultStore(),
     storage: safeStorage(),
     win: window,
@@ -641,6 +651,29 @@ export function wireApp(opts: WireOpts): WiredApp {
   };
   const startSession = () => { listening = true; armWatchdog(); };
   const endSession = () => { listening = false; };
+
+  // ---- earphones come and go ----
+  // The OS routes audio (voice/mic.ts): earphones when paired, the loudspeaker otherwise. A stream opened
+  // before the change keeps its old route, so on every headset transition an open mic is reopened and the
+  // browser pairs it with the new output. When the earphones drop, a walker must hear at once where the next
+  // "Stop" will come from: said once per drop on the urgent path (never behind Live audio), with the warn
+  // earcon and haptic. Earphones arriving are quiet: he put them on himself.
+  const restartMic = () => {
+    if (!mic && !micOpen) return;
+    stopMic();
+    void openMic(true);
+  };
+  cleanups.push(
+    watchHeadset(env.mediaDevices, (present) => {
+      if (disposed) return;
+      clientLog("headset", { present });
+      restartMic();
+      if (present) return;
+      api.earcon("warn");
+      api.haptic("warn");
+      speakUrgent(STRINGS.earphonesLost[lang()], { kind: "headset.lost" });
+    }),
+  );
 
   // ---- hands-free start ----
   // No ack earcon and no thinking timer: nothing was asked yet. Audio output may still be locked (the
