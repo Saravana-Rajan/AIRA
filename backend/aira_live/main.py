@@ -66,7 +66,7 @@ from aira_live.live_bridge import AdkLiveBackend, LiveBridge
 from aira_live.prompt import build_system_prompt
 from aira_live.session import Session, current_session
 from aira_live.tool_runtime import live_tools
-from aira_live.tools import NON_BLOCKING_TOOLS, active_tools
+from aira_live.tools import NON_BLOCKING_TOOLS, SILENT_TOOLS, active_tools
 
 log = logging.getLogger(__name__)
 
@@ -231,7 +231,10 @@ async def live_frame(session: Session, bridge: LiveBridge | None, frame: Frame, 
             precount.scene_changed(session, frame.ts)
         else:
             precount.tick(session)
-    return await bridge.video.offer(bridge, frame.jpeg_b64, changed=changed, labels=labels)
+    sent = await bridge.video.offer(bridge, frame.jpeg_b64, changed=changed, labels=labels)
+    if sent and session.walking:  # walk with me: Live just got a new picture (a "changed" one asks for a check)
+        await _lane_hook("aira_live.tools.walk", "on_live_frame", session, changed)
+    return sent
 
 
 def _live_nudge_on() -> bool:
@@ -245,10 +248,12 @@ async def _start_live(session: Session, resume_handle: str | None = None) -> Liv
     phone brought its handle). On failure, tell the phone and return ``None``."""
     bridge: LiveBridge | None = None
     try:
-        er2 = config.load().er2  # AIRA_ER2=0: Live-only test mode, no Robotics-ER tools
+        settings = config.load()
+        er2 = settings.er2  # AIRA_ER2=0: Live-only test mode, no Robotics-ER tools
+        walk = settings.walk  # AIRA_WALK=1: walk with me (Live-only perception), with or without ER2
         prompt = await build_system_prompt(session.shop_id, session.lang, session.verbosity,
-                                           **({} if er2 else {"er2": False}))
-        tools = live_tools(active_tools(er2), session, NON_BLOCKING_TOOLS)
+                                           **({} if er2 else {"er2": False}), **({"walk": True} if walk else {}))
+        tools = live_tools(active_tools(er2, walk), session, NON_BLOCKING_TOOLS, SILENT_TOOLS)
         bridge = LiveBridge(session, lambda: app.state.backend_factory(session), prompt, tools,
                             resume_handle=resume_handle, live_nudge=_live_nudge_on())
         await bridge.start()

@@ -14,7 +14,7 @@ def test_er2_is_on_by_default(monkeypatch):
 
 
 def test_active_tools_keeps_everything_with_er2_and_drops_the_er_tools_without():
-    assert [f.__name__ for f in active_tools(True)] == [f.__name__ for f in TOOL_FUNCS]
+    assert [f.__name__ for f in active_tools(True, walk=True)] == [f.__name__ for f in TOOL_FUNCS]
     names = {f.__name__ for f in active_tools(False)}
     assert not names & ER_TOOLS
     assert {"sale_start", "price_query", "stock_query", "web_search"} <= names
@@ -22,8 +22,8 @@ def test_active_tools_keeps_everything_with_er2_and_drops_the_er_tools_without()
 
 
 def test_the_live_only_rules_replace_the_camera_rules_only_when_er2_is_off():
-    on = render_prompt(SHOP, [], [], "en", "short")
-    off = render_prompt(SHOP, [], [], "en", "short", er2=False)
+    on = render_prompt(SHOP, [], [], "en", "short", walk=True)  # RULES hold the AIRA_WALK rule 18
+    off = render_prompt(SHOP, [], [], "en", "short", er2=False, walk=True)
     assert all(r in on for r in RULES) and not any(r in on for r in set(RULES_LIVE_ONLY) - set(RULES))
     assert all(r in off for r in RULES_LIVE_ONLY) and not any(r in off for r in set(RULES) - set(RULES_LIVE_ONLY))
     assert "about N, in the current view" in off and "never read money amounts or prices off the video" in off.lower()

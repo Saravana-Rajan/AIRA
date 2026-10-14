@@ -21,7 +21,7 @@ from aira_live import main as main_mod
 from aira_live.system_lines import line as t
 from aira_live.live_bridge import NOTICE_PREFIX, LiveEvent
 from aira_live.tool_runtime import live_tools
-from aira_live.tools import NON_BLOCKING_TOOLS, TOOL_FUNCS
+from aira_live.tools import NON_BLOCKING_TOOLS, TOOL_FUNCS, WALK_TOOLS
 
 DEMO = "sunrise_dairy"
 HELLO = {"t": "hello", "uid": "u1", "shopId": DEMO, "lang": "en", "verbosity": "short", "appVersion": "0.1.0"}
@@ -288,7 +288,9 @@ def test_ws_real_mode_wires_bridge_audio_text_and_transcripts(real_mode):
         sid = ready["sessionId"]
         fb = real_mode[0]
         assert ready["t"] == "ready" and ready["mock"] is False
-        assert sorted(_tool_name(x) for x in fb.tools) == sorted(f.__name__ for f in TOOL_FUNCS)
+        # AIRA_WALK is off by default: every tool but the walk ones (tests/tools/test_walk.py covers AIRA_WALK=1)
+        assert sorted(_tool_name(x) for x in fb.tools) == sorted(f.__name__ for f in TOOL_FUNCS
+                                                                 if f.__name__ not in WALK_TOOLS)
         ws.send_json({"t": "audio", "pcm16": base64.b64encode(b"\x00\x01").decode()})
         _wait(lambda: fb.sent_audio)
         assert fb.sent_audio == [b"\x00\x01"]

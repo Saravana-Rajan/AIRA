@@ -28,6 +28,9 @@ class Settings:
     # AIRA_ER2=0: a Live-only test mode. No Robotics-ER tools, loops or pre-counts; Gemini Live answers every
     # camera question from its own video (counts said as "about").
     er2: bool = True
+    # AIRA_WALK=1: "walk with me" guidance (walk_to / walk_stop / nav_report), perceived by Gemini Live itself
+    # (no Robotics-ER), with AIRA_ER2 on or off. Off by default.
+    walk: bool = False
 
 
 def _env(name: str) -> str | None:
@@ -54,4 +57,5 @@ def load() -> Settings:
         live_nudge=os.getenv("AIRA_LIVE_NUDGE", "1") != "0",
         precount=os.getenv("AIRA_PRECOUNT", "1") != "0",
         er2=os.getenv("AIRA_ER2", "1") != "0",
+        walk=os.getenv("AIRA_WALK", "0") == "1",
     )
