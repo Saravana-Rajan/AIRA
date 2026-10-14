@@ -343,12 +343,14 @@ ServerMsg = Annotated[
     Field(discriminator="t"),
 ]
 
-# ---------- server -> monitor (GET /monitor[?shop=<id>]; read-only, signed-in viewers only) ----------
-# There is one shop: ``shop`` may be left out (config demo_shop_id); any other value is refused. The first message
-# a monitor sends must be ``MonAuthMsg`` (``{t:"auth", idToken}``, a Firebase Authentication ID token) within
-# ``monitor.AUTH_TIMEOUT_S``; ``main.py`` / ``monitor.authenticate`` verify it and the viewer allowlist before
-# anything is sent (close 4401 = not authenticated, 4403 = not authorized). The same message refreshes the token
-# before it expires. Mirrors messages.ts and shared/contracts/fixtures/monitor_msgs.json / monitor_client_msgs.json.
+# ---------- server -> monitor (GET /monitor[?shop=<id>]; read-only) ----------
+# There is one shop: ``shop`` may be left out (config demo_shop_id); any other value is refused. The auth message
+# ``MonAuthMsg`` (``{t:"auth", idToken}``, a Firebase Authentication ID token) is required only when the server
+# runs with AIRA_MONITOR_AUTH=1: then it must be the first message, within ``monitor.AUTH_TIMEOUT_S``, and
+# ``main.py`` / ``monitor.authenticate`` verify it and the viewer allowlist before anything is sent (close 4401 =
+# not authenticated, 4403 = not authorized); the same message refreshes the token before it expires. Without the
+# flag (the default) there is no sign-in: the feed starts at once, and an auth message is accepted and ignored.
+# Mirrors messages.ts and shared/contracts/fixtures/monitor_msgs.json / monitor_client_msgs.json.
 # Every server message is {t:"mon", kind, session, ts, ...}; ``jpeg_b64`` keeps its snake_case name on the wire.
 MONITOR_CLOSE_UNAUTHENTICATED = 4401
 MONITOR_CLOSE_UNAUTHORIZED = 4403
@@ -393,6 +395,9 @@ class MonSessionMsg(_MonWire):
     state: MonitorSessionState
     lang: StrictStr
     uid: Optional[StrictStr] = None  # "camera:<name>" marks a room camera (aira_live.cameras.sources)
+    # Epoch ms when the phone session began (``startedAt`` on the wire); sent on ``start``, so a monitor that
+    # joins late still knows how long the session has been running.
+    started_at: Optional[Num] = None
 
 
 class MonTranscriptMsg(_MonWire):

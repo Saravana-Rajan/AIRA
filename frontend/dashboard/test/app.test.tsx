@@ -93,7 +93,10 @@ function go(hash: string) {
 beforeEach(() => {
   history.replaceState(null, "", "/dashboard/");
 });
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  vi.unstubAllEnvs(); // App reads import.meta.env: the sign-in test below turns VITE_MONITOR_AUTH on
+});
 
 describe("App", () => {
   it("shows a loading state until the shop's records arrive, then the overview of every section", async () => {
@@ -177,7 +180,28 @@ describe("App", () => {
     expect(loadForecast).toHaveBeenCalledWith("sunrise_dairy");
   });
 
-  it("opens the Live page behind Google sign-in: a sign-in button, no key screen, nothing read from the fragment or storage, no socket until signed in", () => {
+  it("by default (no VITE_MONITOR_AUTH) the Live page opens for anyone: no sign-in, no key, a socket at once with nothing sent, and the empty people panel", () => {
+    sessionStorage.clear();
+    history.replaceState(null, "", "/dashboard/#/live");
+    const { listen } = fakeLive();
+    const live = liveDeps(); // the fake sign-in is injected but does not count: the flag is off
+    const el = mount(<App listen={listen} loadForecast={async () => null} now={() => NOW} monitorDeps={live.deps} />);
+    expect(el.querySelector(".livepage")).not.toBeNull();
+    expect(el.querySelector("input, form, #monitor-key, .keyprompt, .signin, .signin__btn, .lv-user")).toBeNull();
+    expect(text(el)).not.toMatch(/Sign in|sign-in|Monitor key/);
+    expect(live.sockets).toHaveLength(1);
+    expect(live.sockets[0].sent).toEqual([]);
+    expect(live.auth.signIn).not.toHaveBeenCalled();
+    expect(text(el.querySelector(".people__title"))).toBe("People using AIRA now (0)");
+    expect(text(el.querySelector(".people__empty"))).toBe("No one is using AIRA right now.");
+    act(() => { live.sockets[0].onopen!({}); });
+    expect(live.sockets[0].sent).toEqual([]); // live on open: nothing to hand over
+    expect(findAllByText(el, ".lv-conn__text", "Connected")).toHaveLength(1);
+    expect(sessionStorage.length).toBe(0);
+  });
+
+  it("opens the Live page behind Google sign-in (VITE_MONITOR_AUTH=1): a sign-in button, no key screen, nothing read from the fragment or storage, no socket until signed in", () => {
+    vi.stubEnv("VITE_MONITOR_AUTH", "1");
     sessionStorage.clear();
     history.replaceState(null, "", "/dashboard/#/live");
     const { listen } = fakeLive();
@@ -188,7 +212,7 @@ describe("App", () => {
     expect(text(el)).not.toContain("Monitor key");
     const btn = findAllByText(el, "button.signin__btn", "Sign in with Google to watch AIRA Live");
     expect(btn).toHaveLength(1);
-    expect(text(el)).not.toContain("Waiting for Sam's phone");
+    expect(text(el)).not.toContain("Waiting for a phone");
     expect(live.sockets).toHaveLength(0);
     act(() => { btn[0].click(); });
     expect(live.auth.signIn).toHaveBeenCalledTimes(1);

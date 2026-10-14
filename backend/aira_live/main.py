@@ -477,33 +477,50 @@ async def ws_endpoint(ws: WebSocket) -> None:
             await _end_session(session, bridge)
 
 
+async def _refuse(ws: WebSocket) -> None:
+    """Refuse a /monitor upgrade for its Origin, shop or the per-shop cap: accept, then close with 4403 at once.
+    Nothing is sent or subscribed in between. Closing *before* the accept would answer HTTP 403, which a browser
+    can only report as an opaque 1006, so the dashboard could never tell "this address is not allowed" from
+    "the server is down" and would retry forever; with the code it stops and says so."""
+    await ws.accept()
+    try:
+        await ws.close(code=4403)
+    except Exception:  # noqa: BLE001 - the client already went away
+        pass
+
+
 @app.websocket("/monitor")
 async def monitor_endpoint(ws: WebSocket) -> None:
-    """``GET /monitor[?shop=<id>]``: the dashboard's read-only live feed of the one shop, for signed-in viewers the
-    owner listed (shared/docs/ops/security.md §2a).
+    """``GET /monitor[?shop=<id>]``: the dashboard's read-only live feed of the one shop
+    (shared/docs/ops/security.md §2a).
 
-    Before the handshake (close 4403): the monitor's own browser Origin allowlist (``monitor.origin_allowed``,
-    env ``AIRA_MONITOR_ORIGINS``; defence in depth only, never admits anyone by itself; a missing Origin is
-    refused too), a ``shop`` that may be watched (there is one shop: left out it is ``AIRA_DEMO_SHOP``; in
-    tokenless / demo mode only that shop may be named) and ``monitor.MAX_MONITORS_PER_SHOP``. After it: the
-    first message must be ``{t:"auth", idToken}`` within ``monitor.AUTH_TIMEOUT_S`` and ``monitor.authenticate``
-    must accept the Firebase ID token and the account (4401 = not authenticated, 4403 = not an allowed viewer);
-    nothing is subscribed or sent before that. A monitor then first hears ``session start`` for every live
-    session of the shop, and ``monitor.serve`` closes it with 4401 when its token expires unrefreshed.
+    Refused with close 4403 (accepted and closed at once, ``_refuse``; nothing sent): the monitor's own browser
+    Origin allowlist (``monitor.origin_allowed``,
+    env ``AIRA_MONITOR_ORIGINS``; defence in depth, not authentication: a script can send any Origin; a missing
+    Origin is refused too), a ``shop`` that may be watched (there is one shop: left out it is ``AIRA_DEMO_SHOP``;
+    in tokenless / demo mode only that shop may be named) and ``monitor.MAX_MONITORS_PER_SHOP``.
+
+    With ``AIRA_MONITOR_AUTH`` unset (the default, the owner's decision) there is no authentication: the socket
+    is accepted and subscribed at once, no first message needed (an ``{t:"auth", idToken}`` arriving anyway is
+    ignored). With ``AIRA_MONITOR_AUTH=1`` the first message must be ``{t:"auth", idToken}`` within
+    ``monitor.AUTH_TIMEOUT_S`` and ``monitor.authenticate`` must accept the Firebase ID token and the account
+    (4401 = not authenticated, 4403 = not an allowed viewer); nothing is subscribed or sent before that, and
+    ``monitor.serve`` closes the socket with 4401 when the token expires unrefreshed. Either way a monitor first
+    hears ``session start`` (with ``startedAt``) for every live session of the shop.
     """
     origin = ws.headers.get("origin")
     if not monitor.origin_allowed(origin):
         log.warning("monitor refused: origin %r is missing or not in AIRA_MONITOR_ORIGINS", origin)
-        await ws.close(code=4403)
+        await _refuse(ws)
         return
     shop = (ws.query_params.get("shop") or "").strip() or config.load().demo_shop_id  # one shop: naming it is optional
     if not monitor.shop_allowed(shop):
         log.warning("monitor refused: shop %r is not the demo shop", shop)
-        await ws.close(code=4403)
+        await _refuse(ws)
         return
     if monitor.monitors(shop) >= monitor.MAX_MONITORS_PER_SHOP:
         log.warning("monitor refused: %d monitors already watch %s", monitor.monitors(shop), shop)
-        await ws.close(code=4403)
+        await _refuse(ws)
         return
     await ws.accept()
     try:
@@ -519,7 +536,8 @@ async def monitor_endpoint(ws: WebSocket) -> None:
     except WebSocketDisconnect:
         return
     sub = monitor.subscribe(shop, viewer)
-    diag("monitor", event="open", shop=shop, origin=origin, uid=uid_hash(viewer.uid), exp=viewer.exp,
+    diag("monitor", event="open", shop=shop, origin=origin, auth=viewer is not None,
+         uid=uid_hash(viewer.uid) if viewer else None, exp=viewer.exp if viewer else None,
          monitors=monitor.monitors(shop))
     try:
         for live, _bridge in sessions.by_shop(shop):  # what is already going on
@@ -531,4 +549,5 @@ async def monitor_endpoint(ws: WebSocket) -> None:
         pass
     finally:
         monitor.unsubscribe(sub)
-        diag("monitor", event="close", shop=shop, uid=uid_hash(viewer.uid), monitors=monitor.monitors(shop))
+        diag("monitor", event="close", shop=shop, uid=uid_hash(viewer.uid) if viewer else None,
+             monitors=monitor.monitors(shop))

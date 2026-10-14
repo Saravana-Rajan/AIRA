@@ -998,28 +998,16 @@ a { color: var(--neu-info); }
 .badge--state { background: var(--tint-blue); }
 
 /* ---------- Live page: same panels, black primary pill, white secondary pills ---------- */
-.cam, .chat, .roomcam {
+.cam {
   background: var(--panel-gradient);
   border: 1px solid var(--panel-border);
   box-shadow: var(--neu-raised);
 }
 .cam__view { background: var(--neu-bg-sunken); box-shadow: var(--neu-inset); }
-.lv-logo, .lv-pill, .lv-conn, .lv-session, .cam__live, .cam__paused,
-.step, .step__mark, .step__time, .tl__item, .tl__icon, .msg__bubble,
-.bar__btn, .room__btn, .record__exit {
+.lv-logo, .lv-conn, .person, .cam__chip {
   background: var(--neu-white);
   box-shadow: var(--neu-raised-sm);
 }
-.steps { background: var(--neu-bg-sunken); box-shadow: none; }
-.step__mark, .tl__icon, .step__time { box-shadow: none; border: 1px solid var(--neu-divider); }
-.bar__btn:hover, .record__exit:hover, .room__btn:hover { background: var(--neu-surface); }
-.bar__btn[aria-pressed="true"], .room__btn--on { background: var(--neu-accent); color: #fff; box-shadow: none; }
-.step--active { background: var(--neu-accent); color: #fff; box-shadow: var(--neu-raised-sm); }
-.step--active .step__mark, .step__time--live { background: rgba(255, 255, 255, 0.18); border: 0; color: #fff; }
-.step--done .step__mark { background: var(--lv-ov-found); border: 0; }
-.lv-pill--guiding { background: var(--neu-accent); }
-.tl__item--aira .tl__icon { background: var(--neu-accent); border: 0; }
-.msg--owner .msg__bubble, .msg--customer .msg__bubble { background: var(--neu-surface); box-shadow: var(--neu-inset-sm); }
 
 @media (max-width: 760px) {
   .header { padding: 12px 16px; }

@@ -232,19 +232,23 @@ export function parseClientMsg(raw: string): ClientMsg | null {
   }
 }
 
-// ---------- server -> monitor (GET /monitor[?shop=<id>]; read-only, signed-in viewers only) ----------
+// ---------- server -> monitor (GET /monitor[?shop=<id>]; read-only) ----------
 // There is one shop: `shop` may be left out (the server's demo shop); any other value is refused.
 // A projector view of one shop's live sessions. Every message is {t:"mon", kind, session, ts, ...}.
 //
-// Access: the first message a monitor sends, within 5 s of the upgrade, must be {t:"auth", idToken} with a
-// Firebase Authentication ID token (Google sign-in on the dashboard). The server verifies it (signature, issuer,
-// audience, expiry) and checks the account against its viewer allowlist (AIRA_MONITOR_VIEWERS); nothing is sent
-// before that. A missing, late, malformed, expired or otherwise invalid token closes the socket with 4401; a
-// valid token for an account that is not allowed closes it with 4403 (4403 is also the pre-handshake refusal
-// for a bad Origin, shop or a full shop). The token never goes in the URL. A token expires within an hour: the
-// monitor sends a fresh {t:"auth", idToken} for the same account before `exp` (the dashboard refreshes about
-// five minutes early); without one the server closes with 4401 at `exp` (plus a short grace), and a refresh
-// naming a different account closes the socket too. Every reconnect authenticates again.
+// Access: by default (the server runs without AIRA_MONITOR_AUTH; the owner's decision) there is no sign-in: the
+// feed starts as soon as the socket is open, and an {t:"auth", idToken} sent anyway is accepted and ignored.
+// The pre-handshake refusals (4403 for a bad Origin, shop or a full shop) still apply. Only when the server
+// runs with AIRA_MONITOR_AUTH=1 (and the dashboard is built with VITE_MONITOR_AUTH=1) is the auth message
+// required: then the first message a monitor sends, within 5 s of the upgrade, must be {t:"auth", idToken} with
+// a Firebase Authentication ID token (Google sign-in on the dashboard). The server verifies it (signature,
+// issuer, audience, expiry) and checks the account against its viewer allowlist (AIRA_MONITOR_VIEWERS); nothing
+// is sent before that. A missing, late, malformed, expired or otherwise invalid token closes the socket with
+// 4401; a valid token for an account that is not allowed closes it with 4403. The token never goes in the URL.
+// A token expires within an hour: the monitor sends a fresh {t:"auth", idToken} for the same account before
+// `exp` (the dashboard refreshes about five minutes early); without one the server closes with 4401 at `exp`
+// (plus a short grace), and a refresh naming a different account closes the socket too. Every reconnect
+// authenticates again.
 // Frames are sent only while a monitor is connected (<= 480 px wide, quality 0.6, <= 4 fps a session).
 // Mirrored in backend/aira_live/contracts.py; fixtures in ../fixtures/monitor_msgs.json and
 // ../fixtures/monitor_client_msgs.json.
@@ -284,8 +288,9 @@ export interface VisionObject {
 
 type MonBase = { t: "mon"; session: string; ts: number };
 export type MonitorMsg = MonBase & (
-  // uid "camera:<name>" marks a room camera's session.
-  | { kind: "session"; state: MonitorSessionState; lang: string; uid?: string }
+  // uid "camera:<name>" marks a room camera's session. startedAt: epoch ms when the phone session began; sent
+  // on start, so a monitor that joins late still knows how long it has been running.
+  | { kind: "session"; state: MonitorSessionState; lang: string; uid?: string; startedAt?: number }
   | { kind: "transcript"; role: MonitorRole; text: string; lang: string; final: boolean }
   | { kind: "frame"; jpeg_b64: string; w: number; h: number; purpose: FramePurpose }
   | { kind: "vision"; source: VisionSource; objects: VisionObject[]; target?: string; found?: boolean; severity?: BoxSeverity; context?: string; frameId?: string }
@@ -335,7 +340,8 @@ export function isMonitorMsg(x: unknown): x is MonitorMsg {
   if (!isObj(x) || x.t !== "mon" || !inList(MONITOR_KINDS, x.kind) || !isStr(x.session) || !isNum(x.ts)) return false;
   switch (x.kind as MonitorKind) {
     case "session":
-      return inList(MONITOR_SESSION_STATES, x.state) && isStr(x.lang) && optional(x.uid, isStr);
+      return inList(MONITOR_SESSION_STATES, x.state) && isStr(x.lang) && optional(x.uid, isStr) &&
+        optional(x.startedAt, isNum);
     case "transcript":
       return inList(MONITOR_ROLES, x.role) && isStr(x.text) && isStr(x.lang) && isBool(x.final);
     case "frame":

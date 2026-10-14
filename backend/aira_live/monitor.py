@@ -25,19 +25,24 @@ Who is talking: a user transcript is the owner's, unless a sale is open for that
 active_sale``) and the line does not address AIRA by name; a sale tool may also say ``speaker="customer"``
 (``set_speaker``) and that word wins while the sale is open.
 
-Access (shared/docs/ops/security.md §2a): a viewer is a Google account the owner listed. After the upgrade the
-monitor's first message, within ``AUTH_TIMEOUT_S``, must be ``{t:"auth", idToken}`` with a Firebase
-Authentication ID token; ``authenticate`` verifies it server-side (``auth.verify_firebase_user``: signature,
-issuer, audience, expiry) and checks the account against ``AIRA_MONITOR_VIEWERS`` (``auth.monitor_viewer_allowed``).
-Nothing is subscribed, sent or relayed before that; a failure closes the socket with ``CLOSE_UNAUTHENTICATED``
-(4401: missing, late, malformed, invalid or expired token) or ``CLOSE_UNAUTHORIZED`` (4403: a valid token for
-an account that is not listed). The token expires within an hour: ``serve`` closes the socket with 4401 at
-``exp`` (plus ``EXPIRY_GRACE_S``) unless a fresh ``{t:"auth", idToken}`` for the same account arrived first; a
-refresh naming another account closes it too. Every reconnect authenticates from scratch. The browser Origin
-allowlist, ``origin_allowed`` (config ``monitor_origins`` / env ``AIRA_MONITOR_ORIGINS``), stays as defence in
-depth only: it never admits anyone by itself. In tokenless / demo mode (the phone has no Firebase Auth) only the
-configured demo shop may be watched at all (``shop_allowed``). Logs carry a uid hash and the outcome, never the
-token or the email.
+Access (shared/docs/ops/security.md §2a): by default (``AIRA_MONITOR_AUTH`` unset, the owner's decision) there
+is NO authentication: ``authenticate`` returns None without reading a message and the socket is subscribed at
+once; anyone who can open the dashboard address watches. What still applies: the browser Origin allowlist,
+``origin_allowed`` (config ``monitor_origins`` / env ``AIRA_MONITOR_ORIGINS``; defence in depth only, a script
+can send any Origin), the shop check (in tokenless / demo mode only the configured demo shop may be watched,
+``shop_allowed``) and the per-shop cap ``MAX_MONITORS_PER_SHOP``. An ``{t:"auth", idToken}`` that arrives
+anyway is ignored.
+
+``AIRA_MONITOR_AUTH=1`` restores the Firebase sign-in gate: a viewer is a Google account the owner listed. After
+the upgrade the monitor's first message, within ``AUTH_TIMEOUT_S``, must be ``{t:"auth", idToken}`` with a
+Firebase Authentication ID token; ``authenticate`` verifies it server-side (``auth.verify_firebase_user``:
+signature, issuer, audience, expiry) and checks the account against ``AIRA_MONITOR_VIEWERS``
+(``auth.monitor_viewer_allowed``). Nothing is subscribed, sent or relayed before that; a failure closes the
+socket with ``CLOSE_UNAUTHENTICATED`` (4401: missing, late, malformed, invalid or expired token) or
+``CLOSE_UNAUTHORIZED`` (4403: a valid token for an account that is not listed). The token expires within an
+hour: ``serve`` closes the socket with 4401 at ``exp`` (plus ``EXPIRY_GRACE_S``) unless a fresh
+``{t:"auth", idToken}`` for the same account arrived first; a refresh naming another account closes it too.
+Every reconnect authenticates from scratch. Logs carry a uid hash and the outcome, never the token or the email.
 """
 from __future__ import annotations
 
@@ -292,7 +297,8 @@ def publish(shop_id: str, kind: str, session_id: str, **fields: Any) -> int:
 
 # ---------- access ----------
 def origin_allowed(origin: str | None, allowed: tuple[str, ...] | list[str] | None = None) -> bool:
-    """Defence in depth on ``/monitor`` (the viewer check in ``authenticate`` is the gate): True when ``origin``
+    """Defence in depth on ``/monitor`` (the viewer check in ``authenticate`` is the gate only with
+    ``AIRA_MONITOR_AUTH=1``; by default there is no gate at all): True when ``origin``
     (the upgrade's Origin header, as sent) is on the allowlist (``config.monitor_origins`` unless ``allowed`` is
     given). An entry ending in ``:*`` matches that scheme and host on any port (``http://localhost:*``); every
     other entry is an exact match (scheme, host and port, a trailing slash ignored). A missing or empty Origin is
@@ -341,13 +347,16 @@ async def _verify(id_token: str) -> FirebaseUser | None:
     return await asyncio.to_thread(verify_user, id_token)
 
 
-async def authenticate(ws, shop_id: str) -> FirebaseUser:
-    """Wait at most ``AUTH_TIMEOUT_S`` for the monitor's first text frame, ``{t:"auth", idToken}``, verify the
-    token and the viewer allowlist, and return the viewer. Raises ``Refused`` (4401 for no / late / malformed /
-    invalid / expired token, 4403 for an account that is not listed, or a shop that may not be watched).
-    Nothing is subscribed or sent before this returns."""
+async def authenticate(ws, shop_id: str) -> FirebaseUser | None:
+    """The shop check first (``Refused`` 4403 for a shop that may not be watched). Then, without
+    ``config.monitor_auth`` (the default): return None at once, no message read, no viewer. With it: wait at most
+    ``AUTH_TIMEOUT_S`` for the monitor's first text frame, ``{t:"auth", idToken}``, verify the token and the
+    viewer allowlist, and return the viewer. Raises ``Refused`` (4401 for no / late / malformed / invalid /
+    expired token, 4403 for an account that is not listed). Nothing is subscribed or sent before this returns."""
     if not shop_allowed(shop_id):
         raise Refused(CLOSE_UNAUTHORIZED, f"shop {shop_id!r} is not the demo shop")
+    if not config.load().monitor_auth:
+        return None
     try:
         raw = await asyncio.wait_for(ws.receive_text(), timeout=AUTH_TIMEOUT_S)
     except asyncio.TimeoutError:
@@ -366,12 +375,15 @@ async def authenticate(ws, shop_id: str) -> FirebaseUser:
 
 
 # ---------- the socket ----------
-async def serve(ws, sub: Subscriber, viewer: FirebaseUser) -> None:
+async def serve(ws, sub: Subscriber, viewer: FirebaseUser | None) -> None:
     """Pump ``sub``'s lines to ``ws`` until the monitor goes away, its token expires unrefreshed, or a refresh
     fails. Inbound text acted on: ``{t:"auth", idToken}`` (a refresh: verified again, same account required,
     extends the expiry deadline) and WebRTC signalling (``{t:"rtc", ...}``, relayed by ``aira_live.rtc`` to a
-    phone of the shop, rate-limited). The feed itself stays read-only and anything else is ignored."""
-    deadline = [float(viewer.exp) + EXPIRY_GRACE_S]
+    phone of the shop, rate-limited). The feed itself stays read-only and anything else is ignored.
+
+    ``viewer`` is None without ``AIRA_MONITOR_AUTH``: then there is no expiry watchdog and an auth message is
+    ignored like anything else (not verified; the socket stays open)."""
+    deadline = [float(viewer.exp) + EXPIRY_GRACE_S if viewer is not None else float("inf")]
     closing: list[int] = []  # the close code chosen by the watchdog or a failed refresh
 
     async def pump() -> None:
@@ -379,6 +391,8 @@ async def serve(ws, sub: Subscriber, viewer: FirebaseUser) -> None:
             await ws.send_text(await sub.next_line())
 
     async def watchdog() -> None:
+        if viewer is None:
+            return
         while True:
             wait = deadline[0] - _time()
             if wait <= 0:
@@ -401,7 +415,7 @@ async def serve(ws, sub: Subscriber, viewer: FirebaseUser) -> None:
             if not isinstance(text, str):
                 continue
             msg = parse_monitor_client_msg(text)
-            if isinstance(msg, MonAuthMsg):
+            if isinstance(msg, MonAuthMsg) and viewer is not None:
                 fresh = await _verify(msg.id_token)
                 if fresh is None or fresh.uid != viewer.uid or not auth.monitor_viewer_allowed(fresh):
                     why = "not verified" if fresh is None else "another account" if fresh.uid != viewer.uid else "no longer allowed"
@@ -502,11 +516,16 @@ def _lang(session) -> str:
 
 
 def session_fields(session) -> dict[str, Any]:
-    """The ``session`` message's fields for ``session`` (``uid`` tells a room camera from the owner's phone)."""
+    """The ``session`` message's fields for ``session`` (``uid`` tells a room camera from the owner's phone;
+    ``started_at`` -> ``startedAt``, epoch ms, when the session object was made, so a late monitor knows how
+    long it has been running)."""
     fields: dict[str, Any] = {"lang": _lang(session)}
     uid = getattr(session, "uid", None)
     if isinstance(uid, str) and uid:
         fields["uid"] = uid
+    started_at = getattr(session, "started_at", None)
+    if isinstance(started_at, (int, float)) and not isinstance(started_at, bool):
+        fields["started_at"] = int(started_at * 1000)
     return fields
 
 

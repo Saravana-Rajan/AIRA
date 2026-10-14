@@ -1,10 +1,13 @@
 import { describe, expect, it, vi } from "vitest";
 import type { MonitorMsg } from "@aira/contracts";
 import {
-  MAX_LINES, backoffMs, detailText, eventLabel, follow, frameAge, initialState, monitorUrl, openMonitor, overlayShapes,
-  reduce, sessionClock, toRect, toXY, type LiveState, type SocketLike,
+  MAX_LINES, backoffMs, detailText, eventLabel, follow, frameAge, initialState, listSessions, monitorUrl, openMonitor, overlayShapes,
+  reduce, sessionClock, sessionLabel, sinceText, toRect, toXY, type LiveState, type SocketLike,
 } from "../src/lib/monitor";
 import { jwt } from "./helpers/jwt";
+
+/** 2026-10-10 06:30 UTC = 12:00 pm IST. */
+const T_IST = Date.UTC(2026, 9, 10, 6, 30);
 
 type MonInput = MonitorMsg extends infer M ? (M extends MonitorMsg ? Omit<M, "t" | "session" | "ts"> & { ts?: number; session?: string } : never) : never;
 const mon = (m: MonInput): MonitorMsg =>
@@ -203,14 +206,15 @@ describe("reduce: camera, vision, hand, status, stats, events and sessions", () 
     ]);
     expect(s.session).toBe("s1");
     expect(Object.keys(s.sessions)).toEqual(["s1", "s2"]);
-    expect(s.sessions.s2).toEqual({ id: "s2", uid: "u2", lang: "ta", startedAt: 3 });
+    // Its list entry still follows what it says (status, last heard), nothing else does.
+    expect(s.sessions.s2).toEqual({ id: "s2", uid: "u2", lang: "ta", startedAt: 3, lastSeenAt: 6, status: "thinking" });
     expect(s.transcript.map((l) => l.text)).toEqual(["hi from s1"]);
     expect(s.frame).toBeNull();
     expect(s.status).toBe("listening");
     expect(s.stats).toBeNull();
     expect(s.lastMsgAt).toBe(3); // the dropped lines did not touch the page
     const picked = follow(s, "s2");
-    expect(picked).toMatchObject({ session: "s2", sessionStartedAt: 3, lang: "ta", status: "listening", transcript: [], frame: null, activity: [] });
+    expect(picked).toMatchObject({ session: "s2", sessionStartedAt: 3, lang: "ta", status: "thinking", transcript: [], frame: null, activity: [] });
     expect(picked.sessions).toEqual(s.sessions);
     expect(follow(s, "s1")).toBe(s);
     expect(follow(s, "nope")).toBe(s);
@@ -254,6 +258,66 @@ describe("reduce: camera, vision, hand, status, stats, events and sessions", () 
     expect(eventLabel("order_sent")).toBe("Order sent");
     expect(eventLabel("hand_near")).toBe("Hand near");
     expect(eventLabel("some_new_thing")).toBe("Some new thing");
+  });
+});
+
+describe("reduce: everyone using AIRA (the session list)", () => {
+  const start = (session: string, ts: number, extra: Record<string, unknown> = {}) =>
+    mon({ kind: "session", state: "start", lang: "ta", uid: `u-${session}`, session, ts, ...extra } as MonInput);
+
+  it("a session start carries the server's startedAt into the list and the page clock, falling back to the message time", () => {
+    const s = apply([start("s1", 50, { startedAt: 10 }), start("s2", 60), start("s3", 70, { startedAt: "soon" })]);
+    expect(s.sessions.s1).toEqual({ id: "s1", uid: "u-s1", lang: "ta", startedAt: 10, lastSeenAt: 50, status: "idle" });
+    expect(s.sessions.s2.startedAt).toBe(60);
+    expect(s.sessions.s3.startedAt).toBe(70); // a startedAt that is not a number is ignored
+    expect(s).toMatchObject({ session: "s1", sessionStartedAt: 10 });
+    expect(follow(s, "s2").sessionStartedAt).toBe(60);
+  });
+
+  it("a status from a session it is not following updates that entry only; the page and lastMsgAt are untouched", () => {
+    const s0 = apply([start("s1", 1), start("s2", 2), mon({ kind: "status", state: "guiding", ts: 3 })]);
+    expect(s0.sessions.s1.status).toBe("guiding"); // the followed one's entry says what the page says
+    const s = apply([
+      mon({ kind: "status", state: "thinking", session: "s2", ts: 9 }),
+      mon({ kind: "frame", jpeg_b64: "S2", w: 1, h: 1, purpose: "ask", session: "s2", ts: 10 }),
+      mon({ kind: "event", name: "order_sent", detail: {}, session: "s2", ts: 11 }),
+    ], s0);
+    expect(s.sessions.s2).toMatchObject({ status: "thinking", lastSeenAt: 9 });
+    expect(s.sessions.s1).toBe(s0.sessions.s1);
+    expect(s).toMatchObject({ session: "s1", status: "guiding", frame: null, activity: s0.activity, lastMsgAt: 3 });
+    expect(reduce(s, mon({ kind: "status", state: "idle", session: "nobody", ts: 12 }))).toBe(s); // not listed: nothing to update
+  });
+
+  it("when the followed session ends, the newest of the rest is followed from a clean slate; sessions leave the list as they end", () => {
+    const s0 = apply([
+      start("old", 1, { startedAt: 100 }),
+      start("mid", 2, { startedAt: 300 }),
+      start("new", 3, { startedAt: 200 }), // announced last, but began before "mid"
+      mon({ kind: "transcript", role: "owner", text: "hello", lang: "ta", final: true, session: "old", ts: 4 }),
+      mon({ kind: "frame", jpeg_b64: "OLD", w: 1, h: 1, purpose: "ask", session: "old", ts: 5 }),
+      mon({ kind: "status", state: "thinking", session: "mid", ts: 6 }),
+    ]);
+    expect(s0.session).toBe("old");
+    const s1 = reduce(s0, mon({ kind: "session", state: "end", lang: "ta", session: "old", ts: 7 }));
+    expect(Object.keys(s1.sessions).sort()).toEqual(["mid", "new"]);
+    expect(s1).toMatchObject({ session: "mid", sessionStartedAt: 300, lang: "ta", status: "thinking", frame: null, transcript: [], activity: [], lastMsgAt: 7 });
+    expect(reduce(s1, mon({ kind: "frame", jpeg_b64: "MID", w: 1, h: 1, purpose: "ask", session: "mid", ts: 8 })).frame?.src).toContain("MID");
+    const s2 = reduce(s1, mon({ kind: "session", state: "end", lang: "ta", session: "mid", ts: 9 }));
+    expect(s2).toMatchObject({ session: "new", sessionStartedAt: 200 });
+    const s3 = reduce(s2, mon({ kind: "session", state: "end", lang: "ta", session: "new", ts: 10 }));
+    expect(s3).toMatchObject({ session: null, sessions: {}, status: "idle" });
+  });
+
+  it("lists people newest first and names them: the uid, else a short id; room cameras are never people", () => {
+    const s = apply([start("a1", 1, { startedAt: 100 }), start("b2b2b2b2", 2, { startedAt: 300, uid: undefined }), start("c3", 3, { startedAt: 200 })]);
+    expect(listSessions(s.sessions).map((p) => p.id)).toEqual(["b2b2b2b2", "c3", "a1"]);
+    expect(sessionLabel(s.sessions.a1)).toBe("u-a1");
+    expect(sessionLabel(s.sessions.b2b2b2b2)).toBe("b2b2b2");
+    expect(sessionLabel({ id: "cam123456", uid: "camera:front" })).toBe("cam123");
+    const withCam = reduce(s, mon({ kind: "session", state: "start", lang: "en", uid: "camera:front", session: "cam1", ts: 4 }));
+    expect(Object.keys(withCam.sessions)).not.toContain("cam1");
+    expect(sinceText(T_IST, T_IST + 59_000)).toBe("just now");
+    expect(sinceText(T_IST, T_IST + 60_000)).toBe("since 12:00 pm");
   });
 });
 
@@ -436,5 +500,75 @@ describe("reconnect backoff, sign-in and refusal", () => {
     expect(location.href).not.toContain(t);
     expect(sessionStorage.length).toBe(0);
     expect(Object.keys(localStorage)).toEqual([]);
+  });
+
+  describe("without a token source (the default build: no sign-in)", () => {
+    function openRig() {
+      const sockets: ReturnType<typeof fakeSocket>[] = [];
+      const timers: Array<{ fn: () => void; ms: number }> = [];
+      const onMsg = vi.fn();
+      const onConn = vi.fn();
+      const port = { attach: vi.fn(), detach: vi.fn(), receive: vi.fn() };
+      const stop = openMonitor("ws://x/monitor?shop=s", onMsg, onConn, {
+        connect: () => { const s = fakeSocket(); sockets.push(s); return s; },
+        setTimer: (fn: () => void, ms: number) => { timers.push({ fn, ms }); return timers.length; },
+        clearTimer: () => {},
+        signal: port, now: () => T0,
+      });
+      return { sockets, timers, onMsg, onConn, port, stop };
+    }
+
+    it("is live the moment the socket opens: nothing sent, the port attached, messages delivered, no timer booked", () => {
+      const r = openRig();
+      expect(r.onConn).toHaveBeenLastCalledWith("connecting", 0);
+      r.sockets[0].onmessage!({ data: JSON.stringify({ t: "mon", kind: "status", session: "s", ts: 1, state: "thinking" }) });
+      expect(r.onMsg).not.toHaveBeenCalled(); // not open yet
+      r.sockets[0].onopen!({});
+      expect(r.onConn).toHaveBeenLastCalledWith("live", 0);
+      expect(r.sockets[0].sent).toEqual([]);
+      expect(r.port.attach).toHaveBeenCalledTimes(1);
+      expect(r.timers).toEqual([]);
+      r.sockets[0].onmessage!({ data: JSON.stringify({ t: "mon", kind: "session", session: "s1", ts: 1, state: "start", lang: "ta", startedAt: 0 }) });
+      const offer = { t: "rtc", kind: "offer", from: "s1", to: "m1", sdp: "v=0" };
+      r.sockets[0].onmessage!({ data: JSON.stringify(offer) });
+      expect(r.onMsg).toHaveBeenCalledTimes(1);
+      expect(r.onMsg.mock.calls[0][0]).toMatchObject({ kind: "session", state: "start", startedAt: 0 });
+      expect(r.port.receive).toHaveBeenCalledWith(offer);
+      const send = r.port.attach.mock.calls[0][0] as (m: unknown) => boolean;
+      expect(send({ t: "rtc", kind: "want", to: "s1" })).toBe(true);
+      expect(r.sockets[0].sent).toEqual([JSON.stringify({ t: "rtc", kind: "want", to: "s1" })]); // the only thing ever sent
+      expect(r.sockets[0].sent.join("")).not.toContain('"auth"');
+      r.stop();
+      expect(r.sockets[0].closed).toBe(true);
+      expect(r.port.detach).toHaveBeenCalled();
+    });
+
+    it("4403 and 1008 are the server's refusal of the page (rejected), before and after the open; 4401 still reads unauthenticated; other closes retry", () => {
+      const a = openRig();
+      a.sockets[0].onclose!({ code: 4403 });
+      expect(a.onConn).toHaveBeenLastCalledWith("rejected", 0);
+      expect(a.sockets).toHaveLength(1);
+      const b = openRig();
+      b.sockets[0].onopen!({});
+      b.sockets[0].onclose!({ code: 4403 });
+      expect(b.onConn).toHaveBeenLastCalledWith("rejected", 0); // never "unauthorized": no account was offered
+      expect(b.timers).toEqual([]);
+      const c = openRig();
+      c.sockets[0].onopen!({});
+      c.sockets[0].onclose!({ code: 1008 });
+      expect(c.onConn).toHaveBeenLastCalledWith("rejected", 0);
+      const d = openRig();
+      d.sockets[0].onclose!({ code: 4401 });
+      expect(d.onConn).toHaveBeenLastCalledWith("unauthenticated", 0);
+      const e = openRig();
+      e.sockets[0].onopen!({});
+      e.sockets[0].onclose!({ code: 1006 });
+      expect(e.onConn).toHaveBeenLastCalledWith("offline", 0);
+      expect(e.timers.map((t) => t.ms)).toEqual([1000]);
+      e.timers[0].fn();
+      e.sockets[1].onopen!({});
+      expect(e.sockets[1].sent).toEqual([]);
+      expect(e.onConn).toHaveBeenLastCalledWith("live", 0);
+    });
   });
 });

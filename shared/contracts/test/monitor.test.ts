@@ -79,6 +79,14 @@ describe("monitor contract (/monitor, read-only dashboard feed)", () => {
     expect(MONITOR_AUTH_TIMEOUT_S).toBe(5);
   });
 
+  it("a session start may say when the session began (startedAt, epoch ms)", () => {
+    const base = { t: "mon", kind: "session", session: "s", ts: 1, state: "start", lang: "en" };
+    expect(isMonitorMsg({ ...base, startedAt: 1759999990000 })).toBe(true);
+    expect(isMonitorMsg({ ...base })).toBe(true);
+    expect(isMonitorMsg({ ...base, startedAt: "x" })).toBe(false);
+    expect(isMonitorMsg({ ...base, startedAt: Number.NaN })).toBe(false);
+  });
+
   it("stats carry integer counters and a nullable latency", () => {
     const base = { t: "mon", kind: "stats", session: "s", ts: 1 };
     expect(isMonitorMsg({ ...base, turns: 1, er2Calls: 2, flashCalls: 0, visionMs: null, fps: 0 })).toBe(true);

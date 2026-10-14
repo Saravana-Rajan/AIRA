@@ -1,5 +1,5 @@
 [
-  {"t":"mon","kind":"session","session":"s1","ts":1760000000000,"state":"start","lang":"ta"},
+  {"t":"mon","kind":"session","session":"s1","ts":1760000000000,"state":"start","lang":"ta","startedAt":1759999990000},
   {"t":"mon","kind":"session","session":"cam1","ts":1760000000500,"state":"start","lang":"en","uid":"camera:front"},
   {"t":"mon","kind":"session","session":"s1","ts":1760000090000,"state":"end","lang":"ta"},
   {"t":"mon","kind":"transcript","session":"s1","ts":1760000001000,"role":"owner","text":"ஐரா, பால் எங்கே?","lang":"ta","final":true},

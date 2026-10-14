@@ -1,8 +1,10 @@
+// The Live page: the header, the people selector and the selected person's camera. Nothing else: no box
+// legend or overlay, no task steps, no conversation, no timeline, no record mode, no status pills.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { act } from "preact/test-utils";
 import type { MonitorMsg } from "@aira/contracts";
 import { cleanup, findAllByText, mount, text } from "./helpers/render";
-import { LivePage, type LiveAuth } from "../src/pages/LivePage";
+import { LivePage, REJECTED_TEXT, type LiveAuth } from "../src/pages/LivePage";
 import type { DrawDeps, Drawable } from "../src/lib/frameDraw";
 import { initialState, reduce, type Frame, type LiveState } from "../src/lib/monitor";
 import type { VideoState } from "../src/lib/rtcViewer";
@@ -14,7 +16,6 @@ HTMLMediaElement.prototype.pause = vi.fn();
 
 type MonInput = MonitorMsg extends infer M ? (M extends MonitorMsg ? Omit<M, "t" | "session" | "ts"> & { ts?: number; session?: string } : never) : never;
 const T0 = 1760000000000;
-// The page's clock is T0 + 84.5 s; messages default to just before it, so ER 2 and MediaPipe boxes are fresh.
 const mon = (m: MonInput): MonitorMsg =>
   ({ t: "mon", session: "s1", ts: T0 + 84_000, ...m }) as MonitorMsg;
 const stateOf = (msgs: MonitorMsg[]): LiveState => msgs.reduce(reduce, initialState());
@@ -34,95 +35,37 @@ function fakeDraw() {
   return { deps, rafs, decoded, tick: () => rafs.splice(0).forEach((cb) => cb()) };
 }
 
-const page = (state: LiveState, conn: Conn = "live", extra: { record?: boolean; onRecord?: (on: boolean) => void; drawDeps?: DrawDeps; video?: VideoState; auth?: LiveAuth } = {}) =>
+const page = (state: LiveState, conn: Conn = "live", extra: { drawDeps?: DrawDeps; video?: VideoState; auth?: LiveAuth; configured?: boolean; onFollow?: (id: string) => void } = {}) =>
   mount(<LivePage state={state} conn={conn} now={() => T0 + 84_500} {...extra} />);
 
-const milk = { label: "Aavin milk 500 ml", box: [400, 500, 440, 560] as [number, number, number, number], point: null, score: 0.92, distance: "arm" as const };
 const frame = mon({ kind: "frame", jpeg_b64: "AAAA", w: 480, h: 640, purpose: "preview", ts: T0 + 84_000 });
 const started = mon({ kind: "session", state: "start", lang: "ta", uid: "u1", ts: T0 });
+const second = mon({ kind: "session", state: "start", lang: "en", uid: "u2", session: "s2", ts: T0 + 1, startedAt: T0 + 1 });
 
-describe("LivePage: AIRA's own chrome", () => {
-  it("has the header with logo, shop name, status pill and connection, the camera card, the chat, the stepper, the timeline and the bar; no Target or Session stats card", () => {
+describe("LivePage: chrome", () => {
+  it("is the header, the people selector and the camera, in that order, and nothing else", () => {
     const el = page(initialState(), "connecting");
     expect(el.querySelector("img.lv-logo")!.getAttribute("src")).toMatch(/aira-logo-192\.png$/);
     expect(text(el.querySelector(".lv-title"))).toBe("Sunrise Dairy - Live");
-    expect(findAllByText(el, ".lv-pill", "Idle")).toHaveLength(1);
     expect(findAllByText(el, ".lv-conn__text", "Connecting…")).toHaveLength(1);
-    expect([...el.querySelectorAll("h3")].map(text)).toEqual(["Sam's view", "Conversation"]);
-    expect(text(el)).not.toContain("Target");
-    expect(text(el)).not.toContain("Session stats");
-    expect(text(el)).not.toContain("Nothing being looked for");
-    expect(el.querySelector(".card, .card--target, .card--stats, .hud")).toBeNull();
-    expect(findAllByText(el, "p", "Waiting for Sam's phone…")).toHaveLength(1);
-    expect(el.querySelector("canvas")).toBeNull();
-    expect(text(el.querySelector(".cam__age"))).toBe("—");
-    expect(text(el.querySelector(".steps"))).toBe("Waiting for a task");
-    expect(el.querySelector(".tl")!.getAttribute("aria-label")).toBe("Activity");
-    expect(text(el.querySelector(".tl__empty"))).toContain("What AIRA does shows up here");
-    expect(text(el.querySelector(".chat__empty"))).toContain("Nothing said yet");
-    expect([...el.querySelectorAll(".legend__item")].map(text)).toEqual(["MediaPipe (on-device)", "Gemini Robotics-ER 2", "Obstacle", "Found", "Fingertip"]);
-    expect([...el.querySelectorAll(".bar__btn")].map(text)).toEqual(["Record mode", "Pause camera"]);
-    expect(el.querySelector(".room")).toBeNull();
+    expect([...el.querySelectorAll(".livepage > *")].map((n) => n.className)).toEqual(["lv-head", "people", "cam"]);
+    expect([...el.querySelectorAll("h3")].map(text)).toEqual(["People using AIRA now (0)", "Camera"]);
+    expect(el.querySelector(".legend, .ov, svg.camera__overlay, .steps, .step, .chat, .msg, .tl, .bar, .bar__btn, .lv-pill, .room, .roomcam, .captions, [data-testid=record], .record__exit, .camera__badge")).toBeNull();
+    expect(text(el)).not.toMatch(/Waiting for a task|Record mode|Pause camera|Conversation|MediaPipe|Gemini Robotics|Obstacle|Fingertip|Idle|Listening/);
+    expect(el.querySelector("canvas, video")).toBeNull();
   });
   it("takes the shop's name, and shows the language and connection once a session is open", () => {
     const el = mount(<LivePage state={stateOf([started])} conn="live" shopName="Sunrise Dairy East" now={() => T0 + 84_500} />);
     expect(text(el.querySelector(".lv-title"))).toBe("Sunrise Dairy East - Live");
-    expect(findAllByText(el, ".lv-pill", "Listening")).toHaveLength(1);
     expect(text(el.querySelector(".lv-conn__lang"))).toBe("Tamil");
     expect(findAllByText(el, ".lv-conn__text", "Session open")).toHaveLength(1);
     expect(el.querySelector(".lv-conn__dot")!.className).toContain("lv-conn__dot--on");
-  });
-  it("the status pill follows AIRA's state: thinking, guiding, found", () => {
-    const thinking = page(stateOf([started, mon({ kind: "status", state: "thinking" })]));
-    expect(thinking.querySelector(".lv-pill")!.className).toContain("lv-pill--thinking");
-    expect(thinking.querySelector(".lv-pill")!.getAttribute("aria-label")).toBe("AIRA is thinking");
-    cleanup();
-    const guiding = page(stateOf([started, mon({ kind: "status", state: "guiding" })]));
-    expect(findAllByText(guiding, ".lv-pill", "Guiding")).toHaveLength(1);
-    cleanup();
-    const found = page(stateOf([started, mon({ kind: "vision", source: "er2", objects: [milk], target: "Aavin milk 500 ml", found: true, context: "guidance" })]));
-    expect(findAllByText(found, ".lv-pill", "Found")).toHaveLength(1);
-  });
-  it("offers a session picker only when the shop has more than one live phone, and hands the pick back", () => {
-    const onFollow = vi.fn();
-    const one = mount(<LivePage state={stateOf([started])} conn="live" onFollow={onFollow} now={() => T0 + 84_500} />);
-    expect(one.querySelector("select.lv-session")).toBeNull();
-    const two = mount(<LivePage state={stateOf([started, mon({ kind: "session", state: "start", lang: "en", uid: "u2", session: "s2", ts: T0 + 1 })])} conn="live" onFollow={onFollow} now={() => T0 + 84_500} />);
-    const select = two.querySelector<HTMLSelectElement>("select.lv-session")!;
-    expect(select.value).toBe("s1");
-    expect([...select.options].map((o) => o.value)).toEqual(["s1", "s2"]);
-    act(() => {
-      select.value = "s2";
-      select.dispatchEvent(new Event("change", { bubbles: true }));
-    });
-    expect(onFollow).toHaveBeenCalledWith("s2");
-  });
-  it("explains a refusal by the server without mentioning any key", () => {
-    const el = page(initialState(), "rejected");
-    expect(text(el)).toContain("AIRA Live refused this page");
-    expect(text(el)).not.toContain("key");
-    expect(findAllByText(el, ".lv-conn__text", "Refused")).toHaveLength(1);
-  });
-  it("says what it is waiting for: not configured only without a live URL, else connecting or waiting for the phone", () => {
-    const sub = (el: HTMLElement) => text(el.querySelector(".cam__empty-sub"));
-    const unconfigured = mount(<LivePage state={initialState()} conn="waiting" configured={false} now={() => T0 + 84_500} />);
-    expect(sub(unconfigured)).toBe("AIRA Live is not configured for this dashboard.");
-    cleanup();
-    expect(sub(page(initialState(), "waiting"))).toBe("Connecting to AIRA Live…");
-    cleanup();
-    expect(sub(page(initialState(), "connecting"))).toBe("Connecting to AIRA Live…");
-    cleanup();
-    expect(sub(page(initialState(), "offline"))).toContain("Reconnecting");
-    cleanup();
-    const live = page(initialState(), "live");
-    expect(sub(live)).toBe("Connected. Waiting for the phone to start a session.");
-    expect(text(live)).not.toContain("not configured");
   });
   it("never shows a key field: there is no monitor key, in any connection or sign-in state", () => {
     const states: Array<[Conn, LiveAuth | undefined]> = [
       ...(["waiting", "connecting", "live", "offline", "rejected", "unauthenticated", "unauthorized"] as Conn[]).map((c) => [c, undefined] as [Conn, undefined]),
       ["waiting", auth("unconfigured")], ["waiting", auth("loading")], ["waiting", auth("signed_out")], ["live", auth("signed_in")],
-      ["unauthorized", auth("signed_in")], ["unauthenticated", auth("signed_in")],
+      ["unauthorized", auth("signed_in")], ["unauthenticated", auth("signed_in")], ["live", auth("off")], ["unauthorized", auth("off")],
     ];
     for (const [conn, a] of states) {
       const el = page(initialState(), conn, a ? { auth: a } : {});
@@ -130,6 +73,150 @@ describe("LivePage: AIRA's own chrome", () => {
       expect(text(el)).not.toMatch(/monitor key|key field/i);
       cleanup();
     }
+  });
+});
+
+describe("LivePage: people using AIRA now", () => {
+  it("lists the one person using AIRA, followed (the black card), with their language, since when and AIRA's status; the camera is theirs", () => {
+    const el = page(stateOf([started]), "live");
+    expect(text(el.querySelector(".people__title"))).toBe("People using AIRA now (1)");
+    expect(el.querySelector("select.lv-session")).toBeNull();
+    const cards = [...el.querySelectorAll(".person")];
+    expect(cards).toHaveLength(1);
+    expect(cards[0].className).toContain("person--on");
+    expect(cards[0].getAttribute("aria-pressed")).toBe("true");
+    expect(cards[0].getAttribute("type")).toBe("button");
+    expect(text(cards[0].querySelector(".person__label"))).toBe("u1");
+    expect(text(cards[0].querySelector(".person__lang"))).toBe("Tamil");
+    expect(text(cards[0].querySelector(".person__since"))).toMatch(/^since \d{1,2}:\d{2} (am|pm)$/);
+    expect(text(cards[0].querySelector(".person__status"))).toBe("Idle"); // no status line from it yet
+    expect(el.querySelector(".people__empty")).toBeNull();
+    expect(text(el.querySelector(".cam__title"))).toBe("u1's view");
+  });
+  it("shows everyone newest first, hands a click on another person back as onFollow, and each card's status follows that session's status lines", () => {
+    const onFollow = vi.fn();
+    const state = stateOf([
+      started, second,
+      mon({ kind: "status", state: "guiding", ts: T0 + 2 }),
+      mon({ kind: "status", state: "thinking", session: "s2", ts: T0 + 3 }),
+    ]);
+    const el = page(state, "live", { onFollow });
+    expect(text(el.querySelector(".people__title"))).toBe("People using AIRA now (2)");
+    const cards = [...el.querySelectorAll<HTMLButtonElement>(".person")];
+    expect(cards.map((c) => text(c.querySelector(".person__label")))).toEqual(["u2", "u1"]);
+    expect(cards.map((c) => c.classList.contains("person--on"))).toEqual([false, true]);
+    expect(cards.map((c) => c.getAttribute("aria-pressed"))).toEqual(["false", "true"]);
+    expect(cards.map((c) => text(c.querySelector(".person__status")))).toEqual(["Thinking", "Guiding"]);
+    expect(cards[0].querySelector(".person__status")!.className).toContain("person__status--thinking");
+    expect(cards[1].querySelector(".person__status")!.className).toContain("person__status--guiding");
+    expect(cards.map((c) => text(c.querySelector(".person__lang")))).toEqual(["English", "Tamil"]);
+    act(() => { cards[0].click(); });
+    expect(onFollow).toHaveBeenCalledWith("s2");
+  });
+  it("says so when no one is using AIRA, and never lists a room camera as a person", () => {
+    const el = page(initialState(), "live");
+    expect(text(el.querySelector(".people__title"))).toBe("People using AIRA now (0)");
+    expect(text(el.querySelector(".people__empty"))).toBe("No one is using AIRA right now.");
+    expect(el.querySelector(".person")).toBeNull();
+    expect(text(el.querySelector(".cam__title"))).toBe("Camera");
+    expect(findAllByText(el, "p", "Waiting for a phone…")).toHaveLength(1); // the camera's own empty state stays
+    cleanup();
+    const cam = page(stateOf([started, mon({ kind: "session", state: "start", lang: "en", uid: "camera:front", session: "cam1", ts: T0 + 500 })]), "live");
+    expect([...cam.querySelectorAll(".person__label")].map(text)).toEqual(["u1"]);
+    expect(text(cam.querySelector(".people__title"))).toBe("People using AIRA now (1)");
+    expect(cam.querySelector(".room, .roomcam")).toBeNull();
+  });
+  it("names a session the page adopted before it was announced by its short id", () => {
+    const el = page(stateOf([mon({ kind: "frame", jpeg_b64: "AAAA", w: 1, h: 1, purpose: "ask", session: "abcdef123" })]), "live");
+    expect(text(el.querySelector(".cam__title"))).toBe("abcdef's view");
+    expect(text(el.querySelector(".people__title"))).toBe("People using AIRA now (0)");
+  });
+});
+
+describe("LivePage: camera", () => {
+  it("paints the newest JPEG frame on a canvas through the drawer (one animation frame, newest frame only), large, in its own aspect ratio, with the live chip", () => {
+    const d = fakeDraw();
+    const el = page(stateOf([started, frame]), "live", { drawDeps: d.deps });
+    const canvas = el.querySelector<HTMLCanvasElement>("canvas.camera__canvas")!;
+    expect([canvas.getAttribute("width"), canvas.getAttribute("height")]).toEqual(["480", "640"]);
+    expect(canvas.getAttribute("data-frame-ts")).toBe(String(T0 + 84_000));
+    expect(el.querySelector<HTMLElement>(".camera")!.style.aspectRatio).toBe("480 / 640");
+    expect(el.querySelector("img.camera__img, video, svg.camera__overlay, .legend")).toBeNull();
+    expect(d.rafs).toHaveLength(1);
+    d.tick();
+    expect(d.decoded.map((f) => f.ts)).toEqual([T0 + 84_000]);
+    expect(findAllByText(el, ".cam__chip", "live")).toHaveLength(1);
+    expect(el.querySelector(".cam__chip")!.className).toContain("cam__chip--live");
+    expect(el.querySelector(".cam__empty")).toBeNull();
+    cleanup();
+    const s2 = stateOf([started, frame, mon({ kind: "frame", jpeg_b64: "BBBB", w: 640, h: 480, purpose: "preview", ts: T0 + 84_300 })]);
+    const e2 = fakeDraw();
+    const el2 = page(s2, "live", { drawDeps: e2.deps });
+    e2.tick();
+    expect(e2.decoded.map((f) => f.src)).toEqual(["data:image/jpeg;base64,BBBB"]); // only the newest
+    expect(el2.querySelector<HTMLElement>(".camera")!.style.aspectRatio).toBe("640 / 480");
+  });
+
+  it("plays the WebRTC video (muted, inline, autoplay) in the stream's size, with the live chip and no canvas or badge", () => {
+    const stream = { id: "remote" } as unknown as MediaStream;
+    const d = fakeDraw();
+    const el = page(stateOf([started]), "live", { video: { mode: "webrtc", stream, session: "s1" }, drawDeps: d.deps });
+    expect(el.querySelector("canvas.camera__canvas")).toBeNull();
+    expect(d.rafs).toHaveLength(0);
+    const video = el.querySelector<HTMLVideoElement>("video.camera__video")!;
+    expect(video.muted).toBe(true);
+    expect(video.hasAttribute("autoplay")).toBe(true);
+    expect(video.hasAttribute("playsinline")).toBe(true);
+    expect(el.querySelector<HTMLElement>(".camera")!.style.aspectRatio).toBe("640 / 480"); // the stream's size until its metadata says otherwise
+    expect(findAllByText(el, ".cam__chip", "live")).toHaveLength(1);
+    expect(el.querySelector(".camera__badge, [data-testid=video-badge], .cam__empty")).toBeNull();
+  });
+
+  it("shows the JPEG frame while WebRTC is only connecting", () => {
+    const d = fakeDraw();
+    const el = page(stateOf([started, frame]), "live", { video: { mode: "connecting", stream: null, session: "s1" }, drawDeps: d.deps });
+    expect(el.querySelector("canvas.camera__canvas")).not.toBeNull();
+    expect(el.querySelector("video")).toBeNull();
+    expect(findAllByText(el, ".cam__chip", "live")).toHaveLength(1);
+  });
+
+  it("says what it is waiting for: not configured only without a live URL, else connecting, reconnecting or waiting for a phone; the chip says connecting while the socket is not up", () => {
+    const sub = (el: HTMLElement) => text(el.querySelector(".cam__empty-sub"));
+    const chip = (el: HTMLElement) => text(el.querySelector(".cam__chip"));
+    const unconfigured = page(initialState(), "waiting", { configured: false });
+    expect(sub(unconfigured)).toBe("AIRA Live is not configured for this dashboard.");
+    expect(unconfigured.querySelector(".cam__chip")).toBeNull();
+    cleanup();
+    expect(sub(page(initialState(), "waiting"))).toBe("Connecting to AIRA Live…");
+    cleanup();
+    const connecting = page(initialState(), "connecting");
+    expect(sub(connecting)).toBe("Connecting to AIRA Live…");
+    expect(chip(connecting)).toBe("connecting");
+    expect(connecting.querySelector(".cam__chip")!.className).toContain("cam__chip--connecting");
+    cleanup();
+    const offline = page(initialState(), "offline");
+    expect(sub(offline)).toBe("Lost the connection to AIRA Live. Reconnecting…");
+    expect(chip(offline)).toBe("connecting");
+    expect(findAllByText(offline, ".lv-conn__text", "Reconnecting…")).toHaveLength(1);
+    cleanup();
+    const live = page(initialState(), "live");
+    expect(findAllByText(live, "p", "Waiting for a phone…")).toHaveLength(1);
+    expect(sub(live)).toBe("Connected. Waiting for the phone to start a session.");
+    expect(live.querySelector(".cam__chip")).toBeNull();
+    expect(text(live)).not.toContain("not configured");
+  });
+
+  it("a 4403 (rejected) is explained once, in the camera area, without mentioning any key, and the chip says refused", () => {
+    const el = page(initialState(), "rejected");
+    expect(REJECTED_TEXT).toBe("This address isn't allowed to watch AIRA Live. Open the dashboard from its own address (the server allows only its listed origins).");
+    expect(text(el.querySelector(".cam__empty-title"))).toBe("AIRA Live refused this page");
+    expect(text(el.querySelector(".cam__empty-sub"))).toBe(REJECTED_TEXT);
+    expect(el.querySelector(".cam__pulse")).toBeNull(); // nothing is being waited for
+    expect(findAllByText(el, ".cam__chip", "refused")).toHaveLength(1);
+    expect(el.querySelector(".cam__chip")!.className).toContain("cam__chip--refused");
+    expect(findAllByText(el, ".lv-conn__text", "Refused")).toHaveLength(1);
+    expect(text(el)).not.toContain("key");
+    expect(text(el)).not.toContain("Reconnecting");
   });
 });
 
@@ -163,7 +250,7 @@ describe("LivePage: sign-in", () => {
     expect(findAllByText(el, ".lv-conn__text", "Not allowed")).toHaveLength(1);
     act(() => { (el.querySelector("button.signin__btn") as HTMLButtonElement).click(); });
     expect(a.onSignOut).toHaveBeenCalledTimes(1);
-    expect(text(el)).not.toContain("Waiting for Sam's phone");
+    expect(text(el)).not.toContain("Waiting for a phone");
   });
   it("sign-in expired: says so and offers to sign in again", () => {
     const a = auth("signed_in");
@@ -188,7 +275,7 @@ describe("LivePage: sign-in", () => {
   it("signed in and allowed: the feed's own waiting text, the viewer's email and a Sign out in the header", () => {
     const a = auth("signed_in");
     const el = page(initialState(), "live", { auth: a });
-    expect(findAllByText(el, "p", "Waiting for Sam's phone…")).toHaveLength(1);
+    expect(findAllByText(el, "p", "Waiting for a phone…")).toHaveLength(1);
     expect(el.querySelector(".signin")).toBeNull();
     expect(text(el.querySelector(".lv-conn__user"))).toBe("sam@example.com");
     const out = el.querySelector("button.lv-conn__signout") as HTMLButtonElement;
@@ -200,261 +287,28 @@ describe("LivePage: sign-in", () => {
     expect(withPicture.querySelector("canvas.camera__canvas")).not.toBeNull();
     expect(withPicture.querySelector(".signin")).toBeNull();
   });
-  it("record mode shows the sign-in card in the camera slot and no header user", () => {
-    const el = page(initialState(), "waiting", { auth: auth("signed_out"), record: true });
-    expect(el.querySelector(".record__sam .signin__btn")).not.toBeNull();
-    expect(el.querySelector(".lv-conn__signout, .lv-user")).toBeNull();
-  });
   it("without an auth prop (the feed's own tests) the page behaves as signed in", () => {
     const el = page(initialState(), "connecting");
-    expect(findAllByText(el, "p", "Waiting for Sam's phone…")).toHaveLength(1);
+    expect(findAllByText(el, "p", "Waiting for a phone…")).toHaveLength(1);
     expect(el.querySelector(".signin, .lv-user")).toBeNull();
   });
-});
-
-describe("LivePage: task stepper", () => {
-  it("shows the find steps as chips with checks and durations, and the active step", () => {
-    const el = page(stateOf([
-      started,
-      mon({ kind: "event", name: "tool_call", detail: { tool: "product_find", args: { product: "Aavin milk" } }, ts: T0 + 1000 }),
-      mon({ kind: "vision", source: "er2", objects: [milk], target: "Aavin milk 500 ml", found: false, context: "product_find", ts: T0 + 2200 }),
-    ]));
-    const steps = [...el.querySelectorAll(".step")];
-    expect(steps.map((s) => text(s.querySelector(".step__label")))).toEqual(["Ask", "Point", "Guide", "Found"]);
-    expect(steps.map((s) => s.className.includes("step--done"))).toEqual([true, true, false, false]);
-    expect(steps[2].className).toContain("step--active");
-    expect(steps[2].getAttribute("aria-current")).toBe("step");
-    expect(steps.map((s) => text(s.querySelector(".step__mark")))).toEqual(["✓", "✓", "3", "4"]);
-    expect(text(steps[1].querySelector(".step__time"))).toBe("1.2s");
-    expect(el.querySelector(".steps")!.getAttribute("aria-label")).toBe("Finding Aavin milk");
-  });
-});
-
-describe("LivePage: camera", () => {
-  it("paints the newest frame on a canvas through the drawer (one animation frame, newest frame only) and shows the frame age", () => {
-    const d = fakeDraw();
-    const el = page(stateOf([frame]), "live", { drawDeps: d.deps });
-    const canvas = el.querySelector<HTMLCanvasElement>("canvas.camera__canvas")!;
-    expect([canvas.getAttribute("width"), canvas.getAttribute("height")]).toEqual(["480", "640"]);
-    expect(canvas.getAttribute("data-frame-ts")).toBe(String(T0 + 84_000));
-    expect(el.querySelector("img.camera__img")).toBeNull();
-    expect(d.rafs).toHaveLength(1);
-    d.tick();
-    expect(d.decoded.map((f) => f.ts)).toEqual([T0 + 84_000]);
-    expect(el.querySelector(".cam__live")!.className).toContain("cam__live--on");
-    expect(text(el.querySelector(".cam__age"))).toBe("0.5s ago");
-    expect(el.querySelector(".hud")).toBeNull();
-  });
-
-  it("draws the frame with each ER 2 box in the frame's pixel space, with a label tag and score, in the object or target tone", () => {
-    const el = page(stateOf([
-      frame,
-      mon({ kind: "status", state: "guiding" }),
-      mon({ kind: "vision", source: "er2", objects: [milk, { label: "Sakthi curd 1 L", box: null, point: [600, 200] }], target: "Aavin milk 500 ml", found: false, context: "guidance" }),
-    ]));
-    const svg = el.querySelector("svg.camera__overlay")!;
-    expect(svg.getAttribute("viewBox")).toBe("0 0 480 640");
-    const target = svg.querySelector("[data-tone=target]")!;
-    expect(target.getAttribute("data-label")).toBe("Aavin milk 500 ml");
-    const rect = target.querySelector("rect")!;
-    expect([rect.getAttribute("x"), rect.getAttribute("y"), rect.getAttribute("width"), rect.getAttribute("height")]).toEqual(["240", "256", "28.8", "25.6"]);
-    expect(target.querySelector(".ov__tag")).not.toBeNull();
-    expect(text(target.querySelector("text"))).toBe("Aavin milk 500 ml 92%");
-    const other = svg.querySelector("[data-tone=object]")!;
-    expect(other.querySelector("circle")!.getAttribute("cx")).toBe("96");
-    expect(other.querySelector("circle")!.getAttribute("cy")).toBe("384");
-    expect(findAllByText(el, "[role=status]", "Looking for Aavin milk 500 ml")).toHaveLength(1);
-    expect(findAllByText(el, ".lv-pill", "Guiding")).toHaveLength(1);
-    expect(svg.querySelector("[data-tone=found]")).toBeNull();
-  });
-
-  it("draws MediaPipe boxes thin and grey, and an obstacle red with the camera flagged", () => {
-    const el = page(stateOf([
-      frame,
-      mon({ kind: "vision", source: "mediapipe", objects: [{ label: "chair", box: [420, 310, 900, 690], point: null, score: 0.82, severity: "danger" }, { label: "bottle", box: [100, 50, 300, 120], point: null, score: 0.61 }], severity: "danger", ts: T0 + 84_400 }),
-    ]));
-    const svg = el.querySelector("svg.camera__overlay")!;
-    expect(svg.querySelector("[data-tone=fast]")!.getAttribute("data-label")).toBe("bottle");
-    expect(svg.querySelector("[data-tone=fast] .ov__tag")).toBeNull();
-    const danger = svg.querySelector("[data-tone=danger]")!;
-    expect(danger.getAttribute("data-label")).toBe("chair");
-    expect(text(danger.querySelector("text"))).toBe("chair 82%");
-    expect(el.querySelector(".camera")!.className).toContain("camera--danger");
-  });
-
-  it("turns the target green with a check and a Found banner when found", () => {
-    const el = page(stateOf([
-      frame,
-      mon({ kind: "status", state: "guiding" }),
-      mon({ kind: "vision", source: "er2", objects: [milk], target: "Aavin milk 500 ml", found: true, context: "guidance" }),
-    ]));
-    const found = el.querySelector("svg [data-tone=found]")!;
-    expect(found.getAttribute("class")).toContain("ov--found");
-    expect(text(found.querySelector("text"))).toBe("✓ Aavin milk 500 ml 92%");
-    expect(findAllByText(el, "p.camera__found", "✓ Found: Aavin milk 500 ml")).toHaveLength(1);
-    expect(findAllByText(el, ".lv-pill", "Found")).toHaveLength(1);
-    expect(findAllByText(el, ".tl__label", "Found")).toHaveLength(1);
-  });
-
-  it("draws the fingertip dot and a dashed line to the target while guiding", () => {
-    const el = page(stateOf([
-      frame,
-      mon({ kind: "status", state: "guiding" }),
-      mon({ kind: "vision", source: "er2", objects: [milk], target: "Aavin milk 500 ml", found: false, context: "guidance" }),
-      mon({ kind: "hand", point: [800, 100], near: false }),
-    ]));
-    const hand = el.querySelector("svg [data-tone=hand] circle")!;
-    expect([hand.getAttribute("cx"), hand.getAttribute("cy")]).toEqual(["48", "512"]);
-    const line = el.querySelector("svg line.ov--line")!;
-    expect([line.getAttribute("x1"), line.getAttribute("y1"), line.getAttribute("x2"), line.getAttribute("y2")]).toEqual(["48", "512", "254.4", "268.8"]);
-  });
-
-  it("plays the WebRTC video under the same overlay (mapped to the video's size) with a WebRTC badge, and no frame age", () => {
-    const stream = { id: "remote" } as unknown as MediaStream;
-    const d = fakeDraw();
-    const el = page(stateOf([
-      mon({ kind: "status", state: "guiding" }),
-      mon({ kind: "vision", source: "er2", objects: [milk], target: "Aavin milk 500 ml", found: false, context: "guidance" }),
-    ]), "live", { video: { mode: "webrtc", stream, session: "s1" }, drawDeps: d.deps });
-    expect(el.querySelector("canvas.camera__canvas")).toBeNull();
-    expect(el.querySelector("img.camera__img")).toBeNull();
-    expect(d.rafs).toHaveLength(0);
-    const video = el.querySelector<HTMLVideoElement>("video.camera__video")!;
-    expect(video.muted).toBe(true);
-    expect(video.hasAttribute("autoplay")).toBe(true);
-    expect(video.hasAttribute("playsinline")).toBe(true);
-    expect(el.querySelector("svg.camera__overlay")!.getAttribute("viewBox")).toBe("0 0 640 480"); // the stream's size until its metadata says otherwise
-    const rect = el.querySelector("svg [data-tone=target] rect")!;
-    expect([rect.getAttribute("x"), rect.getAttribute("y")]).toEqual(["320", "192"]);
-    expect(text(el.querySelector("[data-testid=video-badge]"))).toBe("WebRTC");
-    expect(el.querySelector(".camera__age, .cam__age")).toBeNull(); // no frame age for a live picture
-    expect(el.querySelector(".cam__live")!.className).toContain("cam__live--on");
-    expect(el.querySelector(".cam__empty")).toBeNull();
-    expect(el.querySelector(".stage, .hud")).toBeNull();
-  });
-
-  it("shows the JPEG frame on the canvas with a Preview badge while WebRTC is not connected", () => {
-    const d = fakeDraw();
-    const el = page(stateOf([frame]), "live", { video: { mode: "connecting", stream: null, session: "s1" }, drawDeps: d.deps });
-    expect(el.querySelector("canvas.camera__canvas")).not.toBeNull();
-    expect(el.querySelector("video")).toBeNull();
-    expect(d.rafs).toHaveLength(1);
-    expect(text(el.querySelector("[data-testid=video-badge]"))).toBe("Preview");
-    expect(text(el.querySelector(".cam__age"))).toBe("0.5s ago");
+  it("sign-in off (the default build): no gate, no user, no sign-out, the feed's own waiting text, and every refusal reads the same", () => {
+    const a = auth("off");
+    const el = page(initialState(), "live", { auth: a });
+    expect(findAllByText(el, "p", "Waiting for a phone…")).toHaveLength(1);
+    expect(el.querySelector(".signin, .signin__btn, .lv-user, .lv-conn__signout, input, form")).toBeNull();
+    expect(text(el)).not.toMatch(/sign in|sign-in|signed in/i);
     cleanup();
-    const none = page(stateOf([frame]));
-    expect(none.querySelector("[data-testid=video-badge]")).toBeNull();
-  });
-
-  it("record mode plays the WebRTC video too, without a frame age", () => {
-    const stream = { id: "remote" } as unknown as MediaStream;
-    const el = page(stateOf([started]), "live", { record: true, video: { mode: "webrtc", stream, session: "s1" } });
-    expect(el.querySelector(".record__sam video.camera__video")).not.toBeNull();
-    expect(el.querySelector(".record__sam .camera__age")).toBeNull();
-    expect(el.querySelector(".cam__empty")).toBeNull();
-  });
-
-  it("pauses the camera on the last frame and says so in the camera card", () => {
-    const el = page(stateOf([frame]));
-    const btn = findAllByText(el, ".bar__btn", "Pause camera")[0];
-    act(() => { btn.click(); });
-    expect(findAllByText(el, ".bar__btn", "Resume camera")).toHaveLength(1);
-    expect(findAllByText(el, ".cam__paused", "Paused")).toHaveLength(1);
-    expect(el.querySelector("canvas.camera__canvas")).not.toBeNull();
-  });
-});
-
-describe("LivePage: conversation as chat bubbles", () => {
-  it("puts Sam on the right, AIRA on the left with an avatar, the customer on the right in purple, with language chips; partials are italic and then replaced", () => {
-    const s1 = stateOf([
-      mon({ kind: "transcript", role: "owner", text: "பால் எங்கே?", lang: "ta", final: true }),
-      mon({ kind: "transcript", role: "customer", text: "ஒரு பால்", lang: "ta", final: true }),
-      mon({ kind: "transcript", role: "aira", text: "Fridge two,", lang: "en", final: false }),
-    ]);
-    const el = page(s1);
-    const msgs = [...el.querySelectorAll("li.msg")];
-    expect(msgs.map((l) => text(l.querySelector(".msg__who")))).toEqual(["Sam", "Customer", "AIRA"]);
-    expect(msgs.map((l) => text(l.querySelector(".msg__lang")))).toEqual(["ta", "ta", "en"]);
-    expect(msgs.map((l) => text(l.querySelector(".msg__text")))).toEqual(["பால் எங்கே?", "ஒரு பால்", "Fridge two,"]);
-    expect(msgs.map((l) => l.classList.contains("msg--partial"))).toEqual([false, false, true]);
-    expect(msgs[0].classList.contains("msg--owner")).toBe(true);
-    expect(msgs[1].classList.contains("msg--customer")).toBe(true);
-    expect(msgs[2].classList.contains("msg--aira")).toBe(true);
-    expect(msgs.map((l) => l.querySelector(".msg__avatar") !== null)).toEqual([false, false, true]);
-    expect(el.querySelector("li.line, .chip")).toBeNull();
-    cleanup();
-    const s2 = reduce(s1, mon({ kind: "transcript", role: "aira", text: "Fridge two, middle shelf.", lang: "en", final: true }));
-    const el2 = page(s2);
-    const msgs2 = [...el2.querySelectorAll("li.msg")];
-    expect(msgs2).toHaveLength(3);
-    expect(text(msgs2[2].querySelector(".msg__text"))).toBe("Fridge two, middle shelf.");
-    expect(msgs2[2].classList.contains("msg--partial")).toBe(false);
-  });
-});
-
-describe("LivePage: activity timeline", () => {
-  it("shows events oldest first as icon chips with a readable label, detail, time and kind", () => {
-    const el = page(stateOf([
-      mon({ kind: "event", name: "guidance_start", detail: { target: "Aavin milk 500 ml" }, ts: T0 }),
-      mon({ kind: "event", name: "count", detail: { sku: "sakthi_curd_1l", counted: 28, expected: 30 }, ts: T0 + 60_000 }),
-      mon({ kind: "event", name: "order_sent", detail: { summary: "30 L Sakthi curd sent on WhatsApp" }, ts: T0 + 120_000 }),
-      mon({ kind: "event", name: "confirm_resolved", detail: { id: "c1", answer: "yes" }, ts: T0 + 180_000 }),
-      mon({ kind: "event", name: "client_event", detail: { name: "network", data: { online: false } }, ts: T0 + 190_000 }),
-    ]));
-    const items = [...el.querySelectorAll("li.tl__item")];
-    expect(items.map((i) => text(i.querySelector(".tl__label")))).toEqual(["Searching", "Counted", "Order sent", "Answered", "Phone event"]);
-    expect(items.map((i) => [...i.classList].find((c) => c.startsWith("tl__item--")))).toEqual(["tl__item--vision", "tl__item--vision", "tl__item--order", "tl__item--aira", "tl__item--sam"]);
-    expect(items.map((i) => text(i.querySelector(".tl__detail")))).toEqual(["Aavin milk 500 ml", "Counted 28/30", "30 L Sakthi curd sent on WhatsApp", "Answer: yes", "network"]);
-    expect(items.every((i) => i.querySelector("svg.tl__icon path")!.getAttribute("d")!.length > 10)).toBe(true);
-    expect(text(items[0].querySelector(".tl__time"))).toMatch(/Vision, \d{1,2}:\d{2}/);
-    expect(el.querySelector(".activity__list, .act")).toBeNull();
-  });
-});
-
-describe("LivePage: room camera and record mode", () => {
-  const room = [
-    started,
-    mon({ kind: "session", state: "start", lang: "en", uid: "camera:front", session: "cam1", ts: T0 + 500 }),
-    mon({ kind: "frame", jpeg_b64: "ROOM", w: 480, h: 270, purpose: "ask", session: "cam1", ts: T0 + 84_200 }),
-    frame,
-  ];
-  it("shows the room camera panel when a camera:<name> session exists, with a picker for several", () => {
-    const d = fakeDraw();
-    const el = page(stateOf(room), "live", { drawDeps: d.deps });
-    expect(text(el.querySelector(".roomcam__title"))).toBe("Room camera: front");
-    expect(el.querySelector(".roomcam canvas")!.getAttribute("width")).toBe("480");
-    d.tick();
-    expect(d.decoded.map((f) => f.src)).toContain("data:image/jpeg;base64,ROOM");
-    expect(el.querySelector(".room__pick")).toBeNull();
-    cleanup();
-    const two = page(stateOf([...room, mon({ kind: "session", state: "start", lang: "en", uid: "camera:fridge", session: "cam2", ts: T0 + 600 })]));
-    const btns = [...two.querySelectorAll(".room__btn")];
-    expect(btns.map(text)).toEqual(["front", "fridge"]);
-    act(() => { (btns[1] as HTMLButtonElement).click(); });
-    expect(text(two.querySelector(".roomcam__title"))).toBe("Room camera: fridge");
-    expect(text(two.querySelector(".roomcam__empty"))).toBe("Connected, no picture yet.");
-  });
-  it("record mode is a clean 16:9 view: cameras and the last three caption lines, no cards, no header", () => {
-    const onRecord = vi.fn();
-    const state = stateOf([
-      ...room,
-      mon({ kind: "transcript", role: "owner", text: "one", lang: "en", final: true }),
-      mon({ kind: "transcript", role: "aira", text: "two", lang: "en", final: true }),
-      mon({ kind: "transcript", role: "customer", text: "three", lang: "ta", final: true }),
-      mon({ kind: "transcript", role: "aira", text: "four", lang: "en", final: false }),
-    ]);
-    const el = page(state, "live", { record: true, onRecord });
-    expect(el.querySelector("[data-testid=record]")).not.toBeNull();
-    expect(el.querySelector(".lv-head, .cam, .chat, .tl, .steps")).toBeNull();
-    expect(el.querySelectorAll(".record__cams canvas")).toHaveLength(2);
-    expect(text(el.querySelector(".record__sam .camera__age"))).toBe("0.5s ago");
-    expect([...el.querySelectorAll(".caption__text")].map(text)).toEqual(["two", "three", "four"]);
-    expect(el.querySelector(".caption--partial")).not.toBeNull();
-    act(() => { (el.querySelector(".record__exit") as HTMLButtonElement).click(); });
-    expect(onRecord).toHaveBeenCalledWith(false);
-    cleanup();
-    const normal = page(state, "live", { onRecord });
-    act(() => { findAllByText(normal, ".bar__btn", "Record mode")[0].click(); });
-    expect(onRecord).toHaveBeenCalledWith(true);
+    for (const conn of ["unauthorized", "unauthenticated"] as Conn[]) {
+      const refused = page(initialState(), conn, { auth: a });
+      expect(refused.querySelector(".signin, .signin__btn")).toBeNull();
+      expect(text(refused.querySelector(".cam__empty-sub"))).toBe(REJECTED_TEXT);
+      expect(findAllByText(refused, ".lv-conn__text", "Refused")).toHaveLength(1);
+      expect(text(refused)).not.toMatch(/Google account|Sign in again|Sign-in expired|Not allowed/);
+      cleanup();
+    }
+    const noProp = page(initialState(), "unauthorized");
+    expect(text(noProp.querySelector(".cam__empty-sub"))).toBe(REJECTED_TEXT);
+    expect(findAllByText(noProp, ".lv-conn__text", "Refused")).toHaveLength(1);
   });
 });

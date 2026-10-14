@@ -49,16 +49,20 @@ class Settings:
     allow_no_token: bool = False  # hello without a Firebase ID token is accepted (no Firebase Auth)
     app_key: str | None = None  # shared demo key: when set, hello.idToken must equal it (shared/docs/ops/security.md)
     job_token: str | None = None  # X-AIRA-Job-Token for /jobs/*
+    # AIRA_MONITOR_AUTH=1: the read-only /monitor socket requires the Google sign-in (a Firebase ID token for an
+    # account in ``monitor_viewers``). Unset or "0" (the default, the owner's decision): no authentication, anyone
+    # who can open the dashboard watches the live feed (shared/docs/ops/security.md §2a).
+    monitor_auth: bool = False
     # AIRA_MONITOR_ORIGINS (comma-separated): browser Origins that may open the read-only /monitor socket
-    # (aira_live.monitor.origin_allowed). Defence in depth only: the feed itself requires a signed-in, allowed
-    # viewer (``monitor_viewers``, verified by aira_live.auth.verify_firebase_user).
+    # (aira_live.monitor.origin_allowed). Defence in depth only, not authentication: a script can send any Origin.
     monitor_origins: tuple[str, ...] = DEFAULT_MONITOR_ORIGINS
     # The Firebase project whose Authentication ID tokens the live feed accepts (the token's ``aud`` and the
     # issuer ``https://securetoken.google.com/<project>``): AIRA_FIREBASE_PROJECT, else GCP_PROJECT. None = no
-    # token can verify (fail closed).
+    # token can verify (fail closed). Only matters with AIRA_MONITOR_AUTH=1.
     firebase_project_id: str | None = None
     # AIRA_MONITOR_VIEWERS: the Google accounts allowed to watch the live feed (emails, lowercased, or
-    # ``uid:<uid>``). Empty = nobody may watch (shared/docs/ops/security.md §2a).
+    # ``uid:<uid>``) when AIRA_MONITOR_AUTH=1; empty = nobody may watch then. Ignored without the flag
+    # (shared/docs/ops/security.md §2a).
     monitor_viewers: tuple[str, ...] = ()
     live_video: bool = True  # AIRA_LIVE_VIDEO: the phone's 1 fps ``live`` frames go into Gemini Live as video
     live_nudge: bool = True  # AIRA_LIVE_NUDGE: a settled scene change asks Live to speak up (aira_live.live_video)
@@ -98,6 +102,7 @@ def load() -> Settings:
         allow_no_token=os.getenv("AIRA_ALLOW_NO_TOKEN", "0") == "1",
         app_key=_env("AIRA_APP_KEY"),
         job_token=_env("AIRA_JOB_TOKEN"),
+        monitor_auth=os.getenv("AIRA_MONITOR_AUTH", "0") == "1",
         monitor_origins=_origins(_env("AIRA_MONITOR_ORIGINS")),
         firebase_project_id=_env("AIRA_FIREBASE_PROJECT") or _env("GCP_PROJECT"),
         monitor_viewers=_viewers(_env("AIRA_MONITOR_VIEWERS")),

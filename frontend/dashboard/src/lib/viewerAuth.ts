@@ -16,12 +16,23 @@ export interface ViewerAuth {
   idToken(force?: boolean): Promise<string>;
 }
 
-/** unconfigured: no Firebase web config in the build · loading: the SDK has not said yet · signed_out · signed_in. */
-export type AuthStatus = "unconfigured" | "loading" | "signed_out" | "signed_in";
+/**
+ * off: this build asks for no sign-in (VITE_MONITOR_AUTH unset, the default) · unconfigured: sign-in is wanted
+ * but the build has no Firebase web config · loading: the SDK has not said yet · signed_out · signed_in.
+ */
+export type AuthStatus = "off" | "unconfigured" | "loading" | "signed_out" | "signed_in";
 
 /** True when the build carries the Firebase web config sign-in needs (VITE_FIREBASE_PROJECT_ID and API key). */
 export function authConfigured(env: Record<string, unknown>): boolean {
   return missingFirebaseConfig(env).length === 0;
+}
+
+/**
+ * True when the build wants the viewer signed in to watch (VITE_MONITOR_AUTH=1, matching the server's
+ * AIRA_MONITOR_AUTH=1). Off by default: the Live page opens for anyone and shows everyone using AIRA.
+ */
+export function monitorAuthRequired(env: Record<string, unknown>): boolean {
+  return typeof env.VITE_MONITOR_AUTH === "string" && env.VITE_MONITOR_AUTH.trim() === "1";
 }
 
 /** A token is refreshed this long before it expires. */

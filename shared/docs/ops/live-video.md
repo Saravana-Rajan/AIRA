@@ -22,8 +22,9 @@ Our WebSockets carry only the signalling, as one message shape on every channel
 - `from` is always the sender's id **as the server knows it** (a phone's session id, or the monitor id the
   server gave the dashboard); whatever a client puts there is overwritten. `to` names the peer.
 - The server (`backend/aira_live/rtc.py`) relays only between a monitor and a phone session **of the same
-  shop**. A monitor is a socket on `/monitor` that authenticated with a Firebase ID token for a Google account on
-  `AIRA_MONITOR_VIEWERS` (no key; see `security.md` §2a): no signalling is relayed before that. It never reads the SDP: offers and answers are capped at
+  shop**. A monitor is a socket on `/monitor` (when `AIRA_MONITOR_AUTH=1`, one that authenticated with a Firebase
+  ID token for a Google account on `AIRA_MONITOR_VIEWERS`, and no signalling is relayed before that; by default
+  no sign-in, see `security.md` §2a). It never reads the SDP: offers and answers are capped at
   64 KB, candidates at 1 KB, each socket at 40 signalling messages a second, and `diag("rtc", ...)` logs the
   kind, the ids and the size only.
 

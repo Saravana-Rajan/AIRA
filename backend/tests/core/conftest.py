@@ -12,7 +12,10 @@ from core.monitor_fakes import ORIGIN, SHOP, TOKEN_VIEWER, VIEWER_EMAIL, FakeVer
 
 @pytest.fixture
 def fake_viewers(monkeypatch) -> FakeVerifier:
-    """The live feed's auth, faked: the verifier table above and an allowlist with the viewer's email and a uid."""
+    """The live feed's auth, faked: the verifier table above and an allowlist with the viewer's email and a uid.
+    Also sets AIRA_MONITOR_AUTH=1, so every test using it runs the sign-in gate (the default is no auth at all,
+    tested in test_monitor_open.py)."""
+    monkeypatch.setenv("AIRA_MONITOR_AUTH", "1")
     monkeypatch.setenv("GCP_PROJECT", "test-project")
     monkeypatch.delenv("AIRA_FIREBASE_PROJECT", raising=False)
     monkeypatch.setenv("AIRA_MONITOR_VIEWERS", f"{VIEWER_EMAIL},uid:uid-listed")

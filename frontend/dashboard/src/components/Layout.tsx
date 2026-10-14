@@ -55,7 +55,7 @@ export function Layout(props: {
   route: Route;
   status: LiveStatus;
   updatedText?: string;
-  /** Record mode on the Live page: only the page itself, no header or menu (a clean screen recording). */
+  /** Only the page itself, no header or menu (a clean full-screen view); nothing passes it today. */
   bare?: boolean;
   children: ComponentChildren;
 }) {

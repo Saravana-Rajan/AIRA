@@ -1,8 +1,10 @@
-// useMonitor connects only while a viewer is signed in, sends the ID token as the first message of every
-// socket, refreshes it before expiry, keeps what it hears in memory only, scoped to one session, and drops it
-// whenever the socket is not open: on close, when the Live page is left, when the page is unloaded (pagehide),
-// on sign-out and when the server refuses the account. A merely hidden tab stays connected. Fake sockets and a
-// fake sign-in stand in for WebSocket and Firebase.
+// useMonitor, by default (no VITE_MONITOR_AUTH), connects as soon as the Live page is open and sends nothing
+// first: the server streams everyone using AIRA. In the VITE_MONITOR_AUTH=1 build it connects only while a
+// viewer is signed in, sends the ID token as the first message of every socket and refreshes it before expiry.
+// In both it keeps what it hears in memory only, scoped to one followed session, and drops it whenever the
+// socket is not open: on close, when the Live page is left, when the page is unloaded (pagehide), on sign-out
+// and when the server refuses the account. A merely hidden tab stays connected. Fake sockets and a fake
+// sign-in stand in for WebSocket and Firebase.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act } from "preact/test-utils";
 import { useState } from "preact/hooks";
@@ -14,7 +16,10 @@ import type { PeerCtor, PeerLike } from "../src/lib/rtcViewer";
 import type { ViewerAuth, ViewerUser } from "../src/lib/viewerAuth";
 
 type Fake = SocketLike & { closed: boolean; sent: string[] };
-const ENV = { VITE_AIRA_LIVE_WS: "wss://live.example/ws" };
+/** The sign-in build: every test below but the last describe runs with sign-in required. */
+const ENV = { VITE_AIRA_LIVE_WS: "wss://live.example/ws", VITE_MONITOR_AUTH: "1" };
+/** The default build: no sign-in. */
+const OPEN_ENV = { VITE_AIRA_LIVE_WS: "wss://live.example/ws" };
 const T0 = 1_760_000_000_000;
 const SAM: ViewerUser = { uid: "u-sam", email: "sam@example.com", name: "Sam" };
 const token = (exp = T0 + 3_600_000, tag = "t") => jwt({ sub: "u-sam", exp: Math.floor(exp / 1000), tag });
@@ -68,7 +73,7 @@ class FakePC implements PeerLike {
   close() { this.closed = true; }
 }
 
-function harness(enabled = true, peer?: PeerCtor, auth = fakeAuth()) {
+function harness(enabled = true, peer?: PeerCtor, auth = fakeAuth(), env: Record<string, unknown> = ENV) {
   const sockets: Fake[] = [];
   const timers: Array<{ fn: () => void; ms: number }> = [];
   const deps: MonitorDeps = {
@@ -80,7 +85,7 @@ function harness(enabled = true, peer?: PeerCtor, auth = fakeAuth()) {
   function Probe() {
     const [on, set] = useState(enabled);
     setEnabled = set;
-    latest = useMonitor(on, "sunrise_dairy", ENV, deps);
+    latest = useMonitor(on, "sunrise_dairy", env, deps);
     return null;
   }
   mount(<Probe />);
@@ -368,5 +373,90 @@ describe("useMonitor: the feed", () => {
     h.send({ kind: "session", state: "start", lang: "en", uid: "u1" });
     expect(h.last().sent).toEqual([authLine(token())]);
     expect(h.mon().video.mode).toBe("preview");
+  });
+});
+
+describe("useMonitor: no sign-in (the default)", () => {
+  it("connects the moment the page is open, sends nothing, and is live on open; sign-in is off even with a fake injected", async () => {
+    const a = fakeAuth(null); // a fake sign-in, signed out: it does not count, the flag decides
+    const h = harness(true, undefined, a, OPEN_ENV);
+    expect(h.sockets).toHaveLength(1);
+    expect(h.mon().conn).toBe("connecting");
+    expect(h.mon().auth).toMatchObject({ status: "off", user: null, error: null });
+    await h.open();
+    expect(h.mon().conn).toBe("live");
+    expect(h.last().sent).toEqual([]);
+    expect(a.idToken).not.toHaveBeenCalled();
+    expect(h.timers).toEqual([]); // no token refresh booked
+    act(() => h.mon().auth.signIn()); // no-ops
+    act(() => h.mon().auth.signOut());
+    await flush();
+    expect(a.signIn).not.toHaveBeenCalled();
+    expect(a.signOut).not.toHaveBeenCalled();
+    expect(h.mon().auth.status).toBe("off");
+    expect(h.mon().conn).toBe("live");
+    expect(h.last().sent).toEqual([]);
+  });
+
+  it("lists everyone using AIRA, follows the first and switches on follow", async () => {
+    const h = harness(true, undefined, fakeAuth(null), OPEN_ENV);
+    await h.open();
+    h.send({ kind: "session", state: "start", lang: "ta", uid: "u1", startedAt: T0 - 60_000 });
+    h.send({ kind: "session", state: "start", lang: "hi", uid: "u2", session: "s2", startedAt: T0 - 5_000, ts: 2 });
+    h.send({ kind: "status", state: "guiding", session: "s2", ts: 3 });
+    h.send({ kind: "transcript", role: "owner", text: "from s2", lang: "hi", final: true, session: "s2", ts: 4 });
+    expect(h.mon().state.session).toBe("s1");
+    expect(h.mon().state.sessions.s1).toMatchObject({ uid: "u1", lang: "ta", startedAt: T0 - 60_000 });
+    expect(h.mon().state.sessions.s2).toMatchObject({ uid: "u2", lang: "hi", startedAt: T0 - 5_000, status: "guiding" });
+    expect(h.mon().state.transcript).toEqual([]);
+    act(() => h.mon().follow("s2"));
+    expect(h.mon().state).toMatchObject({ session: "s2", sessionStartedAt: T0 - 5_000, status: "guiding" });
+    h.send({ kind: "transcript", role: "owner", text: "from s2 again", lang: "hi", final: true, session: "s2", ts: 5 });
+    h.send({ kind: "transcript", role: "owner", text: "from s1", lang: "ta", final: true, ts: 6 });
+    expect(h.mon().state.transcript.map((l) => l.text)).toEqual(["from s2 again"]);
+    h.send({ kind: "session", state: "end", lang: "hi", session: "s2", ts: 7 });
+    expect(h.mon().state.session).toBe("s1"); // the one left is followed
+    expect(Object.keys(h.mon().state.sessions)).toEqual(["s1"]);
+  });
+
+  it("closes the socket and clears the state when the Live page is left, and reconnects without a handshake when it is opened again", async () => {
+    const h = harness(true, undefined, fakeAuth(null), OPEN_ENV);
+    await h.open();
+    h.send({ kind: "frame", jpeg_b64: "AAAA", w: 1, h: 1, purpose: "ask" });
+    expect(h.mon().state.frame).not.toBeNull();
+    h.setEnabled(false);
+    expect(h.last().closed).toBe(true);
+    expect(h.mon().state.frame).toBeNull();
+    expect(h.mon().conn).toBe("waiting");
+    h.setEnabled(true);
+    expect(h.sockets).toHaveLength(2);
+    await h.open();
+    expect(h.last().sent).toEqual([]);
+    expect(h.mon().conn).toBe("live");
+  });
+
+  it("a 4403 is the server's refusal of the page (rejected), no retry; a 4401 is shown as it comes, no retry with a token", async () => {
+    const h = harness(true, undefined, fakeAuth(null), OPEN_ENV);
+    await h.open();
+    h.send({ kind: "frame", jpeg_b64: "DDDD", w: 1, h: 1, purpose: "ask" });
+    act(() => h.last().onclose!({ code: 4403 }));
+    expect(h.mon().conn).toBe("rejected");
+    expect(h.mon().state.frame).toBeNull();
+    expect(h.sockets).toHaveLength(1);
+    cleanup();
+    const g = harness(true, undefined, fakeAuth(null), OPEN_ENV);
+    await g.open();
+    act(() => g.last().onclose!({ code: 4401 }));
+    expect(g.mon().conn).toBe("unauthenticated");
+    expect(g.sockets).toHaveLength(1);
+    expect(g.auth.idToken).not.toHaveBeenCalled();
+  });
+
+  it("asks the followed session for WebRTC video as the first and only thing it sends", async () => {
+    FakePC.instances = [];
+    const h = harness(true, FakePC as unknown as PeerCtor, fakeAuth(null), OPEN_ENV);
+    await h.open();
+    h.send({ kind: "session", state: "start", lang: "en", uid: "u1" });
+    expect(h.last().sent).toEqual([JSON.stringify({ t: "rtc", kind: "want", to: "s1" })]);
   });
 });

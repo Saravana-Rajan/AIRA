@@ -666,10 +666,11 @@ def test_monitor_refused_for_a_shop_that_is_not_the_demo_shop(fake_viewers):
                                      {"Origin": "http://aira-shop.web.app"}, {}])
 def test_monitor_refused_from_a_foreign_or_missing_origin(headers, fake_viewers):
     """Defence in depth: an Origin off AIRA_MONITOR_ORIGINS (by default the hosting site; localhost is not on
-    it) or no Origin at all is closed before the handshake, before any token is read."""
+    it) or no Origin at all is accepted and closed with 4403 at once, before any token is read (the code, not an
+    HTTP 403, so a browser can tell the dashboard it is not allowed here)."""
     with pytest.raises(WebSocketDisconnect) as closed:
-        with TestClient(main_mod.app).websocket_connect(f"/monitor?shop={SHOP}", headers=headers):
-            pass
+        with TestClient(main_mod.app).websocket_connect(f"/monitor?shop={SHOP}", headers=headers) as mon:
+            mon.receive_json()  # accepted and closed at once: the first read is the 4403
     assert closed.value.code == 4403
     assert not monitor.monitored(SHOP)
     assert fake_viewers.calls == []
@@ -681,8 +682,8 @@ def test_monitor_origins_env_lets_a_local_dashboard_in(monkeypatch, mon_open):
         _wait(lambda: monitor.monitored(SHOP))
     _wait(lambda: not monitor.monitored(SHOP))
     with pytest.raises(WebSocketDisconnect) as closed:  # the env replaces the default list
-        with TestClient(main_mod.app).websocket_connect(f"/monitor?shop={SHOP}", headers={"Origin": "https://aira-shop.firebaseapp.com"}):
-            pass
+        with TestClient(main_mod.app).websocket_connect(f"/monitor?shop={SHOP}", headers={"Origin": "https://aira-shop.firebaseapp.com"}) as mon:
+            mon.receive_json()
     assert closed.value.code == 4403
 
 
@@ -692,8 +693,8 @@ def test_monitor_refused_over_the_per_shop_cap(monkeypatch, mon_open):
         with mon_open(client):
             _wait(lambda: monitor.monitors(SHOP) == 1)
             with pytest.raises(WebSocketDisconnect) as closed:
-                with client.websocket_connect(f"/monitor?shop={SHOP}", headers=ORIGIN):
-                    pass
+                with client.websocket_connect(f"/monitor?shop={SHOP}", headers=ORIGIN) as mon:
+                    mon.receive_json()
             assert closed.value.code == 4403
             assert monitor.monitors(SHOP) == 1
     _wait(lambda: not monitor.monitored(SHOP))

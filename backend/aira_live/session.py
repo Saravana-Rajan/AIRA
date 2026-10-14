@@ -44,6 +44,7 @@ class Session:
         # ``session_id`` is given only when a hello resumes a session that just ended (sessions.take_ended).
         self.session_id = session_id or uuid.uuid4().hex[:12]
         self.uid, self.shop_id, self.lang, self.verbosity = uid, shop_id, lang, verbosity
+        self.started_at = time.time()  # epoch seconds; the monitor's ``session start`` carries it as ms
         self.lang_pending: str | None = None  # a language heard in the last utterance but not yet adopted
         # The languages this shop usually speaks (i18n.expected); None means any language switches as before.
         self.languages: list[str] | None = languages
