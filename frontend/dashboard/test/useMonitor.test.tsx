@@ -1,13 +1,13 @@
 // useMonitor keeps what it hears in memory only, scoped to one session, and drops it whenever the socket is
-// not open: on close, when the Live page is left, when the page is unloaded (pagehide), and when the key is
-// refused (which also forgets the key for the tab). A merely hidden tab stays connected. Fake sockets stand in
-// for WebSocket.
+// not open: on close, when the Live page is left, when the page is unloaded (pagehide), and when the server
+// refuses the page. There is no monitor key: it connects at once. A merely hidden tab stays connected. Fake
+// sockets stand in for WebSocket.
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { act } from "preact/test-utils";
 import { useState } from "preact/hooks";
 import { cleanup, mount } from "./helpers/render";
 import { useMonitor, type Monitor, type MonitorDeps } from "../src/lib/useMonitor";
-import { KEY_STORAGE, type SocketLike } from "../src/lib/monitor";
+import type { SocketLike } from "../src/lib/monitor";
 import type { PeerCtor, PeerLike } from "../src/lib/rtcViewer";
 
 type Fake = SocketLike & { closed: boolean; sent: string[] };
@@ -57,18 +57,16 @@ function harness(enabled = true, peer?: PeerCtor) {
 
 beforeEach(() => {
   sessionStorage.clear();
-  sessionStorage.setItem(KEY_STORAGE, "k-1");
   location.hash = "#/live";
 });
 afterEach(cleanup);
 
 describe("useMonitor", () => {
-  it("connects with the tab's key, reduces messages into memory, and drops everything when the socket closes", () => {
+  it("connects at once without any key, reduces messages into memory, and drops everything when the socket closes", () => {
     const h = harness();
     expect(h.sockets).toHaveLength(1);
-    expect(h.mon().keyNeeded).toBe(false);
     h.open();
-    expect(h.last().sent).toEqual([JSON.stringify({ t: "auth", key: "k-1" })]);
+    expect(h.last().sent).toEqual([]); // no auth message: there is no monitor key
     expect(h.mon().conn).toBe("live");
     h.send({ kind: "session", state: "start", lang: "en", uid: "u1" });
     h.send({ kind: "transcript", role: "owner", text: "two litres", lang: "en", final: true });
@@ -82,7 +80,7 @@ describe("useMonitor", () => {
     expect(h.mon().state.session).toBeNull();
     // Nothing reached storage or the address bar.
     expect(Object.keys(localStorage)).toEqual([]);
-    expect([...Array(sessionStorage.length).keys()].map((i) => sessionStorage.key(i))).toEqual([KEY_STORAGE]);
+    expect(sessionStorage.length).toBe(0);
     expect(location.href).not.toContain("AAAA");
   });
 
@@ -193,22 +191,18 @@ describe("useMonitor", () => {
     const h = harness();
     h.open();
     h.send({ kind: "session", state: "start", lang: "en", uid: "u1" });
-    expect(h.last().sent).toEqual([JSON.stringify({ t: "auth", key: "k-1" })]);
+    expect(h.last().sent).toEqual([]);
     expect(h.mon().video.mode).toBe("preview");
   });
 
-  it("forgets a refused key and asks for a new one, without retrying", () => {
+  it("reports a refusal (4403: the server's Origin allowlist or shop check) and does not retry", () => {
     const h = harness();
     h.open();
+    h.send({ kind: "frame", jpeg_b64: "DDDD", w: 1, h: 1, purpose: "ask" });
     act(() => h.last().onclose!({ code: 4403 }));
     expect(h.mon().conn).toBe("rejected");
-    expect(h.mon().keyNeeded).toBe(true);
-    expect(sessionStorage.getItem(KEY_STORAGE)).toBeNull();
+    expect(h.mon().state.frame).toBeNull();
     expect(h.sockets).toHaveLength(1);
-    act(() => h.mon().setKey("k-2"));
-    expect(sessionStorage.getItem(KEY_STORAGE)).toBe("k-2");
-    expect(h.sockets).toHaveLength(2);
-    h.open();
-    expect(h.last().sent).toEqual([JSON.stringify({ t: "auth", key: "k-2" })]);
+    expect(sessionStorage.length).toBe(0);
   });
 });

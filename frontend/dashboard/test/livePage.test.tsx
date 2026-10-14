@@ -31,8 +31,8 @@ function fakeDraw() {
   return { deps, rafs, decoded, tick: () => rafs.splice(0).forEach((cb) => cb()) };
 }
 
-const page = (state: LiveState, conn: Conn = "live", keyNeeded = false, onKey = vi.fn(), extra: { record?: boolean; onRecord?: (on: boolean) => void; drawDeps?: DrawDeps; video?: VideoState } = {}) =>
-  mount(<LivePage state={state} conn={conn} keyNeeded={keyNeeded} onKey={onKey} now={() => T0 + 84_500} {...extra} />);
+const page = (state: LiveState, conn: Conn = "live", extra: { record?: boolean; onRecord?: (on: boolean) => void; drawDeps?: DrawDeps; video?: VideoState } = {}) =>
+  mount(<LivePage state={state} conn={conn} now={() => T0 + 84_500} {...extra} />);
 
 const milk = { label: "Aavin milk 500 ml", box: [400, 500, 440, 560] as [number, number, number, number], point: null, score: 0.92, distance: "arm" as const };
 const frame = mon({ kind: "frame", jpeg_b64: "AAAA", w: 480, h: 640, purpose: "preview", ts: T0 + 84_000 });
@@ -62,7 +62,7 @@ describe("LivePage: AIRA's own chrome", () => {
     expect(el.querySelector(".room")).toBeNull();
   });
   it("takes the shop's name, and shows the language and connection once a session is open", () => {
-    const el = mount(<LivePage state={stateOf([started])} conn="live" keyNeeded={false} onKey={vi.fn()} shopName="Sunrise Dairy East" now={() => T0 + 84_500} />);
+    const el = mount(<LivePage state={stateOf([started])} conn="live" shopName="Sunrise Dairy East" now={() => T0 + 84_500} />);
     expect(text(el.querySelector(".lv-title"))).toBe("Sunrise Dairy East - Live");
     expect(findAllByText(el, ".lv-pill", "Listening")).toHaveLength(1);
     expect(text(el.querySelector(".lv-conn__lang"))).toBe("Tamil");
@@ -82,9 +82,9 @@ describe("LivePage: AIRA's own chrome", () => {
   });
   it("offers a session picker only when the shop has more than one live phone, and hands the pick back", () => {
     const onFollow = vi.fn();
-    const one = mount(<LivePage state={stateOf([started])} conn="live" keyNeeded={false} onKey={vi.fn()} onFollow={onFollow} now={() => T0 + 84_500} />);
+    const one = mount(<LivePage state={stateOf([started])} conn="live" onFollow={onFollow} now={() => T0 + 84_500} />);
     expect(one.querySelector("select.lv-session")).toBeNull();
-    const two = mount(<LivePage state={stateOf([started, mon({ kind: "session", state: "start", lang: "en", uid: "u2", session: "s2", ts: T0 + 1 })])} conn="live" keyNeeded={false} onKey={vi.fn()} onFollow={onFollow} now={() => T0 + 84_500} />);
+    const two = mount(<LivePage state={stateOf([started, mon({ kind: "session", state: "start", lang: "en", uid: "u2", session: "s2", ts: T0 + 1 })])} conn="live" onFollow={onFollow} now={() => T0 + 84_500} />);
     const select = two.querySelector<HTMLSelectElement>("select.lv-session")!;
     expect(select.value).toBe("s1");
     expect([...select.options].map((o) => o.value)).toEqual(["s1", "s2"]);
@@ -94,13 +94,15 @@ describe("LivePage: AIRA's own chrome", () => {
     });
     expect(onFollow).toHaveBeenCalledWith("s2");
   });
-  it("explains a refused key", () => {
+  it("explains a refusal by the server without mentioning any key", () => {
     const el = page(initialState(), "rejected");
-    expect(text(el)).toContain("The monitor key was refused");
+    expect(text(el)).toContain("AIRA Live refused this page");
+    expect(text(el)).not.toContain("key");
+    expect(findAllByText(el, ".lv-conn__text", "Refused")).toHaveLength(1);
   });
   it("says what it is waiting for: not configured only without a live URL, else connecting or waiting for the phone", () => {
     const sub = (el: HTMLElement) => text(el.querySelector(".cam__empty-sub"));
-    const unconfigured = mount(<LivePage state={initialState()} conn="waiting" keyNeeded={false} onKey={vi.fn()} configured={false} now={() => T0 + 84_500} />);
+    const unconfigured = mount(<LivePage state={initialState()} conn="waiting" configured={false} now={() => T0 + 84_500} />);
     expect(sub(unconfigured)).toBe("AIRA Live is not configured for this dashboard.");
     cleanup();
     expect(sub(page(initialState(), "waiting"))).toBe("Connecting to AIRA Live…");
@@ -112,27 +114,16 @@ describe("LivePage: AIRA's own chrome", () => {
     const live = page(initialState(), "live");
     expect(sub(live)).toBe("Connected. Waiting for the phone to start a session.");
     expect(text(live)).not.toContain("not configured");
-    cleanup();
-    // No key yet: the key prompt, even when the live URL is missing too.
-    const noKey = mount(<LivePage state={initialState()} conn="waiting" keyNeeded onKey={vi.fn()} configured={false} now={() => T0 + 84_500} />);
-    expect(noKey.querySelector("input#monitor-key")).not.toBeNull();
-    expect(noKey.querySelector(".cam__empty")).toBeNull();
   });
-  it("asks for the key when none is known and hands it back on submit", () => {
-    const onKey = vi.fn();
-    const el = page(initialState(), "waiting", true, onKey);
-    const input = el.querySelector<HTMLInputElement>("input#monitor-key")!;
-    expect(input.type).toBe("password");
-    expect(text(el.querySelector("label"))).toBe("Monitor key");
-    act(() => {
-      input.value = "  secret-1 ";
-      input.dispatchEvent(new Event("input", { bubbles: true }));
-    });
-    act(() => {
-      el.querySelector("form")!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
-    });
-    expect(onKey).toHaveBeenCalledWith("secret-1");
-    expect(findAllByText(el, "p", "Waiting for Sam's phone…")).toHaveLength(0);
+  it("never shows a monitor key screen: the page opens straight to the feed in every connection state", () => {
+    for (const conn of ["waiting", "connecting", "live", "offline", "rejected"] as Conn[]) {
+      const el = page(initialState(), conn);
+      expect(el.querySelector("input#monitor-key")).toBeNull();
+      expect(el.querySelector(".keyprompt, form")).toBeNull();
+      expect(text(el)).not.toContain("Monitor key");
+      expect(findAllByText(el, "p", "Waiting for Sam's phone…")).toHaveLength(1);
+      cleanup();
+    }
   });
 });
 
@@ -157,7 +148,7 @@ describe("LivePage: task stepper", () => {
 describe("LivePage: camera", () => {
   it("paints the newest frame on a canvas through the drawer (one animation frame, newest frame only) and shows the frame age", () => {
     const d = fakeDraw();
-    const el = page(stateOf([frame]), "live", false, vi.fn(), { drawDeps: d.deps });
+    const el = page(stateOf([frame]), "live", { drawDeps: d.deps });
     const canvas = el.querySelector<HTMLCanvasElement>("canvas.camera__canvas")!;
     expect([canvas.getAttribute("width"), canvas.getAttribute("height")]).toEqual(["480", "640"]);
     expect(canvas.getAttribute("data-frame-ts")).toBe(String(T0 + 84_000));
@@ -239,7 +230,7 @@ describe("LivePage: camera", () => {
     const el = page(stateOf([
       mon({ kind: "status", state: "guiding" }),
       mon({ kind: "vision", source: "er2", objects: [milk], target: "Aavin milk 500 ml", found: false, context: "guidance" }),
-    ]), "live", false, vi.fn(), { video: { mode: "webrtc", stream, session: "s1" }, drawDeps: d.deps });
+    ]), "live", { video: { mode: "webrtc", stream, session: "s1" }, drawDeps: d.deps });
     expect(el.querySelector("canvas.camera__canvas")).toBeNull();
     expect(el.querySelector("img.camera__img")).toBeNull();
     expect(d.rafs).toHaveLength(0);
@@ -259,7 +250,7 @@ describe("LivePage: camera", () => {
 
   it("shows the JPEG frame on the canvas with a Preview badge while WebRTC is not connected", () => {
     const d = fakeDraw();
-    const el = page(stateOf([frame]), "live", false, vi.fn(), { video: { mode: "connecting", stream: null, session: "s1" }, drawDeps: d.deps });
+    const el = page(stateOf([frame]), "live", { video: { mode: "connecting", stream: null, session: "s1" }, drawDeps: d.deps });
     expect(el.querySelector("canvas.camera__canvas")).not.toBeNull();
     expect(el.querySelector("video")).toBeNull();
     expect(d.rafs).toHaveLength(1);
@@ -272,7 +263,7 @@ describe("LivePage: camera", () => {
 
   it("record mode plays the WebRTC video too, without a frame age", () => {
     const stream = { id: "remote" } as unknown as MediaStream;
-    const el = page(stateOf([started]), "live", false, vi.fn(), { record: true, video: { mode: "webrtc", stream, session: "s1" } });
+    const el = page(stateOf([started]), "live", { record: true, video: { mode: "webrtc", stream, session: "s1" } });
     expect(el.querySelector(".record__sam video.camera__video")).not.toBeNull();
     expect(el.querySelector(".record__sam .camera__age")).toBeNull();
     expect(el.querySelector(".cam__empty")).toBeNull();
@@ -344,7 +335,7 @@ describe("LivePage: room camera and record mode", () => {
   ];
   it("shows the room camera panel when a camera:<name> session exists, with a picker for several", () => {
     const d = fakeDraw();
-    const el = page(stateOf(room), "live", false, vi.fn(), { drawDeps: d.deps });
+    const el = page(stateOf(room), "live", { drawDeps: d.deps });
     expect(text(el.querySelector(".roomcam__title"))).toBe("Room camera: front");
     expect(el.querySelector(".roomcam canvas")!.getAttribute("width")).toBe("480");
     d.tick();
@@ -367,7 +358,7 @@ describe("LivePage: room camera and record mode", () => {
       mon({ kind: "transcript", role: "customer", text: "three", lang: "ta", final: true }),
       mon({ kind: "transcript", role: "aira", text: "four", lang: "en", final: false }),
     ]);
-    const el = page(state, "live", false, vi.fn(), { record: true, onRecord });
+    const el = page(state, "live", { record: true, onRecord });
     expect(el.querySelector("[data-testid=record]")).not.toBeNull();
     expect(el.querySelector(".lv-head, .cam, .chat, .tl, .steps")).toBeNull();
     expect(el.querySelectorAll(".record__cams canvas")).toHaveLength(2);
@@ -377,7 +368,7 @@ describe("LivePage: room camera and record mode", () => {
     act(() => { (el.querySelector(".record__exit") as HTMLButtonElement).click(); });
     expect(onRecord).toHaveBeenCalledWith(false);
     cleanup();
-    const normal = page(state, "live", false, vi.fn(), { onRecord });
+    const normal = page(state, "live", { onRecord });
     act(() => { findAllByText(normal, ".bar__btn", "Record mode")[0].click(); });
     expect(onRecord).toHaveBeenCalledWith(true);
   });

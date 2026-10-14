@@ -22,11 +22,6 @@ ORIGIN = {"Origin": "https://aira-shop.web.app"}
 HELLO = {"t": "hello", "uid": "u1", "shopId": "sunrise_dairy", "lang": "en", "verbosity": "short",
          "appVersion": "0.1.0"}
 SHOP = "sunrise_dairy"
-import hashlib
-import hmac
-
-KEY = hmac.new(b"m-secret", SHOP.encode(), hashlib.sha256).hexdigest()[:32]
-AUTH = {"t": "auth", "key": KEY}
 
 
 def jpeg_b64(w: int, h: int) -> str:
@@ -63,7 +58,7 @@ def _recv_until(ws, kind: str, timeout: float = 3.0) -> dict:
 
 @pytest.fixture(autouse=True)
 def clean(monkeypatch):
-    for name in ("GEMINI_API_KEY", "AIRA_MOCK", "AIRA_ALLOW_NO_TOKEN", "AIRA_APP_KEY", "AIRA_MONITOR_KEY"):
+    for name in ("GEMINI_API_KEY", "AIRA_MOCK", "AIRA_ALLOW_NO_TOKEN", "AIRA_APP_KEY", "AIRA_MONITOR_ORIGINS"):
         monkeypatch.delenv(name, raising=False)
     monitor.reset()
     yield
@@ -154,10 +149,8 @@ async def test_an_oversize_preview_frame_is_still_downscaled(mk_session):
 
 
 def test_preview_frames_reach_the_monitor_but_are_never_stored_for_the_tools(monkeypatch):
-    monkeypatch.setenv("AIRA_MONITOR_KEY", "m-secret")
     with TestClient(main_mod.app) as client, \
             client.websocket_connect(f"/monitor?shop={SHOP}", headers=ORIGIN) as mon:
-        mon.send_json(AUTH)
         _wait(lambda: monitor.monitored(SHOP))
         with client.websocket_connect("/ws", headers=ORIGIN) as ws:
             ws.send_json(HELLO)
@@ -180,12 +173,10 @@ def test_preview_frames_reach_the_monitor_but_are_never_stored_for_the_tools(mon
 
 
 def test_the_last_monitor_leaving_stops_the_phone_preview(monkeypatch):
-    monkeypatch.setenv("AIRA_MONITOR_KEY", "m-secret")
     with TestClient(main_mod.app) as client, client.websocket_connect("/ws", headers=ORIGIN) as ws:
         ws.send_json(HELLO)
         assert ws.receive_json()["t"] == "ready"
         with client.websocket_connect(f"/monitor?shop={SHOP}", headers=ORIGIN) as mon:
-            mon.send_json(AUTH)
             _recv_until(mon, "session")
             assert ws.receive_json() == {"t": "request_frame", "purpose": "preview", "continuous": True}
         _wait(lambda: not monitor.monitored(SHOP))

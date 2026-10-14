@@ -54,6 +54,30 @@ before it can even try a hello. The phone app is a Trusted Web Activity (Chrome)
 Origin is `https://aira-shop.web.app` and the owner never notices the check. For a local run, the Vite dev server
 (`:5173`) and preview (`:4173`) are already allowed. `ws_smoke` sends the hosting site's Origin (`--origin`).
 
+## 2a. The dashboard's live feed (`/monitor`): no key, an Origin allowlist only
+
+The **monitor key was removed by the owner's decision** (after the privacy trade-off was explained). There is no
+`AIRA_MONITOR_KEY`, no per-shop key, no `{t:"auth", key}` message, no `#key=` link and no key screen on the
+dashboard: the Live page opens straight to the feed. **Anyone who can open the dashboard can watch the shop**
+(the owner's camera, every conversation, every box AIRA draws).
+
+The only remaining check is a browser Origin allowlist of its own, `monitor.origin_allowed`:
+
+| Env var on `aira-live` | Default |
+|---|---|
+| `AIRA_MONITOR_ORIGINS` (comma-separated; **replaces** the default; an entry ending in `:*` matches any port on that scheme and host) | `https://aira-shop.web.app,https://aira-shop.firebaseapp.com` |
+
+An upgrade whose Origin is missing or off the list is closed with 4403 before the handshake. Localhost is **not**
+on the default list: for a local dashboard set
+`AIRA_MONITOR_ORIGINS=https://aira-shop.web.app,https://aira-shop.firebaseapp.com,http://localhost:*,http://127.0.0.1:*`
+(see `shared/.env.example`). The shop is still bound (`?shop=` is optional; in tokenless / demo mode only the
+demo shop may be named) and `MAX_MONITORS_PER_SHOP` still caps the watchers.
+
+Be clear about what this is: **a cross-site-WebSocket guard, not authentication.** It stops another web page
+from embedding or scripting the feed from a browser. It does not stop anyone who can reach the server with a
+tool that sets its own `Origin` header (curl, a script, a modified browser): to them the feed is open. Nothing
+else stands in the way.
+
 ## 3. Session caps
 
 `hello` is refused with `error/permission` ("AIRA is busy with other phones") when either cap is reached:

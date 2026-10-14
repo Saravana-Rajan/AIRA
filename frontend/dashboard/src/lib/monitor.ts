@@ -1,7 +1,8 @@
 // The Live page's model: a pure reducer over /monitor messages, coordinate mapping for the camera
-// overlay, the monitor key, the WebSocket URL and a reconnecting client that authenticates with its
-// first message. Nothing here touches the DOM except the client's WebSocket/timer hooks, which are
-// injected so tests drive them.
+// overlay, the WebSocket URL and a reconnecting client. There is no monitor key (removed by the owner's
+// decision): the feed starts as soon as the socket opens, and the server's only guard is its Origin
+// allowlist. Nothing here touches the DOM except the client's WebSocket/timer hooks, which are injected so
+// tests drive them.
 import {
   NORM_MAX, parseMonitorFeedMsg,
   type Box, type MonitorMsg, type MonitorRole, type MonitorState, type Point, type VisionObject, type VisionSource,
@@ -326,68 +327,10 @@ export function overlayShapes(
   return out;
 }
 
-// ---------- key and URL ----------
-export const KEY_STORAGE = "aira.monitorKey";
-export const KEY_PARAM = "key";
-
-type StorageLike = Pick<Storage, "getItem" | "setItem" | "removeItem">;
-
-const KEY_IN_HASH = /(^#|[?&#])key=([^&#]*)/;
-
-/** The key in a URL fragment: "#key=abc", "#/live?key=abc" or "#/live&key=abc". Null when absent. */
-export function keyFromHash(hash: string): string | null {
-  const m = KEY_IN_HASH.exec(hash);
-  if (!m) return null;
-  try {
-    return decodeURIComponent(m[2]).trim() || null;
-  } catch {
-    return m[2].trim() || null;
-  }
-}
-
-/**
- * The fragment with key= removed ("#/live?key=abc" -> "#/live"; "#/live#key=abc" -> "#/live"; "#key=abc" -> "").
- * Never the query string.
- */
-export function stripKey(hash: string): string {
-  const out = hash
-    .replace(/\?key=[^&#]*&/, "?")
-    .replace(/([?&#])key=[^&#]*/, (_m, lead: string, at: number) => (lead === "#" && at === 0 ? "#" : ""))
-    .replace(/\?&/, "?")
-    .replace(/[?&#]$/, "");
-  return out === "#" ? "" : out;
-}
-
-/**
- * The monitor key from the URL fragment (#key=..., never the query string: a fragment is not sent to the
- * server or written to access logs), saved for the tab; else the one saved earlier in this tab; else null.
- */
-export function readKey(hash: string, storage: StorageLike | null | undefined): string | null {
-  const fromUrl = keyFromHash(hash);
-  if (fromUrl) {
-    storeKey(fromUrl, storage);
-    return fromUrl;
-  }
-  try {
-    return storage?.getItem(KEY_STORAGE)?.trim() || null;
-  } catch {
-    return null;
-  }
-}
-
-/** Remembers the key for this tab only; a blocked storage is not an error. */
-export function storeKey(key: string | null, storage: StorageLike | null | undefined): void {
-  try {
-    if (key) storage?.setItem(KEY_STORAGE, key);
-    else storage?.removeItem(KEY_STORAGE);
-  } catch {
-    /* private window or blocked storage: the key lives in memory only */
-  }
-}
-
+// ---------- URL ----------
 /**
  * The /monitor WebSocket URL from the app's VITE_AIRA_LIVE_WS (wss://host/ws -> wss://host/monitor?shop=).
- * The key is never part of it: the client sends it as its first message. Null when nothing usable is configured.
+ * Nothing else goes in it: there is no key. Null when nothing usable is configured.
  */
 export function monitorUrl(env: Record<string, unknown>, shopId: string): string | null {
   const raw = typeof env.VITE_AIRA_LIVE_WS === "string" ? env.VITE_AIRA_LIVE_WS.trim() : "";
@@ -414,7 +357,7 @@ export function backoffMs(attempt: number): number {
   return Math.min(BACKOFF_MAX_MS, BACKOFF_BASE_MS * 2 ** Math.max(0, attempt));
 }
 
-/** waiting: no key or URL yet · connecting: socket opening · live: open · offline: closed, retrying · rejected: the key was refused. */
+/** waiting: no URL yet · connecting: socket opening · live: open · offline: closed, retrying · rejected: the server refused this page (Origin or shop), no retry. */
 export type Connection = "waiting" | "connecting" | "live" | "offline" | "rejected";
 
 /** The slice of WebSocket the client uses; a real WebSocket satisfies it, and tests pass a fake. */
@@ -435,17 +378,16 @@ export interface ClientDeps {
   signal?: SignalPort;
 }
 
-/** WebSocket close codes the server uses to refuse the key: policy violation or auth-style. */
+/** WebSocket close codes the server uses to refuse a monitor (its Origin or shop): policy violation or auth-style. */
 const REJECT_CODES = new Set([1008, 4401, 4403]);
 
 /**
- * Keeps one /monitor socket open: as soon as it opens it sends {t:"auth", key} (the server closes with 4403
- * within 5 s otherwise); on every other close it waits backoffMs(attempt) and connects again, resetting the
- * attempt count once a socket opens. stop() closes it for good.
+ * Keeps one /monitor socket open: nothing is sent on open (there is no key: the feed starts at once); on a
+ * refusal (REJECT_CODES) it reports "rejected" and stops; on every other close it waits backoffMs(attempt) and
+ * connects again, resetting the attempt count once a socket opens. stop() closes it for good.
  */
 export function openMonitor(
   url: string,
-  key: string,
   onMsg: (m: MonitorMsg) => void,
   onConn: (c: Connection, attempt: number) => void,
   deps: ClientDeps,
@@ -470,11 +412,6 @@ export function openMonitor(
     sock = s;
     s.onopen = () => {
       if (stopped) return;
-      try {
-        s.send(JSON.stringify({ t: "auth", key }));
-      } catch {
-        /* the socket closed under us: onclose follows */
-      }
       attempt = 0;
       onConn("live", 0);
       deps.signal?.attach((m) => {

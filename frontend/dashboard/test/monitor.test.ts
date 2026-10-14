@@ -1,8 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import type { MonitorMsg } from "@aira/contracts";
 import {
-  MAX_LINES, backoffMs, detailText, eventLabel, follow, frameAge, initialState, keyFromHash, monitorUrl, openMonitor, overlayShapes,
-  readKey, reduce, sessionClock, storeKey, stripKey, toRect, toXY, type LiveState, type SocketLike,
+  MAX_LINES, backoffMs, detailText, eventLabel, follow, frameAge, initialState, monitorUrl, openMonitor, overlayShapes,
+  reduce, sessionClock, toRect, toXY, type LiveState, type SocketLike,
 } from "../src/lib/monitor";
 
 type MonInput = MonitorMsg extends infer M ? (M extends MonitorMsg ? Omit<M, "t" | "session" | "ts"> & { ts?: number; session?: string } : never) : never;
@@ -256,46 +256,8 @@ describe("reduce: camera, vision, hand, status, stats, events and sessions", () 
   });
 });
 
-describe("key handling (the fragment, never the query string)", () => {
-  const mem = () => {
-    const m = new Map<string, string>();
-    return { getItem: (k: string) => m.get(k) ?? null, setItem: (k: string, v: string) => void m.set(k, v), removeItem: (k: string) => void m.delete(k), m };
-  };
-  it("reads #key= in its three spellings", () => {
-    expect(keyFromHash("#key=abc123")).toBe("abc123");
-    expect(keyFromHash("#/live?key=abc123")).toBe("abc123");
-    expect(keyFromHash("#/live#key=abc123")).toBe("abc123");
-    expect(keyFromHash("#/live?shop=x&key=a%20b")).toBe("a b");
-    expect(keyFromHash("#/live")).toBeNull();
-    expect(keyFromHash("")).toBeNull();
-    expect(keyFromHash("#/live?monkey=1")).toBeNull();
-  });
-  it("takes the key from the fragment and remembers it for the tab", () => {
-    const st = mem();
-    expect(readKey("#/live?key=abc123", st)).toBe("abc123");
-    expect(st.m.get("aira.monitorKey")).toBe("abc123");
-    expect(readKey("#/live", st)).toBe("abc123");
-  });
-  it("returns null with no key anywhere, and survives a throwing storage", () => {
-    expect(readKey("#/live", mem())).toBeNull();
-    const broken = { getItem: () => { throw new Error("blocked"); }, setItem: () => { throw new Error("blocked"); }, removeItem: () => {} };
-    expect(readKey("#key=k", broken)).toBe("k");
-    expect(readKey("", broken)).toBeNull();
-    expect(() => storeKey("k", broken)).not.toThrow();
-    expect(readKey("#key=k", null)).toBe("k");
-  });
-  it("strips key= from the fragment and nothing else", () => {
-    expect(stripKey("#/live?key=abc")).toBe("#/live");
-    expect(stripKey("#/live?shop=x&key=abc")).toBe("#/live?shop=x");
-    expect(stripKey("#/live?key=abc&shop=x")).toBe("#/live?shop=x");
-    expect(stripKey("#key=abc")).toBe("");
-    expect(stripKey("#/live#key=abc")).toBe("#/live");
-    expect(stripKey("#/live")).toBe("#/live");
-  });
-});
-
 describe("monitorUrl", () => {
-  it("replaces /ws with /monitor and adds the shop, never the key", () => {
+  it("replaces /ws with /monitor and adds the shop, nothing else (there is no key)", () => {
     expect(monitorUrl({ VITE_AIRA_LIVE_WS: "wss://aira-live-abc.a.run.app/ws" }, "sunrise_dairy")).toBe(
       "wss://aira-live-abc.a.run.app/monitor?shop=sunrise_dairy",
     );
@@ -317,7 +279,7 @@ describe("clocks", () => {
   });
 });
 
-describe("reconnect backoff and auth", () => {
+describe("reconnect backoff and refusal", () => {
   it("doubles from 1 s and caps at 15 s", () => {
     expect([0, 1, 2, 3, 4, 9].map(backoffMs)).toEqual([1000, 2000, 4000, 8000, 15000, 15000]);
   });
@@ -330,14 +292,13 @@ describe("reconnect backoff and auth", () => {
     };
   }
 
-  it("sends {t:auth, key} as its first message, reconnects after each close with growing delays, resets after an open, and stops cleanly", () => {
+  it("sends nothing on open (no key), reconnects after each close with growing delays, resets after an open, and stops cleanly", () => {
     const sockets: ReturnType<typeof fakeSocket>[] = [];
     const timers: Array<{ fn: () => void; ms: number }> = [];
     const onMsg = vi.fn();
     const onConn = vi.fn();
     const stop = openMonitor(
       "ws://x/monitor?shop=s",
-      "k-secret",
       onMsg,
       onConn,
       { connect: () => { const s = fakeSocket(); sockets.push(s); return s; }, setTimer: (fn: () => void, ms: number) => { timers.push({ fn, ms }); return timers.length; }, clearTimer: vi.fn() },
@@ -351,7 +312,7 @@ describe("reconnect backoff and auth", () => {
     expect(timers.map((t) => t.ms)).toEqual([1000, 2000]);
     timers[1].fn();
     sockets[2].onopen!({});
-    expect(sockets[2].sent).toEqual([JSON.stringify({ t: "auth", key: "k-secret" })]);
+    expect(sockets[2].sent).toEqual([]);
     expect(onConn).toHaveBeenLastCalledWith("live", 0);
     sockets[2].onmessage!({ data: JSON.stringify({ t: "mon", kind: "status", session: "s", ts: 1, state: "thinking" }) });
     sockets[2].onmessage!({ data: "not json" });
@@ -368,7 +329,7 @@ describe("reconnect backoff and auth", () => {
     const sockets: ReturnType<typeof fakeSocket>[] = [];
     const onMsg = vi.fn();
     const port = { attach: vi.fn(), detach: vi.fn(), receive: vi.fn() };
-    const stop = openMonitor("ws://x", "k", onMsg, vi.fn(), {
+    const stop = openMonitor("ws://x", onMsg, vi.fn(), {
       connect: () => { const s = fakeSocket(); sockets.push(s); return s; }, setTimer: vi.fn(), clearTimer: vi.fn(), signal: port,
     });
     expect(port.attach).not.toHaveBeenCalled();
@@ -390,10 +351,10 @@ describe("reconnect backoff and auth", () => {
     expect(port.detach).toHaveBeenCalledTimes(2);
   });
 
-  it("reports a refused key instead of retrying", () => {
+  it("reports a refusal (4403: Origin or shop) instead of retrying", () => {
     const onConn = vi.fn();
     const s = fakeSocket();
-    openMonitor("ws://x", "k", vi.fn(), onConn, { connect: () => s, setTimer: vi.fn(), clearTimer: vi.fn() });
+    openMonitor("ws://x", vi.fn(), onConn, { connect: () => s, setTimer: vi.fn(), clearTimer: vi.fn() });
     s.onopen!({});
     s.onclose!({ code: 4403 });
     expect(onConn).toHaveBeenLastCalledWith("rejected", 0);

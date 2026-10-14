@@ -5,8 +5,6 @@ the event hooks and the WebSocket route (TestClient). Nothing is stored and no n
 """
 import asyncio
 import base64
-import hashlib
-import hmac
 import io
 import json
 import time
@@ -30,9 +28,6 @@ ORIGIN = {"Origin": "https://aira-shop.web.app"}
 HELLO = {"t": "hello", "uid": "u1", "shopId": "sunrise_dairy", "lang": "en", "verbosity": "short",
          "appVersion": "0.1.0"}
 SHOP = "sunrise_dairy"
-# The per-shop key: hex(HMAC-SHA256(AIRA_MONITOR_KEY, shop_id))[:32]; AIRA_MONITOR_KEY is "m-secret" in these tests.
-KEY = hmac.new(b"m-secret", SHOP.encode(), hashlib.sha256).hexdigest()[:32]
-OTHER_KEY = hmac.new(b"m-secret", b"other_shop", hashlib.sha256).hexdigest()[:32]
 
 
 def jpeg_b64(w: int, h: int, quality: int = 90) -> str:
@@ -66,7 +61,7 @@ def _recv_until(ws, kind: str, timeout: float = 3.0) -> dict:
 
 @pytest.fixture(autouse=True)
 def clean(monkeypatch):
-    for name in ("GEMINI_API_KEY", "AIRA_MOCK", "AIRA_ALLOW_NO_TOKEN", "AIRA_APP_KEY", "AIRA_MONITOR_KEY"):
+    for name in ("GEMINI_API_KEY", "AIRA_MOCK", "AIRA_ALLOW_NO_TOKEN", "AIRA_APP_KEY", "AIRA_MONITOR_ORIGINS"):
         monkeypatch.delenv(name, raising=False)
     monitor.reset()
     yield
@@ -570,206 +565,159 @@ async def test_notify_publishes_an_event(mk_session):
     assert ev and ev[0]["name"] == "notify" and ev[0]["detail"] == {"text": "Vendor replied: ok", "cue": "ack"}
 
 
-# ---------- key check ----------
-def test_shop_key_is_the_hmac_of_the_shop_id(monkeypatch):
-    assert monitor.shop_key(SHOP) is None  # env unset: there is no key for any shop
-    monkeypatch.setenv("AIRA_MONITOR_KEY", "m-secret")
-    assert monitor.shop_key(SHOP) == KEY and len(KEY) == 32
-    assert monitor.shop_key("other_shop") == OTHER_KEY != KEY
-    assert monitor.shop_key("") is None
+# ---------- access: no key, an Origin allowlist only ----------
+def test_there_is_no_monitor_key_any_more():
+    """Removed by the owner's decision: no key derivation, no auth message, no env, no CLI."""
+    from aira_live import config, contracts as c
+    for name in ("shop_key", "key_ok", "authenticate", "main", "AUTH_TIMEOUT_S"):
+        assert not hasattr(monitor, name), name
+    assert not hasattr(c, "MonAuthMsg")
+    assert "monitor_key" not in config.Settings.__dataclass_fields__
+    assert contracts.parse_monitor_client_msg(json.dumps({"t": "auth", "key": "k"})) is None
 
 
-def test_key_ok_needs_the_env_and_an_exact_match_for_that_shop(monkeypatch):
-    assert not monitor.key_ok(KEY, SHOP)  # env unset: nobody gets in
-    assert not monitor.key_ok("m-secret", SHOP)
-    monkeypatch.setenv("AIRA_MONITOR_KEY", "m-secret")
-    assert monitor.key_ok(KEY, SHOP)
-    assert not monitor.key_ok("m-secret", SHOP)  # the master secret itself is not a shop key
-    assert not monitor.key_ok(KEY[:-1], SHOP) and not monitor.key_ok(KEY + " ", SHOP) and not monitor.key_ok(None, SHOP)
-    assert not monitor.key_ok("", SHOP)
-    assert not monitor.key_ok(KEY, "other_shop")  # a key for shop A is refused on shop B
-    assert not monitor.key_ok(OTHER_KEY, SHOP)
+def test_default_monitor_origins_are_the_hosting_site_only():
+    from aira_live import config
+    assert config.load().monitor_origins == ("https://aira-shop.web.app", "https://aira-shop.firebaseapp.com")
+    assert monitor.origin_allowed("https://aira-shop.web.app")
+    assert monitor.origin_allowed("https://aira-shop.firebaseapp.com/")  # a trailing slash is ignored
+    assert not monitor.origin_allowed("http://localhost:5198")  # local hosts only through AIRA_MONITOR_ORIGINS
+    assert not monitor.origin_allowed("http://127.0.0.1:5173")
+    assert not monitor.origin_allowed("https://evil.example")
+    assert not monitor.origin_allowed("https://aira-shop.web.app.evil.example")
+    assert not monitor.origin_allowed("http://aira-shop.web.app")  # scheme matters
+    assert not monitor.origin_allowed(None) and not monitor.origin_allowed("") and not monitor.origin_allowed("  ")
+
+
+def test_monitor_origins_env_replaces_the_default_and_supports_any_port(monkeypatch):
+    from aira_live import config
+    monkeypatch.setenv("AIRA_MONITOR_ORIGINS", " https://aira-shop.web.app/, http://localhost:*,http://127.0.0.1:* ,,")
+    assert config.load().monitor_origins == ("https://aira-shop.web.app", "http://localhost:*", "http://127.0.0.1:*")
+    assert monitor.origin_allowed("http://localhost:5198")
+    assert monitor.origin_allowed("http://localhost:5173") and monitor.origin_allowed("http://localhost")
+    assert monitor.origin_allowed("http://127.0.0.1:4173")
+    assert monitor.origin_allowed("https://aira-shop.web.app")
+    assert not monitor.origin_allowed("https://aira-shop.firebaseapp.com")  # the env replaces the default
+    assert not monitor.origin_allowed("https://localhost:5198")  # the scheme of a ":*" entry is exact
+    assert not monitor.origin_allowed("http://localhost.evil.example:5198")
+    assert not monitor.origin_allowed("http://localhost:51x8")
+    assert not monitor.origin_allowed(None)
+    monkeypatch.setenv("AIRA_MONITOR_ORIGINS", " , ")  # blank = the default
+    assert config.load().monitor_origins == config.DEFAULT_MONITOR_ORIGINS
+    assert monitor.origin_allowed("https://x.example", ["https://x.example"])  # an explicit list
 
 
 def test_only_the_demo_shop_may_be_watched_in_tokenless_mode(monkeypatch):
-    monkeypatch.setenv("AIRA_MONITOR_KEY", "m-secret")
     assert monitor.shop_allowed(SHOP)
     assert not monitor.shop_allowed("other_shop")
     monkeypatch.setenv("AIRA_DEMO_SHOP", "other_shop")
     assert monitor.shop_allowed("other_shop") and not monitor.shop_allowed(SHOP)
 
 
-def test_cli_prints_the_shop_key(monkeypatch, capsys):
-    monkeypatch.setenv("AIRA_MONITOR_KEY", "m-secret")
-    assert monitor.main(["key", SHOP]) == 0
-    assert capsys.readouterr().out == KEY + "\n"
-    assert monitor.main(["key", "other_shop"]) == 0
-    assert capsys.readouterr().out == OTHER_KEY + "\n"
-    assert monitor.main(["key"]) == 2 and monitor.main(["nope", SHOP]) == 2
-    monkeypatch.delenv("AIRA_MONITOR_KEY")
-    assert monitor.main(["key", SHOP]) == 2
-    out = capsys.readouterr()
-    assert out.out == "" and "AIRA_MONITOR_KEY" in out.err
-
-
-class _AuthSocket:
-    def __init__(self, raw=None, delay: float = 0.0, fail: Exception | None = None):
-        self.raw, self.delay, self.fail = raw, delay, fail
-
-    async def receive_text(self):
-        await asyncio.sleep(self.delay)
-        if self.fail:
-            raise self.fail
-        return self.raw
-
-
-async def test_authenticate_takes_the_key_from_the_first_message_only(monkeypatch):
-    auth = json.dumps({"t": "auth", "key": KEY})
-    assert await monitor.authenticate(_AuthSocket(auth), SHOP) is False  # env unset: nobody gets in
-    monkeypatch.setenv("AIRA_MONITOR_KEY", "m-secret")
-    assert await monitor.authenticate(_AuthSocket(auth), SHOP) is True
-    assert await monitor.authenticate(_AuthSocket(auth), "other_shop") is False  # shop A's key, shop B
-    assert await monitor.authenticate(_AuthSocket('{"t": "auth", "key": "m-secret"}'), SHOP) is False
-    assert await monitor.authenticate(_AuthSocket('{"t": "auth", "key": "wrong"}'), SHOP) is False
-    assert await monitor.authenticate(_AuthSocket(json.dumps({"t": "hello", "key": KEY})), SHOP) is False
-    assert await monitor.authenticate(_AuthSocket('{"t": "auth"}'), SHOP) is False
-    assert await monitor.authenticate(_AuthSocket("not json"), SHOP) is False
-    assert await monitor.authenticate(_AuthSocket(fail=RuntimeError("gone")), SHOP) is False
-
-
-async def test_authenticate_refuses_a_non_demo_shop_even_with_its_own_key(monkeypatch):
-    monkeypatch.setenv("AIRA_MONITOR_KEY", "m-secret")
-    auth = json.dumps({"t": "auth", "key": OTHER_KEY})
-    assert await monitor.authenticate(_AuthSocket(auth), "other_shop") is False
-    monkeypatch.setenv("AIRA_DEMO_SHOP", "other_shop")
-    assert await monitor.authenticate(_AuthSocket(auth), "other_shop") is True
-
-
-async def test_authenticate_gives_up_after_the_timeout(monkeypatch):
-    monkeypatch.setenv("AIRA_MONITOR_KEY", "m-secret")
-    monkeypatch.setattr(monitor, "AUTH_TIMEOUT_S", 0.02)
-    assert await monitor.authenticate(_AuthSocket(json.dumps({"t": "auth", "key": KEY}), delay=0.2), SHOP) is False
-    assert monitor.AUTH_TIMEOUT_S == 0.02
-
-
-def test_auth_timeout_is_five_seconds():
-    assert monitor.AUTH_TIMEOUT_S == 5.0
-
-
 # ---------- the /monitor route ----------
-AUTH = {"t": "auth", "key": KEY}
-
-
-def _open(client, shop=SHOP, auth=AUTH):
-    """A /monitor socket that has sent its auth message."""
+def _open(client, shop=SHOP):
+    """A /monitor socket from the hosting site; nothing is sent, there is no key."""
     mon = client.websocket_connect(f"/monitor?shop={shop}", headers=ORIGIN)
     ws = mon.__enter__()
-    if auth is not None:
-        ws.send_json(auth)
     return mon, ws
 
 
-def test_monitor_refused_without_env_key():
+def test_monitor_connects_without_a_key_from_an_allowed_origin():
     with TestClient(main_mod.app).websocket_connect(f"/monitor?shop={SHOP}", headers=ORIGIN) as mon:
-        mon.send_json(AUTH)
-        with pytest.raises(WebSocketDisconnect) as closed:
-            mon.receive_json()
-    assert closed.value.code == 4403
-    assert not monitor.monitored(SHOP)
+        _wait(lambda: monitor.monitored(SHOP))
+        assert monitor.monitors(SHOP) == 1
+        assert monitor.publish(SHOP, "status", "x", state="idle") == 1
+        assert _recv_until(mon, "status")["state"] == "idle"
+    _wait(lambda: not monitor.monitored(SHOP))
 
 
-@pytest.mark.parametrize("auth", [{"t": "auth", "key": "wrong"}, {"t": "auth"}, {"t": "hello", "key": KEY},
-                                  {"t": "auth", "key": ""}, {"t": "auth", "key": "m-secret"},
-                                  {"t": "auth", "key": OTHER_KEY}])
-def test_monitor_refused_with_a_wrong_or_malformed_auth(monkeypatch, auth):
-    monkeypatch.setenv("AIRA_MONITOR_KEY", "m-secret")
-    with TestClient(main_mod.app).websocket_connect(f"/monitor?shop={SHOP}", headers=ORIGIN) as mon:
-        mon.send_json(auth)
-        with pytest.raises(WebSocketDisconnect) as closed:
-            mon.receive_json()
-    assert closed.value.code == 4403
-    assert not monitor.monitored(SHOP)
+def test_monitor_connects_from_the_firebaseapp_origin_too():
+    with TestClient(main_mod.app).websocket_connect(f"/monitor?shop={SHOP}", headers={"Origin": "https://aira-shop.firebaseapp.com"}):
+        _wait(lambda: monitor.monitored(SHOP))
+    _wait(lambda: not monitor.monitored(SHOP))
 
 
-def test_monitor_ignores_a_key_in_the_url(monkeypatch):
-    monkeypatch.setenv("AIRA_MONITOR_KEY", "m-secret")
-    with TestClient(main_mod.app).websocket_connect(f"/monitor?shop={SHOP}&key={KEY}", headers=ORIGIN) as mon:
-        mon.send_json({"t": "auth", "key": "wrong"})
-        with pytest.raises(WebSocketDisconnect) as closed:
-            mon.receive_json()
-    assert closed.value.code == 4403
+def test_monitor_ignores_a_key_in_the_url_and_any_auth_message():
+    """A stale #key= link or an old dashboard still works: there is nothing to check."""
+    with TestClient(main_mod.app).websocket_connect(f"/monitor?shop={SHOP}&key=whatever", headers=ORIGIN) as mon:
+        mon.send_json({"t": "auth", "key": "wrong"})  # read-only: ignored like any other text
+        _wait(lambda: monitor.monitored(SHOP))
+        assert monitor.publish(SHOP, "status", "x", state="idle") == 1
+        assert _recv_until(mon, "status")["state"] == "idle"
+    _wait(lambda: not monitor.monitored(SHOP))
 
 
-def test_monitor_refused_when_auth_is_late(monkeypatch):
-    monkeypatch.setenv("AIRA_MONITOR_KEY", "m-secret")
-    monkeypatch.setattr(monitor, "AUTH_TIMEOUT_S", 0.05)
-    with TestClient(main_mod.app).websocket_connect(f"/monitor?shop={SHOP}", headers=ORIGIN) as mon:
-        with pytest.raises(WebSocketDisconnect) as closed:
-            mon.receive_json()
-    assert closed.value.code == 4403
-    assert not monitor.monitored(SHOP)
-
-
-@pytest.mark.parametrize("query", ["", f"key={KEY}", "shop="])
-def test_monitor_without_a_shop_watches_the_demo_shop(monkeypatch, query):
-    """One shop: ``?shop=`` is optional; left out, the demo shop is watched (the key is still that shop's)."""
-    monkeypatch.setenv("AIRA_MONITOR_KEY", "m-secret")
-    with TestClient(main_mod.app).websocket_connect(f"/monitor?{query}", headers=ORIGIN) as mon:
-        mon.send_json(AUTH)
+@pytest.mark.parametrize("query", ["", "shop="])
+def test_monitor_without_a_shop_watches_the_demo_shop(query):
+    """One shop: ``?shop=`` is optional; left out, the demo shop is watched."""
+    with TestClient(main_mod.app).websocket_connect(f"/monitor?{query}", headers=ORIGIN):
         _wait(lambda: monitor.monitored(SHOP))
         assert monitor.monitors(SHOP) == 1
     _wait(lambda: not monitor.monitored(SHOP))
 
 
-def test_monitor_without_a_shop_still_needs_the_demo_shop_key(monkeypatch):
-    monkeypatch.setenv("AIRA_MONITOR_KEY", "m-secret")
-    with TestClient(main_mod.app).websocket_connect("/monitor", headers=ORIGIN) as mon:
-        mon.send_json({"t": "auth", "key": OTHER_KEY})
-        with pytest.raises(WebSocketDisconnect) as closed:
+def test_monitor_refused_for_a_shop_that_is_not_the_demo_shop():
+    """Tokenless mode: every phone lands in the demo shop, so only that shop may be watched (closed before the
+    handshake)."""
+    with pytest.raises(WebSocketDisconnect) as closed:
+        with TestClient(main_mod.app).websocket_connect("/monitor?shop=other_shop", headers=ORIGIN) as mon:
             mon.receive_json()
+    assert closed.value.code == 4403
+    assert not monitor.monitored("other_shop") and not monitor.monitored(SHOP)
+
+
+@pytest.mark.parametrize("headers", [{"Origin": "https://evil.example"}, {"Origin": "http://localhost:5198"},
+                                     {"Origin": "http://aira-shop.web.app"}, {}])
+def test_monitor_refused_from_a_foreign_or_missing_origin(headers):
+    """The only guard: an Origin off AIRA_MONITOR_ORIGINS (by default the hosting site; localhost is not on
+    it) or no Origin at all is closed before the handshake. Not authentication: a forged header passes."""
+    with pytest.raises(WebSocketDisconnect) as closed:
+        with TestClient(main_mod.app).websocket_connect(f"/monitor?shop={SHOP}", headers=headers):
+            pass
     assert closed.value.code == 4403
     assert not monitor.monitored(SHOP)
 
 
-def test_monitor_refused_for_a_shop_that_is_not_the_demo_shop(monkeypatch):
-    """Tokenless mode: every phone lands in the demo shop, so only that shop may be watched (closed before the
-    handshake, even with that shop's own key)."""
-    monkeypatch.setenv("AIRA_MONITOR_KEY", "m-secret")
-    with pytest.raises(WebSocketDisconnect) as closed:
-        with TestClient(main_mod.app).websocket_connect("/monitor?shop=other_shop", headers=ORIGIN) as mon:
-            mon.send_json({"t": "auth", "key": OTHER_KEY})
-            mon.receive_json()
+def test_monitor_origins_env_lets_a_local_dashboard_in(monkeypatch):
+    monkeypatch.setenv("AIRA_MONITOR_ORIGINS", "https://aira-shop.web.app,http://localhost:*")
+    with TestClient(main_mod.app).websocket_connect(f"/monitor?shop={SHOP}", headers={"Origin": "http://localhost:5198"}):
+        _wait(lambda: monitor.monitored(SHOP))
+    _wait(lambda: not monitor.monitored(SHOP))
+    with pytest.raises(WebSocketDisconnect) as closed:  # the env replaces the default list
+        with TestClient(main_mod.app).websocket_connect(f"/monitor?shop={SHOP}", headers={"Origin": "https://aira-shop.firebaseapp.com"}):
+            pass
     assert closed.value.code == 4403
-    assert not monitor.monitored("other_shop")
 
 
-def test_monitor_refused_from_a_foreign_origin(monkeypatch):
-    monkeypatch.setenv("AIRA_MONITOR_KEY", "m-secret")
-    for headers in ({"Origin": "https://evil.example"}, {}):
-        with pytest.raises(WebSocketDisconnect) as closed:
-            with TestClient(main_mod.app).websocket_connect(f"/monitor?shop={SHOP}", headers=headers):
-                pass
-        assert closed.value.code == 4403
+def test_monitor_refused_over_the_per_shop_cap(monkeypatch):
+    monkeypatch.setattr(monitor, "MAX_MONITORS_PER_SHOP", 1)
+    with TestClient(main_mod.app) as client:
+        mon, _ws = _open(client)
+        try:
+            _wait(lambda: monitor.monitors(SHOP) == 1)
+            with pytest.raises(WebSocketDisconnect) as closed:
+                with client.websocket_connect(f"/monitor?shop={SHOP}", headers=ORIGIN):
+                    pass
+            assert closed.value.code == 4403
+            assert monitor.monitors(SHOP) == 1
+        finally:
+            mon.__exit__(None, None, None)
+    _wait(lambda: not monitor.monitored(SHOP))
 
 
-def test_nothing_is_published_before_auth(monkeypatch):
-    monkeypatch.setenv("AIRA_MONITOR_KEY", "m-secret")
+def test_a_new_monitor_first_hears_the_live_sessions():
     with TestClient(main_mod.app) as client, client.websocket_connect("/ws", headers=ORIGIN) as ws:
         ws.send_json(HELLO)
         ws.receive_json()
         with client.websocket_connect(f"/monitor?shop={SHOP}", headers=ORIGIN) as mon:
-            assert not monitor.monitored(SHOP)  # not subscribed until the key is checked
-            mon.send_json(AUTH)
             start = _recv_until(mon, "session")  # the first thing it hears is the live session
             assert start["state"] == "start"
 
 
 def test_monitor_sees_sessions_transcripts_frames_and_hands_in_mock_mode(monkeypatch):
-    monkeypatch.setenv("AIRA_MONITOR_KEY", "m-secret")
     # One TestClient context = one portal, so both sockets run on the same loop (as they do on Cloud Run).
     with TestClient(main_mod.app) as client, \
             client.websocket_connect(f"/monitor?shop={SHOP}", headers=ORIGIN) as mon:
-        mon.send_json(AUTH)
         _wait(lambda: monitor.monitored(SHOP))
         with client.websocket_connect("/ws", headers=ORIGIN) as ws:
             ws.send_json(HELLO)
@@ -803,16 +751,13 @@ def test_monitor_sees_sessions_transcripts_frames_and_hands_in_mock_mode(monkeyp
 
 
 def test_late_monitor_gets_the_live_sessions_of_its_shop(monkeypatch):
-    monkeypatch.setenv("AIRA_MONITOR_KEY", "m-secret")
     with TestClient(main_mod.app) as client, client.websocket_connect("/ws", headers=ORIGIN) as ws:
         ws.send_json(HELLO)
         sid = ws.receive_json()["sessionId"]
         with client.websocket_connect(f"/monitor?shop={SHOP}", headers=ORIGIN) as mon:
-            mon.send_json(AUTH)
             start = _recv_until(mon, "session")
             assert start["state"] == "start" and start["session"] == sid and start["uid"] == "u1"
         with client.websocket_connect(f"/monitor?shop={SHOP}", headers=ORIGIN) as mon:
-            mon.send_json(AUTH)
             mon.send_text("ignored")  # after auth the monitor is read-only: inbound text is dropped
             _wait(lambda: monitor.monitors(SHOP) == 1)
             assert monitor.publish(SHOP, "status", "x", state="idle") == 1
@@ -821,10 +766,8 @@ def test_late_monitor_gets_the_live_sessions_of_its_shop(monkeypatch):
 
 def test_monitor_sees_live_transcripts_with_customer_role(real_mode, monkeypatch):
     from aira_live.tools import sales
-    monkeypatch.setenv("AIRA_MONITOR_KEY", "m-secret")
     with TestClient(main_mod.app) as client, \
             client.websocket_connect(f"/monitor?shop={SHOP}", headers=ORIGIN) as mon:
-        mon.send_json(AUTH)
         _wait(lambda: monitor.monitored(SHOP))
         with client.websocket_connect("/ws", headers=ORIGIN) as ws:
             ws.send_json(HELLO)
@@ -864,10 +807,8 @@ def test_frames_are_not_downscaled_when_nobody_watches(monkeypatch):
 
 
 def test_room_camera_session_is_marked_by_uid_and_its_frames_reach_the_monitor(monkeypatch):
-    monkeypatch.setenv("AIRA_MONITOR_KEY", "m-secret")
     with TestClient(main_mod.app) as client, \
             client.websocket_connect(f"/monitor?shop={SHOP}", headers=ORIGIN) as mon:
-        mon.send_json(AUTH)
         _wait(lambda: monitor.monitored(SHOP))
         with client.websocket_connect("/ws", headers=ORIGIN) as ws:
             ws.send_json({**HELLO, "uid": "camera:front"})
@@ -881,11 +822,9 @@ def test_room_camera_session_is_marked_by_uid_and_its_frames_reach_the_monitor(m
 
 
 def test_monitor_hears_stats_for_a_live_session(monkeypatch):
-    monkeypatch.setenv("AIRA_MONITOR_KEY", "m-secret")
     monkeypatch.setattr(monitor, "STATS_INTERVAL_S", 0.05)
     with TestClient(main_mod.app) as client, \
             client.websocket_connect(f"/monitor?shop={SHOP}", headers=ORIGIN) as mon:
-        mon.send_json(AUTH)
         _wait(lambda: monitor.monitored(SHOP))
         with client.websocket_connect("/ws", headers=ORIGIN) as ws:
             ws.send_json(HELLO)

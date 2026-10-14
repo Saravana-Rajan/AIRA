@@ -343,8 +343,9 @@ ServerMsg = Annotated[
     Field(discriminator="t"),
 ]
 
-# ---------- server -> monitor (GET /monitor[?shop=<id>], then {t:"auth", key}; read-only) ----------
-# There is one shop: ``shop`` may be left out (config demo_shop_id); any other value is refused.
+# ---------- server -> monitor (GET /monitor[?shop=<id>]; read-only, no key) ----------
+# There is one shop: ``shop`` may be left out (config demo_shop_id); any other value is refused. There is no auth
+# message: the monitor key was removed by the owner's decision (the server's only guard is an Origin allowlist).
 # Mirrors the MonitorMsg union in messages.ts and shared/contracts/fixtures/monitor_msgs.json.
 # Every message is {t:"mon", kind, session, ts, ...}; ``jpeg_b64`` keeps its snake_case name on the wire.
 MonitorRole = Literal["owner", "customer", "aira"]
@@ -356,19 +357,12 @@ VisionDistance = Literal["near", "arm", "far"]
 MonitorState = Literal["listening", "thinking", "guiding", "found", "idle"]
 
 
-class MonAuthMsg(_ClientWire):
-    """The monitor's first (and only) message: the key, compared in constant time to AIRA_MONITOR_KEY."""
-
-    t: Literal["auth"]
-    key: StrictStr
-
-
-# What a monitor may send: its auth, then WebRTC signalling for one of the shop's sessions (``to`` = session id).
-MonitorClientMsg = Annotated[Union[MonAuthMsg, RtcMsg], Field(discriminator="t")]
+# What a monitor may send: only WebRTC signalling for one of the shop's sessions (``to`` = session id).
+MonitorClientMsg = RtcMsg
 monitor_client_adapter: TypeAdapter[MonitorClientMsg] = TypeAdapter(MonitorClientMsg)
 
 
-def parse_monitor_client_msg(raw: str | bytes) -> MonAuthMsg | RtcMsg | None:
+def parse_monitor_client_msg(raw: str | bytes) -> RtcMsg | None:
     """Parse one text frame a monitor sent. None for bad JSON or an unknown/invalid message."""
     try:
         return monitor_client_adapter.validate_json(raw)

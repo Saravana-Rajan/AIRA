@@ -19,9 +19,6 @@ export interface LivePageProps {
   conn: Connection;
   /** The WebRTC picture (lib/rtcViewer): shown under the overlay while mode is "webrtc", else the JPEG frames. */
   video?: VideoState;
-  /** True when no monitor key is known yet: the page asks for one instead of connecting. */
-  keyNeeded: boolean;
-  onKey: (key: string) => void;
   /** False when the dashboard has no AIRA Live address (VITE_AIRA_LIVE_WS): nothing to connect to. */
   configured?: boolean;
   /** Picks another of the shop's live sessions (`state.sessions`) to follow. */
@@ -42,7 +39,7 @@ const STATUS_TEXT: Record<MonitorState, string> = {
 };
 
 const CONN_TEXT: Record<Connection, string> = {
-  waiting: "Not connected", connecting: "Connecting…", live: "Connected", offline: "Reconnecting…", rejected: "Key refused",
+  waiting: "Not connected", connecting: "Connecting…", live: "Connected", offline: "Reconnecting…", rejected: "Refused",
 };
 
 const LANG_NAME: Record<string, string> = { ta: "Tamil", hi: "Hindi", en: "English" };
@@ -58,7 +55,7 @@ function useNow(now: () => number): number {
 }
 
 export function LivePage({
-  state, conn, video, keyNeeded, onKey, configured = true, onFollow, record = false, onRecord, shopName = "Sunrise Dairy", now = Date.now, drawDeps = browserDeps,
+  state, conn, video, configured = true, onFollow, record = false, onRecord, shopName = "Sunrise Dairy", now = Date.now, drawDeps = browserDeps,
 }: LivePageProps) {
   const t = useNow(now);
   const [paused, setPaused] = useState(false);
@@ -115,7 +112,7 @@ export function LivePage({
           )}
         </div>
         <div class="cam__view">
-          {keyNeeded ? <KeyPrompt onKey={onKey} /> : hasPicture ? <Camera state={{ ...state, frame }} now={t} drawDeps={drawDeps} video={video} paused={paused} /> : <Waiting conn={conn} configured={configured} />}
+          {hasPicture ? <Camera state={{ ...state, frame }} now={t} drawDeps={drawDeps} video={video} paused={paused} /> : <Waiting conn={conn} configured={configured} />}
         </div>
         <Legend />
       </section>
@@ -189,7 +186,7 @@ function elapsed(task: Task, now: number): string {
 
 // ---------- the camera ----------
 function waitingText(conn: Connection, configured: boolean): string {
-  if (conn === "rejected") return "The monitor key was refused. Open this page with the right #key= link.";
+  if (conn === "rejected") return "AIRA Live refused this page. Open the dashboard from its own address (the server allows only its listed origins).";
   if (!configured) return "AIRA Live is not configured for this dashboard.";
   if (conn === "live") return "Connected. Waiting for the phone to start a session.";
   if (conn === "offline") return "Lost the connection to AIRA Live. Reconnecting…";
@@ -218,26 +215,6 @@ function SessionPicker({ sessions, current, onFollow }: { sessions: LiveState["s
         <option key={id} value={id}>{sessions[id].uid ? `${sessions[id].uid} · ${id.slice(0, 8)}` : id.slice(0, 8)}</option>
       ))}
     </select>
-  );
-}
-
-function KeyPrompt({ onKey }: { onKey: (key: string) => void }) {
-  const [value, setValue] = useState("");
-  return (
-    <form
-      class="keyprompt"
-      onSubmit={(e) => {
-        e.preventDefault();
-        if (value.trim()) onKey(value.trim());
-      }}
-    >
-      <label class="keyprompt__label" for="monitor-key">Monitor key</label>
-      <p class="keyprompt__help">Paste the key from the AIRA Live settings, or open this page with #key= at the end of the address.</p>
-      <div class="keyprompt__row">
-        <input id="monitor-key" class="keyprompt__input" type="password" autocomplete="off" value={value} onInput={(e) => setValue((e.target as HTMLInputElement).value)} />
-        <button class="keyprompt__btn" type="submit">Connect</button>
-      </div>
-    </form>
   );
 }
 

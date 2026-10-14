@@ -477,20 +477,19 @@ async def ws_endpoint(ws: WebSocket) -> None:
 
 @app.websocket("/monitor")
 async def monitor_endpoint(ws: WebSocket) -> None:
-    """``GET /monitor[?shop=<id>]``, then ``{t:"auth", key}``: the dashboard's read-only live feed of one shop.
+    """``GET /monitor[?shop=<id>]``: the dashboard's read-only live feed of the one shop. No key, no login: the
+    monitor key was removed by the owner's decision, so anyone who can open the dashboard can watch.
 
-    Guards, in order: the browser Origin allowlist (like ``/ws``), a ``shop`` that may be watched (there is one
-    shop: left out it is ``AIRA_DEMO_SHOP``; in tokenless / demo mode only that shop may be named:
-    ``monitor.shop_allowed``) and ``monitor.MAX_MONITORS_PER_SHOP`` (each
-    refusal closes with 4403 before the handshake), then the first message: ``{t:"auth", key}`` within
-    ``monitor.AUTH_TIMEOUT_S``, compared in constant time to that shop's key, ``monitor.shop_key`` =
-    HMAC(``AIRA_MONITOR_KEY``, shop) (with the env unset nobody gets in; a key for another shop is refused). A
-    wrong, malformed or late key closes with 4403; nothing is published before it. The key is never read from the
-    URL. A connected monitor first hears ``session start`` for every live session of the shop.
+    Guards, in order (each refusal closes with 4403 before the handshake): the monitor's own browser Origin
+    allowlist (``monitor.origin_allowed``, env ``AIRA_MONITOR_ORIGINS``; a light guard, not authentication: a
+    missing Origin is refused too), a ``shop`` that may be watched (there is one shop: left out it is
+    ``AIRA_DEMO_SHOP``; in tokenless / demo mode only that shop may be named: ``monitor.shop_allowed``) and
+    ``monitor.MAX_MONITORS_PER_SHOP``. A connected monitor first hears ``session start`` for every live session
+    of the shop.
     """
     origin = ws.headers.get("origin")
-    if not origin_allowed(origin):
-        log.warning("monitor refused: origin %r is missing or not in AIRA_ALLOWED_ORIGINS", origin)
+    if not monitor.origin_allowed(origin):
+        log.warning("monitor refused: origin %r is missing or not in AIRA_MONITOR_ORIGINS", origin)
         await ws.close(code=4403)
         return
     shop = (ws.query_params.get("shop") or "").strip() or config.load().demo_shop_id  # one shop: naming it is optional
@@ -503,11 +502,6 @@ async def monitor_endpoint(ws: WebSocket) -> None:
         await ws.close(code=4403)
         return
     await ws.accept()
-    if not await monitor.authenticate(ws, shop):
-        log.warning("monitor refused: bad, missing or late auth for %s", shop)
-        diag("monitor", event="refused", shop=shop, origin=origin)
-        await ws.close(code=4403)
-        return
     sub = monitor.subscribe(shop)
     diag("monitor", event="open", shop=shop, origin=origin, monitors=monitor.monitors(shop))
     try:

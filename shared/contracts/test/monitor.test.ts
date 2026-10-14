@@ -47,8 +47,9 @@ describe("monitor contract (/monitor, read-only dashboard feed)", () => {
     expect(isMonitorMsg({ ...base, source: "guidance", objects: [] })).toBe(false);
   });
 
-  it("the monitor's auth message is {t:\"auth\", key}", () => {
-    expect(isMonitorClientMsg({ t: "auth", key: "k" })).toBe(true);
+  it("a monitor sends only rtc signalling: there is no auth message any more (the monitor key was removed)", () => {
+    expect(isMonitorClientMsg({ t: "rtc", kind: "want", to: "s1" })).toBe(true);
+    expect(isMonitorClientMsg({ t: "auth", key: "k" })).toBe(false);
     expect(isMonitorClientMsg({ t: "auth" })).toBe(false);
     expect(isMonitorClientMsg({ t: "hello", key: "k" })).toBe(false);
     expect(isMonitorClientMsg(null)).toBe(false);

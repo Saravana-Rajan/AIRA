@@ -2,8 +2,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act } from "preact/test-utils";
 import { cleanup, findAllByText, flush, mount, text } from "./helpers/render";
 import { App, type ListenFn } from "../src/components/App";
-import { captureMonitorKey } from "../src/lib/useMonitor";
-import { KEY_STORAGE } from "../src/lib/monitor";
 import type { LiveStatus, ShopData } from "../src/lib/live";
 import type { Forecast, ForecastItem } from "../src/lib/forecast";
 
@@ -154,18 +152,17 @@ describe("App", () => {
     expect(loadForecast).toHaveBeenCalledWith("sunrise_dairy");
   });
 
-  it("opens the Live page from a #/live#key=... link: the key is taken off before the first render", () => {
+  it("opens the Live page straight to the feed: no monitor key screen, nothing read from the fragment or storage", () => {
     sessionStorage.clear();
-    history.replaceState(null, "", "/dashboard/#/live#key=abc123");
-    captureMonitorKey(); // what main.tsx does before render
-    expect(location.hash).toBe("#/live");
-    expect(sessionStorage.getItem(KEY_STORAGE)).toBe("abc123");
+    history.replaceState(null, "", "/dashboard/#/live");
     const { listen } = fakeLive();
     const el = mount(<App listen={listen} loadForecast={async () => null} now={() => NOW} />);
     expect(el.querySelector(".livepage")).not.toBeNull();
     expect(el.querySelector("input#monitor-key")).toBeNull();
-    expect(location.href).not.toContain("abc123");
-    sessionStorage.clear();
+    expect(el.querySelector(".keyprompt")).toBeNull();
+    expect(text(el)).not.toContain("Monitor key");
+    expect(el.querySelector(".cam__empty")).not.toBeNull(); // waiting for the phone, not for a key
+    expect(sessionStorage.length).toBe(0);
   });
 
   it("stops listening when it unmounts", () => {

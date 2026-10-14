@@ -232,15 +232,16 @@ export function parseClientMsg(raw: string): ClientMsg | null {
   }
 }
 
-// ---------- server -> monitor (GET /monitor[?shop=<id>], then {t:"auth", key}; read-only) ----------
+// ---------- server -> monitor (GET /monitor[?shop=<id>]; read-only, no key) ----------
 // There is one shop: `shop` may be left out (the server's demo shop); any other value is refused.
 // A projector view of one shop's live sessions. Every message is {t:"mon", kind, session, ts, ...}.
-// The monitor's first and only message is {t:"auth", key}: the server closes with 4403 when the key is wrong,
-// missing or late (5 s), and publishes nothing before it. The key never travels in the URL.
+// There is no key and no auth message (the monitor key was removed by the owner's decision): the server's
+// only guard is a browser Origin allowlist, and it closes with 4403 before the handshake when the Origin is
+// off it. The feed starts as soon as the socket is open.
 // Frames are sent only while a monitor is connected (<= 480 px wide, quality 0.6, <= 4 fps a session).
 // Mirrored in backend/aira_live/contracts.py; fixtures in ../fixtures/monitor_msgs.json.
-// After auth a monitor may also send rtc signalling for one of the shop's sessions (`to` = session id).
-export type MonitorClientMsg = { t: "auth"; key: string } | RtcClientMsg;
+// The only thing a monitor sends is rtc signalling for one of the shop's sessions (`to` = session id).
+export type MonitorClientMsg = RtcClientMsg;
 export const MONITOR_KINDS = Object.freeze(["session", "transcript", "frame", "vision", "hand", "event", "status", "stats"] as const);
 export type MonitorKind = (typeof MONITOR_KINDS)[number];
 export const MONITOR_ROLES = Object.freeze(["owner", "customer", "aira"] as const);
@@ -289,7 +290,7 @@ const isVisionObject = (o: unknown): o is VisionObject =>
   optional(o.distance, (v) => inList(VISION_DISTANCES, v));
 
 export function isMonitorClientMsg(x: unknown): x is MonitorClientMsg {
-  return (isObj(x) && x.t === "auth" && isStr(x.key)) || isRtcClientMsg(x);
+  return isRtcClientMsg(x);
 }
 
 /** One text frame of the /monitor feed: a monitor message, or rtc signalling from a phone session. */

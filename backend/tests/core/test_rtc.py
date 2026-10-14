@@ -4,13 +4,12 @@ crosses shops, caps the size and rate of what it relays, and pauses the JPEG pre
 monitor of the shop has a WebRTC picture of it.
 """
 import asyncio
-import hashlib
-import hmac
 import json
 import time
 
 import pytest
 from fastapi.testclient import TestClient
+from starlette.websockets import WebSocketDisconnect
 
 from aira_live import contracts, monitor, rtc, sessions
 from aira_live import main as main_mod
@@ -20,8 +19,6 @@ ORIGIN = {"Origin": "https://aira-shop.web.app"}
 HELLO = {"t": "hello", "uid": "u1", "shopId": "sunrise_dairy", "lang": "en", "verbosity": "short",
          "appVersion": "0.1.0"}
 SHOP = "sunrise_dairy"
-KEY = hmac.new(b"m-secret", SHOP.encode(), hashlib.sha256).hexdigest()[:32]
-AUTH = {"t": "auth", "key": KEY}
 SDP = "v=0\r\no=- 1 1 IN IP4 127.0.0.1\r\ns=-\r\nm=video 9 UDP/TLS/RTP/SAVPF 96\r\n"
 CAND = {"candidate": "candidate:1 1 udp 2122260223 192.0.2.1 50000 typ host", "sdpMid": "0", "sdpMLineIndex": 0}
 
@@ -71,7 +68,7 @@ def _recv_t(ws, t: str, timeout: float = 3.0) -> dict:
 
 @pytest.fixture(autouse=True)
 def clean(monkeypatch):
-    for name in ("GEMINI_API_KEY", "AIRA_MOCK", "AIRA_ALLOW_NO_TOKEN", "AIRA_APP_KEY", "AIRA_MONITOR_KEY"):
+    for name in ("GEMINI_API_KEY", "AIRA_MOCK", "AIRA_ALLOW_NO_TOKEN", "AIRA_APP_KEY", "AIRA_MONITOR_ORIGINS"):
         monkeypatch.delenv(name, raising=False)
     monitor.reset()
     yield
@@ -94,7 +91,7 @@ def test_rtc_messages_validate_in_both_directions_and_keep_a_null_m_line_index()
 
 
 def test_a_monitor_may_send_auth_or_rtc_and_nothing_else():
-    assert parse_monitor_client_msg(json.dumps(AUTH)).t == "auth"
+    assert parse_monitor_client_msg(json.dumps({"t": "auth", "key": "k"})) is None  # no auth message any more
     want = parse_monitor_client_msg(json.dumps({"t": "rtc", "kind": "want", "to": "s1"}))
     assert isinstance(want, RtcMsg) and want.kind == "want"
     assert parse_monitor_client_msg(json.dumps({"t": "hello"})) is None
@@ -265,10 +262,8 @@ async def test_a_session_ending_says_bye_to_its_monitors_and_forgets_it(mk_sessi
 
 # ---------- over the sockets ----------
 def test_the_full_flow_over_ws_and_monitor(monkeypatch):
-    monkeypatch.setenv("AIRA_MONITOR_KEY", "m-secret")
     with TestClient(main_mod.app) as client, \
             client.websocket_connect(f"/monitor?shop={SHOP}", headers=ORIGIN) as mon:
-        mon.send_json(AUTH)
         _wait(lambda: monitor.monitored(SHOP))
         with client.websocket_connect("/ws", headers=ORIGIN) as ws:
             ws.send_json(HELLO)
@@ -302,11 +297,12 @@ def test_the_full_flow_over_ws_and_monitor(monkeypatch):
         _recv_rtc(mon, "bye")  # the session ended: its monitor hears bye
 
 
-def test_rtc_before_auth_is_refused(monkeypatch):
-    monkeypatch.setenv("AIRA_MONITOR_KEY", "m-secret")
+def test_rtc_from_a_foreign_origin_is_refused_before_the_handshake():
+    """No key any more: the Origin allowlist is the only gate, and a stray rtc from off it never reaches a phone."""
     with TestClient(main_mod.app) as client:
-        with client.websocket_connect(f"/monitor?shop={SHOP}", headers=ORIGIN) as mon:
-            mon.send_json({"t": "rtc", "kind": "want", "to": "s1"})
-            with pytest.raises(Exception):
+        with pytest.raises(WebSocketDisconnect) as closed:
+            with client.websocket_connect(f"/monitor?shop={SHOP}", headers={"Origin": "https://evil.example"}) as mon:
+                mon.send_json({"t": "rtc", "kind": "want", "to": "s1"})
                 mon.receive_json()
+        assert closed.value.code == 4403
         assert not monitor.monitored(SHOP)

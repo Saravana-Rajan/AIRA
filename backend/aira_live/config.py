@@ -6,6 +6,17 @@ import os
 from dataclasses import dataclass
 
 
+# The hosting site only. Local dev adds "http://localhost:*,http://127.0.0.1:*" through AIRA_MONITOR_ORIGINS
+# (shared/.env.example); an entry ending in ":*" matches any port on that scheme and host.
+DEFAULT_MONITOR_ORIGINS: tuple[str, ...] = ("https://aira-shop.web.app", "https://aira-shop.firebaseapp.com")
+
+
+def _origins(raw: str | None) -> tuple[str, ...]:
+    """A comma-separated Origin list, trimmed, without trailing slashes, empty entries dropped."""
+    out = tuple(o.strip().rstrip("/") for o in (raw or "").split(",") if o.strip())
+    return out or DEFAULT_MONITOR_ORIGINS
+
+
 @dataclass(frozen=True)
 class Settings:
     gemini_api_key: str | None
@@ -21,7 +32,10 @@ class Settings:
     allow_no_token: bool = False  # hello without a Firebase ID token is accepted (no Firebase Auth)
     app_key: str | None = None  # shared demo key: when set, hello.idToken must equal it (shared/docs/ops/security.md)
     job_token: str | None = None  # X-AIRA-Job-Token for /jobs/*
-    monitor_key: str | None = None  # ?key= on the read-only /monitor socket (aira_live.monitor); unset = closed
+    # AIRA_MONITOR_ORIGINS (comma-separated): browser Origins that may open the read-only /monitor socket
+    # (aira_live.monitor.origin_allowed). A cross-site-WebSocket guard only, not authentication: the dashboard's
+    # Live feed has no key (removed by the owner's decision) and a client with a forged Origin gets in.
+    monitor_origins: tuple[str, ...] = DEFAULT_MONITOR_ORIGINS
     live_video: bool = True  # AIRA_LIVE_VIDEO: the phone's 1 fps ``live`` frames go into Gemini Live as video
     live_nudge: bool = True  # AIRA_LIVE_NUDGE: a settled scene change asks Live to speak up (aira_live.live_video)
     precount: bool = True  # AIRA_PRECOUNT: a settled scene change starts a background count (vision.precount)
@@ -60,7 +74,7 @@ def load() -> Settings:
         allow_no_token=os.getenv("AIRA_ALLOW_NO_TOKEN", "0") == "1",
         app_key=_env("AIRA_APP_KEY"),
         job_token=_env("AIRA_JOB_TOKEN"),
-        monitor_key=_env("AIRA_MONITOR_KEY"),
+        monitor_origins=_origins(_env("AIRA_MONITOR_ORIGINS")),
         live_video=os.getenv("AIRA_LIVE_VIDEO", "1") != "0",
         live_nudge=os.getenv("AIRA_LIVE_NUDGE", "1") != "0",
         precount=os.getenv("AIRA_PRECOUNT", "1") != "0",
