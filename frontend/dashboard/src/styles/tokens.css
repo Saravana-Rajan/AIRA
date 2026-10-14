@@ -41,8 +41,9 @@
    it: a faint white edge, one soft drop shadow, large corners. No pressed-in (inset) relief any more: "inset"
    tokens are kept for the many rules that use them but now draw only a hair-line ring. */
 :root {
-  --neu-bg: #EDF1F6;          /* page (solid fallback); the body paints --page-gradient over it */
-  --page-gradient: linear-gradient(180deg, #F4F7FB, #E7ECF3);   /* bright, cool light: no dull grey */
+  --neu-bg: #F2F4F7;          /* page (solid fallback); the body paints --page-gradient over it */
+  --page-gradient: linear-gradient(180deg, #F7F8FA, #EFF1F4);   /* soft, almost neutral light */
+  --page-end: #EFF1F4;        /* html ground beyond the page: the gradient's end colour */
   --neu-surface: #FBFCFD;     /* panels, cards, chips (solid fallback) */
   --panel-gradient: linear-gradient(180deg, #FFFFFF, #F7F9FC);
   --panel-border: rgba(255, 255, 255, 0.7);
