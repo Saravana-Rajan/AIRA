@@ -48,6 +48,15 @@ describe("bump guard decisions", () => {
     expect(s.latencies[0]).toBeLessThanOrEqual(150);
   });
 
+  it("reports the detector diagnostic each frame: raw count, top score, surviving count, and any error", () => {
+    const onDiag = vi.fn();
+    const s = setup({ onDiag });
+    s.g.process({ ts: 0, floor: null, dets: [{ label: "chair", score: 0.8, box: sq(100) }], raw: 3, top: 0.8 });
+    expect(onDiag).toHaveBeenCalledWith({ raw: 3, top: 0.8, n: 1, err: undefined });
+    s.g.process({ ts: 125, floor: null, dets: [], raw: 0, top: 0, err: "detectForVideo exploded" });
+    expect(onDiag).toHaveBeenLastCalledWith({ raw: 0, top: 0, n: 0, err: "detectForVideo exploded" });
+  });
+
   it("a single-frame spike (one big box, then gone) gives no warning", () => {
     const s = setup();
     s.g.process(res(0, [[300, 450, 800, 550]]));

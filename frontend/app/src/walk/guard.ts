@@ -61,6 +61,13 @@ export interface BumpGuardDeps {
    * the walking path (before cooldowns): the monitor's boxes and the "Show boxes" overlay. Errors are ignored.
    */
   onDetections?: (reports: BoxReport[], ts: number) => void;
+  /**
+   * Per-frame detector diagnostic: objects the model returned before the MIN_SCORE filter (`raw`), the top score
+   * seen (`top`), how many survived the filter (`n`), and a detect error (`err`). The integrator throttles and
+   * logs it so an empty overlay has a visible cause (model error vs nothing-in-view vs scores-too-low). Errors
+   * here are ignored.
+   */
+  onDiag?: (d: { raw: number; top: number; n: number; err?: string }) => void;
 }
 
 export interface BumpGuard {
@@ -157,6 +164,10 @@ export function createBumpGuard(deps: BumpGuardDeps): BumpGuard {
     }
     if (deps.onDetections) {
       try { deps.onDetections(reports, r.ts); } catch { /* the monitor never blocks the guard */ }
+    }
+    if (deps.onDiag) {
+      try { deps.onDiag({ raw: r.raw ?? 0, top: r.top ?? 0, n: r.dets.length, err: r.err }); }
+      catch { /* diagnostics never block the guard */ }
     }
     if (floor && r.floor !== null && floor.update(r.floor)) {
       consider({ key: "floor", box: FLOOR_BOX, ttcS: Infinity, ts: r.ts });

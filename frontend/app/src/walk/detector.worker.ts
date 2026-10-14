@@ -26,8 +26,10 @@ scope.onmessage = async (e: MessageEvent<ToWorker>) => {
     try {
       const r = engine ? engine.run(m.frame, m.ts) : { ts: m.ts, dets: [], floor: null };
       post({ type: "result", seq: m.seq, ...r });
-    } catch {
-      post({ type: "result", seq: m.seq, ts: m.ts, dets: [], floor: null });
+    } catch (err) {
+      // engine.run already catches a detect throw; this is for a failure in run() itself. Report it, never hide it.
+      post({ type: "result", seq: m.seq, ts: m.ts, dets: [], floor: null,
+        err: err instanceof Error ? err.message : String(err) });
     } finally {
       if ("close" in m.frame && typeof m.frame.close === "function") m.frame.close();
     }

@@ -28,8 +28,19 @@ describe("worker detector", () => {
     const sent = posted[1].msg;
     expect(sent).toMatchObject({ type: "frame", ts: 1234, frame });
     w.reply({ type: "result", seq: sent.seq + 99, ts: 1, dets: [], floor: null });   // unknown seq ignored
-    w.reply({ type: "result", seq: sent.seq, ts: 1234, dets: [{ label: "chair", score: 0.9, box: [1, 2, 3, 4] }], floor: 0.1 });
-    await expect(p).resolves.toEqual({ ts: 1234, dets: [{ label: "chair", score: 0.9, box: [1, 2, 3, 4] }], floor: 0.1 });
+    w.reply({ type: "result", seq: sent.seq, ts: 1234, dets: [{ label: "chair", score: 0.9, box: [1, 2, 3, 4] }], floor: 0.1, raw: 2, top: 0.9 });
+    // the diagnostics (raw / top / err) ride along the result so the guard can report an empty overlay's cause
+    await expect(p).resolves.toEqual({ ts: 1234, dets: [{ label: "chair", score: 0.9, box: [1, 2, 3, 4] }], floor: 0.1, raw: 2, top: 0.9, err: undefined });
+  });
+
+  it("carries a detect error reported by the worker instead of hiding an empty result", async () => {
+    const { w, posted } = fakeWorker();
+    const pending = createWorkerDetector(w as any, 1000);
+    w.reply({ type: "ready", delegate: "CPU" });
+    const d = await pending;
+    const p = d.detect({ close: vi.fn() } as any, 7);
+    w.reply({ type: "result", seq: posted[1].msg.seq, ts: 7, dets: [], floor: null, raw: 0, top: 0, err: "detectForVideo exploded" });
+    await expect(p).resolves.toMatchObject({ dets: [], err: "detectForVideo exploded" });
   });
 
   it("rejects when the worker reports an init error, and terminates it", async () => {

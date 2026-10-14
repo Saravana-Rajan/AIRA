@@ -3,7 +3,10 @@
 import type { Box } from "../guidance/geometry";
 
 export type RawDet = { label: string; score: number; box: Box };
-export const MIN_SCORE = 0.4;
+// The score a detection must reach to count. EfficientDet-Lite0 int8 scores low on a small phone frame, and a
+// missed obstacle is worse than a false "Stop", so this is deliberately generous. The detector itself runs at a
+// lower floor (engine.ts DETECT_FLOOR) so the diagnostic can see near-misses just below this bar.
+export const MIN_SCORE = 0.3;
 
 type PixelBox = { originX: number; originY: number; width: number; height: number };
 type MpDetection = { categories: { categoryName?: string; displayName?: string; score: number }[]; boundingBox?: PixelBox };

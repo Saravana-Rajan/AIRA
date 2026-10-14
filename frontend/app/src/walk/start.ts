@@ -3,6 +3,7 @@
 // The integrator calls startBumpGuard() once (after the Start tap) and connects the guidance session's
 // onNear to guard.setHandNearTarget.
 import { app } from "../core/app";
+import { clientLog } from "../core/clientLog";
 import { detectionPaused, startCamera } from "../camera/capture";
 import { getFrameSource } from "../camera/source";
 import type { BumpWarning } from "./bump";
@@ -79,6 +80,8 @@ export async function startBumpGuard(opts: StartBumpGuardOptions = {}): Promise<
       boxStore.setMediapipe(reports);
       boxes?.push(reports);
     },
+    // Why the overlay is empty, once every few seconds: model error, nothing in view, or scores under the bar.
+    onDiag: (d) => clientLog("bump_detect", { ...d, delegate: detector.kind }, { minGapMs: 5000 }),
     vibrate: (p) => { try { navigator.vibrate?.(p); } catch { /* not supported */ } },
     earcon: () => app.earcon("warn"),
     speak: (s) => app.speak(s),

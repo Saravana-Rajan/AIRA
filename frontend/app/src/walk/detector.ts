@@ -3,7 +3,16 @@
 // UI thread, voice and hand tracking stay smooth; falls back to the main thread if the worker fails.
 import type { RawDet } from "./detections";
 
-export type DetectResult = { ts: number; dets: RawDet[]; floor: number | null };
+export type DetectResult = {
+  ts: number;
+  dets: RawDet[];
+  floor: number | null;
+  /** Diagnostics (optional): detections the model returned before the MIN_SCORE filter, their top score, and a
+   *  per-frame detect error message. They let the guard report WHY `dets` is empty instead of hiding it. */
+  raw?: number;
+  top?: number;
+  err?: string;
+};
 export type DetectFrame = ImageBitmap | HTMLVideoElement;
 
 export interface Detector {
@@ -80,7 +89,7 @@ export function createWorkerDetector(worker: WorkerLike, readyTimeoutMs = READY_
         const p = pending.get(m.seq);
         if (!p) return;
         pending.delete(m.seq);
-        p.resolve({ ts: m.ts, dets: m.dets, floor: m.floor });
+        p.resolve({ ts: m.ts, dets: m.dets, floor: m.floor, raw: m.raw, top: m.top, err: m.err });
       }
     };
     worker.onerror = (e) => fail(e instanceof Error ? e : new Error("bump detector: worker crashed"));
