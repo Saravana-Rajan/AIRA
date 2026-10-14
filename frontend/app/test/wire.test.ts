@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 import type { ClientMsg, ServerMsg } from "@aira/contracts";
-import { wireApp, type WireEnv, type WiredApp, MIC_IDLE_MS, MIC_WATCHDOG_MS, THINKING_LOOP_MS, MIC_MAX_BUFFERED_BYTES } from "../src/core/wire";
+import { wireApp, type WireEnv, type WiredApp, MIC_IDLE_MS, MIC_WATCHDOG_MS, THINKING_LOOP_MS, MIC_MAX_BUFFERED_BYTES, URGENT_DEDUPE_MS } from "../src/core/wire";
+import { GLOBAL_COOLDOWN_MS } from "../src/walk/bump";
 import type { PlaybackOpts } from "../src/voice/playback";
 import { app } from "../src/core/app";
 import { DEFAULT_SETTINGS, SETTINGS_KEY } from "../src/core/settings";
@@ -709,5 +710,36 @@ describe("wireApp: earphones come and go (voice/route)", () => {
     a.w.dispose();
     expect(d.listeners.size).toBe(0);
     expect(() => setup({ env: { mediaDevices: null } })).not.toThrow();
+  });
+});
+
+describe("wireApp: the bump guard's urgent path (walk with me safety layer)", () => {
+  it("a guard 'Stop' is spoken at once over Live audio and a waiting local line; a repeat past the dedupe window speaks again", async () => {
+    vi.useFakeTimers();
+    const a = setup();
+    await flush();
+    const before = a.spoken().length;
+    a.playback.msSinceAudio.mockReturnValue(0);           // AIRA is mid-answer
+    app.speak("The curd is 30 rupees.");                   // a normal local line waits behind Live audio
+    expect(a.spoken().length).toBe(before);
+    app.speakUrgent("Stop", { kind: "bump.stop", ageMs: 40 });
+    expect(a.spoken().slice(before)).toEqual(["Stop"]);    // not scheduled: said now
+    expect(a.env.speech!.cancel).toHaveBeenCalled();
+    expect(a.playback.flush).toHaveBeenCalled();           // the answer is cut, not talked over
+    const alerts = () => a.socket.sent.flatMap((m) => (m.t === "log" && m.tag === "guard_alert" ? [m.data] : []));
+    expect(alerts()).toEqual([{ kind: "bump.stop", deduped: false, waitedMs: 40, overLive: true }]);
+    vi.advanceTimersByTime(URGENT_DEDUPE_MS - 500);
+    app.speakUrgent("Stop", { kind: "bump.stop", ageMs: 30 });
+    expect(a.spoken().slice(before)).toEqual(["Stop"]);    // the same line within the window: once
+    expect(alerts()[1]).toMatchObject({ kind: "bump.stop", deduped: true });
+    vi.advanceTimersByTime(600);
+    app.speakUrgent("Stop", { kind: "bump.stop", ageMs: 30 });
+    expect(a.spoken().slice(before)).toEqual(["Stop", "Stop"]);   // a later warning is never swallowed
+    vi.advanceTimersByTime(60_000);                        // the waiting local line never comes back
+    expect(a.spoken().slice(before)).toEqual(["Stop", "Stop"]);
+  });
+
+  it("the guard's own global cooldown is longer than the urgent dedupe: every guard warning is heard", () => {
+    expect(GLOBAL_COOLDOWN_MS).toBeGreaterThan(URGENT_DEDUPE_MS);
   });
 });

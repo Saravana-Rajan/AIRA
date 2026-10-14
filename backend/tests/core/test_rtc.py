@@ -67,7 +67,7 @@ def _recv_t(ws, t: str, timeout: float = 3.0) -> dict:
 
 
 @pytest.fixture(autouse=True)
-def clean(monkeypatch):
+def clean(monkeypatch, fake_viewers):
     for name in ("GEMINI_API_KEY", "AIRA_MOCK", "AIRA_ALLOW_NO_TOKEN", "AIRA_APP_KEY", "AIRA_MONITOR_ORIGINS"):
         monkeypatch.delenv(name, raising=False)
     monitor.reset()
@@ -91,7 +91,11 @@ def test_rtc_messages_validate_in_both_directions_and_keep_a_null_m_line_index()
 
 
 def test_a_monitor_may_send_auth_or_rtc_and_nothing_else():
-    assert parse_monitor_client_msg(json.dumps({"t": "auth", "key": "k"})) is None  # no auth message any more
+    from aira_live.contracts import MonAuthMsg
+    auth = parse_monitor_client_msg(json.dumps({"t": "auth", "idToken": "a.b.c"}))
+    assert isinstance(auth, MonAuthMsg) and auth.id_token == "a.b.c"
+    assert parse_monitor_client_msg(json.dumps({"t": "auth", "key": "k"})) is None  # the old shared-key message
+    assert parse_monitor_client_msg(json.dumps({"t": "auth", "idToken": ""})) is None
     want = parse_monitor_client_msg(json.dumps({"t": "rtc", "kind": "want", "to": "s1"}))
     assert isinstance(want, RtcMsg) and want.kind == "want"
     assert parse_monitor_client_msg(json.dumps({"t": "hello"})) is None
@@ -261,9 +265,9 @@ async def test_a_session_ending_says_bye_to_its_monitors_and_forgets_it(mk_sessi
 
 
 # ---------- over the sockets ----------
-def test_the_full_flow_over_ws_and_monitor(monkeypatch):
+def test_the_full_flow_over_ws_and_monitor(monkeypatch, mon_open):
     with TestClient(main_mod.app) as client, \
-            client.websocket_connect(f"/monitor?shop={SHOP}", headers=ORIGIN) as mon:
+            mon_open(client) as mon:
         _wait(lambda: monitor.monitored(SHOP))
         with client.websocket_connect("/ws", headers=ORIGIN) as ws:
             ws.send_json(HELLO)
@@ -297,8 +301,24 @@ def test_the_full_flow_over_ws_and_monitor(monkeypatch):
         _recv_rtc(mon, "bye")  # the session ended: its monitor hears bye
 
 
+def test_rtc_before_auth_is_refused_and_never_reaches_a_phone(mon_open):
+    """Signalling is behind the same check as the feed: an rtc message as the first frame (no token) closes the
+    socket with 4401 and the phone hears nothing."""
+    with TestClient(main_mod.app) as client, client.websocket_connect("/ws", headers=ORIGIN) as ws:
+        ws.send_json(HELLO)
+        sid = ws.receive_json()["sessionId"]
+        with pytest.raises(WebSocketDisconnect) as closed:
+            with mon_open(client, token=None) as mon:
+                mon.send_json({"t": "rtc", "kind": "want", "to": sid})
+                mon.receive_json()
+        assert closed.value.code == 4401
+        assert not monitor.monitored(SHOP)
+        ws.send_json({"t": "stop"})
+        assert ws.receive_json() == {"t": "cue", "cue": "done"}  # nothing (no want, no request_frame) came before
+
+
 def test_rtc_from_a_foreign_origin_is_refused_before_the_handshake():
-    """No key any more: the Origin allowlist is the only gate, and a stray rtc from off it never reaches a phone."""
+    """The Origin allowlist stays as defence in depth: a stray rtc from off it never reaches a phone."""
     with TestClient(main_mod.app) as client:
         with pytest.raises(WebSocketDisconnect) as closed:
             with client.websocket_connect(f"/monitor?shop={SHOP}", headers={"Origin": "https://evil.example"}) as mon:

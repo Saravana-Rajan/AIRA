@@ -4,6 +4,7 @@ import {
   MAX_LINES, backoffMs, detailText, eventLabel, follow, frameAge, initialState, monitorUrl, openMonitor, overlayShapes,
   reduce, sessionClock, toRect, toXY, type LiveState, type SocketLike,
 } from "../src/lib/monitor";
+import { jwt } from "./helpers/jwt";
 
 type MonInput = MonitorMsg extends infer M ? (M extends MonitorMsg ? Omit<M, "t" | "session" | "ts"> & { ts?: number; session?: string } : never) : never;
 const mon = (m: MonInput): MonitorMsg =>
@@ -257,7 +258,7 @@ describe("reduce: camera, vision, hand, status, stats, events and sessions", () 
 });
 
 describe("monitorUrl", () => {
-  it("replaces /ws with /monitor and adds the shop, nothing else (there is no key)", () => {
+  it("replaces /ws with /monitor and adds the shop, nothing else (the token never goes in the URL)", () => {
     expect(monitorUrl({ VITE_AIRA_LIVE_WS: "wss://aira-live-abc.a.run.app/ws" }, "sunrise_dairy")).toBe(
       "wss://aira-live-abc.a.run.app/monitor?shop=sunrise_dairy",
     );
@@ -279,7 +280,7 @@ describe("clocks", () => {
   });
 });
 
-describe("reconnect backoff and refusal", () => {
+describe("reconnect backoff, sign-in and refusal", () => {
   it("doubles from 1 s and caps at 15 s", () => {
     expect([0, 1, 2, 3, 4, 9].map(backoffMs)).toEqual([1000, 2000, 4000, 8000, 15000, 15000]);
   });
@@ -291,72 +292,149 @@ describe("reconnect backoff and refusal", () => {
       close() { this.closed = true; },
     };
   }
+  const tick = () => new Promise((r) => setTimeout(r, 0));
+  const T0 = 1_760_000_000_000;
+  const token = (exp: number, tag = "t") => jwt({ sub: "u1", exp: Math.floor(exp / 1000), tag });
+  const authLine = (idToken: string) => JSON.stringify({ t: "auth", idToken });
 
-  it("sends nothing on open (no key), reconnects after each close with growing delays, resets after an open, and stops cleanly", () => {
+  function rig(getToken = vi.fn(async (_force?: boolean) => token(T0 + 3_600_000))) {
     const sockets: ReturnType<typeof fakeSocket>[] = [];
-    const timers: Array<{ fn: () => void; ms: number }> = [];
+    const timers: Array<{ fn: () => void; ms: number; id: number }> = [];
+    const cleared: number[] = [];
     const onMsg = vi.fn();
     const onConn = vi.fn();
-    const stop = openMonitor(
-      "ws://x/monitor?shop=s",
-      onMsg,
-      onConn,
-      { connect: () => { const s = fakeSocket(); sockets.push(s); return s; }, setTimer: (fn: () => void, ms: number) => { timers.push({ fn, ms }); return timers.length; }, clearTimer: vi.fn() },
-    );
-    expect(onConn).toHaveBeenLastCalledWith("connecting", 0);
-    sockets[0].onclose!({ code: 1006 });
-    expect(onConn).toHaveBeenLastCalledWith("offline", 0);
-    expect(timers.map((t) => t.ms)).toEqual([1000]);
-    timers[0].fn();
-    sockets[1].onclose!({ code: 1006 });
-    expect(timers.map((t) => t.ms)).toEqual([1000, 2000]);
-    timers[1].fn();
-    sockets[2].onopen!({});
-    expect(sockets[2].sent).toEqual([]);
-    expect(onConn).toHaveBeenLastCalledWith("live", 0);
-    sockets[2].onmessage!({ data: JSON.stringify({ t: "mon", kind: "status", session: "s", ts: 1, state: "thinking" }) });
-    sockets[2].onmessage!({ data: "not json" });
-    expect(onMsg).toHaveBeenCalledTimes(1);
-    expect(onMsg.mock.calls[0][0]).toMatchObject({ kind: "status", state: "thinking" });
-    sockets[2].onclose!({ code: 1006 });
-    expect(timers.map((t) => t.ms)).toEqual([1000, 2000, 1000]); // attempt count reset by the open
-    stop();
-    timers[2].fn();
-    expect(sockets).toHaveLength(3); // no dial after stop
-  });
-
-  it("hands rtc lines to the signal port, attaches it once a socket is open and detaches it on close and stop", () => {
-    const sockets: ReturnType<typeof fakeSocket>[] = [];
-    const onMsg = vi.fn();
     const port = { attach: vi.fn(), detach: vi.fn(), receive: vi.fn() };
-    const stop = openMonitor("ws://x", onMsg, vi.fn(), {
-      connect: () => { const s = fakeSocket(); sockets.push(s); return s; }, setTimer: vi.fn(), clearTimer: vi.fn(), signal: port,
+    const stop = openMonitor("ws://x/monitor?shop=s", onMsg, onConn, {
+      connect: () => { const s = fakeSocket(); sockets.push(s); return s; },
+      setTimer: (fn: () => void, ms: number) => { const id = timers.length + 1; timers.push({ fn, ms, id }); return id; },
+      clearTimer: (t: unknown) => { cleared.push(t as number); },
+      signal: port, getToken, now: () => T0,
     });
-    expect(port.attach).not.toHaveBeenCalled();
-    sockets[0].onopen!({});
-    expect(port.attach).toHaveBeenCalledTimes(1);
-    const send = port.attach.mock.calls[0][0] as (m: unknown) => boolean;
+    return { sockets, timers, cleared, onMsg, onConn, port, stop, getToken };
+  }
+
+  it("sends the ID token as its first message, reports live and attaches the signal port only after it, and schedules the refresh", async () => {
+    const r = rig();
+    expect(r.onConn).toHaveBeenLastCalledWith("connecting", 0);
+    r.sockets[0].onopen!({});
+    expect(r.sockets[0].sent).toEqual([]); // the token is fetched first
+    expect(r.port.attach).not.toHaveBeenCalled();
+    await tick();
+    expect(r.getToken).toHaveBeenCalledWith();
+    expect(r.sockets[0].sent).toEqual([authLine(token(T0 + 3_600_000))]);
+    expect(r.onConn).toHaveBeenLastCalledWith("live", 0);
+    expect(r.port.attach).toHaveBeenCalledTimes(1);
+    expect(r.timers.map((t) => t.ms)).toEqual([55 * 60_000]); // exp - 5 min
+    const send = r.port.attach.mock.calls[0][0] as (m: unknown) => boolean;
     expect(send({ t: "rtc", kind: "want", to: "s1" })).toBe(true);
-    expect(sockets[0].sent.at(-1)).toBe(JSON.stringify({ t: "rtc", kind: "want", to: "s1" }));
-    const offer = { t: "rtc", kind: "offer", from: "s1", to: "m1", sdp: "v=0" };
-    sockets[0].onmessage!({ data: JSON.stringify(offer) });
-    sockets[0].onmessage!({ data: JSON.stringify({ t: "mon", kind: "status", session: "s1", ts: 1, state: "idle" }) });
-    expect(port.receive).toHaveBeenCalledWith(offer);
-    expect(onMsg).toHaveBeenCalledTimes(1);
-    expect(onMsg).not.toHaveBeenCalledWith(expect.objectContaining({ t: "rtc" }));
-    sockets[0].onclose!({ code: 1006 });
-    expect(port.detach).toHaveBeenCalledTimes(1);
-    expect(send({ t: "rtc", kind: "bye", to: "s1" })).toBe(false); // a dead socket's send is refused
-    stop();
-    expect(port.detach).toHaveBeenCalledTimes(2);
+    expect(r.sockets[0].sent[0]).toContain('"t":"auth"'); // auth stays first
+    expect(r.sockets[0].sent[1]).toBe(JSON.stringify({ t: "rtc", kind: "want", to: "s1" }));
   });
 
-  it("reports a refusal (4403: Origin or shop) instead of retrying", () => {
-    const onConn = vi.fn();
-    const s = fakeSocket();
-    openMonitor("ws://x", vi.fn(), onConn, { connect: () => s, setTimer: vi.fn(), clearTimer: vi.fn() });
-    s.onopen!({});
-    s.onclose!({ code: 4403 });
-    expect(onConn).toHaveBeenLastCalledWith("rejected", 0);
+  it("refreshes with a freshly minted token before expiry, on the same socket, and books the next refresh from it", async () => {
+    let n = 0;
+    const getToken = vi.fn(async (force?: boolean) => token(T0 + (force ? 7_200_000 : 3_600_000), `t${n++}`));
+    const r = rig(getToken);
+    r.sockets[0].onopen!({});
+    await tick();
+    expect(r.timers).toHaveLength(1);
+    r.timers[0].fn();
+    await tick();
+    expect(getToken).toHaveBeenLastCalledWith(true);
+    expect(r.sockets[0].sent).toHaveLength(2);
+    expect(JSON.parse(r.sockets[0].sent[1])).toMatchObject({ t: "auth" });
+    expect(r.sockets[0].sent[1]).toContain(token(T0 + 7_200_000, "t1"));
+    expect(r.timers.map((t) => t.ms)).toEqual([55 * 60_000, 115 * 60_000]);
+    expect(r.sockets).toHaveLength(1); // no reconnect: the refresh rides the open socket
+    r.sockets[0].onclose!({ code: 1006 });
+    expect(r.cleared).toContain(2); // the pending refresh is cancelled with the socket
+  });
+
+  it("drops messages that arrive before the token went out, and hands rtc lines to the port after", async () => {
+    const r = rig();
+    r.sockets[0].onopen!({});
+    r.sockets[0].onmessage!({ data: JSON.stringify({ t: "mon", kind: "status", session: "s", ts: 1, state: "thinking" }) });
+    expect(r.onMsg).not.toHaveBeenCalled();
+    await tick();
+    r.sockets[0].onmessage!({ data: JSON.stringify({ t: "mon", kind: "status", session: "s", ts: 1, state: "thinking" }) });
+    r.sockets[0].onmessage!({ data: "not json" });
+    const offer = { t: "rtc", kind: "offer", from: "s1", to: "m1", sdp: "v=0" };
+    r.sockets[0].onmessage!({ data: JSON.stringify(offer) });
+    expect(r.onMsg).toHaveBeenCalledTimes(1);
+    expect(r.onMsg.mock.calls[0][0]).toMatchObject({ kind: "status", state: "thinking" });
+    expect(r.port.receive).toHaveBeenCalledWith(offer);
+    r.sockets[0].onclose!({ code: 1006 });
+    expect(r.port.detach).toHaveBeenCalledTimes(1);
+    const send = r.port.attach.mock.calls[0][0] as (m: unknown) => boolean;
+    expect(send({ t: "rtc", kind: "bye", to: "s1" })).toBe(false); // a dead socket's send is refused
+    r.stop();
+    expect(r.port.detach).toHaveBeenCalledTimes(2);
+  });
+
+  it("reconnects after each ordinary close with growing delays, signs in again on every socket, resets after an open, and stops cleanly", async () => {
+    const r = rig();
+    r.sockets[0].onclose!({ code: 1006 });
+    expect(r.onConn).toHaveBeenLastCalledWith("offline", 0);
+    expect(r.timers.map((t) => t.ms)).toEqual([1000]);
+    r.timers[0].fn();
+    r.sockets[1].onclose!({ code: 1006 });
+    expect(r.timers.map((t) => t.ms)).toEqual([1000, 2000]);
+    r.timers[1].fn();
+    r.sockets[2].onopen!({});
+    await tick();
+    expect(r.sockets[2].sent).toEqual([authLine(token(T0 + 3_600_000))]); // every socket authenticates from scratch
+    expect(r.onConn).toHaveBeenLastCalledWith("live", 0);
+    r.sockets[2].onclose!({ code: 1006 });
+    expect(r.timers.map((t) => t.ms)).toEqual([1000, 2000, 55 * 60_000, 1000]); // attempt count reset by the open
+    r.stop();
+    r.timers[3].fn();
+    expect(r.sockets).toHaveLength(3); // no dial after stop
+  });
+
+  it("closes as unauthenticated when no token can be had", async () => {
+    const r = rig(vi.fn(async () => { throw new Error("signed out"); }));
+    r.sockets[0].onopen!({});
+    await tick();
+    expect(r.sockets[0].closed).toBe(true);
+    expect(r.sockets[0].sent).toEqual([]);
+    expect(r.onConn).toHaveBeenLastCalledWith("unauthenticated", 0);
+    expect(r.sockets).toHaveLength(1);
+  });
+
+  it("4403 before the token went out is a refusal of the page (Origin or shop); after it, the account is not allowed; neither retries", async () => {
+    const a = rig();
+    a.sockets[0].onclose!({ code: 4403 });
+    expect(a.onConn).toHaveBeenLastCalledWith("rejected", 0);
+    const b = rig();
+    b.sockets[0].onclose!({ code: 1008 });
+    expect(b.onConn).toHaveBeenLastCalledWith("rejected", 0);
+    const c = rig();
+    c.sockets[0].onopen!({});
+    await tick();
+    c.sockets[0].onclose!({ code: 4403 });
+    expect(c.onConn).toHaveBeenLastCalledWith("unauthorized", 0);
+    expect(c.sockets).toHaveLength(1);
+    expect(c.timers.map((t) => t.ms)).toEqual([55 * 60_000]); // only the (now cancelled) refresh: no reconnect timer
+    expect(c.cleared).toEqual([1]);
+  });
+
+  it("4401 (the server did not accept the token) is reported as unauthenticated without a retry of its own", async () => {
+    const r = rig();
+    r.sockets[0].onopen!({});
+    await tick();
+    r.sockets[0].onclose!({ code: 4401 });
+    expect(r.onConn).toHaveBeenLastCalledWith("unauthenticated", 0);
+    expect(r.sockets).toHaveLength(1);
+  });
+
+  it("never puts the token anywhere but the socket", async () => {
+    const r = rig();
+    r.sockets[0].onopen!({});
+    await tick();
+    const t = token(T0 + 3_600_000);
+    expect(r.sockets[0].sent[0]).toContain(t);
+    expect(location.href).not.toContain(t);
+    expect(sessionStorage.length).toBe(0);
+    expect(Object.keys(localStorage)).toEqual([]);
   });
 });

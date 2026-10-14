@@ -19,7 +19,8 @@ State machine (``WalkLoop.state``; every transition is logged as ``walk_state``)
                   |                                 |  |   \\--target large + ahead (confirmed)--> ARRIVAL_CANDIDATE
                   |                                 v  |                                          (keeps watching)
                   +--unusable view / 3 failed checks--> DEGRADED --2 usable fresh reports--> NAVIGATING
-    any state --walk_stop / long-press / disconnect / timeout--> STOPPED (late reports ignored)
+    ACQUIRING / NAVIGATING / ARRIVAL_CANDIDATE --no observation for OBSERVATION_GAP_S (any reason)--> DEGRADED
+    any state --walk_stop / long-press / disconnect / timeout / Live gone--> STOPPED (late reports ignored)
 
 Pausing is walk_stop then walk_to again. Arrival is never claimed: ARRIVAL_CANDIDATE says "The fridge appears to
 be just ahead. Reach forward carefully to confirm." and keeps watching; the walk ends on walk_stop (the owner says he is
@@ -28,7 +29,15 @@ there, or stop, in any language: Live decides), the long-press, a disconnect, or
 Freshness: an observation's age is (now - when the newest live frame was forwarded to Live before its check was
 sent), measured just before its line is said, so it includes the check's latency. Stops are always said; other
 lines only when age <= ``vision.walk.WALK_DIRECTION_MAX_AGE_S``. A report whose check was replaced, timed out or
-belongs to an ended walk is ignored.
+belongs to an ended walk is ignored. A report for a check sent BEFORE the phone marked the scene changed
+describes an older view: it may stop him but never direct him, and the new view is checked at once.
+
+Watchdogs: whatever keeps observations away (a busy conversation without a navigation session, a navigation
+session that dropped, no frames, a Live reconnect), a walk in a moving state with no observation for
+``OBSERVATION_GAP_S`` goes DEGRADED and says the honest line once; it never stays silently NAVIGATING on old
+evidence. The navigation session is reopened on its own (every ``NAV_REOPEN_S``, at most ``NAV_MAX_OPENS``
+opens per walk) with quiet-moment checks through the conversation in between. A conversation bridge that gave up
+(``LiveBridge.closed``) ends the walk: there is no voice left to guide with.
 
 The phone signal: walk start sends ``RequestFrameMsg(purpose="walk", continuous=True)`` and the end sends its
 ``stop=True`` twin, unchanged, only as the "walk active" signal for the phone. The loop never waits for or reads
@@ -70,6 +79,12 @@ HOLD_TEXT = "Stay stopped. I'm still checking the way."
 MEMORY_TIMEOUT_S = 1.5
 FAST_STOP_GAP_S = 3.0
 MAX_IN_FLIGHT = 1          # nav checks in flight at once
+OBSERVATION_GAP_S = 10.0   # moving with no observation this long (any reason): DEGRADED, honest line once
+NAV_REOPEN_S = 10.0        # a navigation session that failed to open or dropped is reopened this often...
+NAV_MAX_OPENS = 4          # ...at most this many opens per walk (the first one included)
+DISCONNECT_NOTE_S = 60.0   # a walk ended by a disconnect is reported to Live on a resume within this long
+
+_ENDED_BY_DISCONNECT: dict[str, tuple[str, float]] = {}   # session id -> (target, ended at)
 
 ACQUIRING, NAVIGATING, HAZARD = "ACQUIRING", "NAVIGATING", "HAZARD"
 ARRIVAL_CANDIDATE, DEGRADED, STOPPED = "ARRIVAL_CANDIDATE", "DEGRADED", "STOPPED"
@@ -138,6 +153,8 @@ class WalkLoop:
         self.nav = None                          # the walk's own navigation Live session, once open
         self._nav_factory = nav_factory if nav_factory is not None else default_nav_factory
         self._nav_task: asyncio.Task | None = None
+        self.nav_opens = 0                       # opens tried (start + reopens), bounded by NAV_MAX_OPENS
+        self.nav_open_at = float("-inf")         # when the last open was tried (loop clock)
         self.checker = checker or NavChecker(self._bridge, lambda: self.nav)
         self.owner_name: str | None = getattr(session, "owner_name", None) or config.load().owner_name
         self.hazard_label: str | None = None   # what the last stop was for (the resume line names it)
@@ -149,8 +166,11 @@ class WalkLoop:
         self.task: asyncio.Task | None = None
         # perception
         self.frame_at: float | None = None     # when the newest live frame was forwarded to Live (loop clock)
+        self.bridge_frame_at: float | None = None   # ... to the conversation session itself (fallback checks)
         self.check_seq = 0
         self.pending: tuple[int, float, float] | None = None   # (check id, sent at, frame forwarded at)
+        self.scene_changed_at: float | None = None   # a changed frame arrived while a check was in flight
+        self.last_report_at = self.started_at  # the last observation (a non-empty report) for the watchdog
         self._checking = False                 # a check is being handed to Live (tick and changed-frame race)
         self.deferred_since: float | None = None  # when checks started waiting for a quiet voice channel
         self.preempted = 0                     # checks the conversation overtook (not failures)
@@ -187,6 +207,8 @@ class WalkLoop:
         the old target, so its report is ignored."""
         self.target = target
         self.pending = None
+        self.scene_changed_at = None
+        self.last_report_at = self._clock()    # a fresh grace period for the new destination
         self.recent.clear()
         self.recent_keys.clear()
         self.search = vwalk.Search()
@@ -196,22 +218,47 @@ class WalkLoop:
         diag("walk_retarget", session=self.session.session_id)
 
     # ---------- perception: nav checks ----------
-    def on_live_frame(self, now: float | None = None) -> None:
-        """A live frame was just forwarded to Live (main.live_frame)."""
-        self.frame_at = self._clock() if now is None else now
+    def on_live_frame(self, now: float | None = None, *, to_bridge: bool = True) -> None:
+        """A live frame was just forwarded to Live (main.live_frame); ``to_bridge``: the conversation session got
+        it too (False: only the walk's navigation session did)."""
+        t = self._clock() if now is None else now
+        self.frame_at = t
+        if to_bridge:
+            self.bridge_frame_at = t
 
     def nav_alive(self) -> bool:
         return self.nav is not None and bool(getattr(self.nav, "alive", False))
 
     async def open_nav(self) -> None:
-        """Open the walk's navigation session (in the background: the walk never waits for it)."""
+        """Open (or reopen) the walk's navigation session, in the background: the walk never waits for it. One
+        of at most ``NAV_MAX_OPENS`` tries per walk; a factory that gives None (flag off, mock) ends the tries."""
+        self.nav_opens += 1
+        self.nav_open_at = self._clock()
         nav = self._nav_factory(self)
         if nav is None:
+            self.nav_opens = NAV_MAX_OPENS
             return
+        old, self.nav = self.nav, None            # a dropped session is replaced, never reused
+        if old is not None:
+            await old.close()
+        diag("walk_nav", session=self.session.session_id, event="open", attempt=self.nav_opens)
         if await nav.start() and self.active:
             self.nav = nav
             return
         await nav.close()
+        diag("walk_nav", session=self.session.session_id, event="open_failed", attempt=self.nav_opens,
+             more=self.active and self.nav_opens < NAV_MAX_OPENS)
+
+    def _maybe_reopen_nav(self, now: float) -> None:
+        """A navigation session that never opened or dropped mid-walk is reopened every ``NAV_REOPEN_S``, at
+        most ``NAV_MAX_OPENS`` opens per walk; in between, checks go through the conversation in quiet moments.
+        Only after ``start`` made the first try (a loop built without it never opens one)."""
+        if (not self.active or self.nav_alive() or self.nav_opens < 1 or self.nav_opens >= NAV_MAX_OPENS
+                or now - self.nav_open_at < NAV_REOPEN_S
+                or (self._nav_task is not None and not self._nav_task.done())):
+            return
+        diag("walk_nav", session=self.session.session_id, event="reopen", attempt=self.nav_opens + 1)
+        self._nav_task = asyncio.create_task(self.open_nav(), name=f"walk-nav-{self.session.session_id}")
 
     async def on_nav_report(self, args: dict) -> None:
         """A nav_report from the navigation session: the same handling as the conversation session's tool."""
@@ -229,20 +276,29 @@ class WalkLoop:
 
     async def _send_check(self, reason: str) -> bool:
         now = self._clock()
-        if self._bridge() is None:
+        bridge = self._bridge()
+        if bridge is None:
             self.last_check_at = now
             await self._failed("no_live")
+            return False
+        if getattr(bridge, "closed", False):   # Live gave up reconnecting: no voice is left to guide with
+            await self._end("no_live", "I stopped guiding: I lost the voice connection. Please stop and ask me "
+                            "again when you are ready.", cue="warn",
+                            facts={"action": "stop", "reason": "guidance_ended", "cause": "live_lost"})
             return False
         if not self.nav_alive() and self._voice_busy():   # waiting for a quiet moment is never a failed look
             if self.deferred_since is None:
                 self.deferred_since = now
                 diag("walk_check", session=self.session.session_id, sent=False, reason=reason, skipped="busy")
             return False
-        if self.frame_at is None or self.frame_at <= self.last_check_frame_at:
+        # The picture this check looks at: the newest one of the session that will answer it. A fallback check
+        # through the conversation session never counts a frame only the (now gone) navigation session received.
+        picture = self.frame_at if self.nav_alive() else self.bridge_frame_at
+        if picture is None or picture <= self.last_check_frame_at:
             self.last_check_at = now      # no new picture: try again next interval
             await self._failed("no_frame")
             return False
-        check_id, frame_at = self.check_seq + 1, self.frame_at
+        check_id, frame_at = self.check_seq + 1, picture
         try:
             sent = await self.checker.request(check_id, self.target)
         except Exception:
@@ -268,8 +324,14 @@ class WalkLoop:
         return True
 
     async def on_changed_frame(self) -> None:
-        """The phone saw the scene change: check now (if a check may go at all)."""
-        if self.active and self._clock() - self.last_check_at >= CHANGED_CHECK_GAP_S:
+        """The phone saw the scene change: check now (if a check may go at all). With a check already in
+        flight, its report will describe the older view: remembered, so that report may stop him but never
+        direct him, and the new view is checked as soon as it comes back."""
+        if not self.active:
+            return
+        if self.pending is not None:
+            self.scene_changed_at = self._clock()
+        if self._clock() - self.last_check_at >= CHANGED_CHECK_GAP_S:
             await self.maybe_check("changed")
 
     async def on_report(self, report: vwalk.NavReport, *, empty: bool = False) -> str:
@@ -293,6 +355,18 @@ class WalkLoop:
             return "empty"
         self.fails = 0
         now = self._clock()
+        self.last_report_at = now
+        scene_changed = self.scene_changed_at is not None and self.scene_changed_at > sent_at
+        self.scene_changed_at = None
+        if scene_changed:
+            # The scene changed after this check went: its report is about an older view. Stops still count
+            # (age None: nothing but a stop is said) and the new view is checked at once.
+            diag("walk_tick", session=self.session.session_id, state=self.state, said="scene_changed",
+                 check=report.check_id)
+            await self.process(report, None, ms=round((now - sent_at) * 1000))
+            self.last_check_at = float("-inf")
+            await self.maybe_check("scene_changed")
+            return "stale_scene"
         await self.process(report, now - frame_at, ms=round((now - sent_at) * 1000))
         return "ok"
 
@@ -403,8 +477,19 @@ class WalkLoop:
                  skipped="timeout")
             self.pending = None
             await self._failed("timeout")
+        self._maybe_reopen_nav(now)
         if self.pending is None and now - self.last_check_at >= self.interval_s:
             await self.maybe_check("tick")
+        if (self.active and self.state in (ACQUIRING, NAVIGATING, ARRIVAL_CANDIDATE)
+                and now - self.last_report_at > OBSERVATION_GAP_S):
+            # Moving on old evidence, whatever kept the observations away (a busy conversation without a
+            # navigation session, a dropped one, no frames, a Live reconnect): stop him honestly, once.
+            # The usual recovery applies: two fresh usable reports and he walks on.
+            self._to(DEGRADED, "no_observation")
+            text = self._degraded_line(now)
+            if text:
+                await self._say(text, cue="warn", urgent=True,
+                                facts={"action": "stop", "reason": "no_fresh_view", "wait_for": "clear_view"})
         if (self.active and self.state in (NAVIGATING, ACQUIRING)
                 and now - self.last_spoken_at > STILL_GUIDING_SILENT_S
                 and now - self.last_still_at >= STILL_GUIDING_EVERY_S):
@@ -551,6 +636,7 @@ async def remembered_place(session: Session, target: str) -> tuple[str | None, s
 async def start(session: Session, target: str, run: bool = True, **kw) -> WalkLoop:
     """Start a walk for ``session`` (one loop per session: an earlier walk is stopped first)."""
     await stop_walk(session)
+    _ENDED_BY_DISCONNECT.pop(session.session_id, None)
     if "memory_place" not in kw:
         kw["memory_place"], kw["memory_side"] = await remembered_place(session, target)
     loop = WalkLoop(session, target, **kw)
@@ -590,16 +676,23 @@ async def on_phone_boxes(session: Session, msg) -> None:
         log.warning("walk: phone boxes failed for %s", session.session_id, exc_info=True)
 
 
-async def on_live_frame(session: Session, changed: bool = False, jpeg_b64: str | None = None) -> None:
-    """main.py hook: a live frame was forwarded into Live during a walk (and ``changed``: check now). The same
-    picture goes to the walk's navigation session, so both sessions see the same camera."""
+async def on_live_frame(session: Session, changed: bool = False, jpeg_b64: str | None = None,
+                        sent: bool = True) -> None:
+    """main.py hook: a live frame reached the camera path during a walk (and ``changed``: check now). The same
+    picture goes to the walk's navigation session, so both sessions see the same camera. ``sent`` is whether
+    the conversation session got it (main.py passes it once it calls the hook for every walking frame); the
+    navigation session is fed either way, and the frame counts as a picture for checks when at least one of
+    the two sessions has it."""
     loop = active(session)
     if loop is None:
         return
     try:
+        fed = False
         if jpeg_b64 and loop.nav_alive():
-            await loop.nav.send_frame(base64.b64decode(jpeg_b64))
-        loop.on_live_frame()
+            fed = await loop.nav.send_frame(base64.b64decode(jpeg_b64))
+        if not sent and not fed:
+            return
+        loop.on_live_frame(to_bridge=sent)
         if changed:
             await loop.on_changed_frame()
     except Exception:
@@ -607,8 +700,37 @@ async def on_live_frame(session: Session, changed: bool = False, jpeg_b64: str |
 
 
 async def stop_session(session: Session) -> None:
-    """main.py hook: a `stop` message or a disconnect ends the walk."""
-    await stop_walk(session)
+    """main.py hook: a `stop` message or a disconnect ends the walk. A disconnect (the session is no longer
+    registered: ``_end_session`` unregisters it first) is remembered for ``on_session_resumed``."""
+    loop = active(session)
+    target = loop.target if loop is not None else None
+    if not await stop_walk(session):
+        return
+    from aira_live import sessions
+
+    if target and not any(s.session_id == session.session_id for s, _ in sessions.by_shop(session.shop_id)):
+        _ENDED_BY_DISCONNECT[session.session_id] = (target, time.monotonic())
+        for sid, (_, at) in list(_ENDED_BY_DISCONNECT.items()):
+            if time.monotonic() - at > DISCONNECT_NOTE_S:
+                del _ENDED_BY_DISCONNECT[sid]
+
+
+async def on_session_resumed(session: Session, bridge) -> bool:
+    """main.py hook (after a resumed hello attached its Live bridge): a walk that ended when the phone's
+    connection dropped is NOT resumed by itself (nobody saw him move meanwhile); Live is told, so it tells the
+    owner the walk stopped and calls walk_to again only when he asks. True when a note went."""
+    entry = _ENDED_BY_DISCONNECT.pop(session.session_id, None)
+    if entry is None or bridge is None:
+        return False
+    target, at = entry
+    if time.monotonic() - at > DISCONNECT_NOTE_S:
+        return False
+    diag("walk_end", session=session.session_id, why="disconnect_resumed", target=target)
+    await bridge.send_text(
+        f"[SYSTEM NOTE] The walk to the {target} ended when the phone's connection dropped; nothing has been "
+        "checked since. Tell the owner now, in the language he is speaking, that the walking guidance stopped and "
+        "he should stand still; if he wants to continue, he asks again and you call walk_to.")
+    return True
 
 
 # --- Live tools ------------------------------------------------------------------------------------------------------

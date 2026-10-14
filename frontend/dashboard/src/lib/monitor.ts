@@ -1,14 +1,15 @@
 // The Live page's model: a pure reducer over /monitor messages, coordinate mapping for the camera
-// overlay, the WebSocket URL and a reconnecting client. There is no monitor key (removed by the owner's
-// decision): the feed starts as soon as the socket opens, and the server's only guard is its Origin
-// allowlist. Nothing here touches the DOM except the client's WebSocket/timer hooks, which are injected so
-// tests drive them.
+// overlay, the WebSocket URL and a reconnecting client that signs in. The first thing the client sends on
+// every socket is {t:"auth", idToken} (the viewer's Firebase ID token, from lib/viewerAuth): the server
+// verifies it and its viewer allowlist before it sends a single line, and closes with 4401 / 4403 otherwise.
+// Nothing here touches the DOM except the client's WebSocket/timer hooks, which are injected so tests drive them.
 import {
-  NORM_MAX, parseMonitorFeedMsg,
-  type Box, type MonitorMsg, type MonitorRole, type MonitorState, type Point, type VisionObject, type VisionSource,
+  MONITOR_CLOSE_UNAUTHENTICATED, MONITOR_CLOSE_UNAUTHORIZED, NORM_MAX, parseMonitorFeedMsg,
+  type Box, type MonitorAuthMsg, type MonitorMsg, type MonitorRole, type MonitorState, type Point, type VisionObject, type VisionSource,
 } from "@aira/contracts";
 import { advanceTask, type Task } from "./liveTask";
 import type { SignalPort } from "./rtcViewer";
+import { refreshDelayMs, tokenExp } from "./viewerAuth";
 
 export type { MonitorMsg, MonitorRole, MonitorState, VisionObject, VisionSource };
 
@@ -330,7 +331,8 @@ export function overlayShapes(
 // ---------- URL ----------
 /**
  * The /monitor WebSocket URL from the app's VITE_AIRA_LIVE_WS (wss://host/ws -> wss://host/monitor?shop=).
- * Nothing else goes in it: there is no key. Null when nothing usable is configured.
+ * Nothing else goes in it: the credential travels in the first message, never the URL. Null when nothing
+ * usable is configured.
  */
 export function monitorUrl(env: Record<string, unknown>, shopId: string): string | null {
   const raw = typeof env.VITE_AIRA_LIVE_WS === "string" ? env.VITE_AIRA_LIVE_WS.trim() : "";
@@ -357,8 +359,13 @@ export function backoffMs(attempt: number): number {
   return Math.min(BACKOFF_MAX_MS, BACKOFF_BASE_MS * 2 ** Math.max(0, attempt));
 }
 
-/** waiting: no URL yet · connecting: socket opening · live: open · offline: closed, retrying · rejected: the server refused this page (Origin or shop), no retry. */
-export type Connection = "waiting" | "connecting" | "live" | "offline" | "rejected";
+/**
+ * waiting: no URL or no sign-in yet · connecting: socket opening or signing in · live: authenticated, the feed
+ * runs · offline: closed, retrying · rejected: the server refused this page before the handshake (Origin or
+ * shop), no retry · unauthenticated: the server did not accept the token (4401) · unauthorized: the signed-in
+ * account is not on the server's viewer list (4403 after auth), no retry.
+ */
+export type Connection = "waiting" | "connecting" | "live" | "offline" | "rejected" | "unauthenticated" | "unauthorized";
 
 /** The slice of WebSocket the client uses; a real WebSocket satisfies it, and tests pass a fake. */
 export interface SocketLike {
@@ -374,17 +381,29 @@ export interface ClientDeps {
   connect: (url: string) => SocketLike;
   setTimer?: (fn: () => void, ms: number) => unknown;
   clearTimer?: (t: unknown) => void;
-  /** WebRTC signalling (rtcViewer): attached once a socket is open, told every {t:"rtc"} line, detached on close. */
+  /** WebRTC signalling (rtcViewer): attached once a socket is authenticated, told every {t:"rtc"} line, detached on close. */
   signal?: SignalPort;
+  /** The viewer's Firebase ID token (lib/viewerAuth); `force` asks for a freshly minted one. Rejects when signed out. */
+  getToken?: (force?: boolean) => Promise<string>;
+  /** The clock the refresh schedule reads (tests). */
+  now?: () => number;
 }
 
-/** WebSocket close codes the server uses to refuse a monitor (its Origin or shop): policy violation or auth-style. */
-const REJECT_CODES = new Set([1008, 4401, 4403]);
+/** A close before the handshake completed: the server's Origin / shop / capacity guard (a policy close, or 4403 before any auth). */
+const POLICY_CLOSE = 1008;
+
+const authLine = (idToken: string): string => JSON.stringify({ t: "auth", idToken } satisfies MonitorAuthMsg);
 
 /**
- * Keeps one /monitor socket open: nothing is sent on open (there is no key: the feed starts at once); on a
- * refusal (REJECT_CODES) it reports "rejected" and stops; on every other close it waits backoffMs(attempt) and
- * connects again, resetting the attempt count once a socket opens. stop() closes it for good.
+ * Keeps one /monitor socket open and signed in. On every open the first message is {t:"auth", idToken}
+ * (deps.getToken); only then is the connection "live" and the WebRTC signal port attached. The token's `exp`
+ * schedules a refresh (refreshDelayMs): a fresh token (getToken(true)) goes out as another auth message on
+ * the same socket, and the next refresh is scheduled from it. Closes: 4403 before auth was sent is "rejected"
+ * (Origin or shop; no retry), 4403 after it is "unauthorized" (no retry), 4401 is "unauthenticated" (no
+ * retry here; the hook decides whether to try a fresh token), a failing getToken closes the socket as
+ * "unauthenticated", and every other close waits backoffMs(attempt) and connects again (the attempt count
+ * resets once a socket is authenticated). stop() closes it for good. The token never reaches the URL, storage
+ * or the console.
  */
 export function openMonitor(
   url: string,
@@ -394,10 +413,54 @@ export function openMonitor(
 ): () => void {
   const setTimer = deps.setTimer ?? ((fn, ms) => setTimeout(fn, ms));
   const clearTimer = deps.clearTimer ?? ((t) => clearTimeout(t as ReturnType<typeof setTimeout>));
+  const now = deps.now ?? Date.now;
+  const getToken = deps.getToken ?? (() => Promise.reject(new Error("no sign-in")));
   let attempt = 0;
   let stopped = false;
   let sock: SocketLike | null = null;
   let timer: unknown = null;
+  let refresh: unknown = null;
+
+  const clearRefresh = () => {
+    if (refresh !== null) clearTimer(refresh);
+    refresh = null;
+  };
+
+  /** Sends `idToken` on `s` and books the next refresh from its expiry. */
+  const sendAuth = (s: SocketLike, idToken: string): boolean => {
+    if (stopped || sock !== s) return false;
+    try {
+      s.send(authLine(idToken));
+    } catch {
+      return false;
+    }
+    clearRefresh();
+    const exp = tokenExp(idToken);
+    if (exp !== null) {
+      refresh = setTimer(() => {
+        refresh = null;
+        if (stopped || sock !== s) return;
+        getToken(true).then(
+          (fresh) => { sendAuth(s, fresh); },
+          () => { closeAs(s, "unauthenticated"); },
+        );
+      }, refreshDelayMs(exp, now()));
+    }
+    return true;
+  };
+
+  const closeAs = (s: SocketLike, c: Connection) => {
+    if (stopped || sock !== s) return;
+    sock = null;
+    clearRefresh();
+    deps.signal?.detach();
+    try {
+      s.close();
+    } catch {
+      /* already closed */
+    }
+    onConn(c, attempt);
+  };
 
   const dial = () => {
     if (stopped) return;
@@ -410,22 +473,30 @@ export function openMonitor(
       return;
     }
     sock = s;
+    let authSent = false;
     s.onopen = () => {
-      if (stopped) return;
-      attempt = 0;
-      onConn("live", 0);
-      deps.signal?.attach((m) => {
-        if (sock !== s) return false;
-        try {
-          s.send(JSON.stringify(m));
-          return true;
-        } catch {
-          return false;
-        }
-      });
+      if (stopped || sock !== s) return;
+      getToken().then(
+        (idToken) => {
+          if (!sendAuth(s, idToken)) return;
+          authSent = true;
+          attempt = 0;
+          onConn("live", 0);
+          deps.signal?.attach((m) => {
+            if (sock !== s) return false;
+            try {
+              s.send(JSON.stringify(m));
+              return true;
+            } catch {
+              return false;
+            }
+          });
+        },
+        () => { closeAs(s, "unauthenticated"); },
+      );
     };
     s.onmessage = (ev) => {
-      if (stopped || typeof ev.data !== "string") return;
+      if (stopped || sock !== s || !authSent || typeof ev.data !== "string") return;
       const m = parseMonitorFeedMsg(ev.data);
       if (!m) return;
       if (m.t === "rtc") deps.signal?.receive(m);
@@ -435,9 +506,15 @@ export function openMonitor(
     s.onclose = (ev) => {
       if (stopped || sock !== s) return;
       sock = null;
+      clearRefresh();
       deps.signal?.detach();
-      if (REJECT_CODES.has(ev?.code ?? 0)) {
-        onConn("rejected", attempt);
+      const code = ev?.code ?? 0;
+      if (code === MONITOR_CLOSE_UNAUTHENTICATED) {
+        onConn("unauthenticated", attempt);
+        return;
+      }
+      if (code === MONITOR_CLOSE_UNAUTHORIZED || code === POLICY_CLOSE) {
+        onConn(authSent ? "unauthorized" : "rejected", attempt);
         return;
       }
       retry();
@@ -460,6 +537,7 @@ export function openMonitor(
     stopped = true;
     if (timer !== null) clearTimer(timer);
     timer = null;
+    clearRefresh();
     const s = sock;
     sock = null;
     deps.signal?.detach();

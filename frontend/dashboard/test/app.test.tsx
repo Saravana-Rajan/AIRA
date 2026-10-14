@@ -4,6 +4,31 @@ import { cleanup, findAllByText, flush, mount, text } from "./helpers/render";
 import { App, type ListenFn } from "../src/components/App";
 import type { LiveStatus, ShopData } from "../src/lib/live";
 import type { Forecast, ForecastItem } from "../src/lib/forecast";
+import type { MonitorDeps } from "../src/lib/useMonitor";
+import type { SocketLike } from "../src/lib/monitor";
+import type { ViewerAuth, ViewerUser } from "../src/lib/viewerAuth";
+
+/** The Live page's deps for the App tests: a socket that never opens, and a sign-in that starts signed out. */
+function liveDeps(user: ViewerUser | null = null) {
+  const sockets: Array<SocketLike & { sent: string[] }> = [];
+  const auth: ViewerAuth & { user: ViewerUser | null; signIn: ReturnType<typeof vi.fn> } = {
+    user,
+    subscribe: (cb) => { cb(auth.user); return () => {}; },
+    signIn: vi.fn(async () => undefined),
+    signOut: async () => undefined,
+    idToken: async () => "tok",
+  };
+  // Hoisted: `deps` is in the hook's effect dependencies and must stay the same object across renders.
+  const deps: MonitorDeps = {
+    connect: () => {
+      const s = { onopen: null, onmessage: null, onclose: null, onerror: null, sent: [] as string[], send(d: string) { s.sent.push(d); }, close() {} };
+      sockets.push(s);
+      return s;
+    },
+    setTimer: () => 0, clearTimer: () => {}, auth,
+  };
+  return { deps, sockets, auth };
+}
 
 const NOW = Date.UTC(2026, 9, 10, 6, 30); // 2026-10-10 12:00 IST
 
@@ -152,17 +177,39 @@ describe("App", () => {
     expect(loadForecast).toHaveBeenCalledWith("sunrise_dairy");
   });
 
-  it("opens the Live page straight to the feed: no monitor key screen, nothing read from the fragment or storage", () => {
+  it("opens the Live page behind Google sign-in: a sign-in button, no key screen, nothing read from the fragment or storage, no socket until signed in", () => {
     sessionStorage.clear();
     history.replaceState(null, "", "/dashboard/#/live");
     const { listen } = fakeLive();
-    const el = mount(<App listen={listen} loadForecast={async () => null} now={() => NOW} />);
+    const live = liveDeps();
+    const el = mount(<App listen={listen} loadForecast={async () => null} now={() => NOW} monitorDeps={live.deps} />);
     expect(el.querySelector(".livepage")).not.toBeNull();
-    expect(el.querySelector("input#monitor-key")).toBeNull();
-    expect(el.querySelector(".keyprompt")).toBeNull();
+    expect(el.querySelector("input, form, #monitor-key, .keyprompt")).toBeNull();
     expect(text(el)).not.toContain("Monitor key");
-    expect(el.querySelector(".cam__empty")).not.toBeNull(); // waiting for the phone, not for a key
+    const btn = findAllByText(el, "button.signin__btn", "Sign in with Google to watch AIRA Live");
+    expect(btn).toHaveLength(1);
+    expect(text(el)).not.toContain("Waiting for Sam's phone");
+    expect(live.sockets).toHaveLength(0);
+    act(() => { btn[0].click(); });
+    expect(live.auth.signIn).toHaveBeenCalledTimes(1);
     expect(sessionStorage.length).toBe(0);
+  });
+
+  it("the other pages are untouched by the Live sign-in", async () => {
+    const { listen, push } = fakeLive();
+    const live = liveDeps();
+    const el = mount(<App listen={listen} loadForecast={async () => null} now={() => NOW} monitorDeps={live.deps} />);
+    push();
+    await flush();
+    for (const hash of ["#/", "#/today", "#/stock", "#/prices", "#/orders", "#/audit", "#/forecast"]) {
+      go(hash);
+      expect(text(el)).not.toMatch(/Sign in|sign-in/);
+      expect(el.querySelector(".signin, .livepage")).toBeNull();
+    }
+    go("#/live");
+    expect(el.querySelector(".livepage")).not.toBeNull();
+    go("#/stock");
+    expect(h2s(el)).toEqual(["Stock"]);
   });
 
   it("stops listening when it unmounts", () => {

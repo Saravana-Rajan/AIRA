@@ -35,7 +35,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, ValidationError
 
 from aira_live import config, confirm, live_video, monitor, monitor_hooks, rtc, sessions, tool_runtime
-from aira_live.auth import AuthError, verify_hello
+from aira_live.auth import AuthError, uid_hash, verify_hello
 from aira_live.cameras.sources import is_camera_session
 from aira_live.contracts import (
     AudioInMsg,
@@ -233,8 +233,8 @@ async def live_frame(session: Session, bridge: LiveBridge | None, frame: Frame, 
         else:
             precount.tick(session)
     sent = await bridge.video.offer(bridge, frame.jpeg_b64, changed=changed, labels=labels)
-    if sent and session.walking:  # walk with me: Live just got a new picture (a "changed" one asks for a check)
-        await _lane_hook("aira_live.tools.walk", "on_live_frame", session, changed, frame.jpeg_b64)
+    if session.walking:  # walk with me: the walk's own nav session gets the picture even when this one dropped it
+        await _lane_hook("aira_live.tools.walk", "on_live_frame", session, changed, frame.jpeg_b64, sent)
     if sent and scene_on:  # scene memory: a quiet moment after a scene change asks Live, silently, what it sees
         await _lane_hook("aira_live.scene_watch", "on_live_frame", session, bridge, changed)
     return sent
@@ -375,6 +375,8 @@ async def ws_endpoint(ws: WebSocket) -> None:
                 monitor.session_started(session)
                 if not settings.mock and not is_camera_session(session):  # a shop camera only sends frames
                     bridge = await _start_live(session, handle)
+                    if resumed and bridge is not None:  # a walk the disconnect ended: Live must not keep guiding
+                        await _lane_hook("aira_live.tools.walk", "on_session_resumed", session, bridge)
                 await send(ReadyMsg(session_id=session.session_id, resume=session.session_id, mock=settings.mock))
                 await monitor.preview_on_join(session)  # the dashboard is watching: stream the small preview
                 if bridge is not None and settings.er2:  # ambient mode (ER-based) starts after the greeting
@@ -477,15 +479,17 @@ async def ws_endpoint(ws: WebSocket) -> None:
 
 @app.websocket("/monitor")
 async def monitor_endpoint(ws: WebSocket) -> None:
-    """``GET /monitor[?shop=<id>]``: the dashboard's read-only live feed of the one shop. No key, no login: the
-    monitor key was removed by the owner's decision, so anyone who can open the dashboard can watch.
+    """``GET /monitor[?shop=<id>]``: the dashboard's read-only live feed of the one shop, for signed-in viewers the
+    owner listed (shared/docs/ops/security.md §2a).
 
-    Guards, in order (each refusal closes with 4403 before the handshake): the monitor's own browser Origin
-    allowlist (``monitor.origin_allowed``, env ``AIRA_MONITOR_ORIGINS``; a light guard, not authentication: a
-    missing Origin is refused too), a ``shop`` that may be watched (there is one shop: left out it is
-    ``AIRA_DEMO_SHOP``; in tokenless / demo mode only that shop may be named: ``monitor.shop_allowed``) and
-    ``monitor.MAX_MONITORS_PER_SHOP``. A connected monitor first hears ``session start`` for every live session
-    of the shop.
+    Before the handshake (close 4403): the monitor's own browser Origin allowlist (``monitor.origin_allowed``,
+    env ``AIRA_MONITOR_ORIGINS``; defence in depth only, never admits anyone by itself; a missing Origin is
+    refused too), a ``shop`` that may be watched (there is one shop: left out it is ``AIRA_DEMO_SHOP``; in
+    tokenless / demo mode only that shop may be named) and ``monitor.MAX_MONITORS_PER_SHOP``. After it: the
+    first message must be ``{t:"auth", idToken}`` within ``monitor.AUTH_TIMEOUT_S`` and ``monitor.authenticate``
+    must accept the Firebase ID token and the account (4401 = not authenticated, 4403 = not an allowed viewer);
+    nothing is subscribed or sent before that. A monitor then first hears ``session start`` for every live
+    session of the shop, and ``monitor.serve`` closes it with 4401 when its token expires unrefreshed.
     """
     origin = ws.headers.get("origin")
     if not monitor.origin_allowed(origin):
@@ -502,16 +506,29 @@ async def monitor_endpoint(ws: WebSocket) -> None:
         await ws.close(code=4403)
         return
     await ws.accept()
-    sub = monitor.subscribe(shop)
-    diag("monitor", event="open", shop=shop, origin=origin, monitors=monitor.monitors(shop))
+    try:
+        viewer = await monitor.authenticate(ws, shop)
+    except monitor.Refused as refused:
+        log.warning("monitor refused (%d): %s", refused.code, refused.reason)
+        diag("monitor", event="refused", shop=shop, origin=origin, code=refused.code)
+        try:
+            await ws.close(code=refused.code)
+        except Exception:  # noqa: BLE001 - the client already went away
+            pass
+        return
+    except WebSocketDisconnect:
+        return
+    sub = monitor.subscribe(shop, viewer)
+    diag("monitor", event="open", shop=shop, origin=origin, uid=uid_hash(viewer.uid), exp=viewer.exp,
+         monitors=monitor.monitors(shop))
     try:
         for live, _bridge in sessions.by_shop(shop):  # what is already going on
             sub.push(dump_monitor_msg(monitor_adapter.validate_python(
                 {"t": "mon", "kind": "session", "session": live.session_id, "ts": int(time.time() * 1000),
                  "state": "start", **monitor.session_fields(live)})))
-        await monitor.serve(ws, sub)
+        await monitor.serve(ws, sub, viewer)
     except WebSocketDisconnect:
         pass
     finally:
         monitor.unsubscribe(sub)
-        diag("monitor", event="close", shop=shop, monitors=monitor.monitors(shop))
+        diag("monitor", event="close", shop=shop, uid=uid_hash(viewer.uid), monitors=monitor.monitors(shop))

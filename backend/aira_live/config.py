@@ -17,6 +17,23 @@ def _origins(raw: str | None) -> tuple[str, ...]:
     return out or DEFAULT_MONITOR_ORIGINS
 
 
+def _viewers(raw: str | None) -> tuple[str, ...]:
+    """AIRA_MONITOR_VIEWERS: comma-separated Google accounts allowed to watch the live feed. An entry is an email
+    (lowercased here) or ``uid:<Firebase uid>`` (the uid kept as it is). Unset or blank: nobody (fail closed)."""
+    out = []
+    for entry in (raw or "").split(","):
+        entry = entry.strip()
+        if not entry:
+            continue
+        if entry.lower().startswith("uid:"):
+            uid = entry[4:].strip()
+            if uid:
+                out.append("uid:" + uid)
+        else:
+            out.append(entry.lower())
+    return tuple(dict.fromkeys(out))
+
+
 @dataclass(frozen=True)
 class Settings:
     gemini_api_key: str | None
@@ -33,9 +50,16 @@ class Settings:
     app_key: str | None = None  # shared demo key: when set, hello.idToken must equal it (shared/docs/ops/security.md)
     job_token: str | None = None  # X-AIRA-Job-Token for /jobs/*
     # AIRA_MONITOR_ORIGINS (comma-separated): browser Origins that may open the read-only /monitor socket
-    # (aira_live.monitor.origin_allowed). A cross-site-WebSocket guard only, not authentication: the dashboard's
-    # Live feed has no key (removed by the owner's decision) and a client with a forged Origin gets in.
+    # (aira_live.monitor.origin_allowed). Defence in depth only: the feed itself requires a signed-in, allowed
+    # viewer (``monitor_viewers``, verified by aira_live.auth.verify_firebase_user).
     monitor_origins: tuple[str, ...] = DEFAULT_MONITOR_ORIGINS
+    # The Firebase project whose Authentication ID tokens the live feed accepts (the token's ``aud`` and the
+    # issuer ``https://securetoken.google.com/<project>``): AIRA_FIREBASE_PROJECT, else GCP_PROJECT. None = no
+    # token can verify (fail closed).
+    firebase_project_id: str | None = None
+    # AIRA_MONITOR_VIEWERS: the Google accounts allowed to watch the live feed (emails, lowercased, or
+    # ``uid:<uid>``). Empty = nobody may watch (shared/docs/ops/security.md §2a).
+    monitor_viewers: tuple[str, ...] = ()
     live_video: bool = True  # AIRA_LIVE_VIDEO: the phone's 1 fps ``live`` frames go into Gemini Live as video
     live_nudge: bool = True  # AIRA_LIVE_NUDGE: a settled scene change asks Live to speak up (aira_live.live_video)
     precount: bool = True  # AIRA_PRECOUNT: a settled scene change starts a background count (vision.precount)
@@ -75,6 +99,8 @@ def load() -> Settings:
         app_key=_env("AIRA_APP_KEY"),
         job_token=_env("AIRA_JOB_TOKEN"),
         monitor_origins=_origins(_env("AIRA_MONITOR_ORIGINS")),
+        firebase_project_id=_env("AIRA_FIREBASE_PROJECT") or _env("GCP_PROJECT"),
+        monitor_viewers=_viewers(_env("AIRA_MONITOR_VIEWERS")),
         live_video=os.getenv("AIRA_LIVE_VIDEO", "1") != "0",
         live_nudge=os.getenv("AIRA_LIVE_NUDGE", "1") != "0",
         precount=os.getenv("AIRA_PRECOUNT", "1") != "0",

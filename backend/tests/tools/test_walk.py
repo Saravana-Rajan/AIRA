@@ -51,6 +51,7 @@ def session(mk_session):
     yield s, rec
     current_session.reset(token)
     walk._ACTIVE.clear()
+    walk._ENDED_BY_DISCONNECT.clear()
 
 
 @pytest.fixture
@@ -62,6 +63,7 @@ def no_memory(monkeypatch):
 
 
 def make(s, clock, bridge, target="fridge", **kw) -> walk.WalkLoop:
+    kw.setdefault("nav_factory", lambda lp: None)        # no navigation session unless a test gives one
     loop = walk.WalkLoop(s, target, clock=clock, bridge=lambda: bridge, **kw)
     walk._ACTIVE[s.session_id] = loop
     return loop
@@ -211,6 +213,77 @@ async def test_main_live_frame_feeds_the_walk(session):
     assert len(checks) == 1 and loop.pending is not None                      # a changed frame: checked at once
     assert not [t for t in b.sent_text if t.startswith("[SYSTEM NOTE] Camera")]   # no nudge while walking
     await bridge.close()
+
+
+async def test_main_live_frame_feeds_the_nav_session_even_when_the_conversation_drops_the_frame(session):
+    """main.py passes ``sent``: a frame the conversation session throttled still reaches the walk's own nav
+    session; with no nav session it does not count as a new picture."""
+    from live_fakes import FakeBackend
+
+    from aira_live import main
+    from aira_live.frames import Frame
+    from aira_live.live_bridge import LiveBridge
+
+    class Nav:
+        alive = ready = True
+        checks = 0
+
+        def __init__(self):
+            self.frames: list[bytes] = []
+
+        async def send_frame(self, jpeg):
+            self.frames.append(jpeg)
+            return True
+
+    s, rec = session
+    b = FakeBackend()
+    bridge = LiveBridge(s, lambda: b, "prompt", [])
+    await bridge.start()
+    clock = Clock()
+    loop = walk.WalkLoop(s, "fridge", clock=clock, bridge=lambda: bridge)
+    walk._ACTIVE[s.session_id] = loop
+    jpeg = "/9j/4AAQSkZJRg=="
+    frame = Frame(id="f1", jpeg_b64=jpeg, w=768, h=432, ts=1.0, purpose="live")
+    assert await main.live_frame(s, bridge, frame, video=True)                # the conversation took this one
+    first = loop.frame_at
+    clock.t += 0.3                                                            # within its 1 fps gap: dropped
+    assert not await main.live_frame(s, bridge, frame, video=True)
+    assert loop.frame_at == first                                             # no nav session: not a new picture
+    loop.nav = Nav()
+    clock.t += 0.3
+    assert not await main.live_frame(s, bridge, frame, video=True)
+    assert len(loop.nav.frames) == 1 and loop.frame_at == clock.t            # the nav session saw it
+    await bridge.close()
+
+
+async def test_a_fallback_check_never_uses_a_frame_only_the_dead_nav_session_saw(session):
+    """Regression: the nav session took a frame the conversation session dropped, then died. The fallback check
+    through the conversation session must be timed (and gated) on the conversation session's own newest frame."""
+    s, rec = session
+    clock, fb = Clock(), FakeBridge()
+    loop = make(s, clock, fb)
+
+    class Nav:
+        alive = ready = True
+
+    clock.t += 2.0
+    loop.on_live_frame()                                        # both sessions have this picture
+    both = clock.t
+    cid = await check(loop, clock, frame=False)
+    await answer(loop, clock, cid, **CLEAR)
+    loop.nav = Nav()
+    clock.t += 1.0
+    loop.on_live_frame(to_bridge=False)                         # only the nav session got this one
+    loop.nav.alive = False                                      # ... and then it died
+    clock.t += 2.0
+    sent = len(fb.checks)
+    await loop.tick()
+    assert len(fb.checks) == sent                               # no new picture for the conversation session
+    clock.t += walk.CHECK_INTERVAL_S
+    loop.on_live_frame()                                        # the conversation session gets a fresh one
+    await loop.tick()
+    assert len(fb.checks) == sent + 1
+    assert loop.pending[2] == clock.t and loop.pending[2] > both  # timed on its own newest frame
 
 
 # ---------- the bridge's check sender ----------
@@ -476,18 +549,47 @@ async def test_stop_and_disconnect_end_checks_and_ignore_late_reports(session):
         assert len(fb.checks) == 1 and fb.notices == [], end
 
 
-async def test_still_guiding_once_a_minute_only_when_silent(session):
+async def test_a_busy_minute_without_observations_stops_him_honestly_not_silently(session):
+    """Review finding: with the conversation busy for a minute (no navigation session) the walk stayed silently
+    NAVIGATING on evidence a minute old. Now the observation watchdog degrades it after OBSERVATION_GAP_S and
+    says the honest line once; while he waits stopped he hears "Stay stopped" every 15 s, never "Still
+    guiding" (he was told to stop)."""
     s, rec = session
     clock, fb = Clock(), FakeBridge()
     loop = make(s, clock, fb)
     loop.state = walk.NAVIGATING
     fb.answering = True
+    degraded_at = None
     for _ in range(30):                     # 61 s of ticks, Live busy (no checks, no failures)
         clock.t += 2.05
         loop.on_live_frame()
         await loop.tick()
+        if loop.state == walk.DEGRADED and degraded_at is None:
+            degraded_at = clock.t
     assert loop.fails == 0 and fb.checks == []
+    assert degraded_at is not None and degraded_at - 100.0 <= walk.OBSERVATION_GAP_S + 2.1
+    assert fb.meanings().count(vwalk.DEGRADED_TEXT) == 1 and fb.notices[0][1] is True
+    assert fb.meanings().count(walk.HOLD_TEXT) >= 2
+    assert "Still guiding you to the fridge." not in fb.meanings()
+
+
+async def test_still_guiding_once_a_minute_while_moving_with_nothing_to_say(session):
+    """Observations keep coming but none is worth a line (three different small objects taking turns: each is
+    seen in only 1 of the last 3 reports, so every instruction is a hold): the owner hears once a minute that
+    the walk goes on. Never while stopped (HAZARD / DEGRADED say "Stay stopped" instead)."""
+    s, rec = session
+    clock, fb = Clock(), FakeBridge()
+    loop = make(s, clock, fb)
+    await look(loop, clock, **CLEAR)
+    await look(loop, clock, **CLEAR)
+    assert loop.state == walk.NAVIGATING and len(fb.notices) == 1
+    labels = ("chair", "bucket", "bag")
+    for i in range(32):                     # ~90 s of held-back sightings, no direction and no stop
+        ob = [{"label": labels[i % 3], "side": "ahead", "in_path": True, "size": "small"}]
+        await look(loop, clock, obstacles=ob, **CLEAR)
+    assert loop.state == walk.NAVIGATING and loop.fails == 0
     assert fb.meanings().count("Still guiding you to the fridge.") == 1
+    assert not any(urgent for _, urgent in fb.notices)
 
 
 async def test_times_out_after_max_s(session):
@@ -727,7 +829,10 @@ async def test_no_check_while_sam_speaks_then_one_check_on_the_newest_frame(sess
     assert checks_log[-1]["sent"] is True and checks_log[-1]["deferred_ms"] >= 7000
 
 
-async def test_no_check_while_aira_answers_and_the_walk_goes_on_after(session):
+async def test_no_check_while_aira_answers_then_degraded_then_the_first_look_stops_him(session):
+    """AIRA answers for 12 s (no navigation session): no check goes and none fails; after OBSERVATION_GAP_S the
+    watchdog stops him honestly; the first look after the talk still stops him for a box, and two fresh clear
+    looks let him walk on."""
     s, rec = session
     clock, fb = Clock(), FakeBridge()
     loop = make(s, clock, fb)
@@ -735,11 +840,17 @@ async def test_no_check_while_aira_answers_and_the_walk_goes_on_after(session):
     await look(loop, clock, **CLEAR)
     assert loop.state == walk.NAVIGATING
     sent = len(fb.checks)
-    await busy_for(loop, clock, fb, 12, answering=True)
-    assert len(fb.checks) == sent and loop.fails == 0 and loop.state == walk.NAVIGATING
+    await busy_for(loop, clock, fb, 8, answering=True)
+    assert len(fb.checks) == sent and loop.fails == 0 and loop.state == walk.NAVIGATING   # under the gap
+    await busy_for(loop, clock, fb, 4, answering=True)
+    assert len(fb.checks) == sent and loop.fails == 0 and loop.state == walk.DEGRADED
+    assert fb.meanings()[-1] == vwalk.DEGRADED_TEXT and fb.notices[-1][1] is True
     await look(loop, clock, target_visible=True, target_side="ahead", path="blocked",
                obstacles=[{"label": "box", "side": "ahead", "in_path": True, "size": "large"}])
     assert fb.notices[-1][1] is True and loop.state == walk.HAZARD           # the first look after it stops him
+    await look(loop, clock, **CLEAR)
+    await look(loop, clock, **CLEAR)
+    assert loop.state == walk.NAVIGATING and fb.meanings()[-1].startswith("The box is no longer in your path")
 
 
 async def test_urgent_obstacle_while_sam_speaks_is_said_at_once(session):
@@ -768,13 +879,21 @@ async def test_a_check_overtaken_by_speech_is_cancelled_not_failed(session, chec
     fb.user_speaking = False
     late = vwalk.parse_report("fridge", check_id=cid, target_visible=True, target_side="ahead")
     assert await loop.on_report(late) == "stale"                              # its late answer is ignored
-    for _ in range(3):                                                        # overtaken every time: no DEGRADED
+    for _ in range(2):                                                        # overtaken again: never a failure
         await check(loop, clock)
         fb.user_speaking = True
         clock.t += 0.5
         await loop.tick()
         fb.user_speaking = False
     assert loop.state != walk.DEGRADED and loop.fails == 0 and fb.notices == []
+    while clock.t - 100.0 <= walk.OBSERVATION_GAP_S:                          # ...until the observation gap
+        await check(loop, clock)
+        fb.user_speaking = True
+        clock.t += 0.5
+        await loop.tick()
+        fb.user_speaking = False
+    assert loop.state == walk.DEGRADED and loop.fails == 0                   # the watchdog, not a failed look
+    assert fb.meanings() == [vwalk.DEGRADED_TEXT]
 
 
 async def test_a_waiting_check_follows_a_new_target_and_dies_with_the_walk(session):
@@ -809,3 +928,205 @@ async def test_a_long_conversation_costs_no_checks_and_leaves_no_backlog(session
         clock.t += 0.25
         await loop.tick()
     assert len(fb.checks) == 1
+
+
+# ---------- scene change, Live gone, stop / restart, disconnect / resume, mock, wording ----------
+async def test_a_scene_change_during_a_pending_check_makes_its_report_stale_and_rechecks(session, checks_log):
+    """The phone marked the scene changed after a check went: that check's report describes the older view. It
+    may still stop him (a stop on old news is safe) but never direct him, and the new view is checked at once."""
+    s, rec = session
+    clock, fb = Clock(), FakeBridge()
+    loop = make(s, clock, fb)
+    await look(loop, clock, **CLEAR)                                           # 1 of 2 for "ahead"
+    cid = await check(loop, clock)
+    clock.t += 0.3
+    await walk.on_live_frame(s, changed=True)                                 # the view changed mid-check
+    assert loop.pending is not None and loop.pending[0] == cid and loop.scene_changed_at == clock.t
+    await answer(loop, clock, cid, **CLEAR)                                   # would have confirmed "ahead"
+    assert fb.notices == []                                                   # no direction from the old view
+    assert loop.pending is not None and loop.pending[0] == cid + 1            # the new view: checked at once
+    assert checks_log[-1]["reason"] == "scene_changed"
+    await answer(loop, clock, **CLEAR)                                        # fresh confirmation: a direction
+    assert fb.meanings() == ["The fridge is ahead. Keep going slowly."]
+    cid = await check(loop, clock)
+    clock.t += 0.3
+    await walk.on_live_frame(s, changed=True)
+    await answer(loop, clock, cid, obstacles=STAIRS, path="blocked")          # old view, but a hazard: said
+    assert fb.notices[-1][1] is True and loop.state == walk.HAZARD
+    cid2 = loop.pending[0]                                                    # the prompt re-check
+    await answer(loop, clock, cid2, **CLEAR)
+    assert loop.scene_changed_at is None and loop.resume_streak == 1          # counted as fresh
+
+
+async def test_live_gone_for_good_ends_the_walk_with_a_stop_line(session):
+    """The conversation bridge ran out of reconnects (LiveBridge.closed): there is no voice to guide with, so
+    the walk ends at once with a final stop line instead of ticking in silence until MAX_S."""
+    s, rec = session
+    clock, fb = Clock(), FakeBridge()
+    fb.closed = False
+    loop = make(s, clock, fb)
+    await look(loop, clock, **CLEAR)
+    fb.closed = True
+    assert await check(loop, clock) is None
+    assert not loop.active and loop.ended == "no_live" and loop.state == walk.STOPPED and walk.active(s) is None
+    assert fb.meanings()[-1].startswith("I stopped guiding: I lost the voice connection")
+    assert any(isinstance(m, RequestFrameMsg) and m.purpose == "walk" and m.stop for m in rec.msgs)
+
+
+async def test_live_bridge_exposes_closed(mk_session):
+    from live_fakes import FakeBackend
+
+    from aira_live.live_bridge import LiveBridge
+
+    s, _ = mk_session()
+    bridge = LiveBridge(s, lambda: FakeBackend(), "prompt", [])
+    await bridge.start()
+    assert bridge.closed is False
+    await bridge.close()
+    assert bridge.closed is True
+
+
+async def test_stop_then_restart_gives_a_fresh_walk(session, no_memory, monkeypatch):
+    """walk_stop then walk_to again: a new loop with fresh state and its own check ids; the old one's task is
+    gone and its late reports are ignored."""
+    from collections import deque
+
+    s, rec = session
+    clock, fb = Clock(), FakeBridge()
+    monkeypatch.setattr(walk, "_bridge_of", lambda sess: fb)
+
+    class LoopWithClock(walk.WalkLoop):
+        def __init__(self, *a, **k):
+            super().__init__(*a, clock=clock, nav_factory=lambda lp: None, **k)
+
+    monkeypatch.setattr(walk, "WalkLoop", LoopWithClock)
+    await walk.walk_to("fridge")
+    first = walk.active(s)
+    first.task.cancel()
+    await look(first, clock, **CLEAR)
+    await look(first, clock, obstacles=STAIRS, path="blocked")
+    assert first.state == walk.HAZARD and len(fb.checks) == 2
+    assert (await walk.walk_stop())["was_active"]
+    await asyncio.sleep(0)
+    assert first.task.done() and walk.active(s) is None
+    out = await walk.walk_to("fridge")
+    second = walk.active(s)
+    assert out["active"] and not out.get("already") and second is not first and second.active
+    assert second.state == walk.ACQUIRING and second.recent_keys == deque(maxlen=3) and second.hazard_label is None
+    second.task.cancel()
+    cid = await check(second, clock)
+    assert cid == 1 and len(fb.checks) == 3                                   # check ids start again
+    await answer(second, clock, cid, obstacles=STAIRS, path="blocked")
+    assert first.state == walk.STOPPED and second.state == walk.HAZARD
+    starts = [m for m in rec.msgs if isinstance(m, RequestFrameMsg) and m.purpose == "walk" and m.continuous]
+    assert len(starts) == 2
+    await walk.walk_stop()
+
+
+async def test_a_disconnect_ends_the_walk_and_a_resume_tells_live_once(session):
+    """The phone socket drops mid-walk: the walk ends (nobody sees him move). When the same session resumes
+    within the window, Live is told the walk ended so it tells him and only restarts on his word. A long-press
+    stop (the session stays registered) leaves no such note."""
+    from aira_live import sessions
+
+    s, rec = session
+    clock, fb = Clock(), FakeBridge()
+    loop = make(s, clock, fb)
+    await look(loop, clock, **CLEAR)
+    sessions.unregister(s)                                                    # _end_session does this first
+    await walk.stop_session(s)
+    assert not loop.active and walk._ENDED_BY_DISCONNECT[s.session_id][0] == "fridge"
+
+    class Bridge(FakeBridge):
+        def __init__(self):
+            super().__init__()
+            self.texts = []
+
+        async def send_text(self, text, **kw):
+            self.texts.append(text)
+
+    nb = Bridge()
+    assert await walk.on_session_resumed(s, nb) is True
+    assert len(nb.texts) == 1 and "walk to the fridge ended" in nb.texts[0] and "walk_to" in nb.texts[0]
+    assert await walk.on_session_resumed(s, nb) is False                      # told once
+    # a long-press: the session is still registered, so nothing is remembered
+    loop = make(s, clock, fb)
+    sessions.register(s)
+    try:
+        await walk.stop_session(s)
+    finally:
+        sessions.unregister(s)
+    assert s.session_id not in walk._ENDED_BY_DISCONNECT
+    assert await walk.on_session_resumed(s, nb) is False
+    # a new walk forgets an old note
+    walk._ENDED_BY_DISCONNECT[s.session_id] = ("door", 0.0)
+    nl = await walk.start(s, "fridge", run=False, memory_place=None, memory_side=None, bridge=lambda: fb,
+                          nav_factory=lambda lp: None)
+    assert s.session_id not in walk._ENDED_BY_DISCONNECT
+    await nl.stop()
+
+
+async def test_mock_mode_sends_no_checks_and_opens_no_nav_session(session, monkeypatch):
+    """AIRA_MOCK=1 (or no key): no bridge, no navigation session; the walk never calls out, and after three
+    looks with nothing to look through it says the honest line and waits."""
+    monkeypatch.setenv("AIRA_MOCK", "1")
+    monkeypatch.setenv("AIRA_WALK_NAV_SESSION", "1")
+    s, rec = session
+    clock = Clock()
+    loop = walk.WalkLoop(s, "fridge", clock=clock, bridge=lambda: None)
+    walk._ACTIVE[s.session_id] = loop
+    assert walk.default_nav_factory(loop) is None
+    await loop.open_nav()
+    assert loop.nav is None and loop.nav_opens == walk.NAV_MAX_OPENS            # no retries either
+    for _ in range(3):
+        clock.t += 2.0
+        loop.on_live_frame()
+        await loop.tick()
+    assert loop.checks_sent == 0 and loop.state == walk.DEGRADED
+    assert _spoken(rec).count(vwalk.DEGRADED_TEXT) == 1
+
+
+def test_production_flags_defaults(monkeypatch):
+    """AIRA_WALK off by default; AIRA_WALK_NAV_SESSION on unless "0"; mock when the key is missing."""
+    from aira_live import config
+
+    for name in ("AIRA_WALK", "AIRA_WALK_NAV_SESSION", "AIRA_MOCK", "GEMINI_API_KEY"):
+        monkeypatch.delenv(name, raising=False)
+    s = config.load()
+    assert s.walk is False and s.walk_nav_session is True and s.mock is True
+    monkeypatch.setenv("GEMINI_API_KEY", "k")
+    monkeypatch.setenv("AIRA_WALK", "1")
+    monkeypatch.setenv("AIRA_WALK_NAV_SESSION", "0")
+    s = config.load()
+    assert s.walk is True and s.walk_nav_session is False and s.mock is False
+
+
+def test_walk_speech_never_claims_distance_depth_or_a_safe_clear_way():
+    """Every spoken walk line is evidence-based: no metres / steps / numbers, no "safe", no "clear path" or
+    "the way is clear", no depth or drop-off claims; arrival only as a candidate ("appears")."""
+    import inspect
+    import re
+
+    from aira_live.tools import walk as twalk
+
+    lines: list[str] = []
+    for args in (dict(obstacles=STAIRS, path="blocked"), dict(obstacles=CHAIR, path="blocked"),
+                 dict(obstacles=[{"label": "person", "size": "large"}]), dict(path="blocked"),
+                 dict(view_ok=False), dict(**CLEAR), dict(target_visible=True, target_side="left", target_size="large"),
+                 dict(target_visible=True, target_side="ahead", target_size="large", path="clear_in_view"),
+                 dict(path="clear_in_view")):
+        rep = vwalk.parse_report("fridge", check_id=1, **args)
+        for recent in ([rep], [rep, rep, rep]):
+            for search in (vwalk.Search(), vwalk.Search(lost_s=9.0), vwalk.Search(memory_place="near the door")):
+                ins = vwalk.decide(rep, "fridge", recent, search, name="Sam")
+                lines += [ins.text, ins.short or ""]
+    lines += [vwalk.resume_line("fridge", "chair").text, vwalk.resume_line("fridge", None).text,
+              vwalk.DEGRADED_TEXT, vwalk.KEEP_GOING_TEXT, twalk.HOLD_TEXT,
+              "Still guiding you to the fridge.", "I can see the path again. Walk on slowly toward the fridge."]
+    src = inspect.getsource(twalk)
+    lines += re.findall(r'"(I stopped guiding[^"]*)"', src)
+    bad = re.compile(r"\b(\d+|metres?|meters?|feet|foot|steps? away|safe|safely|the way is clear|path is clear|"
+                     r"clear path|all clear|drop-?offs?|depth|you have arrived|you are at|you're at)\b", re.I)
+    for text in lines:
+        assert not bad.search(text), text
+    assert lines and all("appears" in t for t in lines if "just ahead" in t)

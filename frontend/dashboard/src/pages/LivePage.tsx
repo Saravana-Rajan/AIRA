@@ -12,11 +12,23 @@ import {
   type Frame, type LiveState, type MonitorRole, type MonitorState, type Shape, type TranscriptLine,
 } from "../lib/monitor";
 import type { VideoState } from "../lib/rtcViewer";
+import type { AuthStatus, ViewerUser } from "../lib/viewerAuth";
 import { RtcVideo } from "../components/RtcVideo";
+
+/** The viewer's Google sign-in as the page shows it (lib/useMonitor fills it; tests pass a value). */
+export interface LiveAuth {
+  status: AuthStatus;
+  user: ViewerUser | null;
+  error: string | null;
+  onSignIn: () => void;
+  onSignOut: () => void;
+}
 
 export interface LivePageProps {
   state: LiveState;
   conn: Connection;
+  /** Who is signed in to watch. Left out (older callers, tests of the feed itself): treated as signed in. */
+  auth?: LiveAuth;
   /** The WebRTC picture (lib/rtcViewer): shown under the overlay while mode is "webrtc", else the JPEG frames. */
   video?: VideoState;
   /** False when the dashboard has no AIRA Live address (VITE_AIRA_LIVE_WS): nothing to connect to. */
@@ -40,7 +52,10 @@ const STATUS_TEXT: Record<MonitorState, string> = {
 
 const CONN_TEXT: Record<Connection, string> = {
   waiting: "Not connected", connecting: "Connecting…", live: "Connected", offline: "Reconnecting…", rejected: "Refused",
+  unauthenticated: "Sign-in expired", unauthorized: "Not allowed",
 };
+
+const UNAUTHORIZED_TEXT = "This Google account isn't allowed to watch AIRA Live. Ask the shop owner to add it.";
 
 const LANG_NAME: Record<string, string> = { ta: "Tamil", hi: "Hindi", en: "English" };
 
@@ -55,7 +70,7 @@ function useNow(now: () => number): number {
 }
 
 export function LivePage({
-  state, conn, video, configured = true, onFollow, record = false, onRecord, shopName = "Sunrise Dairy", now = Date.now, drawDeps = browserDeps,
+  state, conn, auth, video, configured = true, onFollow, record = false, onRecord, shopName = "Sunrise Dairy", now = Date.now, drawDeps = browserDeps,
 }: LivePageProps) {
   const t = useNow(now);
   const [paused, setPaused] = useState(false);
@@ -67,6 +82,10 @@ export function LivePage({
   const rooms = Object.entries(state.rooms);
   const [roomId, setRoomId] = useState<string | null>(null);
   const room = rooms.find(([sid]) => sid === roomId) ?? rooms[0] ?? null;
+  // What goes in the camera area when there is no picture: the sign-in states first, then the feed's.
+  const gate = auth ? signInGate(auth, conn) : null;
+  const empty = gate ?? <Waiting conn={conn} configured={configured} />;
+  const signedIn = !auth || auth.status === "signed_in";
 
   if (record) {
     return (
@@ -74,7 +93,7 @@ export function LivePage({
         <div class="record__cams">
           {room && <RoomCamera name={room[1].name} frame={room[1].frame} state={room[1]} now={t} drawDeps={drawDeps} />}
           <div class="record__sam">
-            {hasPicture ? <Camera state={{ ...state, frame }} now={t} drawDeps={drawDeps} video={video} paused={paused} showAge /> : <Waiting conn={conn} configured={configured} />}
+            {hasPicture ? <Camera state={{ ...state, frame }} now={t} drawDeps={drawDeps} video={video} paused={paused} showAge /> : empty}
           </div>
         </div>
         <Captions lines={state.transcript} />
@@ -97,6 +116,12 @@ export function LivePage({
           {state.lang && <span class="lv-conn__lang">{LANG_NAME[state.lang] ?? state.lang}</span>}
           <SessionPicker sessions={state.sessions} current={state.session} onFollow={onFollow} />
         </div>
+        {auth && signedIn && auth.user && (
+          <div class="lv-user">
+            <span class="lv-conn__user" title={auth.user.email ?? undefined}>{auth.user.email ?? auth.user.name ?? "Signed in"}</span>
+            <button class="lv-conn__signout" type="button" onClick={auth.onSignOut}>Sign out</button>
+          </div>
+        )}
       </header>
 
       <section class="cam" aria-labelledby="cam-title">
@@ -112,7 +137,7 @@ export function LivePage({
           )}
         </div>
         <div class="cam__view">
-          {hasPicture ? <Camera state={{ ...state, frame }} now={t} drawDeps={drawDeps} video={video} paused={paused} /> : <Waiting conn={conn} configured={configured} />}
+          {hasPicture ? <Camera state={{ ...state, frame }} now={t} drawDeps={drawDeps} video={video} paused={paused} /> : empty}
         </div>
         <Legend />
       </section>
@@ -191,6 +216,60 @@ function waitingText(conn: Connection, configured: boolean): string {
   if (conn === "live") return "Connected. Waiting for the phone to start a session.";
   if (conn === "offline") return "Lost the connection to AIRA Live. Reconnecting…";
   return "Connecting to AIRA Live…";
+}
+
+/**
+ * The sign-in states, in the camera area: no Firebase config, checking, signed out (the Google button), the
+ * server's refusal of the account (4403 after auth) or of the token (4401 twice: sign in again). Null when the
+ * viewer is signed in and allowed, so the feed's own waiting text shows.
+ */
+function signInGate(auth: LiveAuth, conn: Connection) {
+  const who = auth.user?.email ?? auth.user?.name ?? null;
+  if (auth.status === "unconfigured") {
+    return (
+      <div class="cam__empty" role="status">
+        <p class="cam__empty-title">Live Monitor sign-in isn't configured for this dashboard.</p>
+        <p class="cam__empty-sub">The build has no Firebase web config (VITE_FIREBASE_PROJECT_ID and VITE_FIREBASE_API_KEY), so there is no Google sign-in to watch with.</p>
+      </div>
+    );
+  }
+  if (auth.status === "loading") {
+    return (
+      <div class="cam__empty" role="status">
+        <span class="cam__pulse" aria-hidden="true" />
+        <p class="cam__empty-title">Checking sign-in…</p>
+      </div>
+    );
+  }
+  if (auth.status === "signed_out") {
+    return (
+      <div class="signin">
+        <h4 class="signin__title">Watch AIRA Live</h4>
+        <p class="signin__text">Sam's camera and the shop's conversations are private: only the Google accounts the shop owner listed can watch.</p>
+        <button class="signin__btn" type="button" onClick={auth.onSignIn}>Sign in with Google to watch AIRA Live</button>
+        {auth.error && <p class="signin__error" role="alert">{auth.error}</p>}
+      </div>
+    );
+  }
+  if (conn === "unauthorized") {
+    return (
+      <div class="signin">
+        <p class="signin__text" role="alert">{UNAUTHORIZED_TEXT}</p>
+        {who && <p class="signin__who">Signed in as {who}</p>}
+        <button class="signin__btn" type="button" onClick={auth.onSignOut}>Sign out</button>
+      </div>
+    );
+  }
+  if (conn === "unauthenticated") {
+    return (
+      <div class="signin">
+        <p class="signin__text" role="alert">Your sign-in expired.</p>
+        <button class="signin__btn" type="button" onClick={auth.onSignIn}>Sign in again</button>
+        {auth.error && <p class="signin__error" role="alert">{auth.error}</p>}
+      </div>
+    );
+  }
+  return null;
 }
 
 function Waiting({ conn, configured }: { conn: Connection; configured: boolean }) {

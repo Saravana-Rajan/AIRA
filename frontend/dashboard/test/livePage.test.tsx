@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { act } from "preact/test-utils";
 import type { MonitorMsg } from "@aira/contracts";
 import { cleanup, findAllByText, mount, text } from "./helpers/render";
-import { LivePage } from "../src/pages/LivePage";
+import { LivePage, type LiveAuth } from "../src/pages/LivePage";
 import type { DrawDeps, Drawable } from "../src/lib/frameDraw";
 import { initialState, reduce, type Frame, type LiveState } from "../src/lib/monitor";
 import type { VideoState } from "../src/lib/rtcViewer";
@@ -18,7 +18,10 @@ const T0 = 1760000000000;
 const mon = (m: MonInput): MonitorMsg =>
   ({ t: "mon", session: "s1", ts: T0 + 84_000, ...m }) as MonitorMsg;
 const stateOf = (msgs: MonitorMsg[]): LiveState => msgs.reduce(reduce, initialState());
-type Conn = "waiting" | "connecting" | "live" | "offline" | "rejected";
+type Conn = "waiting" | "connecting" | "live" | "offline" | "rejected" | "unauthenticated" | "unauthorized";
+const SAM = { uid: "u-sam", email: "sam@example.com", name: "Sam" };
+const auth = (status: LiveAuth["status"], extra: Partial<LiveAuth> = {}): LiveAuth =>
+  ({ status, user: status === "signed_in" ? SAM : null, error: null, onSignIn: vi.fn(), onSignOut: vi.fn(), ...extra });
 
 /** A drawer that records what it was asked to decode, so the test sees which frame reached the canvas. */
 function fakeDraw() {
@@ -31,7 +34,7 @@ function fakeDraw() {
   return { deps, rafs, decoded, tick: () => rafs.splice(0).forEach((cb) => cb()) };
 }
 
-const page = (state: LiveState, conn: Conn = "live", extra: { record?: boolean; onRecord?: (on: boolean) => void; drawDeps?: DrawDeps; video?: VideoState } = {}) =>
+const page = (state: LiveState, conn: Conn = "live", extra: { record?: boolean; onRecord?: (on: boolean) => void; drawDeps?: DrawDeps; video?: VideoState; auth?: LiveAuth } = {}) =>
   mount(<LivePage state={state} conn={conn} now={() => T0 + 84_500} {...extra} />);
 
 const milk = { label: "Aavin milk 500 ml", box: [400, 500, 440, 560] as [number, number, number, number], point: null, score: 0.92, distance: "arm" as const };
@@ -115,15 +118,97 @@ describe("LivePage: AIRA's own chrome", () => {
     expect(sub(live)).toBe("Connected. Waiting for the phone to start a session.");
     expect(text(live)).not.toContain("not configured");
   });
-  it("never shows a monitor key screen: the page opens straight to the feed in every connection state", () => {
-    for (const conn of ["waiting", "connecting", "live", "offline", "rejected"] as Conn[]) {
-      const el = page(initialState(), conn);
-      expect(el.querySelector("input#monitor-key")).toBeNull();
-      expect(el.querySelector(".keyprompt, form")).toBeNull();
-      expect(text(el)).not.toContain("Monitor key");
-      expect(findAllByText(el, "p", "Waiting for Sam's phone…")).toHaveLength(1);
+  it("never shows a key field: there is no monitor key, in any connection or sign-in state", () => {
+    const states: Array<[Conn, LiveAuth | undefined]> = [
+      ...(["waiting", "connecting", "live", "offline", "rejected", "unauthenticated", "unauthorized"] as Conn[]).map((c) => [c, undefined] as [Conn, undefined]),
+      ["waiting", auth("unconfigured")], ["waiting", auth("loading")], ["waiting", auth("signed_out")], ["live", auth("signed_in")],
+      ["unauthorized", auth("signed_in")], ["unauthenticated", auth("signed_in")],
+    ];
+    for (const [conn, a] of states) {
+      const el = page(initialState(), conn, a ? { auth: a } : {});
+      expect(el.querySelector("input, form, #monitor-key, .keyprompt")).toBeNull();
+      expect(text(el)).not.toMatch(/monitor key|key field/i);
       cleanup();
     }
+  });
+});
+
+describe("LivePage: sign-in", () => {
+  it("signed out: a Google sign-in button in the camera area (no key field), which calls onSignIn; no user in the header", () => {
+    const a = auth("signed_out");
+    const el = page(initialState(), "waiting", { auth: a });
+    const btn = findAllByText(el, "button.signin__btn", "Sign in with Google to watch AIRA Live");
+    expect(btn).toHaveLength(1);
+    expect(btn[0].getAttribute("type")).toBe("button");
+    expect(text(el.querySelector(".signin__title"))).toBe("Watch AIRA Live");
+    expect(el.querySelector("input")).toBeNull();
+    expect(el.querySelector(".cam__empty")).toBeNull(); // not "waiting for the phone": waiting for a sign-in
+    expect(el.querySelector(".lv-conn__user, .lv-conn__signout")).toBeNull();
+    expect(findAllByText(el, ".lv-conn__text", "Not connected")).toHaveLength(1);
+    act(() => { btn[0].click(); });
+    expect(a.onSignIn).toHaveBeenCalledTimes(1);
+    expect(el.querySelector(".signin__error")).toBeNull();
+  });
+  it("shows why the last sign-in failed under the button", () => {
+    const el = page(initialState(), "waiting", { auth: auth("signed_out", { error: "Google sign-in isn't enabled for this project yet. Ask the shop owner to enable it." }) });
+    expect(text(el.querySelector(".signin__error"))).toContain("isn't enabled for this project yet");
+    expect(el.querySelector(".signin__error")!.getAttribute("role")).toBe("alert");
+  });
+  it("signed in but not allowed: the exact message, who is signed in, and a sign-out", () => {
+    const a = auth("signed_in");
+    const el = page(initialState(), "unauthorized", { auth: a });
+    expect(findAllByText(el, "[role=alert]", "This Google account isn't allowed to watch AIRA Live. Ask the shop owner to add it.")).toHaveLength(1);
+    expect(text(el.querySelector(".signin__who"))).toBe("Signed in as sam@example.com");
+    expect(el.querySelector("button.signin__btn")!.textContent).toBe("Sign out");
+    expect(findAllByText(el, ".lv-conn__text", "Not allowed")).toHaveLength(1);
+    act(() => { (el.querySelector("button.signin__btn") as HTMLButtonElement).click(); });
+    expect(a.onSignOut).toHaveBeenCalledTimes(1);
+    expect(text(el)).not.toContain("Waiting for Sam's phone");
+  });
+  it("sign-in expired: says so and offers to sign in again", () => {
+    const a = auth("signed_in");
+    const el = page(initialState(), "unauthenticated", { auth: a });
+    expect(findAllByText(el, "[role=alert]", "Your sign-in expired.")).toHaveLength(1);
+    const btn = findAllByText(el, "button.signin__btn", "Sign in again");
+    expect(btn).toHaveLength(1);
+    act(() => { btn[0].click(); });
+    expect(a.onSignIn).toHaveBeenCalledTimes(1);
+    expect(findAllByText(el, ".lv-conn__text", "Sign-in expired")).toHaveLength(1);
+  });
+  it("not configured: a clear note instead of a button; loading: a checking note", () => {
+    const el = page(initialState(), "waiting", { auth: auth("unconfigured") });
+    expect(findAllByText(el, "[role=status] p", "Live Monitor sign-in isn't configured for this dashboard.")).toHaveLength(1);
+    expect(text(el)).toContain("VITE_FIREBASE_PROJECT_ID");
+    expect(el.querySelector("button.signin__btn")).toBeNull();
+    cleanup();
+    const loading = page(initialState(), "waiting", { auth: auth("loading") });
+    expect(findAllByText(loading, "p", "Checking sign-in…")).toHaveLength(1);
+    expect(loading.querySelector("button.signin__btn")).toBeNull();
+  });
+  it("signed in and allowed: the feed's own waiting text, the viewer's email and a Sign out in the header", () => {
+    const a = auth("signed_in");
+    const el = page(initialState(), "live", { auth: a });
+    expect(findAllByText(el, "p", "Waiting for Sam's phone…")).toHaveLength(1);
+    expect(el.querySelector(".signin")).toBeNull();
+    expect(text(el.querySelector(".lv-conn__user"))).toBe("sam@example.com");
+    const out = el.querySelector("button.lv-conn__signout") as HTMLButtonElement;
+    expect(text(out)).toBe("Sign out");
+    act(() => { out.click(); });
+    expect(a.onSignOut).toHaveBeenCalledTimes(1);
+    cleanup();
+    const withPicture = page(stateOf([frame]), "live", { auth: a });
+    expect(withPicture.querySelector("canvas.camera__canvas")).not.toBeNull();
+    expect(withPicture.querySelector(".signin")).toBeNull();
+  });
+  it("record mode shows the sign-in card in the camera slot and no header user", () => {
+    const el = page(initialState(), "waiting", { auth: auth("signed_out"), record: true });
+    expect(el.querySelector(".record__sam .signin__btn")).not.toBeNull();
+    expect(el.querySelector(".lv-conn__signout, .lv-user")).toBeNull();
+  });
+  it("without an auth prop (the feed's own tests) the page behaves as signed in", () => {
+    const el = page(initialState(), "connecting");
+    expect(findAllByText(el, "p", "Waiting for Sam's phone…")).toHaveLength(1);
+    expect(el.querySelector(".signin, .lv-user")).toBeNull();
   });
 });
 

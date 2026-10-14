@@ -489,40 +489,9 @@
   font-size: var(--text-body);
 }
 
-.keyprompt {
-  width: min(100%, 460px);
-  padding: 24px;
-  border-radius: var(--neu-radius-card);
-  background: var(--neu-surface);
-  box-shadow: var(--neu-raised);
-  color: var(--neu-text);
-}
-.keyprompt__label {
-  display: block;
-  font-size: 18px;
-  font-weight: 700;
-}
-.keyprompt__help {
-  margin: 6px 0 14px;
-  color: var(--neu-text-muted);
-}
-.keyprompt__row {
-  display: flex;
-  gap: 10px;
-}
-.keyprompt__input {
-  flex: 1;
-  min-width: 0;
-  padding: 10px 14px;
-  border: 0;
-  border-radius: var(--neu-radius-item);
-  background: var(--neu-surface);
-  box-shadow: var(--neu-inset-sm);
-  color: var(--neu-text);
-  font: inherit;
-}
 /* Buttons: raised at rest, pressed in while active. */
-.keyprompt__btn,
+.signin__btn,
+.lv-conn__signout,
 .bar__btn,
 .record__exit,
 .room__btn {
@@ -537,30 +506,86 @@
   cursor: pointer;
   transition: box-shadow 120ms;
 }
-.keyprompt__btn:hover,
+.signin__btn:hover,
+.lv-conn__signout:hover,
 .bar__btn:hover,
 .record__exit:hover,
 .room__btn:hover {
   background: var(--neu-hover);
 }
-.keyprompt__btn:active,
+.signin__btn:active,
+.lv-conn__signout:active,
 .bar__btn:active,
 .record__exit:active,
 .room__btn:active {
   box-shadow: var(--neu-inset-sm);
 }
-.keyprompt__btn:focus-visible,
+.signin__btn:focus-visible,
+.lv-conn__signout:focus-visible,
 .bar__btn:focus-visible,
 .record__exit:focus-visible,
 .room__btn:focus-visible,
-.keyprompt__input:focus-visible,
 .lv-session:focus-visible {
   outline: var(--neu-focus);
   outline-offset: 3px;
 }
-.keyprompt__btn {
+/* ---------- sign-in: who may watch (Google sign-in, checked by the server) ---------- */
+.signin {
+  width: min(100%, 460px);
+  padding: 24px;
+  border-radius: var(--neu-radius-card);
+  background: var(--neu-surface);
+  box-shadow: var(--neu-raised);
+  color: var(--neu-text);
+  text-align: center;
+}
+.signin__title {
+  margin: 0 0 6px;
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+.signin__text {
+  margin: 0 auto 16px;
+  max-width: 40ch;
+  color: var(--neu-text-muted);
+  font-size: var(--text-body);
+}
+.signin__who {
+  margin: -8px 0 14px;
+  color: var(--neu-text-muted);
+  font-size: var(--text-small);
+  overflow-wrap: anywhere;
+}
+.signin__btn {
   background: var(--lv-grad);
   color: #fff;
+}
+.signin__error {
+  margin: 14px 0 0;
+  color: var(--neu-danger);
+  font-size: var(--text-small);
+  font-weight: 600;
+}
+.lv-user {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+.lv-conn__user {
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--neu-text-muted);
+  font-size: var(--text-small);
+  font-weight: 600;
+}
+.lv-conn__signout {
+  padding: 6px 12px;
+  color: var(--neu-text);
+  font-size: var(--text-small);
 }
 
 /* ---------- room camera ---------- */

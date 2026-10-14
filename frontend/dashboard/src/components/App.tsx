@@ -15,7 +15,7 @@ import { OrdersPage } from "../pages/OrdersPage";
 import { AuditPage, type ResolveEvidence } from "../pages/AuditPage";
 import { ForecastPage } from "../pages/ForecastPage";
 import { LivePage } from "../pages/LivePage";
-import { useMonitor } from "../lib/useMonitor";
+import { useMonitor, type MonitorDeps } from "../lib/useMonitor";
 
 export type { ListenFn };
 
@@ -26,12 +26,14 @@ export interface AppProps {
   loadForecast: (shopId: string) => Promise<Forecast | null>;
   resolveEvidence?: ResolveEvidence;
   now?: () => number;
+  /** The Live page's socket, timers and sign-in (tests pass fakes; the browser uses WebSocket and Firebase). */
+  monitorDeps?: MonitorDeps;
 }
 
 /** Re-derive time-based text ("Expires today", today's totals) every minute, even with no new data. */
 const TICK_MS = 60_000;
 
-export function App({ listen, loadForecast, resolveEvidence = publicEvidenceUrl, now = Date.now }: AppProps) {
+export function App({ listen, loadForecast, resolveEvidence = publicEvidenceUrl, now = Date.now, monitorDeps }: AppProps) {
   // No sign-in in this build: every visitor gets the one shop, read-only, whatever the URL asks for.
   const [access] = useState(() => resolveAccess());
   const [route, setRoute] = useState<Route>(() => parseRoute(location.hash) ?? "#/");
@@ -89,7 +91,7 @@ export function App({ listen, loadForecast, resolveEvidence = publicEvidenceUrl,
 
   const views = useMemo(() => (data ? buildViews(data, clock) : null), [data, clock]);
   // The Live page listens to aira-live's /monitor channel only while it is open.
-  const monitor = useMonitor(route === "#/live", shopId);
+  const monitor = useMonitor(route === "#/live", shopId, undefined, monitorDeps);
   const [record, setRecord] = useState(false);
 
   const forecastPage = (
@@ -98,7 +100,13 @@ export function App({ listen, loadForecast, resolveEvidence = publicEvidenceUrl,
   let body;
   if (route === "#/forecast") body = forecastPage;
   else if (route === "#/live") {
-    body = <LivePage state={monitor.state} conn={monitor.conn} video={monitor.video} configured={monitor.configured} onFollow={monitor.follow} record={record} onRecord={setRecord} shopName={shopName()} />;
+    body = (
+      <LivePage
+        state={monitor.state} conn={monitor.conn} video={monitor.video} configured={monitor.configured} onFollow={monitor.follow}
+        auth={{ status: monitor.auth.status, user: monitor.auth.user, error: monitor.auth.error, onSignIn: monitor.auth.signIn, onSignOut: monitor.auth.signOut }}
+        record={record} onRecord={setRecord} shopName={shopName()}
+      />
+    );
   }
   else if (!views) {
     body =

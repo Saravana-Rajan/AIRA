@@ -1,7 +1,7 @@
 """Live monitor: a read-only fan-out, per shop, of what a session hears, sees and does (the dashboard's Live page).
 
-``GET /monitor[?shop=<id>]`` (``main.py``) subscribes a browser to the one demo shop; there is no key or login
-(``origin_allowed`` is the only guard, see below). The hub here keeps a bounded queue per subscriber;
+``GET /monitor[?shop=<id>]`` (``main.py``) subscribes a browser to the one demo shop once ``authenticate`` has
+verified its signed-in viewer (see Access below). The hub here keeps a bounded queue per subscriber;
 ``publish`` builds a ``contracts.MonitorMsg``, serialises it once and hands the same text to every monitor of
 the shop. Nothing is stored: a monitor sees what happens while it is connected, and a slow one loses its oldest
 lines, never the service's time.
@@ -25,11 +25,19 @@ Who is talking: a user transcript is the owner's, unless a sale is open for that
 active_sale``) and the line does not address AIRA by name; a sale tool may also say ``speaker="customer"``
 (``set_speaker``) and that word wins while the sale is open.
 
-Access: the monitor key was removed by the owner's decision (the dashboard's Live page opens straight to the
-feed), so anyone who can open the dashboard can watch the shop. The only guard is a browser Origin allowlist,
-``origin_allowed`` (config ``monitor_origins`` / env ``AIRA_MONITOR_ORIGINS``): a light guard against other web
-pages embedding the feed, not authentication (any non-browser client can send the header). In tokenless / demo
-mode (no Firebase Auth) only the configured demo shop may be watched at all (``shop_allowed``).
+Access (shared/docs/ops/security.md §2a): a viewer is a Google account the owner listed. After the upgrade the
+monitor's first message, within ``AUTH_TIMEOUT_S``, must be ``{t:"auth", idToken}`` with a Firebase
+Authentication ID token; ``authenticate`` verifies it server-side (``auth.verify_firebase_user``: signature,
+issuer, audience, expiry) and checks the account against ``AIRA_MONITOR_VIEWERS`` (``auth.monitor_viewer_allowed``).
+Nothing is subscribed, sent or relayed before that; a failure closes the socket with ``CLOSE_UNAUTHENTICATED``
+(4401: missing, late, malformed, invalid or expired token) or ``CLOSE_UNAUTHORIZED`` (4403: a valid token for
+an account that is not listed). The token expires within an hour: ``serve`` closes the socket with 4401 at
+``exp`` (plus ``EXPIRY_GRACE_S``) unless a fresh ``{t:"auth", idToken}`` for the same account arrived first; a
+refresh naming another account closes it too. Every reconnect authenticates from scratch. The browser Origin
+allowlist, ``origin_allowed`` (config ``monitor_origins`` / env ``AIRA_MONITOR_ORIGINS``), stays as defence in
+depth only: it never admits anyone by itself. In tokenless / demo mode (the phone has no Firebase Auth) only the
+configured demo shop may be watched at all (``shop_allowed``). Logs carry a uid hash and the outcome, never the
+token or the email.
 """
 from __future__ import annotations
 
@@ -46,11 +54,15 @@ from typing import Any
 
 from pydantic import BaseModel, ValidationError
 
-from aira_live import config, monitor_hooks, rtc
+from aira_live import auth, config, monitor_hooks, rtc
+from aira_live.auth import FirebaseUser, uid_hash
 from aira_live.contracts import (
+    MONITOR_CLOSE_UNAUTHENTICATED,
+    MONITOR_CLOSE_UNAUTHORIZED,
     CountMsg,
     CueMsg,
     ErrorMsg,
+    MonAuthMsg,
     RequestFrameMsg,
     RtcMsg,
     StateMsg,
@@ -64,6 +76,14 @@ from aira_live.contracts import (
 from aira_live.diag import diag
 
 log = logging.getLogger(__name__)
+
+AUTH_TIMEOUT_S = 5.0  # the auth message must arrive this soon after the upgrade
+EXPIRY_GRACE_S = 30.0  # a socket whose token expired is closed this long after exp unless refreshed
+CLOSE_UNAUTHENTICATED = MONITOR_CLOSE_UNAUTHENTICATED  # 4401
+CLOSE_UNAUTHORIZED = MONITOR_CLOSE_UNAUTHORIZED  # 4403
+# The token verifier (tests swap in a fake that never touches the network). Called off the event loop.
+verify_user = auth.verify_firebase_user
+_time = time.time  # tests swap in a clock for the expiry watchdog
 
 MAX_WIDTH = 480       # a monitor frame is at most this wide
 JPEG_QUALITY = 60     # 0.6
@@ -88,8 +108,9 @@ class Subscriber:
     backlog of old ones.
     """
 
-    def __init__(self, shop_id: str):
+    def __init__(self, shop_id: str, viewer: FirebaseUser | None = None):
         self.shop_id = shop_id
+        self.viewer = viewer  # the verified account behind a /monitor socket (None for an in-process subscriber)
         self._lines: deque[tuple[str | None, str]] = deque(maxlen=MAX_QUEUE)
         self._event = asyncio.Event()
         try:  # the loop that serves this monitor; a publisher on another loop or thread wakes it safely
@@ -148,8 +169,8 @@ def reset() -> None:
 
 
 # ---------- hub ----------
-def subscribe(shop_id: str) -> Subscriber:
-    sub = Subscriber(shop_id)
+def subscribe(shop_id: str, viewer: FirebaseUser | None = None) -> Subscriber:
+    sub = Subscriber(shop_id, viewer)
     subs = _HUB.setdefault(shop_id, [])
     subs.append(sub)
     if len(subs) == 1:
@@ -271,12 +292,12 @@ def publish(shop_id: str, kind: str, session_id: str, **fields: Any) -> int:
 
 # ---------- access ----------
 def origin_allowed(origin: str | None, allowed: tuple[str, ...] | list[str] | None = None) -> bool:
-    """The light guard on ``/monitor``: True when ``origin`` (the upgrade's Origin header, as sent) is on the
-    allowlist (``config.monitor_origins`` unless ``allowed`` is given). An entry ending in ``:*`` matches that
-    scheme and host on any port (``http://localhost:*``); every other entry is an exact match (scheme, host and
-    port, a trailing slash ignored). A missing or empty Origin is refused: a browser always sends one on a
-    WebSocket upgrade, and the dashboard is the only intended client. This is not authentication: a script can
-    send any Origin it likes."""
+    """Defence in depth on ``/monitor`` (the viewer check in ``authenticate`` is the gate): True when ``origin``
+    (the upgrade's Origin header, as sent) is on the allowlist (``config.monitor_origins`` unless ``allowed`` is
+    given). An entry ending in ``:*`` matches that scheme and host on any port (``http://localhost:*``); every
+    other entry is an exact match (scheme, host and port, a trailing slash ignored). A missing or empty Origin is
+    refused: a browser always sends one on a WebSocket upgrade, and the dashboard is the only intended client.
+    This is not authentication: a script can send any Origin it likes, and passing it admits nobody."""
     if not origin:
         return False
     origin = origin.strip().rstrip("/")
@@ -305,33 +326,102 @@ def shop_allowed(shop_id: str) -> bool:
     return bool(shop_id)
 
 
+# ---------- the viewer check ----------
+class Refused(Exception):
+    """``authenticate`` refused the socket: ``code`` is the WebSocket close code to send, ``reason`` the log line."""
+
+    def __init__(self, code: int, reason: str):
+        super().__init__(reason)
+        self.code = code
+        self.reason = reason
+
+
+async def _verify(id_token: str) -> FirebaseUser | None:
+    """``verify_user`` off the event loop (it may fetch Google's certificates once in a while)."""
+    return await asyncio.to_thread(verify_user, id_token)
+
+
+async def authenticate(ws, shop_id: str) -> FirebaseUser:
+    """Wait at most ``AUTH_TIMEOUT_S`` for the monitor's first text frame, ``{t:"auth", idToken}``, verify the
+    token and the viewer allowlist, and return the viewer. Raises ``Refused`` (4401 for no / late / malformed /
+    invalid / expired token, 4403 for an account that is not listed, or a shop that may not be watched).
+    Nothing is subscribed or sent before this returns."""
+    if not shop_allowed(shop_id):
+        raise Refused(CLOSE_UNAUTHORIZED, f"shop {shop_id!r} is not the demo shop")
+    try:
+        raw = await asyncio.wait_for(ws.receive_text(), timeout=AUTH_TIMEOUT_S)
+    except asyncio.TimeoutError:
+        raise Refused(CLOSE_UNAUTHENTICATED, f"no auth within {AUTH_TIMEOUT_S:.0f} s") from None
+    except Exception:  # noqa: BLE001 - disconnected, or a binary frame
+        raise Refused(CLOSE_UNAUTHENTICATED, "socket closed before auth") from None
+    msg = parse_monitor_client_msg(raw)
+    if not isinstance(msg, MonAuthMsg):
+        raise Refused(CLOSE_UNAUTHENTICATED, "first message is not an auth message")
+    user = await _verify(msg.id_token)
+    if user is None:
+        raise Refused(CLOSE_UNAUTHENTICATED, "token not verified")
+    if not auth.monitor_viewer_allowed(user):
+        raise Refused(CLOSE_UNAUTHORIZED, f"uid={uid_hash(user.uid)} is not in AIRA_MONITOR_VIEWERS")
+    return user
+
+
 # ---------- the socket ----------
-async def serve(ws, sub: Subscriber) -> None:
-    """Pump ``sub``'s lines to ``ws`` until the monitor goes away. The only inbound text acted on is WebRTC
-    signalling (``{t:"rtc", ...}``, relayed by ``aira_live.rtc`` to a phone of the shop, rate-limited); the
-    feed itself stays read-only and anything else is ignored."""
+async def serve(ws, sub: Subscriber, viewer: FirebaseUser) -> None:
+    """Pump ``sub``'s lines to ``ws`` until the monitor goes away, its token expires unrefreshed, or a refresh
+    fails. Inbound text acted on: ``{t:"auth", idToken}`` (a refresh: verified again, same account required,
+    extends the expiry deadline) and WebRTC signalling (``{t:"rtc", ...}``, relayed by ``aira_live.rtc`` to a
+    phone of the shop, rate-limited). The feed itself stays read-only and anything else is ignored."""
+    deadline = [float(viewer.exp) + EXPIRY_GRACE_S]
+    closing: list[int] = []  # the close code chosen by the watchdog or a failed refresh
+
     async def pump() -> None:
         while True:
             await ws.send_text(await sub.next_line())
 
+    async def watchdog() -> None:
+        while True:
+            wait = deadline[0] - _time()
+            if wait <= 0:
+                break
+            await asyncio.sleep(min(wait, 1.0))
+        closing.append(CLOSE_UNAUTHENTICATED)
+        log.info("monitor closed: token of uid=%s expired without a refresh", uid_hash(viewer.uid))
+        diag("monitor", event="expired", shop=sub.shop_id, uid=uid_hash(viewer.uid))
+        await ws.close(code=CLOSE_UNAUTHENTICATED)
+
     task = asyncio.create_task(pump(), name=f"monitor-{sub.shop_id}")
+    expiry = asyncio.create_task(watchdog(), name=f"monitor-expiry-{sub.shop_id}")
     rtc_limit = rtc.limiter()
     try:
-        while True:
+        while not closing:
             message = await ws.receive()
             if message["type"] == "websocket.disconnect":
                 break
             text = message.get("text")
-            if isinstance(text, str):
-                msg = parse_monitor_client_msg(text)
-                if isinstance(msg, RtcMsg) and rtc_limit.allow():
-                    await rtc.from_monitor(sub, msg)
+            if not isinstance(text, str):
+                continue
+            msg = parse_monitor_client_msg(text)
+            if isinstance(msg, MonAuthMsg):
+                fresh = await _verify(msg.id_token)
+                if fresh is None or fresh.uid != viewer.uid or not auth.monitor_viewer_allowed(fresh):
+                    why = "not verified" if fresh is None else "another account" if fresh.uid != viewer.uid else "no longer allowed"
+                    log.info("monitor closed: refresh for uid=%s %s", uid_hash(viewer.uid), why)
+                    diag("monitor", event="refresh", ok=False, shop=sub.shop_id, uid=uid_hash(viewer.uid), why=why)
+                    closing.append(CLOSE_UNAUTHENTICATED if fresh is None or fresh.uid != viewer.uid else CLOSE_UNAUTHORIZED)
+                    await ws.close(code=closing[-1])
+                    break
+                deadline[0] = float(fresh.exp) + EXPIRY_GRACE_S
+                diag("monitor", event="refresh", ok=True, shop=sub.shop_id, uid=uid_hash(viewer.uid), exp=fresh.exp)
+            elif isinstance(msg, RtcMsg) and rtc_limit.allow():
+                await rtc.from_monitor(sub, msg)
     finally:
-        task.cancel()
-        try:
-            await task
-        except BaseException:  # noqa: BLE001 - cancelled, or the socket died under the pump
-            pass
+        for t in (task, expiry):
+            t.cancel()
+        for t in (task, expiry):
+            try:
+                await t
+            except BaseException:  # noqa: BLE001 - cancelled, or the socket died under the pump
+                pass
 
 
 # ---------- who is talking ----------

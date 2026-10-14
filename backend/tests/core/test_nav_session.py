@@ -160,6 +160,7 @@ def session(mk_session):
     yield s, rec
     current_session.reset(token)
     walk._ACTIVE.clear()
+    walk._ENDED_BY_DISCONNECT.clear()
 
 
 async def test_the_walk_keeps_checking_through_conversation_with_its_nav_session(session):
@@ -254,4 +255,160 @@ async def test_a_new_nav_sessions_first_empty_answers_are_warm_up_then_count(ses
             assert loop.fails == 0 and bridge.notices == []
     assert loop.state == walk.DEGRADED and loop.fails == walk.MAX_FAILS
     assert bridge.notices[-1][1] is True                              # then the honest stop
+    await walk.stop_walk(s)
+
+
+# ---------- reopening a navigation session that failed or dropped ----------
+
+async def ticks(loop, clock, seconds: float, frame: str | None = "aGVsbG8="):
+    s = loop.session
+    for _ in range(int(seconds / 0.5)):
+        clock.t += 0.5
+        if frame is not None:
+            await walk.on_live_frame(s, False, frame)
+        await loop.tick()
+        await settle()
+
+
+async def test_a_nav_session_that_fails_to_open_is_retried_every_10_s_a_bounded_number_of_times(session):
+    s, rec = session
+    clock, bridge = Clock(), BusyBridge()
+    lives: list[FakeLive] = []
+    fail_first = 2
+
+    async def broken():
+        raise TimeoutError
+
+    def factory(loop):
+        n = len(lives) + 1
+        live = FakeLive()
+        lives.append(live)
+        return NavSession(s.session_id, loop.on_nav_report, connect=broken if n <= fail_first else connector(live))
+
+    loop = walk.WalkLoop(s, "fridge", clock=clock, bridge=lambda: bridge, nav_factory=factory)
+    walk._ACTIVE[s.session_id] = loop
+    await loop.open_nav()                                                  # start's first try: fails
+    assert not loop.nav_alive() and loop.nav_opens == 1
+    await ticks(loop, clock, walk.NAV_REOPEN_S - 1)
+    assert loop.nav_opens == 1                                             # not yet
+    await ticks(loop, clock, 1.5)
+    assert loop.nav_opens == 2 and not loop.nav_alive()                    # second try, fails too
+    await ticks(loop, clock, walk.NAV_REOPEN_S)
+    assert loop.nav_opens == 3 and loop.nav_alive()                        # third try: open
+    await ticks(loop, clock, 3)                                            # frames reach the new session
+    assert len(lives[-1].video) >= 2 and lives[-1].texts                  # and a check went through it
+    assert loop.fails == 0
+    await walk.stop_walk(s)
+    assert not loop.nav_alive() and (loop._nav_task is None or loop._nav_task.done())
+
+    # always failing: NAV_MAX_OPENS tries, then quiet-moment checks only (the busy conversation: none)
+    lives.clear()
+    fail_first = 99
+    walk._ACTIVE.clear()
+    clock = Clock()
+    loop2 = walk.WalkLoop(s, "fridge", clock=clock, bridge=lambda: bridge, nav_factory=factory)
+    walk._ACTIVE[s.session_id] = loop2
+    await loop2.open_nav()
+    await ticks(loop2, clock, walk.NAV_REOPEN_S * (walk.NAV_MAX_OPENS + 2))
+    assert loop2.nav_opens == walk.NAV_MAX_OPENS and not loop2.nav_alive()
+    assert loop2.state == walk.DEGRADED and loop2.fails == 0              # the watchdog spoke, no failed look
+    await walk.stop_walk(s)
+
+
+async def test_a_nav_session_that_drops_mid_walk_is_reopened_and_the_walk_goes_on(session):
+    s, rec = session
+    clock, bridge = Clock(), BusyBridge()
+    lives: list[FakeLive] = []
+
+    def factory(loop):
+        live = FakeLive()
+        lives.append(live)
+        return NavSession(s.session_id, loop.on_nav_report, connect=connector(live))
+
+    loop = walk.WalkLoop(s, "fridge", clock=clock, bridge=lambda: bridge, nav_factory=factory)
+    walk._ACTIVE[s.session_id] = loop
+    await loop.open_nav()
+    first = loop.nav
+    await ticks(loop, clock, 4)
+    assert lives[0].texts                                                  # checking through session 1
+    for cid in range(1, loop.check_seq + 1):
+        lives[0].call(check_id=cid, target_visible=True, target_side="ahead", target_size="medium",
+                      path="clear_in_view", view_ok=True)
+    await settle()
+    lives[0].drop()                                                        # the navigation session dies
+    await settle()
+    assert not loop.nav_alive() and loop.nav is first
+    await ticks(loop, clock, walk.NAV_REOPEN_S + 0.5)
+    assert loop.nav_opens == 2 and loop.nav_alive() and loop.nav is not first and len(lives) == 2
+    assert first._stack is None                                            # the dead one was closed, not leaked
+    await ticks(loop, clock, 3)
+    assert len(lives[1].video) >= 2 and lives[1].texts                     # the new session sees and is asked
+    cid = loop.check_seq
+    lives[1].call(check_id=cid, target_visible=True, target_side="ahead", path="blocked",
+                  obstacles=[{"label": "box", "side": "ahead", "in_path": True, "size": "large"}])
+    await settle()
+    assert bridge.notices[-1][1] is True and loop.state == walk.HAZARD    # reports flow again
+    await walk.stop_walk(s)
+    assert not loop.nav_alive() and loop.nav is None
+
+
+async def test_a_walk_that_loses_its_eyes_degrades_within_the_gap_and_reopens(session):
+    """Navigation session down, conversation busy (no quiet moment): the watchdog says the honest line once
+    within OBSERVATION_GAP_S; when the reopened session reports a usable view twice, he walks on."""
+    s, rec = session
+    clock, bridge = Clock(), BusyBridge()
+    lives: list[FakeLive] = []
+
+    def factory(loop):
+        live = FakeLive()
+        lives.append(live)
+        return NavSession(s.session_id, loop.on_nav_report, connect=connector(live))
+
+    loop = walk.WalkLoop(s, "fridge", clock=clock, bridge=lambda: bridge, nav_factory=factory)
+    walk._ACTIVE[s.session_id] = loop
+    await loop.open_nav()
+    for _ in range(3):
+        await ticks(loop, clock, 2.5)
+        lives[0].call(check_id=loop.check_seq, target_visible=True, target_side="ahead", target_size="medium",
+                      path="clear_in_view", view_ok=True)
+        await settle()
+    assert loop.state == walk.NAVIGATING
+    lives[0].drop()
+    await settle()
+    await ticks(loop, clock, walk.OBSERVATION_GAP_S + 1)
+    assert loop.state == walk.DEGRADED
+    assert [n for n, u in bridge.notices if "can't see the path" in n] and bridge.notices[-1][1] is True
+    assert loop.nav_alive() and loop.nav_opens == 2                        # reopened meanwhile
+    await ticks(loop, clock, 2)
+    for _ in range(2):                                                     # two usable fresh reports
+        cid = loop.check_seq
+        lives[1].call(check_id=cid, target_visible=True, target_side="ahead", target_size="medium",
+                      path="clear_in_view", view_ok=True)
+        await settle()
+        await ticks(loop, clock, 2.5)
+    assert loop.state == walk.NAVIGATING
+    assert "path again" in bridge.notices[-1][0]
+    await walk.stop_walk(s)
+
+
+async def test_a_frame_the_conversation_dropped_still_feeds_the_nav_session(session):
+    """While the conversation bridge reconnects, main.live_frame's offer fails (sent=False): the navigation
+    session, when alive, still gets the picture and it counts for checks; without one the frame is no picture."""
+    s, rec = session
+    clock, bridge, live = Clock(), BusyBridge(), FakeLive()
+    loop = walk.WalkLoop(s, "fridge", clock=clock, bridge=lambda: bridge,
+                         nav_factory=lambda lp: NavSession(s.session_id, lp.on_nav_report, connect=connector(live)))
+    walk._ACTIVE[s.session_id] = loop
+    clock.t += 1.0
+    await walk.on_live_frame(s, False, "aGVsbG8=", sent=False)            # no nav session yet: no picture
+    assert loop.frame_at is None
+    await loop.open_nav()
+    clock.t += 1.0
+    await walk.on_live_frame(s, False, "aGVsbG8=", sent=False)
+    assert live.video == [b"hello"] and loop.frame_at == clock.t
+    live.drop()
+    await settle()
+    clock.t += 1.0
+    await walk.on_live_frame(s, False, "aGVsbG8=", sent=False)            # dead session, nothing sent: none
+    assert loop.frame_at == clock.t - 1.0
     await walk.stop_walk(s)

@@ -232,16 +232,30 @@ export function parseClientMsg(raw: string): ClientMsg | null {
   }
 }
 
-// ---------- server -> monitor (GET /monitor[?shop=<id>]; read-only, no key) ----------
+// ---------- server -> monitor (GET /monitor[?shop=<id>]; read-only, signed-in viewers only) ----------
 // There is one shop: `shop` may be left out (the server's demo shop); any other value is refused.
 // A projector view of one shop's live sessions. Every message is {t:"mon", kind, session, ts, ...}.
-// There is no key and no auth message (the monitor key was removed by the owner's decision): the server's
-// only guard is a browser Origin allowlist, and it closes with 4403 before the handshake when the Origin is
-// off it. The feed starts as soon as the socket is open.
+//
+// Access: the first message a monitor sends, within 5 s of the upgrade, must be {t:"auth", idToken} with a
+// Firebase Authentication ID token (Google sign-in on the dashboard). The server verifies it (signature, issuer,
+// audience, expiry) and checks the account against its viewer allowlist (AIRA_MONITOR_VIEWERS); nothing is sent
+// before that. A missing, late, malformed, expired or otherwise invalid token closes the socket with 4401; a
+// valid token for an account that is not allowed closes it with 4403 (4403 is also the pre-handshake refusal
+// for a bad Origin, shop or a full shop). The token never goes in the URL. A token expires within an hour: the
+// monitor sends a fresh {t:"auth", idToken} for the same account before `exp` (the dashboard refreshes about
+// five minutes early); without one the server closes with 4401 at `exp` (plus a short grace), and a refresh
+// naming a different account closes the socket too. Every reconnect authenticates again.
 // Frames are sent only while a monitor is connected (<= 480 px wide, quality 0.6, <= 4 fps a session).
-// Mirrored in backend/aira_live/contracts.py; fixtures in ../fixtures/monitor_msgs.json.
-// The only thing a monitor sends is rtc signalling for one of the shop's sessions (`to` = session id).
-export type MonitorClientMsg = RtcClientMsg;
+// Mirrored in backend/aira_live/contracts.py; fixtures in ../fixtures/monitor_msgs.json and
+// ../fixtures/monitor_client_msgs.json.
+// What a monitor sends: the auth message, and rtc signalling for one of the shop's sessions (`to` = session id).
+export type MonitorAuthMsg = { t: "auth"; idToken: string };
+export type MonitorClientMsg = MonitorAuthMsg | RtcClientMsg;
+/** WebSocket close codes the server uses on /monitor after the upgrade. */
+export const MONITOR_CLOSE_UNAUTHENTICATED = 4401;
+export const MONITOR_CLOSE_UNAUTHORIZED = 4403;
+/** The server waits this long for the auth message after the upgrade. */
+export const MONITOR_AUTH_TIMEOUT_S = 5;
 export const MONITOR_KINDS = Object.freeze(["session", "transcript", "frame", "vision", "hand", "event", "status", "stats"] as const);
 export type MonitorKind = (typeof MONITOR_KINDS)[number];
 export const MONITOR_ROLES = Object.freeze(["owner", "customer", "aira"] as const);
@@ -289,8 +303,22 @@ const isVisionObject = (o: unknown): o is VisionObject =>
   optional(o.score, isNum) && optional(o.severity, (v) => inList(BOX_SEVERITIES, v)) &&
   optional(o.distance, (v) => inList(VISION_DISTANCES, v));
 
+export function isMonitorAuthMsg(x: unknown): x is MonitorAuthMsg {
+  return isObj(x) && x.t === "auth" && isStr(x.idToken) && x.idToken.length > 0;
+}
+
 export function isMonitorClientMsg(x: unknown): x is MonitorClientMsg {
-  return isRtcClientMsg(x);
+  return isMonitorAuthMsg(x) || isRtcClientMsg(x);
+}
+
+/** Parse one text frame a monitor sent. Returns null for bad JSON or an unknown/invalid message. */
+export function parseMonitorClientMsg(raw: string): MonitorClientMsg | null {
+  try {
+    const v: unknown = JSON.parse(raw);
+    return isMonitorClientMsg(v) ? v : null;
+  } catch {
+    return null;
+  }
 }
 
 /** One text frame of the /monitor feed: a monitor message, or rtc signalling from a phone session. */

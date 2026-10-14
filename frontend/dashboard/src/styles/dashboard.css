@@ -998,7 +998,7 @@ a { color: var(--neu-info); }
 .badge--state { background: var(--tint-blue); }
 
 /* ---------- Live page: same panels, black primary pill, white secondary pills ---------- */
-.cam, .chat, .roomcam, .keyprompt {
+.cam, .chat, .roomcam {
   background: var(--panel-gradient);
   border: 1px solid var(--panel-border);
   box-shadow: var(--neu-raised);
@@ -1006,16 +1006,13 @@ a { color: var(--neu-info); }
 .cam__view { background: var(--neu-bg-sunken); box-shadow: var(--neu-inset); }
 .lv-logo, .lv-pill, .lv-conn, .lv-session, .cam__live, .cam__paused,
 .step, .step__mark, .step__time, .tl__item, .tl__icon, .msg__bubble,
-.bar__btn, .room__btn, .record__exit, .keyprompt__input {
+.bar__btn, .room__btn, .record__exit {
   background: var(--neu-white);
   box-shadow: var(--neu-raised-sm);
 }
 .steps { background: var(--neu-bg-sunken); box-shadow: none; }
 .step__mark, .tl__icon, .step__time { box-shadow: none; border: 1px solid var(--neu-divider); }
-.keyprompt__input { border: 1px solid var(--neu-divider); box-shadow: none; }
-.keyprompt__btn { background: var(--neu-accent); color: #fff; box-shadow: var(--neu-raised-sm); }
 .bar__btn:hover, .record__exit:hover, .room__btn:hover { background: var(--neu-surface); }
-.keyprompt__btn:hover { background: #2A2F36; }
 .bar__btn[aria-pressed="true"], .room__btn--on { background: var(--neu-accent); color: #fff; box-shadow: none; }
 .step--active { background: var(--neu-accent); color: #fff; box-shadow: var(--neu-raised-sm); }
 .step--active .step__mark, .step__time--live { background: rgba(255, 255, 255, 0.18); border: 0; color: #fff; }

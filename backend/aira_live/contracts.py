@@ -343,11 +343,15 @@ ServerMsg = Annotated[
     Field(discriminator="t"),
 ]
 
-# ---------- server -> monitor (GET /monitor[?shop=<id>]; read-only, no key) ----------
-# There is one shop: ``shop`` may be left out (config demo_shop_id); any other value is refused. There is no auth
-# message: the monitor key was removed by the owner's decision (the server's only guard is an Origin allowlist).
-# Mirrors the MonitorMsg union in messages.ts and shared/contracts/fixtures/monitor_msgs.json.
-# Every message is {t:"mon", kind, session, ts, ...}; ``jpeg_b64`` keeps its snake_case name on the wire.
+# ---------- server -> monitor (GET /monitor[?shop=<id>]; read-only, signed-in viewers only) ----------
+# There is one shop: ``shop`` may be left out (config demo_shop_id); any other value is refused. The first message
+# a monitor sends must be ``MonAuthMsg`` (``{t:"auth", idToken}``, a Firebase Authentication ID token) within
+# ``monitor.AUTH_TIMEOUT_S``; ``main.py`` / ``monitor.authenticate`` verify it and the viewer allowlist before
+# anything is sent (close 4401 = not authenticated, 4403 = not authorized). The same message refreshes the token
+# before it expires. Mirrors messages.ts and shared/contracts/fixtures/monitor_msgs.json / monitor_client_msgs.json.
+# Every server message is {t:"mon", kind, session, ts, ...}; ``jpeg_b64`` keeps its snake_case name on the wire.
+MONITOR_CLOSE_UNAUTHENTICATED = 4401
+MONITOR_CLOSE_UNAUTHORIZED = 4403
 MonitorRole = Literal["owner", "customer", "aira"]
 MonitorSessionState = Literal["start", "end"]
 # Who drew the boxes of a vision message: the phone's on-device MediaPipe detector, Gemini Robotics-ER 2, or
@@ -357,12 +361,20 @@ VisionDistance = Literal["near", "arm", "far"]
 MonitorState = Literal["listening", "thinking", "guiding", "found", "idle"]
 
 
-# What a monitor may send: only WebRTC signalling for one of the shop's sessions (``to`` = session id).
-MonitorClientMsg = RtcMsg
+class MonAuthMsg(_ClientWire):
+    """The monitor's credential: a Firebase Authentication ID token (``idToken`` on the wire). Sent first, and
+    again to refresh before the token expires. Never logged (``diag`` redacts ``id_token``)."""
+
+    t: Literal["auth"]
+    id_token: StrictStr = Field(min_length=1)
+
+
+# What a monitor may send: its auth message, and WebRTC signalling for one of the shop's sessions (``to`` = session id).
+MonitorClientMsg = Annotated[Union[MonAuthMsg, RtcMsg], Field(discriminator="t")]
 monitor_client_adapter: TypeAdapter[MonitorClientMsg] = TypeAdapter(MonitorClientMsg)
 
 
-def parse_monitor_client_msg(raw: str | bytes) -> RtcMsg | None:
+def parse_monitor_client_msg(raw: str | bytes) -> MonAuthMsg | RtcMsg | None:
     """Parse one text frame a monitor sent. None for bad JSON or an unknown/invalid message."""
     try:
         return monitor_client_adapter.validate_json(raw)

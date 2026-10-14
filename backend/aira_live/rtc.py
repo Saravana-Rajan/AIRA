@@ -17,6 +17,12 @@ The dashboard's Live page (a ``monitor.Subscriber`` on ``/monitor``) asks a phon
 
 No TURN server is configured: behind a strict NAT the peers never connect, the dashboard times out and keeps the
 JPEG preview. ``monitor.py`` calls the hooks here lazily (it imports this module, this module imports it back).
+
+Access: a monitor exists here only once ``monitor.subscribe`` ran, which ``main.py`` does after
+``monitor.authenticate`` accepted the viewer's Firebase ID token (shared/docs/ops/security.md §2a); the only
+caller of ``from_monitor`` is ``monitor.serve`` on that authenticated socket. So no ``want`` reaches a phone,
+and no offer / candidate reaches a browser, without a signed-in, listed viewer: the signalling is protected by
+the same check as the feed. ``from_monitor`` also refuses a subscriber that was never registered here.
 """
 from __future__ import annotations
 

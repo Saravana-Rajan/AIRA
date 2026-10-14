@@ -1,17 +1,24 @@
-// useMonitor keeps what it hears in memory only, scoped to one session, and drops it whenever the socket is
-// not open: on close, when the Live page is left, when the page is unloaded (pagehide), and when the server
-// refuses the page. There is no monitor key: it connects at once. A merely hidden tab stays connected. Fake
-// sockets stand in for WebSocket.
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+// useMonitor connects only while a viewer is signed in, sends the ID token as the first message of every
+// socket, refreshes it before expiry, keeps what it hears in memory only, scoped to one session, and drops it
+// whenever the socket is not open: on close, when the Live page is left, when the page is unloaded (pagehide),
+// on sign-out and when the server refuses the account. A merely hidden tab stays connected. Fake sockets and a
+// fake sign-in stand in for WebSocket and Firebase.
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act } from "preact/test-utils";
 import { useState } from "preact/hooks";
-import { cleanup, mount } from "./helpers/render";
+import { cleanup, flush, mount } from "./helpers/render";
+import { jwt } from "./helpers/jwt";
 import { useMonitor, type Monitor, type MonitorDeps } from "../src/lib/useMonitor";
 import type { SocketLike } from "../src/lib/monitor";
 import type { PeerCtor, PeerLike } from "../src/lib/rtcViewer";
+import type { ViewerAuth, ViewerUser } from "../src/lib/viewerAuth";
 
 type Fake = SocketLike & { closed: boolean; sent: string[] };
 const ENV = { VITE_AIRA_LIVE_WS: "wss://live.example/ws" };
+const T0 = 1_760_000_000_000;
+const SAM: ViewerUser = { uid: "u-sam", email: "sam@example.com", name: "Sam" };
+const token = (exp = T0 + 3_600_000, tag = "t") => jwt({ sub: "u-sam", exp: Math.floor(exp / 1000), tag });
+const authLine = (idToken: string) => JSON.stringify({ t: "auth", idToken });
 
 function fakeSocket(): Fake {
   return {
@@ -19,6 +26,30 @@ function fakeSocket(): Fake {
     send(d: string) { this.sent.push(d); },
     close() { this.closed = true; },
   };
+}
+
+/** A sign-in the test drives: who is signed in, and which token the next idToken() hands out. */
+function fakeAuth(user: ViewerUser | null = SAM) {
+  const subs = new Set<(u: ViewerUser | null) => void>();
+  const a = {
+    user, minted: 0,
+    signIn: vi.fn(async () => { a.set(SAM); }),
+    signOut: vi.fn(async () => { a.set(null); }),
+    idToken: vi.fn(async (force?: boolean) => {
+      if (!a.user) throw new Error("signed out");
+      return token(force ? T0 + 7_200_000 : T0 + 3_600_000, force ? `fresh${a.minted++}` : "t");
+    }),
+    subscribe(cb: (u: ViewerUser | null) => void) {
+      subs.add(cb);
+      cb(a.user);
+      return () => { subs.delete(cb); };
+    },
+    set(u: ViewerUser | null) {
+      a.user = u;
+      act(() => { for (const cb of subs) cb(u); });
+    },
+  };
+  return a as typeof a & ViewerAuth;
 }
 
 class FakePC implements PeerLike {
@@ -37,9 +68,13 @@ class FakePC implements PeerLike {
   close() { this.closed = true; }
 }
 
-function harness(enabled = true, peer?: PeerCtor) {
+function harness(enabled = true, peer?: PeerCtor, auth = fakeAuth()) {
   const sockets: Fake[] = [];
-  const deps: MonitorDeps = { connect: () => { const s = fakeSocket(); sockets.push(s); return s; }, setTimer: () => 0, clearTimer: () => {}, peer };
+  const timers: Array<{ fn: () => void; ms: number }> = [];
+  const deps: MonitorDeps = {
+    connect: () => { const s = fakeSocket(); sockets.push(s); return s; },
+    setTimer: (fn, ms) => { timers.push({ fn, ms }); return timers.length; }, clearTimer: () => {}, now: () => T0, peer, auth,
+  };
   let latest: Monitor | null = null;
   let setEnabled: (v: boolean) => void = () => {};
   function Probe() {
@@ -50,9 +85,10 @@ function harness(enabled = true, peer?: PeerCtor) {
   }
   mount(<Probe />);
   const last = () => sockets[sockets.length - 1];
-  const open = () => act(() => last().onopen!({}));
+  /** Opens the newest socket and lets the token go out. */
+  const open = async () => { act(() => last().onopen!({})); await flush(); };
   const send = (m: Record<string, unknown>) => act(() => last().onmessage!({ data: JSON.stringify({ t: "mon", session: "s1", ts: 1, ...m }) }));
-  return { sockets, last, open, send, mon: () => latest!, setEnabled: (v: boolean) => act(() => setEnabled(v)) };
+  return { sockets, timers, last, open, send, auth, mon: () => latest!, setEnabled: (v: boolean) => act(() => setEnabled(v)) };
 }
 
 beforeEach(() => {
@@ -61,12 +97,144 @@ beforeEach(() => {
 });
 afterEach(cleanup);
 
-describe("useMonitor", () => {
-  it("connects at once without any key, reduces messages into memory, and drops everything when the socket closes", () => {
+describe("useMonitor: sign-in", () => {
+  it("opens no socket while signed out, and reports the sign-in state for the page", () => {
+    const h = harness(true, undefined, fakeAuth(null));
+    expect(h.sockets).toHaveLength(0);
+    expect(h.mon().conn).toBe("waiting");
+    expect(h.mon().auth).toMatchObject({ status: "signed_out", user: null, error: null });
+  });
+
+  it("connects once signed in and sends the ID token as the very first message; nothing goes to storage or the URL", async () => {
+    const h = harness(true, undefined, fakeAuth(null));
+    act(() => h.mon().auth.signIn());
+    await flush();
+    expect(h.auth.signIn).toHaveBeenCalledTimes(1);
+    expect(h.mon().auth).toMatchObject({ status: "signed_in", user: SAM });
+    expect(h.sockets).toHaveLength(1);
+    expect(h.mon().conn).toBe("connecting");
+    await h.open();
+    expect(h.last().sent).toEqual([authLine(token())]);
+    expect(h.mon().conn).toBe("live");
+    expect(Object.keys(localStorage)).toEqual([]);
+    expect(sessionStorage.length).toBe(0);
+    expect(location.href).not.toContain(token());
+  });
+
+  it("reports a failed sign-in in words, without the error's internals", async () => {
+    const a = fakeAuth(null);
+    a.signIn.mockImplementationOnce(async () => { throw Object.assign(new Error("Firebase: Error (auth/configuration-not-found)."), { code: "auth/configuration-not-found" }); });
+    const h = harness(true, undefined, a);
+    act(() => h.mon().auth.signIn());
+    await flush();
+    expect(h.mon().auth.error).toBe("Google sign-in isn't enabled for this project yet. Ask the shop owner to enable it.");
+    expect(h.mon().auth.error).not.toContain("Firebase");
+    expect(h.sockets).toHaveLength(0);
+  });
+
+  it("says the sign-in is not configured when the build has no Firebase config and no fake", () => {
+    const deps: MonitorDeps = { connect: () => fakeSocket(), setTimer: () => 0, clearTimer: () => {} };
+    let m: Monitor | null = null;
+    function Probe() {
+      m = useMonitor(true, "sunrise_dairy", ENV, deps);
+      return null;
+    }
+    mount(<Probe />);
+    expect(m!.auth.status).toBe("unconfigured");
+    expect(m!.conn).toBe("waiting");
+  });
+
+  it("signing out closes the socket and clears everything; signing in again opens a new one that authenticates again", async () => {
+    const h = harness();
+    await h.open();
+    h.send({ kind: "frame", jpeg_b64: "AAAA", w: 1, h: 1, purpose: "ask" });
+    expect(h.mon().state.frame).not.toBeNull();
+    act(() => h.mon().auth.signOut());
+    await flush();
+    expect(h.last().closed).toBe(true);
+    expect(h.mon().conn).toBe("waiting");
+    expect(h.mon().state.frame).toBeNull();
+    expect(h.mon().auth.status).toBe("signed_out");
+    act(() => h.mon().auth.signIn());
+    await flush();
+    expect(h.sockets).toHaveLength(2);
+    await h.open();
+    expect(h.last().sent).toEqual([authLine(token())]);
+    expect(h.mon().conn).toBe("live");
+  });
+
+  it("refreshes the token five minutes before it expires, on the same socket, with a freshly minted one", async () => {
+    const h = harness();
+    await h.open();
+    const refresh = h.timers.find((t) => t.ms === 55 * 60_000)!;
+    expect(refresh).toBeDefined();
+    await act(async () => { refresh.fn(); await flush(); });
+    expect(h.auth.idToken).toHaveBeenLastCalledWith(true);
+    expect(h.last().sent).toHaveLength(2);
+    expect(h.last().sent[1]).toBe(authLine(token(T0 + 7_200_000, "fresh0")));
+    expect(h.sockets).toHaveLength(1);
+    expect(h.mon().conn).toBe("live");
+  });
+
+  it("on 4401 it silently reconnects once with a freshly minted token; a second 4401 in a row is shown as sign-in expired", async () => {
+    const h = harness();
+    await h.open();
+    h.send({ kind: "frame", jpeg_b64: "AAAA", w: 1, h: 1, purpose: "ask" });
+    act(() => h.last().onclose!({ code: 4401 }));
+    expect(h.mon().conn).toBe("connecting");
+    expect(h.mon().state.frame).toBeNull();
+    expect(h.sockets).toHaveLength(2);
+    await h.open();
+    expect(h.auth.idToken).toHaveBeenLastCalledWith(true);
+    expect(h.last().sent).toEqual([authLine(token(T0 + 7_200_000, "fresh0"))]);
+    expect(h.mon().conn).toBe("live");
+    act(() => h.last().onclose!({ code: 4401 }));
+    expect(h.mon().conn).toBe("unauthenticated");
+    expect(h.sockets).toHaveLength(2); // no third try on its own
+    expect(h.mon().auth.status).toBe("signed_in"); // the page offers "Sign in again"
+  });
+
+  it("a live socket resets the retry: a 4401 long after a successful reconnect gets its own silent retry", async () => {
+    const h = harness();
+    await h.open();
+    act(() => h.last().onclose!({ code: 4401 }));
+    await h.open();
+    expect(h.mon().conn).toBe("live");
+    act(() => h.last().onclose!({ code: 1006 })); // an ordinary drop
+    expect(h.mon().conn).toBe("offline");
+    h.timers.filter((t) => t.ms === 1000).at(-1)!.fn();
+    await h.open();
+    expect(h.mon().conn).toBe("live");
+    act(() => h.last().onclose!({ code: 4401 }));
+    expect(h.mon().conn).toBe("connecting"); // retried again, since a socket was live in between
+  });
+
+  it("4403 after the token went out means this account is not allowed: no retry, state cleared, still signed in", async () => {
+    const h = harness();
+    await h.open();
+    h.send({ kind: "frame", jpeg_b64: "DDDD", w: 1, h: 1, purpose: "ask" });
+    act(() => h.last().onclose!({ code: 4403 }));
+    expect(h.mon().conn).toBe("unauthorized");
+    expect(h.mon().state.frame).toBeNull();
+    expect(h.sockets).toHaveLength(1);
+    expect(h.mon().auth.status).toBe("signed_in");
+    expect(h.mon().auth.user).toEqual(SAM);
+  });
+
+  it("4403 before the socket opened is the server's refusal of the page (Origin or shop), not of the account", () => {
+    const h = harness();
+    act(() => h.last().onclose!({ code: 4403 }));
+    expect(h.mon().conn).toBe("rejected");
+    expect(h.sockets).toHaveLength(1);
+  });
+});
+
+describe("useMonitor: the feed", () => {
+  it("reduces messages into memory and drops everything when the socket closes; the reconnect authenticates again", async () => {
     const h = harness();
     expect(h.sockets).toHaveLength(1);
-    h.open();
-    expect(h.last().sent).toEqual([]); // no auth message: there is no monitor key
+    await h.open();
+    expect(h.last().sent).toEqual([authLine(token())]);
     expect(h.mon().conn).toBe("live");
     h.send({ kind: "session", state: "start", lang: "en", uid: "u1" });
     h.send({ kind: "transcript", role: "owner", text: "two litres", lang: "en", final: true });
@@ -78,15 +246,20 @@ describe("useMonitor", () => {
     expect(h.mon().state.transcript).toEqual([]);
     expect(h.mon().state.frame).toBeNull();
     expect(h.mon().state.session).toBeNull();
+    h.timers.filter((t) => t.ms === 1000).at(-1)!.fn();
+    expect(h.sockets).toHaveLength(2);
+    await h.open();
+    expect(h.last().sent).toEqual([authLine(token())]);
+    expect(h.mon().conn).toBe("live");
     // Nothing reached storage or the address bar.
     expect(Object.keys(localStorage)).toEqual([]);
     expect(sessionStorage.length).toBe(0);
     expect(location.href).not.toContain("AAAA");
   });
 
-  it("only follows one session; `follow` switches and starts clean", () => {
+  it("only follows one session; `follow` switches and starts clean", async () => {
     const h = harness();
-    h.open();
+    await h.open();
     h.send({ kind: "session", state: "start", lang: "en", uid: "u1" });
     h.send({ kind: "session", state: "start", lang: "ta", uid: "u2", session: "s2" });
     h.send({ kind: "transcript", role: "owner", text: "from s2", lang: "ta", final: true, session: "s2" });
@@ -99,9 +272,9 @@ describe("useMonitor", () => {
     expect(h.mon().state.transcript.map((l) => l.text)).toEqual(["from s2 again"]);
   });
 
-  it("closes the socket and clears the state when the Live page is left; reconnects when it is opened again", () => {
+  it("closes the socket and clears the state when the Live page is left; reconnects (and signs in again) when it is opened again", async () => {
     const h = harness();
-    h.open();
+    await h.open();
     h.send({ kind: "transcript", role: "owner", text: "hello", lang: "en", final: true });
     expect(h.mon().state.transcript).toHaveLength(1);
     h.setEnabled(false);
@@ -110,13 +283,14 @@ describe("useMonitor", () => {
     expect(h.mon().conn).toBe("waiting");
     h.setEnabled(true);
     expect(h.sockets).toHaveLength(2);
-    h.open();
+    await h.open();
+    expect(h.last().sent).toEqual([authLine(token())]);
     expect(h.mon().conn).toBe("live");
   });
 
-  it("stays connected while the tab is merely hidden", () => {
+  it("stays connected while the tab is merely hidden", async () => {
     const h = harness();
-    h.open();
+    await h.open();
     h.send({ kind: "frame", jpeg_b64: "BBBB", w: 1, h: 1, purpose: "ask" });
     Object.defineProperty(document, "visibilityState", { configurable: true, get: () => "hidden" });
     try {
@@ -130,9 +304,9 @@ describe("useMonitor", () => {
     }
   });
 
-  it("closes and clears on pagehide, and reconnects on pageshow", () => {
+  it("closes and clears on pagehide, and reconnects on pageshow", async () => {
     const h = harness();
-    h.open();
+    await h.open();
     h.send({ kind: "frame", jpeg_b64: "CCCC", w: 1, h: 1, purpose: "ask" });
     act(() => { window.dispatchEvent(new Event("pagehide")); });
     expect(h.last().closed).toBe(true);
@@ -141,7 +315,7 @@ describe("useMonitor", () => {
     act(() => { window.dispatchEvent(new Event("pageshow")); });
     expect(h.sockets).toHaveLength(2);
     expect(h.last().closed).toBe(false);
-    h.open();
+    await h.open();
     expect(h.mon().conn).toBe("live");
   });
 
@@ -151,7 +325,7 @@ describe("useMonitor", () => {
     let m: Monitor | null = null;
     // Hoisted: `deps` is in the hook's effect dependencies, so an inline object (new on every render) would
     // re-run the effect, set state, and render again without end.
-    const deps: MonitorDeps = { connect: () => fakeSocket(), setTimer: () => 0, clearTimer: () => {} };
+    const deps: MonitorDeps = { connect: () => fakeSocket(), setTimer: () => 0, clearTimer: () => {}, auth: fakeAuth() };
     function Probe() {
       m = useMonitor(true, "sunrise_dairy", {}, deps);
       return null;
@@ -161,12 +335,13 @@ describe("useMonitor", () => {
     expect(m!.conn).toBe("waiting");
   });
 
-  it("asks the followed session for WebRTC video over the same socket, plays its offer, and says bye when the page is left", async () => {
+  it("asks the followed session for WebRTC video over the same socket, only after the token, plays its offer, and says bye when the page is left", async () => {
     FakePC.instances = [];
     const h = harness(true, FakePC as unknown as PeerCtor);
-    h.open();
+    await h.open();
     expect(h.mon().video).toEqual({ mode: "preview", stream: null, session: null });
     h.send({ kind: "session", state: "start", lang: "en", uid: "u1" });
+    expect(h.last().sent[0]).toBe(authLine(token()));
     expect(h.last().sent.at(-1)).toBe(JSON.stringify({ t: "rtc", kind: "want", to: "s1" }));
     expect(h.mon().video.mode).toBe("connecting");
     act(() => h.last().onmessage!({ data: JSON.stringify({ t: "rtc", kind: "offer", from: "s1", to: "m1", sdp: "OFFER" }) }));
@@ -187,22 +362,11 @@ describe("useMonitor", () => {
     expect(h.mon().video).toEqual({ mode: "preview", stream: null, session: null });
   });
 
-  it("without RTCPeerConnection the socket carries no signalling and the preview is all there is", () => {
+  it("without RTCPeerConnection the socket carries nothing but the token and the preview is all there is", async () => {
     const h = harness();
-    h.open();
+    await h.open();
     h.send({ kind: "session", state: "start", lang: "en", uid: "u1" });
-    expect(h.last().sent).toEqual([]);
+    expect(h.last().sent).toEqual([authLine(token())]);
     expect(h.mon().video.mode).toBe("preview");
-  });
-
-  it("reports a refusal (4403: the server's Origin allowlist or shop check) and does not retry", () => {
-    const h = harness();
-    h.open();
-    h.send({ kind: "frame", jpeg_b64: "DDDD", w: 1, h: 1, purpose: "ask" });
-    act(() => h.last().onclose!({ code: 4403 }));
-    expect(h.mon().conn).toBe("rejected");
-    expect(h.mon().state.frame).toBeNull();
-    expect(h.sockets).toHaveLength(1);
-    expect(sessionStorage.length).toBe(0);
   });
 });

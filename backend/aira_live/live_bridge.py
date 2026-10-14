@@ -178,6 +178,12 @@ class LiveBridge:
         """A long-press stop holds (until the owner's next real turn)."""
         return self._stopped
 
+    @property
+    def closed(self) -> bool:
+        """Closed for good (``close()``, or the reconnects ran out): a walk (tools.walk) ends on it, since no
+        voice is left to guide with."""
+        return self._closed
+
     def lang_name(self) -> str:
         return self._lang_name()
 

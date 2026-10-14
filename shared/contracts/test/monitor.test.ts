@@ -1,9 +1,15 @@
 import { describe, it, expect } from "vitest";
 import monitorJson from "../fixtures/monitor_msgs.json";
+import monitorClientJson from "../fixtures/monitor_client_msgs.json";
 import {
+  isMonitorAuthMsg,
   isMonitorClientMsg,
   isMonitorMsg,
+  parseMonitorClientMsg,
   parseMonitorMsg,
+  MONITOR_AUTH_TIMEOUT_S,
+  MONITOR_CLOSE_UNAUTHENTICATED,
+  MONITOR_CLOSE_UNAUTHORIZED,
   MONITOR_KINDS,
   MONITOR_ROLES,
   MONITOR_STATES,
@@ -12,6 +18,7 @@ import {
 
 type Raw = Record<string, any>;
 const msgs = monitorJson as unknown as Raw[];
+const clientMsgs = monitorClientJson as unknown as Raw[];
 
 describe("monitor contract (/monitor, read-only dashboard feed)", () => {
   it("every fixture is a valid MonitorMsg", () => {
@@ -47,12 +54,29 @@ describe("monitor contract (/monitor, read-only dashboard feed)", () => {
     expect(isMonitorMsg({ ...base, source: "guidance", objects: [] })).toBe(false);
   });
 
-  it("a monitor sends only rtc signalling: there is no auth message any more (the monitor key was removed)", () => {
+  it("a monitor sends its Firebase ID token as {t:\"auth\", idToken} and rtc signalling, nothing else", () => {
+    for (const m of clientMsgs) expect(isMonitorClientMsg(m), JSON.stringify(m)).toBe(true);
+    expect(new Set(clientMsgs.map((m) => m.t))).toEqual(new Set(["auth", "rtc"]));
+    expect(isMonitorAuthMsg({ t: "auth", idToken: "eyJ.x.y" })).toBe(true);
+    expect(isMonitorClientMsg({ t: "auth", idToken: "eyJ.x.y" })).toBe(true);
     expect(isMonitorClientMsg({ t: "rtc", kind: "want", to: "s1" })).toBe(true);
+    // the old shared-key message is not an auth message
     expect(isMonitorClientMsg({ t: "auth", key: "k" })).toBe(false);
+    expect(isMonitorAuthMsg({ t: "auth", key: "k" })).toBe(false);
     expect(isMonitorClientMsg({ t: "auth" })).toBe(false);
-    expect(isMonitorClientMsg({ t: "hello", key: "k" })).toBe(false);
+    expect(isMonitorClientMsg({ t: "auth", idToken: "" })).toBe(false);
+    expect(isMonitorClientMsg({ t: "auth", idToken: 5 })).toBe(false);
+    expect(isMonitorClientMsg({ t: "hello", idToken: "x" })).toBe(false);
     expect(isMonitorClientMsg(null)).toBe(false);
+    for (const m of clientMsgs) expect(parseMonitorClientMsg(JSON.stringify(m))).toEqual(m);
+    expect(parseMonitorClientMsg("{nope")).toBeNull();
+    expect(parseMonitorClientMsg('{"t":"auth"}')).toBeNull();
+  });
+
+  it("names the close codes and the auth deadline the server uses", () => {
+    expect(MONITOR_CLOSE_UNAUTHENTICATED).toBe(4401);
+    expect(MONITOR_CLOSE_UNAUTHORIZED).toBe(4403);
+    expect(MONITOR_AUTH_TIMEOUT_S).toBe(5);
   });
 
   it("stats carry integer counters and a nullable latency", () => {
