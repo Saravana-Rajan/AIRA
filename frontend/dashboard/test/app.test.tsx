@@ -181,6 +181,7 @@ describe("App", () => {
   });
 
   it("by default (no VITE_MONITOR_AUTH) the Live page opens for anyone: no sign-in, no key, a socket at once with nothing sent, and the empty people panel", () => {
+    vi.stubEnv("VITE_AIRA_LIVE_WS", "wss://live.example.test/ws"); // CI has no .env.local: the URL must not come from it
     sessionStorage.clear();
     history.replaceState(null, "", "/dashboard/#/live");
     const { listen } = fakeLive();
