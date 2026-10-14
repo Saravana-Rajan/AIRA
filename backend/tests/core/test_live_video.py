@@ -142,6 +142,8 @@ async def test_a_settled_change_nudges_live_in_the_session_language(mk_session):
     assert "Tamil" in text and "bottle, cup" in text and "stay silent" in text
     assert "one short sentence" in text.lower() and "being shown" in text
     assert "tools" in text and "never invent" in text  # price / stock only via tools
+    # safety first: a scene-change nudge tells Live to warn about an obstacle in his path, unasked
+    assert "obstacle in his path" in text and "Stop, chair right ahead" in text
     await bridge.close()
 
 
@@ -278,6 +280,8 @@ def test_prompt_lets_live_see_but_keeps_numbers_on_tools():
     assert "live video" in p and "hold still or step back" in p
     assert "never state a count, a price read from a label, an amount of money, or an expiry date" in p
     assert "never invent counts or amounts" in p and "[system note] camera:" in p
+    # rule 19 carves out safety from the "stay silent while walking" line: warn about an obstacle in his path
+    assert "obstacle in his path" in p and "never say the way is clear or safe" in p
 
 
 async def test_a_walk_silences_nudges_precounts_and_scene_lines(mk_session, monkeypatch):
