@@ -412,7 +412,7 @@ def test_deploy_workflow_tests_then_deploys_with_wif():
         *LEAST_RUN_FLAGS,
         SECRETS_FLAG,
         "--update-env-vars FIRESTORE_DATABASE=aira,AIRA_DEMO_SHOP=sunrise_dairy,AIRA_ALLOW_NO_TOKEN=1,AIRA_MOCK=0,"
-        "GCP_PROJECT=${{ secrets.GCP_PROJECT }}",
+        "AIRA_WALK=1,GCP_PROJECT=${{ secrets.GCP_PROJECT }}",
     ):
         assert part in run_deploy, part
     # --update-* keeps values added on the service later (WhatsApp tokens, supplier phones);
