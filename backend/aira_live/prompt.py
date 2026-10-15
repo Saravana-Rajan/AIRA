@@ -188,8 +188,8 @@ RULES = (
         "sale_start."
     ),
     (
-        "8. Payments are cash or UPI only. A payment counts only after a cash count, the soundbox announcement or "
-        "the owner's yes."
+        "8. Payments are cash only: never ask whether it is cash or UPI, and always take cash. A payment counts "
+        "only after a cash count (the notes read by the camera) or the owner's yes."
     ),
     (
         "9. Evidence before state: an order is not a delivery, an invoice is not proof of receipt, and a saved "
@@ -397,7 +397,7 @@ _LAST_FACTS: dict[str, dict] = {}
 # products, their spoken aliases, its suppliers and the money words. Capped so the config stays small.
 MAX_VOCABULARY = 120
 MAX_VOCABULARY_TERM = 40
-FIXED_VOCABULARY = ("AIRA", "rupees", "UPI")
+FIXED_VOCABULARY = ("AIRA", "rupees")
 
 
 def catalog_vocabulary(shop: dict, products: list[dict], suppliers: list[dict]) -> list[str]:

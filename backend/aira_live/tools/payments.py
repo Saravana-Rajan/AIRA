@@ -35,7 +35,7 @@ UPI_WAIT_S = 60.0        # how long to listen for the soundbox before asking the
 FRAME_TIMEOUT_S = 6.0    # how long to wait for the phone's cash photos
 PAYABLE_STATES = ["DELIVERY_RECONCILED", "DISCREPANCY", "PAYMENT_PENDING"]
 
-METHOD_Q = {"ok": False, "error": "METHOD_UNKNOWN", "say_en": "Cash or UPI?"}
+METHOD_Q = {"ok": False, "error": "METHOD_UNKNOWN", "say_en": "Pay by cash."}
 NOT_READY = {"ok": False, "error": "NOT_READY", "say_en": "Check the delivery and the bill before paying."}
 SALE_NONE = {"ok": False, "error": "SALE_NONE", "say_en": "No open sale."}
 # English meaning of the cash reader's hint keys (aira_live.vision.cash_merge.HINT_*).

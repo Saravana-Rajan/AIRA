@@ -2,7 +2,7 @@
 
 ``sale_start`` prices a customer's request in each product's selling unit and opens a SALE_PENDING sale;
 ``sale_add`` folds more items into that open sale. Both return the items and the running total as facts (plus an
-English ``say_en`` hint such as "2 L Sakthi Curd 1 L and 1 Aavin Milk, total 120 rupees. Cash or UPI?") so Live
+English ``say_en`` hint such as "2 L Sakthi Curd 1 L and 1 Aavin Milk, total 120 rupees. Take the cash.") so Live
 reads them back to the owner in his earphone, in his language: he may miscount, and the phone's screen faces
 his chest. Nothing leaves stock here: the sale completes only in the committer ``sale.complete``
 (``tools/payments.py``), after the payment has evidence and the owner said "yes".
@@ -63,7 +63,7 @@ async def _price(s: Session, lines: list[dict], phrases: list[str], running: boo
     await s.send(StateMsg(entity="sale", id=sale["id"], state=sale["state"], summary=str(sale["total"])))
     so_far = " so far" if running else ""
     return {"ok": True, "saleId": sale["id"], "total": sale["total"], "items": line_facts(lines),
-            "say_en": f"{join_and(phrases)}, total {sale['total']} rupees{so_far}. Cash or UPI?"}
+            "say_en": f"{join_and(phrases)}, total {sale['total']} rupees{so_far}. Take the cash."}
 
 
 async def sale_start(items: list[dict]) -> dict:

@@ -298,7 +298,7 @@ async def test_sale_start_prices_and_checks_stock(store, session, phone):
     r = await _curd_sale()
     product = await store.get(paths.product(SHOP, CURD))
     price = product["price"]
-    assert r["total"] == 2 * price and r["say_en"].endswith(f", total {2 * price} rupees. Cash or UPI?")
+    assert r["total"] == 2 * price and r["say_en"].endswith(f", total {2 * price} rupees. Take the cash.")
     assert r["items"] == [{"product": product["name"], "qty": 2.0, "unit": "L"}] and "say" not in r
     assert sale_tools.active_sale[session.session_id] == r["saleId"]
     assert (await store.get(paths.sale(SHOP, r["saleId"])))["state"] == "SALE_PENDING"
@@ -545,7 +545,7 @@ async def test_sale_start_says_items_and_running_total(store, session):
     assert r["items"] == [{"product": "Sakthi Curd 1 L", "qty": 2.0, "unit": "L"},
                           {"product": "Aavin Milk 500 ml", "qty": 0.5, "unit": "L"}]
     assert r["say_en"] == ("2 L Sakthi Curd 1 L and 0.5 L Aavin Milk 500 ml (1 × 500 ml pouch = 0.5 L), "
-                           "total 142 rupees. Cash or UPI?")
+                           "total 142 rupees. Take the cash.")
 
 
 async def test_sale_add_merges_into_the_open_sale_and_says_the_running_total(store, session):
@@ -555,7 +555,7 @@ async def test_sale_add_merges_into_the_open_sale_and_says_the_running_total(sto
     assert r["ok"] is True and r["total"] == 142 and r["saleId"] != first["saleId"]
     assert [i["product"] for i in r["items"]] == ["Sakthi Curd 1 L", "Aavin Milk 500 ml"]
     assert r["say_en"] == ("2 L Sakthi Curd 1 L and 0.5 L Aavin Milk 500 ml (1 × 500 ml pouch = 0.5 L), "
-                           "total 142 rupees so far. Cash or UPI?")
+                           "total 142 rupees so far. Take the cash.")
     assert sale_tools.active_sale[session.session_id] == r["saleId"]
     assert (await store.get(paths.sale(SHOP, first["saleId"])))["state"] == "SALE_VOID"
     assert (await store.get(paths.sale(SHOP, r["saleId"])))["state"] == "SALE_PENDING"
