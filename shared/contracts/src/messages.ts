@@ -268,16 +268,30 @@ export function parseClientMsg(raw: string): ClientMsg | null {
 // Frames are sent only while a monitor is connected (<= 480 px wide, quality 0.6, <= 4 fps a session).
 // Mirrored in backend/aira_live/contracts.py; fixtures in ../fixtures/monitor_msgs.json and
 // ../fixtures/monitor_client_msgs.json.
-// What a monitor sends: the auth message, and rtc signalling for one of the shop's sessions (`to` = session id).
+// What a monitor sends: the auth message, a listen request, and rtc signalling for one of the shop's sessions
+// (`to` = session id).
 export type MonitorAuthMsg = { t: "auth"; idToken: string };
-export type MonitorClientMsg = MonitorAuthMsg | RtcClientMsg;
+/**
+ * Hear a session: the server then relays that session's microphone and AIRA's voice to this monitor as kind
+ * "audio" (null = stop). Honoured only when the server runs with AIRA_MONITOR_AUDIO=1 (the "ready" message
+ * says so); ignored otherwise. Asking for another session replaces the first; the relay also stops when the
+ * monitor disconnects or the session ends. A room camera's session never carries audio.
+ */
+export type MonitorListenMsg = { t: "listen"; session: string | null };
+export type MonitorClientMsg = MonitorAuthMsg | MonitorListenMsg | RtcClientMsg;
 /** WebSocket close codes the server uses on /monitor after the upgrade. */
 export const MONITOR_CLOSE_UNAUTHENTICATED = 4401;
 export const MONITOR_CLOSE_UNAUTHORIZED = 4403;
 /** The server waits this long for the auth message after the upgrade. */
 export const MONITOR_AUTH_TIMEOUT_S = 5;
-export const MONITOR_KINDS = Object.freeze(["session", "transcript", "frame", "vision", "hand", "event", "status", "stats"] as const);
+export const MONITOR_KINDS = Object.freeze(["session", "transcript", "frame", "vision", "hand", "event", "status", "stats", "ready", "audio"] as const);
 export type MonitorKind = (typeof MONITOR_KINDS)[number];
+/** Whose audio a chunk is: the phone's microphone (the owner, and whoever stands near him) or AIRA's voice. */
+export const MONITOR_VOICES = Object.freeze(["owner", "aira"] as const);
+export type MonitorVoice = (typeof MONITOR_VOICES)[number];
+/** Sample rates on the feed: the microphone as the phone sends it (16 kHz), AIRA as Gemini Live speaks it (24 kHz). */
+export const MONITOR_AUDIO_RATES = Object.freeze([16000, 24000] as const);
+export type MonitorAudioRate = (typeof MONITOR_AUDIO_RATES)[number];
 export const MONITOR_ROLES = Object.freeze(["owner", "customer", "aira"] as const);
 export type MonitorRole = (typeof MONITOR_ROLES)[number];
 export const MONITOR_SESSION_STATES = Object.freeze(["start", "end"] as const);
@@ -316,6 +330,14 @@ export type MonitorMsg = MonBase & (
   // Every 2 s per live session: Live API turns, ER 2 / Flash calls, average vision latency (ms; null before
   // the first call) and the phone's frame rate over the last window.
   | { kind: "stats"; turns: number; er2Calls: number; flashCalls: number; visionMs: number | null; fps: number }
+  // Once per socket, right after the live sessions a new monitor first hears: `audio` says whether the server
+  // relays audio to a monitor that asks (it runs with AIRA_MONITOR_AUDIO=1). About the feed, not a phone
+  // session: `session` is the monitor's own id (the `from` of its rtc signalling).
+  | { kind: "ready"; audio: boolean }
+  // Only to a monitor that sent {t:"listen", session} for this session: one chunk of the phone's microphone
+  // (who "owner", 16 kHz) or of AIRA's voice (who "aira", 24 kHz), mono PCM16 little-endian, base64, as the
+  // phone sent it or Gemini Live produced it. Never stored; dropped, never queued without bound, for a slow monitor.
+  | { kind: "audio"; who: MonitorVoice; rate: MonitorAudioRate; pcm: string }
 );
 export type MonitorMsgOf<K extends MonitorKind> = Extract<MonitorMsg, { kind: K }>;
 
@@ -328,8 +350,12 @@ export function isMonitorAuthMsg(x: unknown): x is MonitorAuthMsg {
   return isObj(x) && x.t === "auth" && isStr(x.idToken) && x.idToken.length > 0;
 }
 
+export function isMonitorListenMsg(x: unknown): x is MonitorListenMsg {
+  return isObj(x) && x.t === "listen" && (x.session === null || (isStr(x.session) && x.session.length > 0));
+}
+
 export function isMonitorClientMsg(x: unknown): x is MonitorClientMsg {
-  return isMonitorAuthMsg(x) || isRtcClientMsg(x);
+  return isMonitorAuthMsg(x) || isMonitorListenMsg(x) || isRtcClientMsg(x);
 }
 
 /** Parse one text frame a monitor sent. Returns null for bad JSON or an unknown/invalid message. */
@@ -374,6 +400,10 @@ export function isMonitorMsg(x: unknown): x is MonitorMsg {
       return inList(MONITOR_STATES, x.state);
     case "stats":
       return isInt(x.turns) && isInt(x.er2Calls) && isInt(x.flashCalls) && (x.visionMs === null || isInt(x.visionMs)) && isNum(x.fps);
+    case "ready":
+      return isBool(x.audio);
+    case "audio":
+      return inList(MONITOR_VOICES, x.who) && isInt(x.rate) && (MONITOR_AUDIO_RATES as readonly number[]).includes(x.rate) && isStr(x.pcm);
   }
   return false;
 }

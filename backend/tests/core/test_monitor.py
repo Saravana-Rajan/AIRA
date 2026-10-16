@@ -114,7 +114,7 @@ def test_monitor_fixtures_validate_round_trip_and_cover_every_kind():
         seen.add(msg.kind)
         assert json.loads(contracts.dump_monitor_msg(msg)) == raw
     assert seen == set(contracts.MONITOR_KINDS) == {"session", "transcript", "frame", "vision", "hand", "event",
-                                                    "status", "stats"}
+                                                    "status", "stats", "ready", "audio"}
 
 
 @pytest.mark.parametrize("raw", [

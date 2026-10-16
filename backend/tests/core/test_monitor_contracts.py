@@ -57,13 +57,42 @@ def _client_fixtures() -> list[dict]:
     raise RuntimeError("monitor_client_msgs.json not found above this test")
 
 
-def test_monitor_client_fixtures_parse_and_cover_auth_and_rtc():
-    """What a monitor sends: its Firebase ID token ({t:"auth", idToken}) and rtc signalling, in lockstep with TS."""
+def test_monitor_client_fixtures_parse_and_cover_auth_listen_and_rtc():
+    """What a monitor sends: its Firebase ID token ({t:"auth", idToken}), listen requests and rtc signalling, in
+    lockstep with TS."""
     raws = _client_fixtures()
     parsed = [contracts.parse_monitor_client_msg(json.dumps(raw)) for raw in raws]
     assert all(m is not None for m in parsed)
-    assert {m.t for m in parsed} == {"auth", "rtc"}
+    assert {m.t for m in parsed} == {"auth", "listen", "rtc"}
+    listens = [m for m in parsed if isinstance(m, contracts.MonListenMsg)]
+    assert sorted((m.session for m in listens), key=str) == ["s1", None] or {m.session for m in listens} == {"s1", None}
     auth = next(m for m in parsed if isinstance(m, contracts.MonAuthMsg))
     assert auth.id_token == next(r["idToken"] for r in raws if r["t"] == "auth")
     assert contracts.parse_monitor_client_msg(json.dumps({"t": "auth", "idToken": ""})) is None
     assert contracts.parse_monitor_client_msg(json.dumps({"t": "auth", "key": "k"})) is None
+
+
+def test_listen_is_a_session_id_or_null_and_nothing_else():
+    assert contracts.parse_monitor_client_msg('{"t":"listen","session":"s1"}').session == "s1"
+    assert contracts.parse_monitor_client_msg('{"t":"listen","session":null}').session is None
+    assert contracts.parse_monitor_client_msg('{"t":"listen"}') is None
+    assert contracts.parse_monitor_client_msg('{"t":"listen","session":""}') is None
+    assert contracts.parse_monitor_client_msg('{"t":"listen","session":5}') is None
+
+
+def test_ready_and_audio_messages_mirror_the_ts_contract():
+    ready = json.loads(dump_monitor_msg(contracts.MonReadyMsg(session="m1a2b3c4", ts=1, audio=True)))
+    assert ready == {"t": "mon", "kind": "ready", "session": "m1a2b3c4", "ts": 1, "audio": True}
+    audio = json.loads(dump_monitor_msg(contracts.MonAudioMsg(session="s1", ts=2, who="aira", rate=24000, pcm="AAAA")))
+    assert audio == {"t": "mon", "kind": "audio", "session": "s1", "ts": 2, "who": "aira", "rate": 24000, "pcm": "AAAA"}
+    for bad in (
+        {"t": "mon", "kind": "ready", "session": "m1", "ts": 1},
+        {"t": "mon", "kind": "ready", "session": "m1", "ts": 1, "audio": "yes"},
+        {"t": "mon", "kind": "ready", "ts": 1, "audio": True},
+        {"t": "mon", "kind": "audio", "session": "s1", "ts": 1, "who": "customer", "rate": 16000, "pcm": "AAAA"},
+        {"t": "mon", "kind": "audio", "session": "s1", "ts": 1, "who": "owner", "rate": 44100, "pcm": "AAAA"},
+        {"t": "mon", "kind": "audio", "session": "s1", "ts": 1, "who": "owner", "rate": "16000", "pcm": "AAAA"},
+        {"t": "mon", "kind": "audio", "session": "s1", "ts": 1, "who": "owner", "rate": 16000},
+    ):
+        with pytest.raises(ValidationError):
+            monitor_adapter.validate_python(bad)

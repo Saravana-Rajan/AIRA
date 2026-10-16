@@ -4,9 +4,11 @@ import monitorClientJson from "../fixtures/monitor_client_msgs.json";
 import {
   isMonitorAuthMsg,
   isMonitorClientMsg,
+  isMonitorListenMsg,
   isMonitorMsg,
   parseMonitorClientMsg,
   parseMonitorMsg,
+  MONITOR_AUDIO_RATES,
   MONITOR_AUTH_TIMEOUT_S,
   MONITOR_CLOSE_UNAUTHENTICATED,
   MONITOR_CLOSE_UNAUTHORIZED,
@@ -14,6 +16,7 @@ import {
   MONITOR_ROLES,
   MONITOR_STATES,
   MONITOR_VISION_SOURCES,
+  MONITOR_VOICES,
 } from "../src/index";
 
 type Raw = Record<string, any>;
@@ -35,7 +38,9 @@ describe("monitor contract (/monitor, read-only dashboard feed)", () => {
   });
 
   it("lists are fixed", () => {
-    expect(MONITOR_KINDS).toEqual(["session", "transcript", "frame", "vision", "hand", "event", "status", "stats"]);
+    expect(MONITOR_KINDS).toEqual(["session", "transcript", "frame", "vision", "hand", "event", "status", "stats", "ready", "audio"]);
+    expect(MONITOR_VOICES).toEqual(["owner", "aira"]);
+    expect(MONITOR_AUDIO_RATES).toEqual([16000, 24000]);
     expect(MONITOR_ROLES).toEqual(["owner", "customer", "aira"]);
     expect(MONITOR_VISION_SOURCES).toEqual(["mediapipe", "er2", "bump"]);
     expect(MONITOR_STATES).toEqual(["listening", "thinking", "guiding", "found", "idle"]);
@@ -54,9 +59,9 @@ describe("monitor contract (/monitor, read-only dashboard feed)", () => {
     expect(isMonitorMsg({ ...base, source: "guidance", objects: [] })).toBe(false);
   });
 
-  it("a monitor sends its Firebase ID token as {t:\"auth\", idToken} and rtc signalling, nothing else", () => {
+  it("a monitor sends its Firebase ID token as {t:\"auth\", idToken}, listen requests and rtc signalling, nothing else", () => {
     for (const m of clientMsgs) expect(isMonitorClientMsg(m), JSON.stringify(m)).toBe(true);
-    expect(new Set(clientMsgs.map((m) => m.t))).toEqual(new Set(["auth", "rtc"]));
+    expect(new Set(clientMsgs.map((m) => m.t))).toEqual(new Set(["auth", "listen", "rtc"]));
     expect(isMonitorAuthMsg({ t: "auth", idToken: "eyJ.x.y" })).toBe(true);
     expect(isMonitorClientMsg({ t: "auth", idToken: "eyJ.x.y" })).toBe(true);
     expect(isMonitorClientMsg({ t: "rtc", kind: "want", to: "s1" })).toBe(true);
@@ -71,6 +76,40 @@ describe("monitor contract (/monitor, read-only dashboard feed)", () => {
     for (const m of clientMsgs) expect(parseMonitorClientMsg(JSON.stringify(m))).toEqual(m);
     expect(parseMonitorClientMsg("{nope")).toBeNull();
     expect(parseMonitorClientMsg('{"t":"auth"}')).toBeNull();
+  });
+
+  it("listen: a session id to hear, or null to stop; nothing else", () => {
+    expect(isMonitorListenMsg({ t: "listen", session: "s1" })).toBe(true);
+    expect(isMonitorListenMsg({ t: "listen", session: null })).toBe(true);
+    expect(isMonitorClientMsg({ t: "listen", session: "s1" })).toBe(true);
+    expect(isMonitorListenMsg({ t: "listen" })).toBe(false);
+    expect(isMonitorListenMsg({ t: "listen", session: "" })).toBe(false);
+    expect(isMonitorListenMsg({ t: "listen", session: 5 })).toBe(false);
+    expect(isMonitorListenMsg({ t: "listen", session: ["s1"] })).toBe(false);
+    expect(isMonitorListenMsg({ t: "auth", session: "s1" })).toBe(false);
+    expect(parseMonitorClientMsg('{"t":"listen","session":null}')).toEqual({ t: "listen", session: null });
+    expect(parseMonitorClientMsg('{"t":"listen"}')).toBeNull();
+  });
+
+  it("ready says whether the server relays audio; its session is the monitor's own id, not a phone session", () => {
+    expect(isMonitorMsg({ t: "mon", kind: "ready", session: "m1a2b3c4", ts: 1, audio: true })).toBe(true);
+    expect(isMonitorMsg({ t: "mon", kind: "ready", session: "m1a2b3c4", ts: 1, audio: false })).toBe(true);
+    expect(isMonitorMsg({ t: "mon", kind: "ready", session: "m1a2b3c4", ts: 1 })).toBe(false);
+    expect(isMonitorMsg({ t: "mon", kind: "ready", session: "m1a2b3c4", ts: 1, audio: "yes" })).toBe(false);
+    expect(isMonitorMsg({ t: "mon", kind: "ready", ts: 1, audio: true })).toBe(false);
+    expect(msgs.filter((m) => m.kind === "ready").map((m) => m.audio).sort()).toEqual([false, true]);
+  });
+
+  it("audio: the owner's microphone at 16 kHz or AIRA's voice at 24 kHz, PCM16 base64; nothing else", () => {
+    const base = { t: "mon", kind: "audio", session: "s1", ts: 1 };
+    expect(isMonitorMsg({ ...base, who: "owner", rate: 16000, pcm: "AAAA" })).toBe(true);
+    expect(isMonitorMsg({ ...base, who: "aira", rate: 24000, pcm: "AAAA" })).toBe(true);
+    expect(isMonitorMsg({ ...base, who: "customer", rate: 16000, pcm: "AAAA" })).toBe(false);
+    expect(isMonitorMsg({ ...base, who: "owner", rate: 44100, pcm: "AAAA" })).toBe(false);
+    expect(isMonitorMsg({ ...base, who: "owner", rate: "16000", pcm: "AAAA" })).toBe(false);
+    expect(isMonitorMsg({ ...base, who: "owner", rate: 16000 })).toBe(false);
+    expect(isMonitorMsg({ ...base, who: "owner", rate: 16000, pcm: 5 })).toBe(false);
+    expect(new Set(msgs.filter((m) => m.kind === "audio").map((m) => `${m.who}@${m.rate}`))).toEqual(new Set(["owner@16000", "aira@24000"]));
   });
 
   it("names the close codes and the auth deadline the server uses", () => {
