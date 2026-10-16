@@ -234,8 +234,8 @@ class RtcOutMsg(_ServerWire):
 class LightMsg(_ClientWire):
     """Low light: the phone's sustained light level, the raw mean luma (0-255, measured BEFORE any low-light boost)
     and the flashlight state as the phone knows it. Sent on every change of level or torch state and on a clear
-    luma change (rate-limited). The server only records it (``aira_live.tools.light``): with AIRA_TORCH it may
-    PROPOSE the flashlight, which turns on only after a spoken yes. Nothing here changes state on its own."""
+    luma change (rate-limited). The server records it (``aira_live.tools.light``): with AIRA_TORCH it turns the
+    flashlight on in the dark and off again when it is bright, informing the owner rather than asking."""
 
     t: Literal["light"]
     level: LightLevel
@@ -357,9 +357,9 @@ class BoxesOutMsg(_ServerWire):
 
 
 class TorchMsg(_ServerWire):
-    """Flashlight command (AIRA_TORCH): sent only by the torch committer after the owner's spoken "yes" (on), or
-    to switch it off again. The phone obeys only when its rear-camera track reports the torch capability and
-    answers with a ``light`` message carrying the real state (on / off / unsupported). Never spoken."""
+    """Flashlight command (AIRA_TORCH): sent by the server when the view is dark (on), when it is bright again
+    (off), or on the owner's spoken request. The phone obeys only when its rear-camera track reports the torch
+    capability and answers with a ``light`` message carrying the real state (on / off / unsupported). Never spoken."""
 
     t: Literal["torch"] = "torch"
     on: StrictBool

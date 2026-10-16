@@ -3,13 +3,14 @@
 The phone decides the light level over seconds with hysteresis (frontend/app/src/camera/lowlight.ts) and sends a
 ``light`` message (level, raw luma, real torch state). This module only records it, and then:
 
-- **Torch (AIRA_TORCH).** Sustained darkness with the torch off: AIRA PROPOSES the flashlight once per dark
-  episode through ``confirm.propose`` ("generic"). Only a spoken "yes" (Live ``confirm_action``, or the tapped
-  ``confirm``) runs the committer, which sends the ``torch`` command. The phone answers with its real state:
-  ``on``, or ``unsupported`` (then AIRA says once that it cannot switch the flashlight on this phone and never
-  offers it again in this session). It is never assumed on. Bright again with the torch on, sustained for
-  ``TORCH_OFF_BRIGHT_S`` at a luma of at least ``TORCH_OFF_LUMA``: AIRA asks once before turning it off. The
-  phone also switches it off by itself after ``TORCH_AUTO_OFF_MS`` (frontend/app/src/camera/torch.ts).
+- **Torch (AIRA_TORCH).** Sustained darkness with the torch off: AIRA turns the flashlight on by itself and
+  says so, informing the owner rather than asking. The spoken line goes once per dark episode; the phone answers
+  with its real state: ``on``, or ``unsupported`` (then AIRA says once that it cannot switch the flashlight on
+  this phone and stops). Bright again with the torch on, sustained for ``TORCH_OFF_BRIGHT_S`` at a luma of at
+  least ``TORCH_OFF_LUMA``: AIRA turns it off by itself and says so. The phone also switches it off after
+  ``TORCH_AUTO_OFF_MS`` (frontend/app/src/camera/torch.ts); while it is still dark the next report re-lights it
+  quietly. The owner can override by voice at any time (the ``flashlight`` tool); a spoken "turn it off" holds
+  the auto-on until the view is no longer dark. The light-switch flow below still asks before using the torch.
 - **Light switch (AIRA_LOWLIGHT).** ``light_switch_find``: with a shop map and a route follower (Part A,
   ``aira_live.tools.routes.route_to``, imported only if present) the walk goes there first. Near the board, the
   switch loop asks the ``point`` model for structured detections (``vision.switches``) and CODE chooses the
@@ -45,6 +46,10 @@ TORCH_OFFER_EN = "It's too dark. Shall I turn on the flashlight?"
 TORCH_OFF_OFFER_EN = "It's bright now. Shall I turn off the flashlight?"
 TORCH_ON_EN = "Turning on the flashlight."
 TORCH_OFF_EN = "Turning off the flashlight."
+# The automatic path's spoken facts (descriptive: they tell the owner why). The owner's own flashlight request
+# uses the brief TORCH_ON_EN/TORCH_OFF_EN above instead.
+TORCH_ON_DARK_EN = "It's getting dark, turning on the flashlight."
+TORCH_OFF_BRIGHT_EN = "It's bright again, turning the flashlight off."
 TORCH_UNSUPPORTED_EN = "I can't turn on the flashlight on this phone."
 SWITCH_START_EN = "Point the phone at the switch board and hold your hand out. I'll guide your finger."
 SWITCH_PRESS_EN = "Your finger is on {name}. Press it."
@@ -82,8 +87,9 @@ class LightState:
     level: str = "bright"
     luma: float | None = None
     torch: str = "off"
-    dark_offered: bool = False       # the torch was offered in this dark episode (yes, no or expired: once)
-    off_offered: bool = False        # the turn-off was offered in this torch-on episode
+    dark_offered: bool = False       # the auto-on was announced in this dark episode (announce once; re-armed when not dark)
+    off_offered: bool = False        # the turn-off was announced/offered in this torch-on episode
+    off_override: bool = False       # the owner turned it off by voice: hold auto-on until the view is no longer dark
     unsupported_said: bool = False
     bright_since: float | None = None
     torch_requested: str | None = None   # "on" / "off": the command sent, until the phone reports
@@ -171,7 +177,8 @@ async def flashlight(on: bool) -> dict:
         st.pending.pop(cid, None)
     st.torch_requested = "on" if on else "off"
     if not on:
-        st.off_offered = True      # do not ask "shall I turn it off?" after he already did
+        st.off_offered = True      # do not announce/offer the turn-off after he already did it
+        st.off_override = True     # and do not auto-on again until the view is no longer dark
     await s.send(TorchMsg(on=on))
     diag("light", action="torch_command", session=s.session_id, on=on, source="owner")
     return {"torch": "requested", "on": on, "say_en": TORCH_ON_EN if on else TORCH_OFF_EN}
@@ -179,7 +186,8 @@ async def flashlight(on: bool) -> dict:
 
 async def on_light(session: Session, msg: LightMsg) -> None:
     """Cross-team hook: main.py calls this for every ``light`` message. Records the report; with the flags on it
-    may PROPOSE (never command) the torch, and feeds the switch loop's before/after brightness check."""
+    turns the torch on in the dark and off again when it is bright (informing the owner, not asking), and feeds
+    the switch loop's before/after brightness check."""
     st = state(session)
     prev_torch, prev_level = st.torch, st.level
     st.level, st.luma, st.torch = msg.level, float(msg.luma), msg.torch
@@ -196,18 +204,31 @@ async def on_light(session: Session, msg: LightMsg) -> None:
             st.switch_after_torch = False
             await start_switch(session)
     if msg.level != "dark":
-        st.dark_offered = False  # a new dark episode may offer again
+        st.dark_offered = False  # a new dark episode announces again
+        st.off_override = False  # a new dark episode may auto-on again after a manual "turn it off"
     loop = _LOOPS.get(session.session_id)
     if loop is not None and loop.active:
         await loop.on_light(st.luma)
     settings = config.load()
     if not settings.torch:
         return
-    if msg.level == "dark" and msg.torch == "off" and not st.dark_offered and not st.unsupported_said \
-            and st.torch_requested is None:
-        st.dark_offered = True
-        await _propose(session, st, on=True)
+    # Dark with the torch off: turn it on and say so. The command goes on each dark+off report (the phone's own
+    # hysteresis debounces the dark signal, and torch_requested debounces the command until the phone reports
+    # back), so if the phone's 5-minute auto-off fires while it is still dark the next report re-lights it. The
+    # spoken line goes only the first time in each dark episode (dark_offered, re-armed above when the view is no
+    # longer dark), so a quiet re-light does not nag. A spoken "turn it off" (off_override) holds the auto-on
+    # until the view is no longer dark.
+    if msg.level == "dark" and msg.torch == "off" and not st.unsupported_said \
+            and st.torch_requested is None and not st.off_override:
+        st.torch_requested = "on"
+        await session.send(TorchMsg(on=True))
+        diag("light", action="torch_command", session=session.session_id, on=True, source="auto")
+        if not st.dark_offered:
+            st.dark_offered = True
+            await _tell(session, "light.torch_on_dark", TORCH_ON_DARK_EN)
         return
+    # Bright again, sustained for TORCH_OFF_BRIGHT_S at a real luma: turn it off and say so, once per torch-on
+    # episode (off_offered, cleared when the phone reports the torch off).
     if msg.torch == "on":
         now = _monotonic()
         if msg.level == "bright" and float(msg.luma) >= TORCH_OFF_LUMA:
@@ -215,7 +236,10 @@ async def on_light(session: Session, msg: LightMsg) -> None:
                 st.bright_since = now
             elif now - st.bright_since >= TORCH_OFF_BRIGHT_S and not st.off_offered and st.torch_requested is None:
                 st.off_offered = True
-                await _propose(session, st, on=False)
+                st.torch_requested = "off"
+                await session.send(TorchMsg(on=False))
+                diag("light", action="torch_command", session=session.session_id, on=False, source="auto")
+                await _tell(session, "light.torch_off_bright", TORCH_OFF_BRIGHT_EN)
         else:
             st.bright_since = None
 

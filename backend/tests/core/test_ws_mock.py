@@ -231,19 +231,15 @@ def test_light_report_is_accepted_and_proposes_nothing_without_the_flag(monkeypa
         assert ws.receive_json()["text"] == "(mock) you said: hi"
 
 
-def test_dark_with_the_flag_proposes_the_torch_and_a_tapped_yes_sends_the_command(monkeypatch, store):
+def test_dark_with_the_flag_turns_the_torch_on_and_informs(monkeypatch, store):
     monkeypatch.setenv("AIRA_TORCH", "1")
     with TestClient(app).websocket_connect("/ws", headers=ORIGIN) as ws:
         ws.send_json(HELLO); ws.receive_json()
         ws.send_json({"t": "light", "level": "dark", "luma": 8, "torch": "off"})
-        c = ws.receive_json()
-        assert c["t"] == "confirm" and c["kind"] == "generic"
-        assert c["prompt"] == "It's too dark. Shall I turn on the flashlight?"
-        assert ws.receive_json() == {"t": "cue", "cue": "warn"}
-        assert ws.receive_json()["text"] == "It's too dark. Shall I turn on the flashlight?"   # the English line
-        ws.send_json({"t": "confirm", "id": c["id"], "answer": "yes"})
+        # auto-on, then a spoken line informing him; no question
         assert ws.receive_json() == {"t": "torch", "on": True}
-        assert ws.receive_json()["text"] == "Turning on the flashlight."
+        assert ws.receive_json() == {"t": "cue", "cue": "ack"}
+        assert ws.receive_json()["text"] == "It's getting dark, turning on the flashlight."   # the English line
         ws.send_json({"t": "light", "level": "dim", "luma": 70, "torch": "on"})
         ws.send_json({"t": "text", "text": "ok"})
         assert ws.receive_json()["text"] == "(mock) you said: ok"

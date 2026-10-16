@@ -92,8 +92,9 @@ class Settings:
     routes: bool = False
     # AIRA_ROUTES_MAP: path of the map file. Unset: shared/catalog/<demo shop id>_map.json in a repo checkout.
     routes_map: str | None = None
-    # AIRA_TORCH=1: when the phone reports sustained darkness, AIRA PROPOSES the flashlight (confirm.propose) and
-    # the torch command goes to the phone only after a spoken "yes" (aira_live.tools.light). Off by default.
+    # AIRA_TORCH=1: when the phone reports sustained darkness, AIRA turns the flashlight on and says so (it
+    # informs, it does not ask), turns it off again when it is bright, and obeys the owner's spoken flashlight
+    # request (aira_live.tools.light). Off by default.
     torch: bool = False
     # AIRA_LOWLIGHT=1: the "where is the light switch" tool (light_switch_find) and the phone's low-light boost
     # on uploaded frames (never on the bump guard's frames). Off by default.
