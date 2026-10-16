@@ -30,7 +30,8 @@ EXPECTED = {
     "price_query": ["product", "page"],  # the owner's price board, spoken (tools/prices.py)
     "walk_to": ["target"], "walk_stop": [],  # walk with me (tools/walk.py)
     # the walk's perception: Live answers a [NAV CHECK] with it (tools/walk.py; SILENT response)
-    "nav_report": ["target_visible", "target_side", "target_size", "obstacles", "path", "view_ok", "check_id"],
+    "nav_report": ["target_visible", "target_side", "target_size", "obstacles", "path", "view_ok", "check_id",
+                   "current_zone", "facing", "confidence", "reflection"],
     "scene_recall": ["item"],  # what AIRA last counted, with age and evidence (tools/camera.py; read-only)
     # Live's silent answer to a [SCENE CHECK]: what it sees, for the last-seen memory (tools/memory.py)
     "scene_report": ["check_id", "items"],
@@ -52,6 +53,8 @@ OPTIONAL_DEFAULTS = {
     ("nav_report", "target_visible"): False, ("nav_report", "target_side"): "none",
     ("nav_report", "target_size"): "none", ("nav_report", "obstacles"): None,
     ("nav_report", "path"): "uncertain", ("nav_report", "view_ok"): True, ("nav_report", "check_id"): 0,
+    ("nav_report", "current_zone"): "unknown", ("nav_report", "facing"): "unknown",
+    ("nav_report", "confidence"): "low", ("nav_report", "reflection"): False,
     ("scene_report", "check_id"): 0, ("scene_report", "items"): None,
 }
 
@@ -64,6 +67,8 @@ LITERALS = {
     ("nav_report", "target_side"): ("left", "ahead", "right", "none"),
     ("nav_report", "target_size"): ("small", "medium", "large", "none"),
     ("nav_report", "path"): ("clear_in_view", "blocked", "uncertain"),
+    ("nav_report", "facing"): ("front", "left", "right", "back", "unknown"),
+    ("nav_report", "confidence"): ("low", "medium", "high"),
 }
 
 # Typed sample arguments for each stub. When an owner implements a tool, they remove it from STUBS

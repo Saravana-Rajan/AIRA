@@ -25,6 +25,10 @@ from aira_live.vision.point import parse_box
 SIDES = ("left", "ahead", "right")
 SIZES = ("small", "medium", "large")
 PATHS = ("clear_in_view", "blocked", "uncertain")
+# Localisation (AIRA_ROUTES): which of the zone's views the picture matches, and how sure Live is of zone+facing.
+FACINGS = ("front", "left", "right", "back")
+CONFIDENCES = ("low", "medium", "high")
+UNKNOWN = "unknown"
 
 HAZARD = re.compile(r"\b(steps?|stairs?|staircase|ledge|drop|edge|hole|wet|spill|slippery|water|oil|"
                     r"glass|cable|wire)\b", re.I)
@@ -91,6 +95,17 @@ class NavReport:
     obstacles: tuple[Obstacle, ...] = ()
     path: str = "uncertain"
     view_ok: bool = True
+    # Localisation (routes only; defaults mean "nothing known"). ``zone`` is a zone id of the loaded map or
+    # "unknown"; ``facing`` one of that zone's views or "unknown"; ``reflection``: the view is a mirror image.
+    zone: str = UNKNOWN
+    facing: str = UNKNOWN
+    confidence: str = "low"
+    reflection: bool = False
+
+    @property
+    def localised(self) -> bool:
+        """A position the localiser may count: a known zone, not low confidence, not a reflection."""
+        return self.zone != UNKNOWN and self.confidence != "low" and not self.reflection
 
     @property
     def usable(self) -> bool:
@@ -123,10 +138,14 @@ def _bool(value: Any, default: bool) -> bool:
 
 def parse_report(target: str, *, check_id: Any = 0, target_visible: Any = False, target_side: Any = "",
                  target_size: Any = "", obstacles: Any = None, path: Any = "uncertain",
-                 view_ok: Any = True) -> NavReport:
+                 view_ok: Any = True, current_zone: Any = UNKNOWN, facing: Any = UNKNOWN,
+                 confidence: Any = "low", reflection: Any = False,
+                 zone_ids: Iterable[str] | None = None) -> NavReport:
     """Live's raw ``nav_report`` arguments -> ``NavReport``. Unknown values fall back to the cautious reading: an
     obstacle with an unknown side is ahead and in the path, an unknown path is "uncertain". The target listed
-    as an obstacle is dropped (the fridge never stops a walk to the fridge)."""
+    as an obstacle is dropped (the fridge never stops a walk to the fridge). Localisation fields: a zone not in
+    ``zone_ids`` (when given) reads as unknown, an unknown facing / confidence as unknown / low, and a reflection
+    never carries a zone."""
     try:
         cid = int(check_id)
     except (TypeError, ValueError):
@@ -141,6 +160,10 @@ def parse_report(target: str, *, check_id: Any = 0, target_visible: Any = False,
         obs.append(Obstacle(label, _choice(raw.get("side"), SIDES, "ahead"), _bool(raw.get("in_path"), True),
                             _choice(raw.get("size"), SIZES, "medium")))
     visible = _bool(target_visible, False)
+    zone = re.sub(r"\s+", "_", str(current_zone or "").strip().casefold())[:40] or UNKNOWN
+    if zone_ids is not None and zone not in set(zone_ids):
+        zone = UNKNOWN
+    mirror = _bool(reflection, False)
     return NavReport(
         check_id=cid,
         target_visible=visible,
@@ -149,6 +172,10 @@ def parse_report(target: str, *, check_id: Any = 0, target_visible: Any = False,
         obstacles=tuple(obs[:MAX_OBSTACLES]),
         path=_choice(path, PATHS, "uncertain"),
         view_ok=_bool(view_ok, False),
+        zone=UNKNOWN if mirror else zone,
+        facing=_choice(facing, FACINGS, UNKNOWN),
+        confidence=_choice(confidence, CONFIDENCES, "low"),
+        reflection=mirror,
     )
 
 

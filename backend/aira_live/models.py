@@ -5,7 +5,7 @@ Priority (build overrides §7): env ``AIRA_MODEL_<ROLE>`` > the Firestore ``conf
 import os
 from typing import Literal
 
-Role = Literal["live", "point", "count", "read", "verify", "embed"]
+Role = Literal["live", "point", "count", "read", "verify", "embed", "describe"]
 
 DEFAULTS: dict[str, str] = {
     "live": "gemini-3.8-live",
@@ -20,6 +20,8 @@ DEFAULTS: dict[str, str] = {
     # "gemini-embedding-001"; both accept output_dimensionality 128-3072. AIRA asks for 768 (embeddings.DIM),
     # which is also the dimension of the vector indexes in shared/infra/firestore.indexes.json.
     "embed": "gemini-embedding-2",
+    # The photo-description script for the shop map (shared/scripts/describe_shop_photos.py): one view text per photo.
+    "describe": "gemini-3.8-flash",
 }
 FALLBACKS: dict[str, str] = {"point": "gemini-3.8-flash", "count": "gemini-3.8-flash"}
 

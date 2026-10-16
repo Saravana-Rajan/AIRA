@@ -44,6 +44,7 @@ import {
   wireCameraAndGuidance, wireCameraIntoApp, BUMP_CHIP_MS, SERVER_WALK_MAX_MS, serverWalkChange, type CameraWiring,
 } from "../src/camera/wire";
 import { walkingMode } from "../src/walk/mode";
+import { STEP_REPORT_MS } from "../src/walk/steps";
 
 type Handler = (m: ServerMsg) => void;
 function fakeSocket() {
@@ -528,6 +529,71 @@ describe("server walk keeps the bump guard urgent", () => {
     vi.advanceTimersByTime(SERVER_WALK_MAX_MS + 1);
     expect(g.setServerWalk).toHaveBeenLastCalledWith(false);
     p.dispose();
+  });
+
+  const stepsSent = () => socket.sent.filter((m) => m.t === "event" && m.name === "steps");
+  const stepsEvent = (total: number, available: boolean): ClientMsg => ({ t: "event", name: "steps", data: { total, available } });
+  const withMotion = (available: boolean) => {
+    const motion = { steps: 0, available, isWalking: () => false, totalSteps() { return motion.steps; }, stop: vi.fn() };
+    return { g: Object.assign(withWalk(), { motion }), motion };
+  };
+
+  it("walk start reports the phone's steps: a baseline at once, then only when the count moved; stop ends it", async () => {
+    vi.useFakeTimers();
+    const { g, motion } = withMotion(true);
+    guardStarter(g);
+    const { w } = fakeWired();
+    const p = wireCameraIntoApp(w as never, { devtools: false });
+    await p.ready;
+    expect(stepsSent()).toEqual([]);
+    socket.emit(walkStart);
+    expect(stepsSent()).toEqual([stepsEvent(0, true)]);
+    motion.steps = 3;
+    vi.advanceTimersByTime(STEP_REPORT_MS);
+    expect(stepsSent()).toEqual([stepsEvent(0, true), stepsEvent(3, true)]);
+    vi.advanceTimersByTime(STEP_REPORT_MS);
+    expect(stepsSent()).toHaveLength(2);              // unchanged: silence
+    socket.emit(walkStop);
+    motion.steps = 9;
+    vi.advanceTimersByTime(STEP_REPORT_MS * 3);
+    expect(stepsSent()).toHaveLength(2);              // the walk ended: no more reports
+    p.dispose();
+  });
+
+  it("a phone without a usable accelerometer sends one available:false and nothing more", async () => {
+    vi.useFakeTimers();
+    const { g, motion } = withMotion(false);
+    guardStarter(g);
+    const { w } = fakeWired();
+    const p = wireCameraIntoApp(w as never, { devtools: false });
+    await p.ready;
+    socket.emit(walkStart);
+    motion.steps = 4;
+    vi.advanceTimersByTime(STEP_REPORT_MS * 3);
+    expect(stepsSent()).toEqual([stepsEvent(0, false)]);
+    p.dispose();
+  });
+
+  it("a guard arriving after the walk started begins reporting then; dispose ends it", async () => {
+    vi.useFakeTimers();
+    let resolve!: (g: unknown) => void;
+    const { g, motion } = withMotion(true);
+    vi.mocked(startBumpGuard).mockImplementation((() => new Promise((r) => { resolve = r; })) as never);
+    const { w } = fakeWired();
+    const p = wireCameraIntoApp(w as never, { devtools: false });
+    socket.emit(walkStart);
+    expect(stepsSent()).toEqual([]);                  // nothing to read yet
+    motion.steps = 2;
+    resolve(g);
+    await p.ready;
+    expect(stepsSent()).toEqual([stepsEvent(2, true)]);
+    motion.steps = 5;
+    vi.advanceTimersByTime(STEP_REPORT_MS);
+    expect(stepsSent()).toEqual([stepsEvent(2, true), stepsEvent(5, true)]);
+    p.dispose();
+    motion.steps = 8;
+    vi.advanceTimersByTime(STEP_REPORT_MS * 2);
+    expect(stepsSent()).toHaveLength(2);
   });
 
   it("serverWalkChange reads only walk frame requests and ready", () => {

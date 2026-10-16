@@ -26,6 +26,7 @@ import { guideTo, stopTone } from "../guidance/tones";
 import { boxStore } from "../walk/boxes";
 import { parseWalkingModeCommand, walkingMode } from "../walk/mode";
 import { startBumpGuard, type RunningBumpGuard } from "../walk/start";
+import { createStepReporter } from "../walk/steps";
 import { walkingModeText } from "../walk/strings";
 import { createCountUx, type CountProgress } from "./countUx";
 import { createOpenUrlHandler, defaultDial, defaultOpen } from "./openUrl";
@@ -267,9 +268,11 @@ export function wireCameraIntoApp(w: WiredHooks, opts: PhoneWireOptions = {}): P
   });
   let disposed = false;
   let chipTimer: ReturnType<typeof setTimeout> | null = null;
-  // A server walk keeps the bump guard in urgent sensitivity, and walking, for its whole duration.
+  // A server walk keeps the bump guard in urgent sensitivity, and walking, for its whole duration, and the
+  // phone reports its cumulative step count (the guard's accelerometer) to the server while it lasts.
   let serverWalk = false;
   let walkTimer: ReturnType<typeof setTimeout> | null = null;
+  const steps = createStepReporter({ send: (m) => app.send(m) });
   const setServerWalk = (on: boolean) => {
     if (walkTimer) clearTimeout(walkTimer);
     walkTimer = on ? setTimeout(() => { walkTimer = null; setServerWalk(false); }, SERVER_WALK_MAX_MS) : null;
@@ -277,6 +280,8 @@ export function wireCameraIntoApp(w: WiredHooks, opts: PhoneWireOptions = {}): P
     serverWalk = on;
     setWalkVideo(on);   // the camera keeps feeding Live while he talks during a walk
     guard?.setServerWalk(on);
+    if (on) { if (guard) steps.start(guard.motion); }   // no guard yet: it starts reporting when it arrives
+    else steps.stop();
   };
 
   const offNear = cam.onHandNear((n) => guard?.setHandNearTarget(n));
@@ -310,7 +315,10 @@ export function wireCameraIntoApp(w: WiredHooks, opts: PhoneWireOptions = {}): P
           if (disposed) { g.dispose(); return; }
           guard = g;
           g.setHandNearTarget(cam.isHandNearTarget());
-          if (serverWalk) g.setServerWalk(true);   // the walk began while the detector was loading
+          if (serverWalk) {                         // the walk began while the detector was loading
+            g.setServerWalk(true);
+            steps.start(g.motion);
+          }
         },
         report("bump guard did not start; camera and guidance keep working"),
       )
@@ -327,6 +335,7 @@ export function wireCameraIntoApp(w: WiredHooks, opts: PhoneWireOptions = {}): P
     chipTimer = null;
     if (walkTimer) clearTimeout(walkTimer);
     walkTimer = null;
+    steps.stop();
     offNear();
     offServer();
     offMode();
