@@ -25,6 +25,8 @@ export interface StepCounter {
   /** Steps in the last WALK_WINDOW_MS before `at`. */
   steps(at: number): number;
   isWalking(at: number): boolean;
+  /** Every step ever detected since creation (or the last reset): the windowed count never decrements it. */
+  total(): number;
   reset(): void;
 }
 
@@ -33,6 +35,7 @@ export function createStepCounter(): StepCounter {
   let armed = true;          // true once the magnitude has dropped back near the baseline
   let lastStep = -Infinity;
   let stepTimes: number[] = [];
+  let total = 0;
 
   const prune = (at: number) => { stepTimes = stepTimes.filter((t) => at - t <= WALK_WINDOW_MS && t <= at); };
 
@@ -47,6 +50,7 @@ export function createStepCounter(): StepCounter {
         if (s.t - lastStep >= STEP_MIN_INTERVAL_MS) {
           lastStep = s.t;
           stepTimes.push(s.t);
+          total += 1;
           prune(s.t);
         }
       } else if (!armed && rise < PEAK_RESET) {
@@ -57,7 +61,8 @@ export function createStepCounter(): StepCounter {
     },
     steps(at) { prune(at); return stepTimes.length; },
     isWalking(at) { prune(at); return stepTimes.length >= WALK_MIN_STEPS; },
-    reset() { base = null; armed = true; lastStep = -Infinity; stepTimes = []; },
+    total() { return total; },
+    reset() { base = null; armed = true; lastStep = -Infinity; stepTimes = []; total = 0; },
   };
 }
 
@@ -65,6 +70,12 @@ export interface MotionSensor {
   /** false when the phone has no accelerometer or the owner refused the permission (iOS). */
   available: boolean;
   isWalking(at: number): boolean;
+  /**
+   * Cumulative steps since the sensor started (reported to the server during a walk). Optional only so the
+   * fakes elsewhere (guard, sceneGate, start tests) that implement just `available`/`isWalking` keep
+   * compiling; the real sensor always provides it and the step reporter treats a missing one as unavailable.
+   */
+  totalSteps?: () => number;
   stop(): void;
 }
 
@@ -83,7 +94,7 @@ export async function startMotionSensor(counter: StepCounter = createStepCounter
     removeEventListener?: (n: string, f: (e: MotionEvt) => void, o?: unknown) => void;
     performance?: { now(): number };
   };
-  const off: MotionSensor = { available: false, isWalking: () => false, stop() { /* nothing to stop */ } };
+  const off: MotionSensor = { available: false, isWalking: () => false, totalSteps: () => 0, stop() { /* nothing to stop */ } };
   if (!g.DeviceMotionEvent || typeof g.addEventListener !== "function") return off;
   // iOS: shares the answer to the prompt asked inside the Start tap (core/motionPermission); elsewhere no prompt.
   if (typeof g.DeviceMotionEvent.requestPermission === "function" && !(await motionAccess("motion"))) return off;
@@ -97,6 +108,7 @@ export async function startMotionSensor(counter: StepCounter = createStepCounter
   return {
     available: true,
     isWalking: (at) => counter.isWalking(at),
+    totalSteps: () => counter.total(),
     stop() { g.removeEventListener?.("devicemotion", handler, { passive: true } as unknown); },
   };
 }
