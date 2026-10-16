@@ -114,7 +114,7 @@ def test_monitor_fixtures_validate_round_trip_and_cover_every_kind():
         seen.add(msg.kind)
         assert json.loads(contracts.dump_monitor_msg(msg)) == raw
     assert seen == set(contracts.MONITOR_KINDS) == {"session", "transcript", "frame", "vision", "hand", "event",
-                                                    "status", "stats", "ready", "audio"}
+                                                    "status", "orientation", "stats", "ready", "audio"}
 
 
 @pytest.mark.parametrize("raw", [
@@ -169,6 +169,20 @@ async def test_publish_never_raises_on_an_invalid_message():
     assert monitor.publish(SHOP, "status", "s1", state="sleeping") == 0  # not a MonitorState
     assert monitor.publish(SHOP, "nope", "s1") == 0
     assert sub.take() == []
+
+
+async def test_orientation_is_published_remembered_and_seeds_the_session_start(mk_session):
+    s, _ = mk_session()
+    sub = monitor.subscribe(SHOP)
+    monitor.orientation(s, 90)
+    got = sub.take()
+    assert len(got) == 1 and got[0]["kind"] == "orientation" and got[0]["angle"] == 90
+    assert got[0]["session"] == s.session_id
+    # the last-known angle rides the next session-start, so a monitor joining late is not left unrotated
+    assert monitor.session_fields(s).get("orientation") == 90
+    monitor.forget(s.session_id)
+    assert "orientation" not in monitor.session_fields(s)
+    monitor.unsubscribe(sub)
 
 
 # ---------- frames: only while monitored, throttled, downscaled ----------

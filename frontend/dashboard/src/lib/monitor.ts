@@ -7,7 +7,7 @@
 // Nothing here touches the DOM except the client's WebSocket/timer hooks, which are injected so tests drive them.
 import {
   MONITOR_CLOSE_UNAUTHENTICATED, MONITOR_CLOSE_UNAUTHORIZED, NORM_MAX, parseMonitorFeedMsg,
-  type Box, type MonitorAuthMsg, type MonitorMsg, type MonitorRole, type MonitorState, type Point, type VisionObject, type VisionSource,
+  type Box, type MonitorAuthMsg, type MonitorMsg, type MonitorRole, type MonitorState, type OrientationAngle, type Point, type VisionObject, type VisionSource,
 } from "@aira/contracts";
 import { formatTimeIST } from "./format";
 import type { ListenPort } from "./listen";
@@ -63,6 +63,8 @@ export interface SessionInfo {
   lastSeenAt: number;
   /** What AIRA is doing for this person, from its own `status` lines; "idle" until the first one. */
   status: MonitorState;
+  /** The phone's screen orientation (screen.orientation.angle); 0 (upright) until it reports one. */
+  orientation: OrientationAngle;
 }
 export interface Stats { turns: number; er2Calls: number; flashCalls: number; visionMs: number | null; fps: number; ts: number }
 export interface VisionLayer { objects: VisionObject[]; ts: number }
@@ -96,6 +98,8 @@ export interface LiveState {
   lastMsgAt: number | null;
   /** The server relays audio to a monitor that asks (its `ready` line, AIRA_MONITOR_AUDIO=1): the page may offer Listen. */
   audio: boolean;
+  /** The followed phone's screen orientation (screen.orientation.angle); the Live picture turns to match. */
+  orientation: OrientationAngle;
 }
 
 export const MAX_LINES = 200;
@@ -111,7 +115,7 @@ export function initialState(): LiveState {
   return {
     session: null, sessions: {}, sessionStartedAt: null, lang: null, status: "idle", frame: null, er2: noLayer(), mediapipe: noLayer(),
     context: null, target: null, found: false, hand: null, transcript: [], activity: [], stats: null, task: null, rooms: {},
-    lastMsgAt: null, audio: false,
+    lastMsgAt: null, audio: false, orientation: 0,
   };
 }
 
@@ -124,7 +128,7 @@ function clearedSession(s: LiveState, sessions: Record<string, SessionInfo> = s.
 export function follow(s: LiveState, id: string): LiveState {
   const info = s.sessions[id];
   if (!info || s.session === id) return s;
-  return { ...clearedSession(s), session: id, sessionStartedAt: info.startedAt, lang: info.lang, status: info.status };
+  return { ...clearedSession(s), session: id, sessionStartedAt: info.startedAt, lang: info.lang, status: info.status, orientation: info.orientation };
 }
 
 /** The listed sessions newest first (the latest to start on top), as the people panel shows them. */
@@ -232,7 +236,7 @@ export function reduce(s: LiveState, m: MonitorMsg): LiveState {
     if (started) {
       const startedAt = startedAtOf(m, m.ts);
       const known = s.sessions[m.session];
-      const info: SessionInfo = { id: m.session, uid: m.uid ?? null, lang: m.lang, startedAt, lastSeenAt: m.ts, status: known?.status ?? "idle" };
+      const info: SessionInfo = { id: m.session, uid: m.uid ?? null, lang: m.lang, startedAt, lastSeenAt: m.ts, status: known?.status ?? "idle", orientation: m.orientation ?? known?.orientation ?? 0 };
       const sessions = { ...s.sessions, [m.session]: info };
       if (s.session !== null && s.session !== m.session) return { ...base, sessions }; // another phone: listed, not followed
       // The first session, or the followed one announced again (the monitor reconnected): a fresh camera, the same conversation.
@@ -244,6 +248,7 @@ export function reduce(s: LiveState, m: MonitorMsg): LiveState {
         sessionStartedAt: same && s.sessionStartedAt !== null ? s.sessionStartedAt : startedAt,
         lang: m.lang,
         status: "listening",
+        orientation: m.orientation ?? (same ? s.orientation : 0),
         transcript: kept.transcript,
         activity: logActivity(kept, "session_start", `Language ${m.lang}`, m.ts, "sam"),
         lastMsgAt: m.ts,
@@ -254,7 +259,7 @@ export function reduce(s: LiveState, m: MonitorMsg): LiveState {
     if (s.session !== m.session) return { ...base, sessions }; // a session the page was not following ended
     const next = listSessions(sessions)[0]; // the newest of the rest takes the page, from scratch
     if (!next) return { ...clearedSession(s, sessions), lastMsgAt: m.ts };
-    return { ...clearedSession(s, sessions), session: next.id, sessionStartedAt: next.startedAt, lang: next.lang, status: next.status, lastMsgAt: m.ts };
+    return { ...clearedSession(s, sessions), session: next.id, sessionStartedAt: next.startedAt, lang: next.lang, status: next.status, orientation: next.orientation, lastMsgAt: m.ts };
   }
   if (s.session === null) s = { ...s, session: m.session }; // nothing followed yet: this session is the one
   else if (s.session !== m.session) return reduceOther(s, m); // another session's line: only its list entry may change
@@ -268,6 +273,7 @@ function reduceOther(s: LiveState, m: SessionMsg): LiveState {
   if (!s.sessions[m.session]) return s;
   if (m.kind === "status") return { ...s, sessions: patchSession(s.sessions, m.session, { status: m.state, lastSeenAt: m.ts }) };
   if (m.kind === "transcript") return { ...s, sessions: patchSession(s.sessions, m.session, { lastSeenAt: m.ts }) };
+  if (m.kind === "orientation") return { ...s, sessions: patchSession(s.sessions, m.session, { orientation: m.angle }) };
   return s;
 }
 
@@ -324,6 +330,8 @@ function reduceOwn(s: LiveState, m: SessionMsg): LiveState {
     }
     case "stats":
       return { ...base, stats: { turns: m.turns, er2Calls: m.er2Calls, flashCalls: m.flashCalls, visionMs: m.visionMs, fps: m.fps, ts: m.ts } };
+    case "orientation":
+      return { ...base, orientation: m.angle, sessions: patchSession(s.sessions, m.session, { orientation: m.angle }) };
   }
   return base;
 }

@@ -59,6 +59,12 @@ export type LightLevel = (typeof LIGHT_LEVELS)[number];
 export const TORCH_STATES = Object.freeze(["off", "on", "unsupported"] as const);
 export type TorchState = (typeof TORCH_STATES)[number];
 
+// The phone's screen orientation as `screen.orientation.angle`: 0 is upright portrait, 90 and 270 are the two
+// landscapes, 180 is upside down. The phone sends it so a dashboard watching on a laptop can turn the live
+// picture to match (the laptop cannot see the phone physically rotate). Only these four angles.
+export const ORIENTATION_ANGLES = Object.freeze([0, 90, 180, 270] as const);
+export type OrientationAngle = (typeof ORIENTATION_ANGLES)[number];
+
 export const ORDER_STATES = Object.freeze([
   "DRAFT", "ORDER_PLACED", "DELIVERY_PENDING", "DELIVERY_RECONCILED", "DISCREPANCY",
   "PAYMENT_PENDING", "PAYMENT_CONFIRMED", "CLOSED",

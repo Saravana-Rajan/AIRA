@@ -48,6 +48,7 @@ from aira_live.contracts import (
     HelloMsg,
     LightMsg,
     LogMsg,
+    OrientationMsg,
     ReadyMsg,
     RtcMsg,
     StopMsg,
@@ -477,6 +478,8 @@ async def ws_endpoint(ws: WebSocket) -> None:
                 await _lane_hook("aira_live.tools.light", "handle_client_event", session, msg.name, msg.data)
             elif isinstance(msg, LightMsg):  # low light: recorded; with AIRA_TORCH a flashlight command may follow
                 await _lane_hook("aira_live.tools.light", "on_light", session, msg)
+            elif isinstance(msg, OrientationMsg):  # the phone turned: relayed to the dashboard monitor to match
+                monitor.orientation(session, msg.angle)
             elif isinstance(msg, RtcMsg):  # WebRTC signalling for a dashboard monitor: relayed, never read
                 if rtc_limit.allow():
                     await rtc.from_phone(session, msg)
