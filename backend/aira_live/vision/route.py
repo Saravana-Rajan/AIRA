@@ -171,18 +171,22 @@ class RouteGuide:
             self._overshoot()
 
     def no_motion(self) -> Instruction | None:
-        """The phone cannot count steps: landmark-only guidance from now on; the line is given once."""
+        """The phone cannot count steps: landmark-only guidance from now on; the line is queued once."""
         self.motion = False
         if self.no_motion_said:
             return None
         self.no_motion_said = True
-        return Instruction("route.no_motion", NO_MOTION_TEXT, ROUTE_KIND,
-                           facts={"action": "info", "steps": "unavailable", "guidance": "landmarks_only"})
+        ins = Instruction("route.no_motion", NO_MOTION_TEXT, ROUTE_KIND,
+                          facts={"action": "info", "steps": "unavailable", "guidance": "landmarks_only"})
+        self._queue(ins)
+        return ins
 
     # ----- the line due now -----
     def instruction(self, now: float) -> Instruction | None:
+        """The line due now. A queued event line stays queued until ``mark`` says it was said (the walk's
+        pacing may hold it for a moment)."""
         if self.pending:
-            return self.pending.pop(0)
+            return self.pending[0]
         if self.phase in (LOCALISE, RELOCALISE):
             key = "route.localise" if self.phase == LOCALISE else "route.relocalise"
             if now - self.said.get(key, float("-inf")) < LOCALISE_REPEAT_S:
@@ -218,6 +222,7 @@ class RouteGuide:
 
     def mark(self, key: str, now: float) -> None:
         self.said[key] = now
+        self.pending = [p for p in self.pending if p.key != key]
         if key.startswith("route.overshoot"):     # it ends with the "turn slowly" line: the reminder waits
             self.said["route.relocalise"] = now
         elif key.startswith("route.no_route"):

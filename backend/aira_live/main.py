@@ -465,6 +465,8 @@ async def ws_endpoint(ws: WebSocket) -> None:
                 if bridge and msg.name == "talk":  # a talk tap is the owner's next turn: a long-press stop ends
                     bridge.user_turn()
                 await _guidance_hook("handle_client_event", session, msg.name, msg.data)
+                if msg.name == "steps" and session.walking:   # the phone's step count feeds the route follower
+                    await _lane_hook("aira_live.tools.walk", "on_client_event", session, msg.name, msg.data)
             elif isinstance(msg, RtcMsg):  # WebRTC signalling for a dashboard monitor: relayed, never read
                 if rtc_limit.allow():
                     await rtc.from_phone(session, msg)
