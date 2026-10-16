@@ -10,6 +10,7 @@ import {
   type Box, type MonitorAuthMsg, type MonitorMsg, type MonitorRole, type MonitorState, type Point, type VisionObject, type VisionSource,
 } from "@aira/contracts";
 import { formatTimeIST } from "./format";
+import type { ListenPort } from "./listen";
 import { advanceTask, type Task } from "./liveTask";
 import type { SignalPort } from "./rtcViewer";
 import { refreshDelayMs, tokenExp } from "./viewerAuth";
@@ -93,6 +94,8 @@ export interface LiveState {
   /** Room cameras (uid "camera:<name>"), by session id. */
   rooms: Record<string, { name: string; frame: Frame | null; mediapipe: VisionLayer; startedAt: number }>;
   lastMsgAt: number | null;
+  /** The server relays audio to a monitor that asks (its `ready` line, AIRA_MONITOR_AUDIO=1): the page may offer Listen. */
+  audio: boolean;
 }
 
 export const MAX_LINES = 200;
@@ -108,13 +111,13 @@ export function initialState(): LiveState {
   return {
     session: null, sessions: {}, sessionStartedAt: null, lang: null, status: "idle", frame: null, er2: noLayer(), mediapipe: noLayer(),
     context: null, target: null, found: false, hand: null, transcript: [], activity: [], stats: null, task: null, rooms: {},
-    lastMsgAt: null,
+    lastMsgAt: null, audio: false,
   };
 }
 
-/** Everything the followed session owned, gone (frame, boxes, transcript, activity, stats, task); the shop's session list and room cameras stay. */
+/** Everything the followed session owned, gone (frame, boxes, transcript, activity, stats, task); the shop's session list, room cameras and what the server said of itself stay. */
 function clearedSession(s: LiveState, sessions: Record<string, SessionInfo> = s.sessions): LiveState {
-  return { ...initialState(), sessions, rooms: s.rooms, lastMsgAt: s.lastMsgAt };
+  return { ...initialState(), sessions, rooms: s.rooms, lastMsgAt: s.lastMsgAt, audio: s.audio };
 }
 
 /** Follows session `id` (one the shop announced) with a clean slate; the same id, or an unknown one, changes nothing. */
@@ -199,9 +202,15 @@ function logActivity(s: LiveState, name: string, detail: string, ts: number, tag
  * status current and everything else from it is dropped (nothing of it touches the page or `lastMsgAt`).
  * When the followed session ends everything it produced is cleared (nothing of a session outlives it in
  * memory) and the newest of the remaining sessions is followed from a clean slate.
+ *
+ * Two kinds are about the feed, not a session, and never adopt one: `ready` (its `session` is the monitor's
+ * own id) only records whether the server relays audio, and `audio` chunks go to the player (lib/listen) before
+ * the reducer; one that arrives here anyway changes nothing.
  */
 export function reduce(s: LiveState, m: MonitorMsg): LiveState {
   const base = { ...s, lastMsgAt: m.ts };
+  if (m.kind === "ready") return { ...base, audio: m.audio };
+  if (m.kind === "audio") return s;
   const room = s.rooms[m.session];
   if (room && m.kind !== "session") {
     if (m.kind === "frame") {
@@ -252,15 +261,17 @@ export function reduce(s: LiveState, m: MonitorMsg): LiveState {
   return reduceOwn(s, m);
 }
 
+type SessionMsg = Exclude<MonitorMsg, { kind: "session" | "ready" | "audio" }>;
+
 /** A line from a listed session the page is not following: its status and last-seen time, nothing else. */
-function reduceOther(s: LiveState, m: Exclude<MonitorMsg, { kind: "session" }>): LiveState {
+function reduceOther(s: LiveState, m: SessionMsg): LiveState {
   if (!s.sessions[m.session]) return s;
   if (m.kind === "status") return { ...s, sessions: patchSession(s.sessions, m.session, { status: m.state, lastSeenAt: m.ts }) };
   if (m.kind === "transcript") return { ...s, sessions: patchSession(s.sessions, m.session, { lastSeenAt: m.ts }) };
   return s;
 }
 
-function reduceOwn(s: LiveState, m: Exclude<MonitorMsg, { kind: "session" }>): LiveState {
+function reduceOwn(s: LiveState, m: SessionMsg): LiveState {
   const sessions = m.kind === "transcript" ? patchSession(s.sessions, m.session, { lastSeenAt: m.ts }) : s.sessions;
   const base = { ...s, sessions, lastMsgAt: m.ts };
   switch (m.kind) {
@@ -442,6 +453,8 @@ export interface ClientDeps {
   clearTimer?: (t: unknown) => void;
   /** WebRTC signalling (rtcViewer): attached once a socket is authenticated, told every {t:"rtc"} line, detached on close. */
   signal?: SignalPort;
+  /** The audio player (lib/listen): attached with the signal port, handed every kind "audio" line (which never reaches onMsg), detached on close. */
+  listen?: ListenPort;
   /**
    * The viewer's Firebase ID token (lib/viewerAuth); `force` asks for a freshly minted one. Rejects when signed
    * out. Given only by the VITE_MONITOR_AUTH=1 build: without it no auth line is ever sent and a socket is live
@@ -519,6 +532,7 @@ export function openMonitor(
     sock = null;
     clearRefresh();
     deps.signal?.detach();
+    deps.listen?.detach();
     try {
       s.close();
     } catch {
@@ -540,19 +554,21 @@ export function openMonitor(
     sock = s;
     let authSent = false;
     let live = false;
+    const sender = (m: unknown): boolean => {
+      if (sock !== s) return false;
+      try {
+        s.send(JSON.stringify(m));
+        return true;
+      } catch {
+        return false;
+      }
+    };
     const goLive = () => {
       live = true;
       attempt = 0;
       onConn("live", 0);
-      deps.signal?.attach((m) => {
-        if (sock !== s) return false;
-        try {
-          s.send(JSON.stringify(m));
-          return true;
-        } catch {
-          return false;
-        }
-      });
+      deps.signal?.attach(sender);
+      deps.listen?.attach(sender);
     };
     s.onopen = () => {
       if (stopped || sock !== s) return;
@@ -574,6 +590,7 @@ export function openMonitor(
       const m = parseMonitorFeedMsg(ev.data);
       if (!m) return;
       if (m.t === "rtc") deps.signal?.receive(m);
+      else if (m.kind === "audio") deps.listen?.receive(m); // sound goes to the player, never through the page's state
       else onMsg(m);
     };
     s.onerror = () => {};
@@ -582,6 +599,7 @@ export function openMonitor(
       sock = null;
       clearRefresh();
       deps.signal?.detach();
+      deps.listen?.detach();
       const code = ev?.code ?? 0;
       if (code === MONITOR_CLOSE_UNAUTHENTICATED) {
         onConn("unauthenticated", attempt);
@@ -615,6 +633,7 @@ export function openMonitor(
     const s = sock;
     sock = null;
     deps.signal?.detach();
+    deps.listen?.detach();
     try {
       s?.close();
     } catch {
