@@ -158,6 +158,25 @@ confirm.register_committer(TORCH_ON_COMMITTER, _commit_torch_on)
 confirm.register_committer(TORCH_OFF_COMMITTER, _commit_torch_off)
 
 
+async def flashlight(on: bool) -> dict:
+    """Turn the phone's flashlight on or off when the owner asks, in any language ("turn off the flashlight",
+    "torch on", "லைட்டை அணை", "टॉर्च बंद करो"). His own request is the consent: no confirm_action. Off always
+    works at once; on works only on phones whose camera has a torch (some, like iPhone browsers, have none:
+    then say so). Say the result in his language."""
+    s: Session = get_session()
+    st = state(s)
+    if on and st.torch == "unsupported":
+        return {"torch": "unsupported", "on": False, "say_en": TORCH_UNSUPPORTED_EN}
+    for cid in list(st.pending):   # a pending offer is answered by his own request
+        st.pending.pop(cid, None)
+    st.torch_requested = "on" if on else "off"
+    if not on:
+        st.off_offered = True      # do not ask "shall I turn it off?" after he already did
+    await s.send(TorchMsg(on=on))
+    diag("light", action="torch_command", session=s.session_id, on=on, source="owner")
+    return {"torch": "requested", "on": on, "say_en": TORCH_ON_EN if on else TORCH_OFF_EN}
+
+
 async def on_light(session: Session, msg: LightMsg) -> None:
     """Cross-team hook: main.py calls this for every ``light`` message. Records the report; with the flags on it
     may PROPOSE (never command) the torch, and feeds the switch loop's before/after brightness check."""

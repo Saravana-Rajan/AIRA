@@ -305,3 +305,39 @@ async def test_stop_and_forget_clear_the_session(session, flags):
     light.forget(s.session_id)
     assert light.active(s) is None and s.session_id not in light._STATE
     await light.stop_session(s)   # twice is fine
+
+
+# ---------- the owner's own "flashlight on/off" by voice ----------
+async def test_owner_says_turn_off_and_it_goes_off_at_once_without_a_yes(session, flags):
+    s, rec = session
+    await light.on_light(s, report(level="dark", luma=20.0, torch="on"))   # it is on (after an earlier yes)
+    out = await light.flashlight(on=False)
+    assert out["on"] is False and out["say_en"] == light.TORCH_OFF_EN
+    assert [m.on for m in msgs(rec, TorchMsg)] == [False]                 # no confirm needed to turn it off
+    assert light.state(s).off_offered is True                            # and no "shall I turn it off?" later
+
+
+async def test_owner_says_turn_on_and_it_comes_on_or_says_it_cannot(session, flags):
+    s, rec = session
+    out = await light.flashlight(on=True)
+    assert out["on"] is True and [m.on for m in msgs(rec, TorchMsg)] == [True]   # his request is the consent
+    light.state(s).torch = "unsupported"
+    out = await light.flashlight(on=True)
+    assert out["torch"] == "unsupported" and out["say_en"] == light.TORCH_UNSUPPORTED_EN
+    assert len(msgs(rec, TorchMsg)) == 1                                  # never pretends: no second command
+
+
+async def test_a_pending_offer_is_answered_by_his_own_request(session, flags):
+    s, rec = session
+    await light.on_light(s, report())
+    s.clock.t += 5
+    await light.on_light(s, report())                                     # sustained dark: the offer is pending
+    assert light.state(s).pending
+    await light.flashlight(on=False)
+    assert light.state(s).pending == {}
+
+
+def test_the_flashlight_tool_is_listed_only_with_aira_torch():
+    from aira_live.tools import active_tools
+    assert "flashlight" in {f.__name__ for f in active_tools(False, torch=True)}
+    assert "flashlight" not in {f.__name__ for f in active_tools(False)}

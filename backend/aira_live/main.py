@@ -260,7 +260,8 @@ async def _start_live(session: Session, resume_handle: str | None = None) -> Liv
         prompt = await build_system_prompt(session.shop_id, session.lang, session.verbosity,
                                            **({} if er2 else {"er2": False}), **({"walk": True} if walk else {}),
                                            **({"scene": True} if scene else {}))
-        tools = live_tools(active_tools(er2, walk, scene, light), session, NON_BLOCKING_TOOLS, SILENT_TOOLS)
+        tools = live_tools(active_tools(er2, walk, scene, light, settings.torch), session, NON_BLOCKING_TOOLS,
+                           SILENT_TOOLS)
         bridge = LiveBridge(session, lambda: app.state.backend_factory(session), prompt, tools,
                             resume_handle=resume_handle, live_nudge=_live_nudge_on())
         await bridge.start()
