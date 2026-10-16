@@ -16,7 +16,14 @@
 // Live video: a WebRTC viewer (lib/rtcViewer) rides on the same socket for signalling. It asks the followed
 // session for video, and its state (`video`) says whether the page shows the peer-to-peer picture or the JPEG
 // preview. It is stopped (bye, connection closed) whenever the socket is dropped, so nothing outlives the page.
+//
+// Live audio: the player (lib/listen) rides on the socket too. The server's `ready` line says whether it relays
+// audio at all (AIRA_MONITOR_AUDIO=1; `state.audio`, the page hides the button otherwise); the button's click
+// starts the AudioContext and sends {t:"listen", session} for the followed session, which the request follows.
+// Nothing is recorded: chunks are played as they come and gone.
 import { useEffect, useMemo, useState } from "preact/hooks";
+import type { MonitorVoice } from "@aira/contracts";
+import { createListener, type AudioCtxLike, type ListenState } from "./listen";
 import {
   follow as followSession, initialState, monitorUrl, openMonitor, reduce,
   type ClientDeps, type Connection, type LiveState, type SocketLike,
@@ -43,10 +50,25 @@ export interface Monitor {
   follow: (sessionId: string) => void;
   /** The WebRTC picture: "webrtc" with a stream to play, else the JPEG preview ("connecting" while trying). */
   video: VideoState;
+  /** Hearing the followed session on this computer (lib/listen). */
+  listen: MonitorListen;
 }
 
-/** Test hooks: the socket factory and timers, a fake RTCPeerConnection for the viewer, and a fake sign-in. */
-export type MonitorDeps = ClientDeps & { peer?: PeerCtor; auth?: ViewerAuth };
+export interface MonitorListen {
+  /** The server relays audio to a monitor that asks (its `ready` line); false hides the button. */
+  available: boolean;
+  /** Listen is on: the viewer pressed the button and did not stop. */
+  on: boolean;
+  /** Chunks dropped as late since Listen was last started. */
+  dropped: number;
+  /** The button: start or stop (a user gesture, which the browser needs to start sound). */
+  toggle: () => void;
+  /** Subscribes a meter to each voice's level (0-1) as chunks play; returns the unsubscribe. */
+  levels: (cb: (who: MonitorVoice, level: number) => void) => () => void;
+}
+
+/** Test hooks: the socket factory and timers, a fake RTCPeerConnection for the viewer, a fake sign-in and a fake AudioContext. */
+export type MonitorDeps = ClientDeps & { peer?: PeerCtor; auth?: ViewerAuth; audioContext?: () => AudioCtxLike };
 
 /** The browser sign-in, loaded on first use (one promise for the page's life). */
 let browserAuth: Promise<ViewerAuth> | null = null;
@@ -142,9 +164,14 @@ export function useMonitor(
   );
   const [video, setVideo] = useState<VideoState>(() => viewer.state());
   useEffect(() => viewer.subscribe(setVideo), [viewer]);
+  const listener = useMemo(() => createListener(deps?.audioContext ? { audioContext: deps.audioContext } : {}), [deps]);
+  const [listening, setListening] = useState<ListenState>(() => listener.state());
+  useEffect(() => listener.subscribe(setListening), [listener]);
+  useEffect(() => () => listener.dispose(), [listener]); // the page is gone: silence, and the AudioContext closed
   useEffect(() => {
-    viewer.want(state.session); // the followed session (null once it ends): video follows it
-  }, [viewer, state.session]);
+    viewer.want(state.session); // the followed session (null once it ends): video and audio follow it
+    listener.want(state.session);
+  }, [viewer, listener, state.session]);
 
   useEffect(() => {
     // Without sign-in the page connects as soon as it is open; with it, only while a viewer is signed in.
@@ -185,18 +212,22 @@ export function useMonitor(
           setConn(c);
           if (c !== "live") setState(initialState()); // nothing of a session is kept while the socket is not open
         },
-        { ...(deps ?? browserDeps), signal: viewer, getToken },
+        { ...(deps ?? browserDeps), signal: viewer, listen: listener, getToken },
       );
     };
     open(false);
     return () => {
       gone = true;
       viewer.stop(); // bye while the socket is still open, then the connection is closed
+      listener.stop(); // and the server is told to stop relaying sound
       stop?.();
       setState(initialState());
     };
-  }, [enabled, visible, url, deps, auth, status, authRequired]);
+  }, [enabled, visible, url, deps, auth, status, authRequired, listener]);
 
   const follow = (sessionId: string) => setState((s) => followSession(s, sessionId));
-  return { state, conn, configured: url !== null, auth: { status, user, error, signIn, signOut }, follow, video };
+  const listen: MonitorListen = {
+    available: state.audio, on: listening.on, dropped: listening.dropped, toggle: listener.toggle, levels: listener.subscribeLevels,
+  };
+  return { state, conn, configured: url !== null, auth: { status, user, error, signIn, signOut }, follow, video, listen };
 }

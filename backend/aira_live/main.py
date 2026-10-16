@@ -419,6 +419,7 @@ async def ws_endpoint(ws: WebSocket) -> None:
             elif session is None:  # frames, confirmations, audio and events need a hello first
                 await send(ErrorMsg(code="unsupported", say=line("error.unsupported", lang)))
             elif isinstance(msg, AudioInMsg):
+                monitor.audio_in(session, msg.pcm16)  # only to a dashboard that asked to hear this session
                 if bridge:  # mock mode has no Live session: audio is accepted and dropped
                     await bridge.send_audio(msg.pcm16)
             elif isinstance(msg, FrameMsg):
@@ -517,7 +518,8 @@ async def monitor_endpoint(ws: WebSocket) -> None:
     ``monitor.AUTH_TIMEOUT_S`` and ``monitor.authenticate`` must accept the Firebase ID token and the account
     (4401 = not authenticated, 4403 = not an allowed viewer); nothing is subscribed or sent before that, and
     ``monitor.serve`` closes the socket with 4401 when the token expires unrefreshed. Either way a monitor first
-    hears ``session start`` (with ``startedAt``) for every live session of the shop.
+    hears ``session start`` (with ``startedAt``) for every live session of the shop, then ``ready`` (whether it
+    may ask to hear a session: ``AIRA_MONITOR_AUDIO``, ``monitor.listen``).
     """
     origin = ws.headers.get("origin")
     if not monitor.origin_allowed(origin):
@@ -555,10 +557,11 @@ async def monitor_endpoint(ws: WebSocket) -> None:
             sub.push(dump_monitor_msg(monitor_adapter.validate_python(
                 {"t": "mon", "kind": "session", "session": live.session_id, "ts": int(time.time() * 1000),
                  "state": "start", **monitor.session_fields(live)})))
+        sub.push(monitor.ready_line(sub))
         await monitor.serve(ws, sub, viewer)
     except WebSocketDisconnect:
         pass
     finally:
         monitor.unsubscribe(sub)
         diag("monitor", event="close", shop=shop, uid=uid_hash(viewer.uid) if viewer else None,
-             monitors=monitor.monitors(shop))
+             monitors=monitor.monitors(shop), audio_dropped=sub.audio_dropped)

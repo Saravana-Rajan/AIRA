@@ -399,12 +399,21 @@ class MonAuthMsg(_ClientWire):
     id_token: StrictStr = Field(min_length=1)
 
 
-# What a monitor may send: its auth message, and WebRTC signalling for one of the shop's sessions (``to`` = session id).
-MonitorClientMsg = Annotated[Union[MonAuthMsg, RtcMsg], Field(discriminator="t")]
+class MonListenMsg(_ClientWire):
+    """Hear a session: relay its microphone and AIRA's voice to this monitor as kind ``audio`` (``session`` null =
+    stop). Honoured only with AIRA_MONITOR_AUDIO=1 (``monitor.listen``); ignored otherwise."""
+
+    t: Literal["listen"]
+    session: Optional[StrictStr] = Field(min_length=1)  # required; null means stop
+
+
+# What a monitor may send: its auth message, a listen request, and WebRTC signalling for one of the shop's
+# sessions (``to`` = session id).
+MonitorClientMsg = Annotated[Union[MonAuthMsg, MonListenMsg, RtcMsg], Field(discriminator="t")]
 monitor_client_adapter: TypeAdapter[MonitorClientMsg] = TypeAdapter(MonitorClientMsg)
 
 
-def parse_monitor_client_msg(raw: str | bytes) -> MonAuthMsg | RtcMsg | None:
+def parse_monitor_client_msg(raw: str | bytes) -> MonAuthMsg | MonListenMsg | RtcMsg | None:
     """Parse one text frame a monitor sent. None for bad JSON or an unknown/invalid message."""
     try:
         return monitor_client_adapter.validate_json(raw)
@@ -506,13 +515,38 @@ class MonStatsMsg(_MonWire):
         return data
 
 
+class MonReadyMsg(_MonWire):
+    """Once per socket, right after the live sessions a new monitor first hears: ``audio`` says whether the server
+    relays audio to a monitor that asks (AIRA_MONITOR_AUDIO=1). About the feed, not a phone session: ``session``
+    is the monitor's own id (the ``from`` of its rtc signalling, ``rtc.monitor_id``)."""
+
+    kind: Literal["ready"] = "ready"
+    audio: StrictBool
+
+
+MonitorVoice = Literal["owner", "aira"]
+MonitorAudioRate = Literal[16000, 24000]
+
+
+class MonAudioMsg(_MonWire):
+    """One audio chunk for a monitor that asked to listen to this session: the phone's microphone (``who``
+    "owner", 16 kHz, as the phone sent it) or AIRA's voice ("aira", 24 kHz, as Gemini Live produced it), mono
+    PCM16 little-endian, base64. Never stored; dropped, never queued without bound, for a slow monitor."""
+
+    kind: Literal["audio"] = "audio"
+    who: MonitorVoice
+    rate: MonitorAudioRate
+    pcm: StrictStr
+
+
 MonitorMsg = Annotated[
     Union[MonSessionMsg, MonTranscriptMsg, MonFrameMsg, MonVisionMsg, MonHandMsg, MonEventMsg, MonStatusMsg,
-          MonStatsMsg],
+          MonStatsMsg, MonReadyMsg, MonAudioMsg],
     Field(discriminator="kind"),
 ]
 monitor_adapter: TypeAdapter[MonitorMsg] = TypeAdapter(MonitorMsg)
-MONITOR_KINDS: tuple[str, ...] = ("session", "transcript", "frame", "vision", "hand", "event", "status", "stats")
+MONITOR_KINDS: tuple[str, ...] = ("session", "transcript", "frame", "vision", "hand", "event", "status", "stats",
+                                  "ready", "audio")
 
 
 def dump_monitor_msg(msg: BaseModel) -> str:
@@ -522,7 +556,7 @@ def dump_monitor_msg(msg: BaseModel) -> str:
 
 def parse_monitor_msg(raw: str | bytes) -> (
     MonSessionMsg | MonTranscriptMsg | MonFrameMsg | MonVisionMsg | MonHandMsg | MonEventMsg | MonStatusMsg
-    | MonStatsMsg | None
+    | MonStatsMsg | MonReadyMsg | MonAudioMsg | None
 ):
     """Parse one /monitor text frame. None for bad JSON or an unknown/invalid message."""
     try:

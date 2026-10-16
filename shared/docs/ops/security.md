@@ -98,6 +98,19 @@ check (a monitor exists in the relay only after `monitor.subscribe`, which runs 
 the peer-to-peer video and the JPEG frames are behind the same gate. Logs carry a SHA-256 prefix of the uid and
 the outcome, never the token or the email (`diag` also redacts `idToken` / `id_token` at any depth).
 
+**Hearing a session (`AIRA_MONITOR_AUDIO=1`; the owner's explicit decision, on in production).** With this flag
+the Live page offers a **Listen** button: the monitor sends `{t:"listen", session}` and the server relays that
+one session's audio to it as it happens: the **owner's microphone** (the phone's 16 kHz chunks, so also the
+customer and anyone near the phone) and **AIRA's voice** (24 kHz). The relay goes only to a monitor that asked,
+only for the session it named, and stops on `{t:"listen", session: null}`, on a switch to another session, when
+the monitor disconnects or when the session ends; a room camera's session is never relayed; a monitor whose
+socket is backed up loses chunks (bounded queue, counted in the close log line), nothing is buffered without
+limit and nothing is stored. The flag sits **behind the same access as the feed itself**: with
+`AIRA_MONITOR_AUTH` unset (the default) **anyone who can open the Live page can also hear the owner's microphone
+and AIRA**; the Origin check is not authentication. With `AIRA_MONITOR_AUTH=1` only a listed viewer can. With
+`AIRA_MONITOR_AUDIO` unset the server ignores every listen request and tells the dashboard so (`ready` line,
+`audio: false`), which hides the button.
+
 ### Owner setup for the opt-in sign-in (one time; nothing in the repo can do this for you)
 
 Only needed with `AIRA_MONITOR_AUTH=1`. In that mode, until all of these are done the Live page **fails closed**:
@@ -121,6 +134,7 @@ the server refuses every viewer (4401 / 4403) and the dashboard says sign-in is 
 |---|---|---|
 | `AIRA_MONITOR_AUTH` | unset = **no authentication** (the owner's decision) | `1` = the live feed requires the Google sign-in and the viewer list below |
 | `AIRA_MONITOR_VIEWERS` | unset = **nobody** (with `AIRA_MONITOR_AUTH=1`; ignored otherwise) | the Google accounts (emails or `uid:<uid>`) that may watch the live feed |
+| `AIRA_MONITOR_AUDIO` | unset = **no audio** (listen requests ignored, no button) | `1` = a monitor that asks hears the owner's microphone and AIRA's voice, behind the same access as the feed (set to `1` in production by the owner) |
 | `AIRA_FIREBASE_PROJECT` | `GCP_PROJECT` | the Firebase project whose ID tokens are accepted (`aud` / `iss`) |
 | `AIRA_MONITOR_ORIGINS` (comma-separated; **replaces** the default; `:*` = any port) | `https://aira-shop.web.app,https://aira-shop.firebaseapp.com` | the browser Origin allowlist below |
 

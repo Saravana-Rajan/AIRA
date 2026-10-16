@@ -99,6 +99,7 @@ export function App({ listen, loadForecast, resolveEvidence = publicEvidenceUrl,
       <LivePage
         state={monitor.state} conn={monitor.conn} video={monitor.video} configured={monitor.configured} onFollow={monitor.follow}
         auth={{ status: monitor.auth.status, user: monitor.auth.user, error: monitor.auth.error, onSignIn: monitor.auth.signIn, onSignOut: monitor.auth.signOut }}
+        listen={{ available: monitor.listen.available, on: monitor.listen.on, onToggle: monitor.listen.toggle, levels: monitor.listen.levels }}
         shopName={shopName()}
       />
     );

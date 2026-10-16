@@ -23,5 +23,9 @@
   {"t":"mon","kind":"status","session":"s1","ts":1760000006300,"state":"found"},
   {"t":"mon","kind":"status","session":"s1","ts":1760000006400,"state":"idle"},
   {"t":"mon","kind":"stats","session":"s1","ts":1760000008000,"turns":4,"er2Calls":3,"flashCalls":1,"visionMs":1240,"fps":2.5},
-  {"t":"mon","kind":"stats","session":"s1","ts":1760000002000,"turns":0,"er2Calls":0,"flashCalls":0,"visionMs":null,"fps":0}
+  {"t":"mon","kind":"stats","session":"s1","ts":1760000002000,"turns":0,"er2Calls":0,"flashCalls":0,"visionMs":null,"fps":0},
+  {"t":"mon","kind":"ready","session":"m1a2b3c4","ts":1760000000100,"audio":true},
+  {"t":"mon","kind":"ready","session":"m1a2b3c4","ts":1760000000100,"audio":false},
+  {"t":"mon","kind":"audio","session":"s1","ts":1760000007000,"who":"owner","rate":16000,"pcm":"AAAAAAAAAAA="},
+  {"t":"mon","kind":"audio","session":"s1","ts":1760000007100,"who":"aira","rate":24000,"pcm":"AQACAAMABAA="}
 ]
