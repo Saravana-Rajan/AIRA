@@ -3,13 +3,16 @@
 // gesture hooks (wireCameraIntoApp). main.tsx is not edited here: the integrator passes
 // `onWired={(w) => wireCameraIntoApp(w)}` to <AppShell />.
 /// <reference types="vite/client" />
-import type { ServerMsg } from "@aira/contracts";
+import type { ServerMsg, TorchState } from "@aira/contracts";
 import { app } from "../core/app";
 import type { WiredApp } from "../core/wire";
 import {
-  backgroundHeld, captureFrameIf, captureToolFrame, getVideo, holdBackground, probeGrid, setQualityListener, startCamera, startContinuous,
-  stopCamera, toolCaptureBusy, toolCaptureCount, encodedInWorker, type FrameKeep,
+  backgroundHeld, captureFrameIf, captureToolFrame, getVideo, holdBackground, probeGrid, setFrameBoost, setQualityListener,
+  startCamera, startContinuous, stopCamera, toolCaptureBusy, toolCaptureCount, encodedInWorker, type FrameKeep,
 } from "./capture";
+import { boostGainFor } from "./lowlight";
+import { startLightWatch, type LightWatch } from "./lightWatch";
+import { createTorchController, type TorchController } from "./torch";
 import { createWorkingCue } from "./working";
 import { startLiveVideo } from "./liveVideo";
 import { overrideSource } from "./source";
@@ -41,6 +44,21 @@ export interface WireOptions {
   devtools?: boolean;
   /** The accelerometer says the owner walks: describe frames go even when the picture looks the same. */
   isWalking?: () => boolean;
+  /**
+   * Low light. Default: the build flags VITE_AIRA_TORCH=1 (report the light level, obey the server's torch
+   * command after the owner's yes) and VITE_AIRA_LOWLIGHT=1 (boost dim uploaded frames). Both off by default:
+   * then no `light` message is ever sent, no `torch` command is obeyed and no frame is boosted.
+   */
+  lowLight?: { torch?: boolean; boost?: boolean };
+}
+
+/** The low-light flags for this build (tests pass `lowLight` to override). */
+export function lowLightFlags(override?: WireOptions["lowLight"]): { torch: boolean; boost: boolean } {
+  const env = (import.meta.env ?? {}) as Record<string, string | undefined>;
+  return {
+    torch: override?.torch ?? env.VITE_AIRA_TORCH === "1",
+    boost: override?.boost ?? env.VITE_AIRA_LOWLIGHT === "1",
+  };
 }
 
 /**
@@ -66,6 +84,10 @@ export interface CameraWiring {
   isHandNearTarget: () => boolean;
   /** Told when the hand gets near / leaves the guidance target. Returns an unsubscribe fn. */
   onHandNear: (fn: (near: boolean) => void) => () => void;
+  /** The flashlight's real state after every change (the status chip). Returns an unsubscribe fn. */
+  onTorch: (fn: (state: TorchState) => void) => () => void;
+  /** The flashlight as the phone reports it ("off" when the torch flag is off). */
+  torchState: () => TorchState;
   unsubscribe: () => void;
 }
 
@@ -153,6 +175,37 @@ export function wireCameraAndGuidance(opts: WireOptions = {}): CameraWiring {
   });
   const onReady = (m: ServerMsg) => { if (m.t === "ready") liveReady = !m.mock; };
 
+  // Low light (flags off by default: nothing below exists then). The light watch reports the raw level to the
+  // server; the torch obeys only the server's command (sent after the owner's yes) and reports its real state;
+  // the boost brightens dim uploaded frames only (the bump guard grabs the raw <video> itself).
+  const flags = lowLightFlags(opts.lowLight);
+  const torchListeners = new Set<(state: TorchState) => void>();
+  let torch: TorchController | null = null;
+  let light: LightWatch | null = null;
+  if (flags.torch || flags.boost) {
+    light = startLightWatch({
+      probe: () => probeGrid(),
+      send: (m) => (flags.torch ? app.send(m) : true), // boost alone needs no server
+      torch: () => torch?.state() ?? "off",
+      now: () => performance.now(),
+      onSample: flags.boost ? (luma, level) => setFrameBoost(level === "bright" ? null : boostGainFor(luma)) : undefined,
+    });
+  }
+  if (flags.torch) {
+    torch = createTorchController({
+      getTrack: () => {
+        try { return (getVideo()?.srcObject as MediaStream | null)?.getVideoTracks?.()[0] ?? null; } catch { return null; }
+      },
+      onState: (state, reason) => {
+        clientLog("torch", { state, reason });
+        light?.noteTorch(state);
+        for (const fn of torchListeners) {
+          try { fn(state); } catch (e) { report("torch listener failed")(e); }
+        }
+      },
+    });
+  }
+
   let disposed = false;
   let uninstallDev: (() => void) | null = null;
   const socket = app.socket;
@@ -167,6 +220,7 @@ export function wireCameraAndGuidance(opts: WireOptions = {}): CameraWiring {
       (m) => boxStore.onServerMsg(m),   // ER 2 boxes for the "Show boxes" overlay
       (m) => rtc.onServerMsg(m),        // WebRTC signalling from the dashboard
       onReady,                          // live video starts once the Live session is up
+      ...(torch ? [(m: ServerMsg) => torch!.onServerMsg(m)] : []), // the torch command, after the owner's yes
       ...(opts.extraHandlers ?? []),
     ],
     cleanup: [
@@ -176,6 +230,7 @@ export function wireCameraAndGuidance(opts: WireOptions = {}): CameraWiring {
       stopTilt,
       () => setQualityListener(null),
       () => guidance.end(),
+      () => { light?.stop(); torch?.dispose(); setFrameBoost(null); torchListeners.clear(); },
       () => { disposed = true; uninstallDev?.(); uninstallDev = null; nearListeners.clear(); },
     ],
     installDev: (opts.devtools ?? devtoolsDefault())
@@ -197,6 +252,11 @@ export function wireCameraAndGuidance(opts: WireOptions = {}): CameraWiring {
       nearListeners.add(fn);
       return () => { nearListeners.delete(fn); };
     },
+    onTorch: (fn) => {
+      torchListeners.add(fn);
+      return () => { torchListeners.delete(fn); };
+    },
+    torchState: () => torch?.state() ?? "off",
     unsubscribe: () => {
       wiring.unsubscribe();
       if (current?.wiring === self) current = null;
@@ -280,6 +340,11 @@ export function wireCameraIntoApp(w: WiredHooks, opts: PhoneWireOptions = {}): P
   };
 
   const offNear = cam.onHandNear((n) => guard?.setHandNearTarget(n));
+  // The flashlight's real state on the chip ("Flashlight on"): only ever what the phone itself reported.
+  const offTorch = cam.onTorch((state) => {
+    if (disposed) return;
+    w.local(state === "on" ? "torch_on" : state === "unsupported" ? "torch_unsupported" : "torch_off");
+  });
   // The server may only RAISE urgency (`cue: "warn"`); nothing it sends can mute the guard, except the
   // owner's own walking-mode command relayed as a `state` message ("WALKING_MODE on|off", like OPEN_URL).
   const offServer = app.socket.on((m) => {
@@ -328,6 +393,7 @@ export function wireCameraIntoApp(w: WiredHooks, opts: PhoneWireOptions = {}): P
     if (walkTimer) clearTimeout(walkTimer);
     walkTimer = null;
     offNear();
+    offTorch();
     offServer();
     offMode();
     try { guard?.dispose(); } catch (e) { report("bump guard dispose failed")(e); }
