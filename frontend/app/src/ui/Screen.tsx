@@ -35,7 +35,7 @@ type Props = {
  * Everything sits inside ONE full-screen gesture surface; nothing inside is separately tappable.
  * Only phrasing elements (span, img, svg) are used so the markup stays valid inside a <button>.
  */
-export function Screen({ state, level = 0, shopName, lang = "en", progress = null, confirmPending = false, preview, onTalk, onStop }: Props) {
+export function Screen({ state, level = 0, lang = "en", progress = null, confirmPending = false, preview, onTalk, onStop }: Props) {
   const { status, userText, airaText, task } = state;
   const started = Boolean(userText || airaText);
   return (
@@ -44,7 +44,6 @@ export function Screen({ state, level = 0, shopName, lang = "en", progress = nul
         <span class="topbar">
           <span class="brand">
             <img class="brand__logo" src="/icons/aira-logo-192.png" alt="" width={48} height={48} />
-            {shopName ? <span class="brand__shop">{shopName}</span> : null}
           </span>
           <StatusChip kind={status.kind} label={status.label} />
         </span>

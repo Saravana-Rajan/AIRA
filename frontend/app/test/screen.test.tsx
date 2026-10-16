@@ -33,11 +33,12 @@ describe("Screen", () => {
     expect(root.querySelectorAll("a, input, select, textarea, [tabindex]")).toHaveLength(0);
   });
 
-  it("shows the small AIRA logo and the shop name in the top bar", () => {
+  it("shows the small AIRA logo in the top bar, without a shop-name subheading", () => {
     mount(initialScreen);
     const logo = q(".topbar img") as HTMLImageElement;
     expect(logo.getAttribute("src")).toBe("/icons/aira-logo-192.png");
-    expect(q(".topbar")!.textContent).toContain("Sunrise Dairy");
+    expect(q(".brand__shop")).toBeNull();                          // the shop subheading was removed
+    expect(q(".topbar")!.textContent).not.toContain("Sunrise Dairy");
   });
 
   it("status chip shows the label and colours by state", () => {

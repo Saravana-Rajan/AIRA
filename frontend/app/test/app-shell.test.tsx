@@ -87,7 +87,7 @@ describe("AppShell", () => {
     const region = root.querySelector('[aria-live="polite"]')!;
     expect(region).not.toBeNull();
     expect(buttons[0].contains(region)).toBe(false);
-    expect(root.textContent).toContain("Sunrise Dairy");
+    expect(root.textContent).not.toContain("Sunrise Dairy"); // the shop-name subheading was removed from the screen
   });
 
   it("redraws from the wired view and routes gestures to the wired handlers", () => {
