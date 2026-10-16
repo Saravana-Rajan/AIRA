@@ -108,7 +108,7 @@ describe("App", () => {
 
     push();
     await flush();
-    expect(h2s(el)).toEqual(["Today", "Stock", "Orders & deliveries", "Forecast", "Audit trail"]);
+    expect(h2s(el)).toEqual(["Today", "Stock", "Orders & deliveries"]);
     expect(findAllByText(el, "[role=status]", "Live")).toHaveLength(1);
     expect(text(el)).toContain("Arun Ice Cream Family Box");
     expect(findAllByText(el, "li", "Sakthi Curd 1 L: counted 28 L of 30 L ordered")).toHaveLength(1);
@@ -116,7 +116,7 @@ describe("App", () => {
     expect(text(el)).not.toMatch(/expected 28, got 30|undefined/);
     expect(findAllByText(el, ".order__items", "Sakthi Curd 1 L: 30 L")).toHaveLength(1);
     expect(findAllByText(el, "dd", "₹180").length).toBeGreaterThan(0);
-    expect(text(el)).toContain("Forecast unavailable");
+    expect(text(el)).not.toMatch(/Forecast|Audit trail|Reorders suggested/);
     expect(text(el)).not.toMatch(/Demo shop/);
   });
 
@@ -135,7 +135,7 @@ describe("App", () => {
     go("#main"); // the skip link target is not a route
     expect(h2s(el)).toEqual(["Stock"]);
     go("#/");
-    expect(h2s(el)).toHaveLength(5);
+    expect(h2s(el)).toHaveLength(3);
   });
 
   it("only ever reads the demo shop, whatever ?shop= says", () => {
@@ -163,21 +163,16 @@ describe("App", () => {
     expect(findAllByText(el, "[role=status]", "Offline")).toHaveLength(1);
   });
 
-  it("loads the forecast once and shows suggestions", async () => {
+  it("has no Forecast or Audit trail pages any more: their old links open the overview", async () => {
     const { listen, push } = fakeLive();
-    let resolve!: (v: Forecast | null) => void;
-    const loadForecast = vi.fn(() => new Promise<Forecast | null>((r) => (resolve = r)));
-    const el = mount(<App listen={listen} loadForecast={loadForecast} now={() => NOW} />);
+    const el = mount(<App listen={listen} loadForecast={async () => null} now={() => NOW} />);
     push();
-    go("#/forecast");
-    expect(text(el)).toContain("Loading forecast…");
-    const items: ForecastItem[] = [{ sku: "sakthi_curd_1l", name: "Sakthi Curd 1 L", dailyDemand: 26.4, onHand: 28, suggestedOrder: 30 }];
-    resolve({ items, demoHistory: true });
     await flush();
-    expect(text(el.querySelector("tbody"))).toContain("Sakthi Curd 1 L");
-    expect(text(el)).toContain("Demo history");
-    expect(loadForecast).toHaveBeenCalledTimes(1);
-    expect(loadForecast).toHaveBeenCalledWith("sunrise_dairy");
+    for (const gone of ["#/forecast", "#/audit"]) {
+      go(gone);
+      expect(h2s(el)).toEqual(["Today", "Stock", "Orders & deliveries"]);
+    }
+    expect([...el.querySelectorAll("nav a")].map((a) => text(a))).not.toContain("Forecast");
   });
 
   it("by default (no VITE_MONITOR_AUTH) the Live page opens for anyone: no sign-in, no key, a socket at once with nothing sent, and the empty people panel", () => {

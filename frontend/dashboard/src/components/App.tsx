@@ -93,12 +93,8 @@ export function App({ listen, loadForecast, resolveEvidence = publicEvidenceUrl,
   // The Live page listens to aira-live's /monitor channel only while it is open.
   const monitor = useMonitor(route === "#/live", shopId, undefined, monitorDeps);
 
-  const forecastPage = (
-    <ForecastPage items={forecast?.items ?? null} demoHistory={forecast?.demoHistory ?? false} loading={forecastLoading} />
-  );
   let body;
-  if (route === "#/forecast") body = forecastPage;
-  else if (route === "#/live") {
+  if (route === "#/live") {
     body = (
       <LivePage
         state={monitor.state} conn={monitor.conn} video={monitor.video} configured={monitor.configured} onFollow={monitor.follow}
@@ -120,7 +116,6 @@ export function App({ listen, loadForecast, resolveEvidence = publicEvidenceUrl,
   else if (route === "#/stock") body = <StockPage rows={views.stock} />;
   else if (route === "#/prices") body = <PricesPage rows={views.prices} />;
   else if (route === "#/orders") body = <OrdersPage rows={views.orders} />;
-  else if (route === "#/audit") body = <AuditPage rows={views.audit} resolveEvidence={resolveEvidence} />;
   else {
     body = <HomePage views={views} forecast={forecast} forecastLoading={forecastLoading} resolveEvidence={resolveEvidence} />;
   }

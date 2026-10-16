@@ -11,8 +11,6 @@ export const ROUTES = [
   { hash: "#/stock", label: "Stock" },
   { hash: "#/prices", label: "Prices" },
   { hash: "#/orders", label: "Orders & deliveries" },
-  { hash: "#/audit", label: "Audit trail" },
-  { hash: "#/forecast", label: "Forecast" },
   { hash: "#/live", label: "Live" },
 ] as const;
 

@@ -10,7 +10,6 @@ import { AuditPage, type ResolveEvidence } from "./AuditPage";
 export { DEMO_SHOP_ID, SHOP_NAME } from "../lib/access";
 
 const OVERVIEW_ORDERS = 3;
-const OVERVIEW_ACTIONS = 8;
 
 /** The headline numbers across the top of the overview, each a raised tile. The values are the views' own text. */
 function Kpis(props: { views: DashboardViews; forecast: Forecast | null }) {
@@ -19,12 +18,10 @@ function Kpis(props: { views: DashboardViews; forecast: Forecast | null }) {
   const { sent } = splitOrders(views.orders);
   const open = sent.filter((o) => o.stepIndex < ORDER_FLOW.length - 1).length;
   const flagged = sent.filter((o) => o.isDiscrepancy || o.discrepancyTexts.length > 0).length;
-  const reorders = props.forecast?.items?.filter((f) => f.suggestedOrder > 0).length ?? null;
   const tiles: { label: string; value: string; note?: string; tone?: "warn" | "danger" | "ok" }[] = [
     { label: "Revenue today", value: views.today.revenueText, note: `${views.today.salesCount} ${views.today.salesCount === 1 ? "sale" : "sales"}` },
     { label: "Low stock", value: String(lowStock), note: `of ${views.stock.length} products`, tone: lowStock > 0 ? "warn" : "ok" },
     { label: "Open orders", value: String(open), note: flagged > 0 ? `${flagged} with a discrepancy` : "none flagged", tone: flagged > 0 ? "danger" : undefined },
-    { label: "Reorders suggested", value: reorders === null ? "–" : String(reorders), note: reorders === null ? "forecast unavailable" : "from the forecast" },
   ];
   return (
     <section class="kpis" aria-label="Key numbers">
@@ -55,12 +52,6 @@ export function HomePage(props: {
       <TodayPage summary={props.views.today} />
       <StockPage rows={props.views.stock} />
       <OrdersPage rows={orders} limit={OVERVIEW_ORDERS} />
-      <ForecastPage
-        items={props.forecast?.items ?? null}
-        demoHistory={props.forecast?.demoHistory ?? false}
-        loading={props.forecastLoading}
-      />
-      <AuditPage rows={props.views.audit} resolveEvidence={props.resolveEvidence} limit={OVERVIEW_ACTIONS} />
     </>
   );
 }

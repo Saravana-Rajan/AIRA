@@ -82,6 +82,7 @@ export function LivePage({
 
   return (
     <div class="livepage">
+      <div class="lv-bar">
       <header class="lv-head">
         <img class="lv-logo" src={`${import.meta.env.BASE_URL}aira-logo-192.png`} alt="" width={40} height={40} />
         <h2 class="lv-title">{shopName} - Live</h2>
@@ -99,6 +100,7 @@ export function LivePage({
       </header>
 
       <People sessions={state.sessions} current={state.session} now={t} onFollow={onFollow} />
+      </div>
 
       <section class="cam" aria-labelledby="cam-title">
         <div class="cam__head">
