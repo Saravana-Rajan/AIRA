@@ -196,6 +196,30 @@ async def test_auto_off_still_fires_after_the_owner_turns_it_on_manually(session
     assert [m.on for m in msgs(rec, TorchMsg)] == [True, True, False]  # auto-on, the owner's on, then auto-off
 
 
+async def test_off_offered_resets_each_episode_so_the_auto_off_fires_every_time(session, flags):
+    # Regression (turned off the first time, not the second): after the auto-off, the owner also said "turn it
+    # off" while the torch was already off; that set off_offered, and because no torch->off change followed it,
+    # the flag stuck and carried into the next torch-on episode, blocking that episode's auto-off. off_offered now
+    # resets when the torch turns on, so every episode gets a fresh auto-off.
+    s, rec = session
+    # episode 1: auto-on, bright, auto-off, the phone reports off
+    await light.on_light(s, report("dark", 12.0, "off"))
+    await light.on_light(s, report("bright", 150.0, "on"))
+    s.clock.t += light.TORCH_OFF_BRIGHT_S + 1
+    await light.on_light(s, report("bright", 150.0, "on"))   # auto-off
+    await light.on_light(s, report("bright", 150.0, "off"))   # the phone applied the off
+    # the owner then also says "turn it off" while it is already off (no torch change follows to clear the flag)
+    await light.flashlight(False)
+    await light.on_light(s, report("bright", 150.0, "off"))
+    # episode 2: the view goes dark again -> auto-on -> bright -> the auto-off must fire again
+    await light.on_light(s, report("dark", 9.0, "off"))     # auto-on (episode 2)
+    await light.on_light(s, report("bright", 150.0, "on"))   # applied + bright; a fresh episode clears off_offered
+    assert light.state(s).off_offered is False
+    s.clock.t += light.TORCH_OFF_BRIGHT_S + 1
+    await light.on_light(s, report("bright", 150.0, "on"))
+    assert msgs(rec, TorchMsg)[-1].on is False               # the second episode turned off automatically
+
+
 # ---------- the light switch tool ----------
 async def test_switch_find_delegates_to_a_route_follower_when_one_is_importable(session, flags, monkeypatch):
     s, rec = session
