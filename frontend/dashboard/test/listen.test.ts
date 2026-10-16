@@ -22,6 +22,7 @@ interface Started { who: MonitorVoice | "?"; at: number | undefined; rate: numbe
 
 function fakeContext(startState = "suspended") {
   const started: Started[] = [];
+  const stopped: Started[] = [];
   const gains: GainLike[] = [];
   const ctx = {
     currentTime: 0, state: startState, destination: { name: "speakers" },
@@ -34,14 +35,17 @@ function fakeContext(startState = "suspended") {
     },
     createBufferSource(): SourceLike {
       let dest: unknown = null;
+      let rec: Started | null = null;
       const src: SourceLike = {
         buffer: null, onended: null,
         connect: (d: unknown) => { dest = d; return d; },
         start: (when?: number) => {
           const b = src.buffer as (AudioBufferLike & { rate: number }) | null;
           const who = (dest as { who?: MonitorVoice } | null)?.who ?? "?";
-          started.push({ who, at: when, rate: b?.rate ?? 0, frames: b ? Math.round(b.duration * b.rate) : 0 });
+          rec = { who, at: when, rate: b?.rate ?? 0, frames: b ? Math.round(b.duration * b.rate) : 0 };
+          started.push(rec);
         },
+        stop: () => { if (rec) stopped.push(rec); },
       };
       return src;
     },
@@ -52,7 +56,7 @@ function fakeContext(startState = "suspended") {
       return g;
     },
   };
-  return { ctx: ctx as unknown as AudioCtxLike, started, gains, raw: ctx };
+  return { ctx: ctx as unknown as AudioCtxLike, started, stopped, gains, raw: ctx };
 }
 
 function rig() {
@@ -164,7 +168,7 @@ describe("playback: in order, a small jitter buffer, late chunks dropped", () =>
     r.l.receive(chunk("owner", 1600)); // re-buffered: 2.45-2.55
     expect(r.started.map((s) => s.at)).toEqual([1.45, 2.45]);
     // a stall then a burst: chunks pile up ahead of the clock until MAX_LEAD_S, the rest are late and dropped
-    expect(MAX_LEAD_S).toBe(1.0);
+    expect(MAX_LEAD_S.owner).toBe(1.0);
     for (let i = 0; i < 10; i++) r.l.receive(chunk("owner", 1600));
     const ahead = r.started.slice(2).map((s) => Math.round(((s.at ?? 0) - 2) * 100) / 100);
     expect(ahead).toEqual([0.55, 0.65, 0.75, 0.85, 0.95]); // 1.05 would be late
@@ -180,18 +184,47 @@ describe("playback: in order, a small jitter buffer, late chunks dropped", () =>
     r.l.want("s1");
     r.l.start();
     r.raw.currentTime = 5;
-    r.l.receive(chunk("aira", 2400));
-    for (let i = 0; i < 8; i++) r.l.receive(chunk("aira", 2400));
+    r.l.receive(chunk("owner", 1600)); // a mic burst (owner's tight lead) so some chunks drop, to reset below
+    for (let i = 0; i < 8; i++) r.l.receive(chunk("owner", 1600));
     expect(r.l.state().dropped).toBeGreaterThan(0);
     r.l.want("s2");
     r.raw.currentTime = 5.05;
-    r.l.receive(chunk("aira", 2400, "s2"));
+    r.l.receive(chunk("owner", 1600, "s2"));
     expect(r.started[r.started.length - 1].at).toBeCloseTo(5.5, 6); // not queued behind s1's sound
     r.l.stop();
     r.l.start();
     expect(r.l.state().dropped).toBe(0);
     expect(r.make).toHaveBeenCalledTimes(1); // the same AudioContext, resumed
     expect(r.raw.resume).toHaveBeenCalledTimes(2);
+  });
+  it("buffers a whole AIRA turn delivered faster than real time instead of dropping its tail", () => {
+    const r = rig();
+    r.l.want("s1");
+    r.l.start();
+    r.raw.currentTime = 1;
+    // Gemini Live hands over a whole turn at once: 50 chunks of 2400 samples at 24 kHz = 5 s of speech in one
+    // tick. The owner's tight lead would drop most of it; AIRA's large lead lets the turn buffer so the voice is
+    // not cut off mid-sentence and left silent.
+    expect(MAX_LEAD_S.aira).toBeGreaterThan(MAX_LEAD_S.owner);
+    for (let i = 0; i < 50; i++) r.l.receive(chunk("aira", 2400));
+    expect(r.started).toHaveLength(50); // every chunk scheduled
+    expect(r.l.state().dropped).toBe(0); // none dropped
+  });
+  it("Stop and switching person cancel the sound already buffered ahead", () => {
+    const r = rig();
+    r.l.want("s1");
+    r.l.start();
+    r.raw.currentTime = 1;
+    for (let i = 0; i < 20; i++) r.l.receive(chunk("aira", 2400)); // ~2 s of AIRA buffered ahead
+    expect(r.started).toHaveLength(20);
+    expect(r.stopped).toHaveLength(0);
+    r.l.want("s2"); // switching person cancels the buffered sound at once, not seconds later
+    expect(r.stopped).toHaveLength(20);
+    r.raw.currentTime = 2;
+    r.l.receive(chunk("aira", 2400, "s2")); // s2's turn buffers fresh
+    expect(r.started).toHaveLength(21);
+    r.l.stop(); // Stop cancels that too
+    expect(r.stopped).toHaveLength(21);
   });
   it("reports each scheduled chunk's level per voice to the meter, and dispose closes the context", async () => {
     const r = rig();
