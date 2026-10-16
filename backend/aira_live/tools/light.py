@@ -193,6 +193,11 @@ async def on_light(session: Session, msg: LightMsg) -> None:
     st.level, st.luma, st.torch = msg.level, float(msg.luma), msg.torch
     diag("light", action="report", session=session.session_id, level=msg.level, luma=msg.luma, torch=msg.torch)
     monitor.event(session, "light", level=msg.level, luma=msg.luma, torch=msg.torch)
+    # A sent command is fulfilled as soon as the phone reports the state we asked for, even when that is not a
+    # change (the owner said "turn it on" while it was already on): otherwise torch_requested would stay set and
+    # block the automatic turn-off, which only fires when no command is in flight.
+    if st.torch_requested is not None and msg.torch == st.torch_requested:
+        st.torch_requested = None
     if msg.torch != prev_torch:
         st.torch_requested = None
         if msg.torch == "unsupported" and not st.unsupported_said:
