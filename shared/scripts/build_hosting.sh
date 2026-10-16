@@ -11,6 +11,8 @@
 #   VITE_AIRA_LIVE_WS   wss://<cloud-run-host>/ws   (the app falls back to ws://localhost:8080/ws)
 #   VITE_AIRA_APP_KEY   the shared demo key sent as hello.idToken (= AIRA_APP_KEY on aira-live; security.md)
 #   VITE_FIREBASE_*     Firebase web-app config used by the dashboard
+#   VITE_AIRA_MEDIA_BUTTON / VITE_AIRA_VOLUME_TRIGGER / VITE_AIRA_WAKEWORD
+#                       hands-free start flags, off unless "1" (shared/docs/ops/handsfree.md)
 #
 # Usage: bash shared/scripts/build_hosting.sh
 set -euo pipefail
