@@ -37,9 +37,13 @@ export const LABELS: Record<
   | "hintTalk"
   | "mismatch" | "unsure" | "reconnecting" | "yesOrNo" | "short" | "extra" | "counted"
   | "order" | "delivery" | "sale" | "payment" | "stock"
-  | "confirmOrder" | "confirmPayment" | "confirmSale" | "confirmDiscrepancy" | "confirm",
+  | "confirmOrder" | "confirmPayment" | "confirmSale" | "confirmDiscrepancy" | "confirm"
+  | "torchOn" | "torchUnsupported",
   S
 > = {
+  // the flashlight, appended to the chip while it is on (camera/torch.ts reports the real state)
+  torchOn:          { en: "Flashlight on", ta: "டார்ச் ஆன்", hi: "टॉर्च चालू" },
+  torchUnsupported: { en: "No flashlight", ta: "டார்ச் இல்லை", hi: "टॉर्च नहीं" },
   connecting: { en: "Connecting", ta: "இணைக்கிறது", hi: "जुड़ रहा है" },
   ready:      { en: "Ready", ta: "தயார்", hi: "तैयार" },
   listening:  { en: "Listening", ta: "கேட்கிறேன்", hi: "सुन रहा हूँ" },
@@ -74,6 +78,31 @@ export const LABELS: Record<
     ta: "பேச எங்கும் இருமுறை தட்டுங்கள். நிறுத்த அழுத்திப் பிடியுங்கள்.",
     hi: "बोलने के लिए कहीं भी दो बार टैप करें। रोकने के लिए दबाकर रखें।",
   },
+};
+
+/**
+ * Low light (camera/torch.ts, camera/lightWatch.ts): the same words as backend/aira_live/system_lines.py
+ * "light.*". The server speaks them through Live (or captions them in mock mode); the phone keeps them here so a
+ * local fallback and the screen reader can show the same line. Nothing here is spoken on the phone's own
+ * initiative: the torch offer is a server proposal, answered by voice or gesture like every other confirm.
+ */
+export const LIGHT: Record<
+  "torchOffer" | "torchOffOffer" | "torchOn" | "torchOff" | "torchUnsupported" | "switchStart" | "switchPress"
+  | "onNow" | "stillDark" | "notSure" | "noBoard" | "noMore",
+  S
+> = {
+  torchOffer:       { en: "It's too dark. Shall I turn on the flashlight?", ta: "ரொம்ப இருட்டாக இருக்கு. டார்ச் லைட்டை போடட்டுமா?", hi: "बहुत अँधेरा है। क्या मैं टॉर्च जला दूँ?" },
+  torchOffOffer:    { en: "It's bright now. Shall I turn off the flashlight?", ta: "இப்போ வெளிச்சமா இருக்கு. டார்ச் லைட்டை அணைக்கட்டுமா?", hi: "अब रोशनी है। क्या मैं टॉर्च बंद कर दूँ?" },
+  torchOn:          { en: "Turning on the flashlight.", ta: "டார்ச் லைட்டை போடுகிறேன்.", hi: "टॉर्च जला रहा हूँ।" },
+  torchOff:         { en: "Turning off the flashlight.", ta: "டார்ச் லைட்டை அணைக்கிறேன்.", hi: "टॉर्च बंद कर रहा हूँ।" },
+  torchUnsupported: { en: "I can't turn on the flashlight on this phone.", ta: "இந்த போனில் என்னால் டார்ச் லைட்டை போட முடியாது.", hi: "इस फ़ोन पर मैं टॉर्च नहीं जला सकता।" },
+  switchStart:      { en: "Point the phone at the switch board and hold your hand out. I'll guide your finger.", ta: "போனை ஸ்விட்ச் போர்டை நோக்கி வைத்து கையை நீட்டுங்கள். உங்கள் விரலை வழிநடத்துகிறேன்.", hi: "फ़ोन को स्विच बोर्ड की ओर रखें और हाथ आगे बढ़ाएँ। मैं आपकी उँगली को रास्ता दिखाऊँगा।" },
+  switchPress:      { en: "Your finger is on {name}. Press it.", ta: "உங்கள் விரல் {name} மேல் இருக்கு. அழுத்துங்கள்.", hi: "आपकी उँगली {name} पर है। दबाइए।" },
+  onNow:            { en: "The light is on now.", ta: "இப்போ லைட் எரியுது.", hi: "अब लाइट जल गई।" },
+  stillDark:        { en: "Still dark. Try the next switch.", ta: "இன்னும் இருட்டாகவே இருக்கு. அடுத்த ஸ்விட்சை முயலுங்கள்.", hi: "अभी भी अँधेरा है। अगला स्विच दबाइए।" },
+  notSure:          { en: "Not sure which is a switch and which is a socket. I've stopped guiding. Ask someone sighted.", ta: "எது ஸ்விட்ச், எது சாக்கெட் என்று உறுதியில்லை. வழிநடத்துவதை நிறுத்திவிட்டேன். பார்வையுள்ள யாரையாவது கேளுங்கள்.", hi: "पक्का नहीं कि कौन सा स्विच है और कौन सा सॉकेट। मैंने रास्ता दिखाना रोक दिया। किसी देख सकने वाले से पूछें।" },
+  noBoard:          { en: "I can't see the switch board. Turn slowly.", ta: "ஸ்விட்ச் போர்டு தெரியவில்லை. மெதுவாகத் திரும்புங்கள்.", hi: "स्विच बोर्ड नहीं दिख रहा। धीरे-धीरे घूमिए।" },
+  noMore:           { en: "No more switches here.", ta: "இங்கே வேறு ஸ்விட்ச் இல்லை.", hi: "यहाँ और स्विच नहीं हैं।" },
 };
 
 /**

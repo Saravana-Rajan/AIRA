@@ -49,6 +49,16 @@ export type BoxSource = (typeof BOX_SOURCES)[number];
 export const BOX_SEVERITIES = Object.freeze(["danger"] as const);
 export type BoxSeverity = (typeof BOX_SEVERITIES)[number];
 
+// Low light (phone `light` message): how bright the camera view is, decided on the phone over several seconds
+// with hysteresis (camera/lowlight.ts), never from one frame. "dark": too dark to see; "dim": usable with a
+// boost; "bright": fine.
+export const LIGHT_LEVELS = Object.freeze(["dark", "dim", "bright"] as const);
+export type LightLevel = (typeof LIGHT_LEVELS)[number];
+// The rear-camera flashlight as the phone reports it: off, on, or "unsupported" (this browser cannot switch it,
+// e.g. iPhone Safari). The server never assumes it is on: only the phone's report says so.
+export const TORCH_STATES = Object.freeze(["off", "on", "unsupported"] as const);
+export type TorchState = (typeof TORCH_STATES)[number];
+
 export const ORDER_STATES = Object.freeze([
   "DRAFT", "ORDER_PLACED", "DELIVERY_PENDING", "DELIVERY_RECONCILED", "DISCREPANCY",
   "PAYMENT_PENDING", "PAYMENT_CONFIRMED", "CLOSED",

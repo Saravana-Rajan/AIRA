@@ -1,6 +1,6 @@
 // What the phone screen shows, derived from server messages and local gestures.
 // Pure: no DOM, no timers. Audio, earcons and haptics are handled elsewhere (core/dispatch).
-import type { ConfirmKind, Entity, ServerMsg } from "@aira/contracts";
+import type { ConfirmKind, Entity, ServerMsg, TorchState } from "@aira/contracts";
 
 export type StatusKind = "connecting" | "ready" | "listening" | "thinking" | "counting" | "warning" | "stop";
 export interface Status { kind: StatusKind; label: string }
@@ -16,10 +16,15 @@ export interface ScreenState {
   airaText: string;
   /** Current task shown at the bottom, or null when idle. */
   task: TaskCard | null;
+  /** The flashlight as the phone reports it (camera/torch.ts); the chip shows "Flashlight on". Absent = off. */
+  torch?: TorchState;
 }
 
-/** Events raised on the phone itself: gestures, the bump guard and the network monitor. */
-export type LocalEvent = { t: "local"; event: "talk" | "stop" | "bump" | "bump_clear" | "offline" };
+/** Events raised on the phone itself: gestures, the bump guard, the network monitor and the flashlight. */
+export type LocalEvent = {
+  t: "local";
+  event: "talk" | "stop" | "bump" | "bump_clear" | "offline" | "torch_on" | "torch_off" | "torch_unsupported";
+};
 export type ScreenInput = ServerMsg | LocalEvent;
 
 const READY: Status = { kind: "ready", label: "Ready" };
@@ -75,6 +80,9 @@ export function reduceScreen(s: ScreenState, m: ScreenInput): ScreenState {
         case "bump": return { ...s, status: { kind: "stop", label: "Stop!" } };
         case "bump_clear": return { ...s, status: READY };
         case "offline": return withStatus(s, OFFLINE);
+        case "torch_on": return { ...s, torch: "on" };
+        case "torch_off": return { ...s, torch: "off" };
+        case "torch_unsupported": return { ...s, torch: "unsupported" };
       }
       return s;
 

@@ -141,6 +141,73 @@ LINES: dict[str, dict[str, str]] = {
         "ta": "மைக்கைச் சோதிக்க தட்டவும்.",
         "hi": "माइक जाँचने के लिए टैप करें।",
     },
+    # Low light (aira_live.tools.light): the phone's captions when no Live session speaks for AIRA. Live says the
+    # same facts in whatever language the owner is speaking. The same words as frontend/app/src/i18n/strings.ts LIGHT.
+    "light.torch_offer": {
+        "en": "It's too dark. Shall I turn on the flashlight?",
+        "ta": "ரொம்ப இருட்டாக இருக்கு. டார்ச் லைட்டை போடட்டுமா?",
+        "hi": "बहुत अँधेरा है। क्या मैं टॉर्च जला दूँ?",
+    },
+    "light.torch_off_offer": {
+        "en": "It's bright now. Shall I turn off the flashlight?",
+        "ta": "இப்போ வெளிச்சமா இருக்கு. டார்ச் லைட்டை அணைக்கட்டுமா?",
+        "hi": "अब रोशनी है। क्या मैं टॉर्च बंद कर दूँ?",
+    },
+    "light.torch_on": {
+        "en": "Turning on the flashlight.",
+        "ta": "டார்ச் லைட்டை போடுகிறேன்.",
+        "hi": "टॉर्च जला रहा हूँ।",
+    },
+    "light.torch_off": {
+        "en": "Turning off the flashlight.",
+        "ta": "டார்ச் லைட்டை அணைக்கிறேன்.",
+        "hi": "टॉर्च बंद कर रहा हूँ।",
+    },
+    "light.torch_unsupported": {
+        "en": "I can't turn on the flashlight on this phone.",
+        "ta": "இந்த போனில் என்னால் டார்ச் லைட்டை போட முடியாது.",
+        "hi": "इस फ़ोन पर मैं टॉर्च नहीं जला सकता।",
+    },
+    "light.switch_start": {
+        "en": "Point the phone at the switch board and hold your hand out. I'll guide your finger.",
+        "ta": "போனை ஸ்விட்ச் போர்டை நோக்கி வைத்து கையை நீட்டுங்கள். உங்கள் விரலை வழிநடத்துகிறேன்.",
+        "hi": "फ़ोन को स्विच बोर्ड की ओर रखें और हाथ आगे बढ़ाएँ। मैं आपकी उँगली को रास्ता दिखाऊँगा।",
+    },
+    "light.switch_press": {
+        "en": "Your finger is on {name}. Press it.",
+        "ta": "உங்கள் விரல் {name} மேல் இருக்கு. அழுத்துங்கள்.",
+        "hi": "आपकी उँगली {name} पर है। दबाइए।",
+    },
+    "light.on_now": {
+        "en": "The light is on now.",
+        "ta": "இப்போ லைட் எரியுது.",
+        "hi": "अब लाइट जल गई।",
+    },
+    "light.still_dark": {
+        "en": "Still dark. Try the next switch.",
+        "ta": "இன்னும் இருட்டாகவே இருக்கு. அடுத்த ஸ்விட்சை முயலுங்கள்.",
+        "hi": "अभी भी अँधेरा है। अगला स्विच दबाइए।",
+    },
+    "light.not_sure": {
+        "en": "Not sure which is a switch and which is a socket. I've stopped guiding. Ask someone sighted.",
+        "ta": "எது ஸ்விட்ச், எது சாக்கெட் என்று உறுதியில்லை. வழிநடத்துவதை நிறுத்திவிட்டேன். பார்வையுள்ள யாரையாவது கேளுங்கள்.",
+        "hi": "पक्का नहीं कि कौन सा स्विच है और कौन सा सॉकेट। मैंने रास्ता दिखाना रोक दिया। किसी देख सकने वाले से पूछें।",
+    },
+    "light.no_board": {
+        "en": "I can't see the switch board. Turn slowly.",
+        "ta": "ஸ்விட்ச் போர்டு தெரியவில்லை. மெதுவாகத் திரும்புங்கள்.",
+        "hi": "स्विच बोर्ड नहीं दिख रहा। धीरे-धीरे घूमिए।",
+    },
+    "light.no_more": {
+        "en": "No more switches here.",
+        "ta": "இங்கே வேறு ஸ்விட்ச் இல்லை.",
+        "hi": "यहाँ और स्विच नहीं हैं।",
+    },
+    "light.switch_stopped": {
+        "en": "I stopped guiding to the switch.",
+        "ta": "ஸ்விட்சுக்கு வழிநடத்துவதை நிறுத்திவிட்டேன்.",
+        "hi": "मैंने स्विच तक रास्ता दिखाना रोक दिया।",
+    },
 }
 
 

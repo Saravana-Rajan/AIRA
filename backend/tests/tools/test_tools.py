@@ -35,6 +35,7 @@ EXPECTED = {
     "scene_recall": ["item"],  # what AIRA last counted, with age and evidence (tools/camera.py; read-only)
     # Live's silent answer to a [SCENE CHECK]: what it sees, for the last-seen memory (tools/memory.py)
     "scene_report": ["check_id", "items"],
+    "light_switch_find": ["target"],  # low light (tools/light.py): guide the finger to a switch, never a socket
 }
 
 OPTIONAL_DEFAULTS = {
@@ -56,6 +57,7 @@ OPTIONAL_DEFAULTS = {
     ("nav_report", "current_zone"): "unknown", ("nav_report", "facing"): "unknown",
     ("nav_report", "confidence"): "low", ("nav_report", "reflection"): False,
     ("scene_report", "check_id"): 0, ("scene_report", "items"): None,
+    ("light_switch_find", "target"): "light switch",
 }
 
 LITERALS = {

@@ -412,7 +412,7 @@ def test_deploy_workflow_tests_then_deploys_with_wif():
         *LEAST_RUN_FLAGS,
         SECRETS_FLAG,
         "--update-env-vars FIRESTORE_DATABASE=aira,AIRA_DEMO_SHOP=sunrise_dairy,AIRA_ALLOW_NO_TOKEN=1,AIRA_MOCK=0,"
-        "AIRA_WALK=1,GCP_PROJECT=${{ secrets.GCP_PROJECT }}",
+        "AIRA_WALK=1,AIRA_SCENE_MEMORY=1,AIRA_ROUTES=1,AIRA_TORCH=1,AIRA_LOWLIGHT=1,GCP_PROJECT=${{ secrets.GCP_PROJECT }}",
     ):
         assert part in run_deploy, part
     # --update-* keeps values added on the service later (WhatsApp tokens, supplier phones);
@@ -422,6 +422,9 @@ def test_deploy_workflow_tests_then_deploys_with_wif():
 
     [build] = [s for s in deploy["steps"] if s.get("run", "").strip() == "bash shared/scripts/build_hosting.sh"]
     assert build["env"]["VITE_AIRA_LIVE_WS"].startswith("${{ steps.")
+    # the app-side switches of the features the owner turned on in production (code defaults stay off)
+    for flag in ("VITE_AIRA_MEDIA_BUTTON", "VITE_AIRA_TORCH", "VITE_AIRA_LOWLIGHT"):
+        assert build["env"].get(flag) == "1", flag
     firebase_env = {k: v for k, v in build["env"].items() if k.startswith("VITE_FIREBASE_")}
     assert set(firebase_env) == {
         "VITE_FIREBASE_API_KEY", "VITE_FIREBASE_AUTH_DOMAIN", "VITE_FIREBASE_PROJECT_ID",

@@ -7,6 +7,7 @@ from aira_live.tools.core import confirm_action
 from aira_live.tools.delivery import delivery_count, delivery_start, invoice_check
 from aira_live.tools.describe import describe_mode
 from aira_live.tools.insights import day_summary, reorder_suggest
+from aira_live.tools.light import light_switch_find
 from aira_live.tools.memory import memory_forget, memory_remembering, memory_where, scene_report
 from aira_live.tools.orders import order_create, order_status
 from aira_live.tools.payments import sale_pay, supplier_pay
@@ -31,6 +32,7 @@ TOOL_FUNCS: list[Callable[..., Awaitable[dict]]] = [
     walk_to, walk_stop, nav_report,  # "walk with me": guidance from Live's own video (background loop, read-only)
     scene_recall,  # what was last counted, with age and evidence (read-only, not ER: also in Live-only mode)
     scene_report,  # Live's silent answer to a [SCENE CHECK]: what it sees, for the last-seen memory
+    light_switch_find,  # low light (AIRA_LOWLIGHT): find the switch board, guide the finger to a switch (never a socket)
 ]
 TOOLS_BY_NAME: dict[str, Callable[..., Awaitable[dict]]] = {f.__name__: f for f in TOOL_FUNCS}
 # Tools that work through Robotics-ER (camera questions, identification, narration, delivery counts).
@@ -45,13 +47,17 @@ WALK_TOOLS: frozenset[str] = frozenset({"walk_to", "walk_stop", "nav_report"})
 SILENT_TOOLS: frozenset[str] = frozenset({"nav_report", "scene_report"})
 # Scene memory (aira_live.scene_watch): gated by AIRA_SCENE_MEMORY (config.Settings.scene_memory, default off).
 SCENE_TOOLS: frozenset[str] = frozenset({"scene_report"})
+# Low light (tools.light): gated by AIRA_LOWLIGHT (config.Settings.lowlight, default off).
+LIGHT_TOOLS: frozenset[str] = frozenset({"light_switch_find"})
 
 
-def active_tools(er2: bool = True, walk: bool = False, scene: bool = False) -> list[Callable[..., Awaitable[dict]]]:
+def active_tools(er2: bool = True, walk: bool = False, scene: bool = False,
+                 light: bool = False) -> list[Callable[..., Awaitable[dict]]]:
     """The Live tool list: without the Robotics-ER tools when ``er2`` is off (the Live-only mode), without
-    the walk tools when ``walk`` is off and without scene_report when ``scene`` is off."""
+    the walk tools when ``walk`` is off, without scene_report when ``scene`` is off and without the light-switch
+    tool when ``light`` (AIRA_LOWLIGHT) is off."""
     off = (frozenset() if er2 else ER_TOOLS) | (frozenset() if walk else WALK_TOOLS) | \
-        (frozenset() if scene else SCENE_TOOLS)
+        (frozenset() if scene else SCENE_TOOLS) | (frozenset() if light else LIGHT_TOOLS)
     return [f for f in TOOL_FUNCS if f.__name__ not in off]
 # Live tools that run in the background (Live NON_BLOCKING behaviour): the conversation goes on while
 # delivery_count streams counts, sale_pay waits for the soundbox, walk_to starts the walk loop, and every camera / vision tool that takes

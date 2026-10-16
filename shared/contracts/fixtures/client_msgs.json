@@ -28,5 +28,8 @@
   {"t":"rtc","kind":"offer","to":"m1","sdp":"v=0\r\no=- 1 1 IN IP4 127.0.0.1\r\ns=-\r\n"},
   {"t":"rtc","kind":"ice","from":"s1","to":"m1","candidate":{"candidate":"candidate:1 1 udp 2122260223 192.0.2.1 50000 typ host","sdpMid":"0","sdpMLineIndex":0}},
   {"t":"rtc","kind":"connected","to":"m1"},
-  {"t":"rtc","kind":"bye","to":"m1"}
+  {"t":"rtc","kind":"bye","to":"m1"},
+  {"t":"light","level":"dark","luma":21.5,"torch":"off"},
+  {"t":"light","level":"dim","luma":64,"torch":"on"},
+  {"t":"light","level":"bright","luma":142,"torch":"unsupported"}
 ]

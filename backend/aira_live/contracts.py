@@ -51,6 +51,11 @@ ErrorCode = Literal["network", "model_timeout", "camera", "permission", "unsuppo
 # Who drew a box: the phone's on-device MediaPipe detector, Gemini Robotics-ER 2, or the phone's bump guard.
 BoxSource = Literal["mediapipe", "er2", "bump"]
 BoxSeverity = Literal["danger"]
+# Low light (phone ``light`` message): the sustained light level the phone decided over seconds with hysteresis
+# (never one frame), and the flashlight as the phone reports it. "unsupported": this browser cannot switch the
+# torch (e.g. iPhone Safari); the server never assumes it is on.
+LightLevel = Literal["dark", "dim", "bright"]
+TorchState = Literal["off", "on", "unsupported"]
 
 # Spatial coordinates: point [y, x], box [ymin, xmin, ymax, xmax], integers 0..NORM_MAX.
 NORM_MAX = 1000
@@ -226,8 +231,21 @@ class RtcOutMsg(_ServerWire):
     candidate: Optional[RtcCandidate] = None
 
 
+class LightMsg(_ClientWire):
+    """Low light: the phone's sustained light level, the raw mean luma (0-255, measured BEFORE any low-light boost)
+    and the flashlight state as the phone knows it. Sent on every change of level or torch state and on a clear
+    luma change (rate-limited). The server only records it (``aira_live.tools.light``): with AIRA_TORCH it may
+    PROPOSE the flashlight, which turns on only after a spoken yes. Nothing here changes state on its own."""
+
+    t: Literal["light"]
+    level: LightLevel
+    luma: Annotated[Num, Field(ge=0, le=255)]
+    torch: TorchState
+
+
 ClientMsg = Annotated[
-    Union[HelloMsg, AudioInMsg, FrameMsg, TextMsg, EventMsg, ConfirmReplyMsg, StopMsg, LogMsg, BoxesMsg, RtcMsg],
+    Union[HelloMsg, AudioInMsg, FrameMsg, TextMsg, EventMsg, ConfirmReplyMsg, StopMsg, LogMsg, BoxesMsg, RtcMsg,
+          LightMsg],
     Field(discriminator="t"),
 ]
 
@@ -338,9 +356,18 @@ class BoxesOutMsg(_ServerWire):
     found: Optional[StrictBool] = None
 
 
+class TorchMsg(_ServerWire):
+    """Flashlight command (AIRA_TORCH): sent only by the torch committer after the owner's spoken "yes" (on), or
+    to switch it off again. The phone obeys only when its rear-camera track reports the torch capability and
+    answers with a ``light`` message carrying the real state (on / off / unsupported). Never spoken."""
+
+    t: Literal["torch"] = "torch"
+    on: StrictBool
+
+
 ServerMsg = Annotated[
     Union[ReadyMsg, AudioOutMsg, TranscriptMsg, RequestFrameMsg, TargetMsg, CountMsg, StateMsg, ConfirmMsg, CueMsg,
-          ErrorMsg, BoxesOutMsg, RtcOutMsg],
+          ErrorMsg, BoxesOutMsg, RtcOutMsg, TorchMsg],
     Field(discriminator="t"),
 ]
 
@@ -519,7 +546,7 @@ SERVER_MSG_TYPES: tuple[str, ...] = _tags(ServerMsg)
 
 def parse_client_msg(raw: str | bytes) -> (
     HelloMsg | AudioInMsg | FrameMsg | TextMsg | EventMsg | ConfirmReplyMsg | StopMsg | LogMsg | BoxesMsg | RtcMsg
-    | None
+    | LightMsg | None
 ):
     """Parse one WebSocket text frame from the app. None for bad JSON or an unknown/invalid message."""
     try:
@@ -530,7 +557,7 @@ def parse_client_msg(raw: str | bytes) -> (
 
 def parse_server_msg(raw: str | bytes) -> (
     ReadyMsg | AudioOutMsg | TranscriptMsg | RequestFrameMsg | TargetMsg | CountMsg | StateMsg | ConfirmMsg | CueMsg
-    | ErrorMsg | BoxesOutMsg | RtcOutMsg | None
+    | ErrorMsg | BoxesOutMsg | RtcOutMsg | TorchMsg | None
 ):
     """Parse one server WebSocket text frame (used by tests and dev tools). None when invalid."""
     try:
