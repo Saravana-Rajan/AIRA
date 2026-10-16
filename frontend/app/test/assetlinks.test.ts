@@ -24,7 +24,7 @@ describe("TWA config", () => {
     expect(t.host).toMatch(/\.(web\.app|firebaseapp\.com)$/);
     expect(t.name).toBe("AIRA");
     expect(t.launcherName).toBe("AIRA");
-    expect(t.orientation).toBe("portrait");
+    expect(t.orientation).toBe("any"); // the app rotates with the phone; the dashboard follows it
   });
 
   it("every URL points at the Hosting site over https", () => {
