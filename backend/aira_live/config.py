@@ -81,6 +81,12 @@ class Settings:
     # AIRA_SCENE_MEMORY=1: Live silently reports what it sees (scene_report) so AIRA can say where it last saw
     # something after the camera turned away (aira_live.scene_watch / scene_memory). Off by default.
     scene_memory: bool = False
+    # AIRA_TORCH=1: when the phone reports sustained darkness, AIRA PROPOSES the flashlight (confirm.propose) and
+    # the torch command goes to the phone only after a spoken "yes" (aira_live.tools.light). Off by default.
+    torch: bool = False
+    # AIRA_LOWLIGHT=1: the "where is the light switch" tool (light_switch_find) and the phone's low-light boost
+    # on uploaded frames (never on the bump guard's frames). Off by default.
+    lowlight: bool = False
 
 
 def _env(name: str) -> str | None:
@@ -114,4 +120,6 @@ def load() -> Settings:
         owner_name=_env("AIRA_OWNER_NAME"),
         walk_nav_session=os.getenv("AIRA_WALK_NAV_SESSION", "1") != "0",
         scene_memory=os.getenv("AIRA_SCENE_MEMORY", "0") == "1",
+        torch=os.getenv("AIRA_TORCH", "0") == "1",
+        lowlight=os.getenv("AIRA_LOWLIGHT", "0") == "1",
     )

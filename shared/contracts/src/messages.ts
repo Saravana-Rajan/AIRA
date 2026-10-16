@@ -4,9 +4,10 @@
 // integers normalised 0..1000.
 import {
   BOX_SEVERITIES, BOX_SOURCES, CLIENT_EVENT_NAMES, CONFIRM_ANSWERS, CONFIRM_KINDS, CUE_NAMES, ENTITIES, ERROR_CODES,
-  FRAME_PURPOSES, LANGS, MAX_BOXES, NORM_MAX, TRANSCRIPT_ROLES, VERBOSITIES,
+  FRAME_PURPOSES, LANGS, LIGHT_LEVELS, MAX_BOXES, NORM_MAX, TORCH_STATES, TRANSCRIPT_ROLES, VERBOSITIES,
   type BoxSeverity, type BoxSource, type ClientEventName, type ConfirmAnswer, type ConfirmKind, type CueName,
-  type Entity, type ErrorCode, type FramePurpose, type Lang, type TranscriptRole, type Verbosity,
+  type Entity, type ErrorCode, type FramePurpose, type Lang, type LightLevel, type TorchState, type TranscriptRole,
+  type Verbosity,
 } from "./enums";
 
 export type Point = [number, number];
@@ -40,6 +41,12 @@ export type ClientMsg =
   // obstacles. Never answered: the server relays them to the live monitor as kind "vision" and drops the rest
   // above its per-socket rate limit. Nothing here changes state.
   | { t: "boxes"; source: BoxSource; objects: BoxObject[]; frameId?: string }
+  // Low light: the phone's sustained light level (decided over seconds with hysteresis, never from one frame),
+  // the raw mean luma (0-255, measured BEFORE any low-light boost) and the flashlight state as the phone knows
+  // it. Sent on every change of level or torch state and on a clear luma change (rate-limited), so the server
+  // can offer the flashlight (committed only after a spoken yes) and compare brightness before and after a
+  // light switch is pressed. Nothing here changes state on its own.
+  | { t: "light"; level: LightLevel; luma: number; torch: TorchState }
   // WebRTC signalling from the phone to a dashboard monitor (`to` is the monitor id a `want` carried in `from`).
   // The server fills `from` with the session id and relays it; it never reads the SDP.
   | RtcClientMsg;
@@ -80,6 +87,10 @@ export type ServerMsg =
   // as the client message, plus the label being looked for (target, hand guidance) and whether it was found
   // (drawn green). Never spoken.
   | { t: "boxes"; source: BoxSource; objects: BoxObject[]; frameId?: string; target?: string; found?: boolean }
+  // Flashlight command (AIRA_TORCH): sent only by the torch committer after the owner's spoken "yes" (on), or
+  // to switch it off again. The phone obeys only when its rear-camera track reports the torch capability, and
+  // answers with a `light` message carrying the real state (on / off / unsupported). Never spoken.
+  | { t: "torch"; on: boolean }
   // WebRTC signalling relayed from a dashboard monitor (`from` is its monitor id) to this phone session.
   | RtcMsg;
 
@@ -89,10 +100,11 @@ export type ClientMsgOf<T extends ClientMsgType> = Extract<ClientMsg, { t: T }>;
 export type ServerMsgOf<T extends ServerMsgType> = Extract<ServerMsg, { t: T }>;
 
 export const CLIENT_MSG_TYPES = Object.freeze([
-  "hello", "audio", "frame", "text", "event", "confirm", "stop", "log", "boxes", "rtc",
+  "hello", "audio", "frame", "text", "event", "confirm", "stop", "log", "boxes", "rtc", "light",
 ] as const);
 export const SERVER_MSG_TYPES = Object.freeze([
   "ready", "audio", "transcript", "request_frame", "target", "count", "state", "confirm", "cue", "error", "boxes", "rtc",
+  "torch",
 ] as const);
 
 // Compile-time check that the type lists match the unions exactly.
@@ -172,6 +184,8 @@ export function isClientMsg(x: unknown): x is ClientMsg {
       return inList(BOX_SOURCES, x.source) && isBoxList(x.objects) && optional(x.frameId, isStr);
     case "rtc":
       return isRtcClientMsg(x);
+    case "light":
+      return inList(LIGHT_LEVELS, x.level) && isNum(x.luma) && x.luma >= 0 && x.luma <= 255 && inList(TORCH_STATES, x.torch);
   }
   return false;
 }
@@ -208,6 +222,8 @@ export function isServerMsg(x: unknown): x is ServerMsg {
         optional(x.target, isStr) && optional(x.found, isBool);
     case "rtc":
       return isRtcMsg(x);
+    case "torch":
+      return isBool(x.on);
   }
   return false;
 }
