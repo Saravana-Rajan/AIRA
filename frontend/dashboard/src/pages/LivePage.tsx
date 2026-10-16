@@ -78,8 +78,8 @@ const VOICE: Record<MonitorVoice, string> = { owner: "Mic", aira: "AIRA" };
 export const MAX_SHOWN = 50;
 /** Scrolled up more than this (px from the bottom): the viewer is reading, auto-scroll stops until they return. */
 export const STICK_PX = 24;
-export const LISTEN_TEXT = "🔊 Listen";
-export const STOP_LISTEN_TEXT = "🔇 Stop listening";
+export const LISTEN_TEXT = "Listen";
+export const STOP_LISTEN_TEXT = "Stop";
 
 /** A clock that ticks four times a second while the page is open, for the "since" text. */
 function useNow(now: () => number): number {
@@ -203,7 +203,13 @@ function ListenControl({ listen }: { listen: LiveListen }) {
       {listen.on && listen.levels && <Meter levels={listen.levels} />}
       <button class={`listen__btn${listen.on ? " listen__btn--on" : ""}`} type="button" aria-pressed={listen.on} onClick={listen.onToggle}
         title={listen.on ? "Stop playing this person's microphone and AIRA's voice" : "Play this person's microphone and AIRA's voice on this computer"}>
-        {listen.on ? STOP_LISTEN_TEXT : LISTEN_TEXT}
+        <svg class="listen__icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+          <path d="M11 5 6 9H3v6h3l5 4z" />
+          {listen.on
+            ? <g><path d="M15.5 8.8a4 4 0 0 1 0 6.4" /><path d="M18.2 6.3a7.5 7.5 0 0 1 0 11.4" /></g>
+            : <path d="m16.5 9.5 5 5m0-5-5 5" />}
+        </svg>
+        <span class="listen__label">{listen.on ? STOP_LISTEN_TEXT : LISTEN_TEXT}</span>
       </button>
     </div>
   );

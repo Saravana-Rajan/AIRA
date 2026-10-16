@@ -621,7 +621,10 @@
   min-width: 0;
 }
 .listen__btn {
-  padding: 6px 12px;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 14px 7px 11px;
   border: 1px solid var(--neu-divider);
   border-radius: var(--radius-pill);
   background: var(--neu-surface);
@@ -630,9 +633,26 @@
   font: inherit;
   font-size: 13px;
   font-weight: 700;
+  line-height: 1;
   white-space: nowrap;
   cursor: pointer;
-  transition: box-shadow 120ms, background 120ms;
+  transition: box-shadow 120ms, background 120ms, color 120ms;
+}
+.listen__icon {
+  width: 18px;
+  height: 18px;
+  flex: none;
+}
+.listen__icon path {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.listen__icon > path:first-child {   /* the speaker body is a solid shape; the waves / mute-cross are strokes */
+  fill: currentColor;
+  stroke: none;
 }
 .listen__btn:hover {
   background: var(--neu-hover);
