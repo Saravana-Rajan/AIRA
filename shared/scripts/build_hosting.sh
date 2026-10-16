@@ -42,6 +42,25 @@ done
 BUILD_SHA="${GITHUB_SHA:-$(git -C "$ROOT" rev-parse HEAD 2>/dev/null || echo local)}"
 printf '{"build":"%s","updated":"%s"}\n' "${BUILD_SHA:0:7}" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$OUT/version.json"
 
+# Cache-bust the service worker per build so a new deploy actually reaches installed apps. The browser only
+# re-installs the SW (and re-precaches the shell) when sw.js / sw-strategy.js change bytes; they are byte-identical
+# across builds otherwise, so a deploy is silently masked. VERSION stays "aira-v1" in the SOURCE (the pwa tests
+# read that); only the DEPLOYED copies carry the build hash: the cache name in sw-strategy.js, plus a build stamp
+# comment in both so even a browser that does not diff imported scripts still sees sw.js change.
+SW_VER="aira-${BUILD_SHA:0:7}"
+# vite copies public/ (sw.js, sw-strategy.js) into $OUT, so the real build always has them; stamp only what is
+# present so a stubbed/partial build does not fail here. When sw-strategy.js IS present, assert the cache name was
+# actually stamped: a silent miss (the source VERSION line changed shape) would ship an unversioned SW and bring
+# back the stale-deploy bug.
+if [ -f "$OUT/sw-strategy.js" ]; then
+  sed -i "s/\"aira-v1\"/\"$SW_VER\"/" "$OUT/sw-strategy.js"
+  grep -q "VERSION = \"$SW_VER\"" "$OUT/sw-strategy.js" || { echo "error: SW VERSION not stamped (sw-strategy.js changed?)" >&2; exit 1; }
+  printf '\n// build %s\n' "$BUILD_SHA" >> "$OUT/sw-strategy.js"
+fi
+if [ -f "$OUT/sw.js" ]; then
+  printf '\n// build %s\n' "$BUILD_SHA" >> "$OUT/sw.js"
+fi
+
 # firebase deploy --config shared/infra/firebase.json only publishes folders inside shared/infra,
 # so mirror the bundle to shared/infra/public (git-ignored).
 DEPLOY_DIR="$ROOT/shared/infra/public"

@@ -39,8 +39,19 @@ function cacheFirst(e, req) {
   });
 }
 
+// Network-first fetches bypass the browser's HTTP disk cache, so a new deploy is never hidden behind a
+// still-fresh max-age (index.html is served max-age=3600): without this the SW would re-cache yesterday's shell
+// from the HTTP cache and keep serving it. The fresh copy is still stored in the SW cache (keyed by the original
+// req) for the offline fallback. A navigation Request cannot be rebuilt (its mode is "navigate"), so refetch those
+// by URL; other network-first requests are rebuilt with the cache mode overridden.
+function freshFetch(req) {
+  return req.mode === "navigate"
+    ? fetch(req.url, { cache: "no-store" })
+    : fetch(new Request(req, { cache: "no-store" }));
+}
+
 function networkFirst(e, req) {
-  return fetch(req).then(function (res) { return store(e, req, res); }).catch(function (err) {
+  return freshFetch(req).then(function (res) { return store(e, req, res); }).catch(function (err) {
     return caches.match(req).then(function (hit) {
       if (hit) return hit;
       if (req.mode !== "navigate") throw err;

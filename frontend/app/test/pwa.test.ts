@@ -156,7 +156,12 @@ function makeSW() {
     addEventListener: (type: string, fn: (e: any) => void) => { listeners[type] = fn; },
     skipWaiting: async () => { skipped = true; },
     clients: { claim: async () => { claimed = true; } },
-    fetch: (req: FakeRequest) => { fetched.push({ url: req.url, cache: req.cache }); return network(req); },
+    // sw.js calls fetch either with a Request or, for navigations it cannot rebuild, with (urlString, init).
+    fetch: (input: string | FakeRequest, init: any = {}) => {
+      const req = typeof input === "string" ? new FakeRequest(input, init) : input;
+      fetched.push({ url: req.url, cache: req.cache });
+      return network(req);
+    },
     caches: {
       open: async (name: string) => openSync(name),
       keys: async () => [...store.keys()],
@@ -283,6 +288,17 @@ describe("sw.js handlers", () => {
     const fallback = await sw.dispatchFetch(`${ORIGIN}/bench?x=1`, { mode: "navigate" });
     expect(await fallback!.text()).toBe("shell");
     expect(sw.store.get("aira-v1")!.has(`${ORIGIN}/bench?x=1`)).toBe(false);
+  });
+
+  it("network-first fetches past the HTTP cache (no-store) so a fresh max-age never masks a new deploy", async () => {
+    sw.setNetwork(async () => new Response("fresh"));
+    await sw.dispatchFetch(`${ORIGIN}/`, { mode: "navigate" }); // navigations: refetched by URL, no-store
+    expect(sw.fetched.find((f) => f.url === `${ORIGIN}/`)?.cache).toBe("no-store");
+    await sw.dispatchFetch(`${ORIGIN}/version`); // other network-first: rebuilt request, no-store
+    expect(sw.fetched.find((f) => f.url === `${ORIGIN}/version`)?.cache).toBe("no-store");
+    // cache-first assets are untouched: they keep the default cache so hashed files stay fast.
+    await sw.dispatchFetch(`${ORIGIN}/assets/index-abc.js`);
+    expect(sw.fetched.find((f) => f.url === `${ORIGIN}/assets/index-abc.js`)?.cache).toBe("default");
   });
 
   it("network-first: an offline miss with no fallback fails instead of serving the wrong shell", async () => {

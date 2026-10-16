@@ -119,15 +119,22 @@ exit 0
 NPM_STUB = r"""#!/usr/bin/env bash
 printf 'npm %s\n' "$*" >> "$STUB_LOG"
 out=""
+pkg=""
 prev=""
 for a in "$@"; do
   if [ "$prev" = "--outDir" ]; then out="$a"; fi
+  if [ "$prev" = "-w" ]; then pkg="$a"; fi
   case "$a" in --outDir=*) out="${a#--outDir=}" ;; esac
   prev="$a"
 done
 if [ -n "$out" ]; then
   mkdir -p "$out"
   printf '<!doctype html><title>stub</title>\n' > "$out/index.html"
+  # vite copies the package's public/ into the build output; mirror that (cwd is frontend/) so the
+  # service-worker cache-busting in build_hosting.sh has sw.js / sw-strategy.js to stamp.
+  if [ -n "$pkg" ] && [ -d "$pkg/public" ]; then
+    cp -R "$pkg/public/." "$out/"
+  fi
 fi
 exit 0
 """
@@ -179,6 +186,12 @@ def _fake_repo(tmp_path: Path, script: str, node_modules: bool = True) -> Path:
     (root / "frontend").mkdir(exist_ok=True)
     if node_modules:
         (root / "frontend" / "node_modules").mkdir(exist_ok=True)
+    # The app's public/ holds the service worker vite copies into the build; the npm stub mirrors that copy, so
+    # build_hosting.sh's SW cache-busting (and its test) runs against the real sw.js / sw-strategy.js.
+    app_public = root / "frontend" / "app" / "public"
+    app_public.mkdir(parents=True, exist_ok=True)
+    for sw in ("sw.js", "sw-strategy.js"):
+        shutil.copy(REPO / "frontend" / "app" / "public" / sw, app_public / sw)
     shutil.copy(REPO / "shared/infra/firebase.json", root / "shared" / "infra" / "firebase.json")
     return root
 
@@ -683,6 +696,27 @@ def test_build_hosting_installs_in_frontend_when_node_modules_is_missing(tmp_pat
     assert calls[0] == "npm ci"
     text = (REPO / "shared/scripts/build_hosting.sh").read_text()
     assert 'cd "$ROOT/frontend"' in text and 'cd "$ROOT"\n' not in text
+
+
+def test_build_hosting_cache_busts_the_service_worker(tmp_path):
+    # A new deploy must change sw.js / sw-strategy.js bytes, or the browser never re-installs the worker and the
+    # deploy never reaches installed apps. build_hosting.sh stamps the build hash into the deployed copies.
+    proc, _, root = run_script(
+        tmp_path, "shared/scripts/build_hosting.sh",
+        {"VITE_AIRA_LIVE_WS": "wss://x/ws", "GITHUB_SHA": "deadbee1234567"},
+    )
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    out = root / "dist" / "hosting"
+    strategy = (out / "sw-strategy.js").read_text()
+    sw = (out / "sw.js").read_text()
+    # the cache name carries the build hash (no longer the static "aira-v1")
+    assert 'var VERSION = "aira-deadbee";' in strategy
+    assert '"aira-v1"' not in strategy
+    # a build stamp changes both files' bytes, so even a browser that does not diff imports sees sw.js change
+    assert "// build deadbee1234567" in strategy
+    assert "// build deadbee1234567" in sw
+    # the source is left untouched: the pwa tests still read the static VERSION
+    assert 'var VERSION = "aira-v1";' in (REPO / "frontend/app/public/sw-strategy.js").read_text()
 
 
 def test_build_hosting_clears_stale_output(tmp_path):
