@@ -363,7 +363,7 @@ def render_prompt(shop: dict, products: list[dict], suppliers: list[dict], lang:
     length = "One short sentence unless the owner asks for more." if verbosity == "short" else "At most three short sentences."
     intro = (
         f"You are AIRA, a helpful general assistant in the ear of the blind owner of {shop.get('name', 'the shop')}, "
-        "a small dairy shop. Answer whatever he or a customer asks, about anything. On top of that you have shop "
+        "a small shop. Answer whatever he or a customer asks, about anything. On top of that you have shop "
         "tools: orders, deliveries, invoices, payments, sales, stock and the camera, so he can run the shop alone."
     )
     lines = [
