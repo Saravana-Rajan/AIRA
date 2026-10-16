@@ -194,10 +194,10 @@ describe("AppShell: the full-screen camera layout", () => {
     mount(f.w, () => sharedVideo().v);
     const surface = root.querySelector("button.surface")!;
     const talk = byLabel(LIVE_TEXT.talk)!;
-    const stop = byLabel(LIVE_TEXT.stop)!;
+    const leave = byLabel(LIVE_TEXT.leave)!;
     const exit = byLabel(LIVE_TEXT.exit)!;
     const hide = byLabel(PREVIEW_TEXT.hide)!;
-    for (const b of [talk, stop, exit, hide]) {
+    for (const b of [talk, leave, exit, hide]) {
       expect(b).not.toBeNull();
       expect(b.getAttribute("type")).toBe("button");
       expect(surface.contains(b)).toBe(false);
@@ -205,19 +205,30 @@ describe("AppShell: the full-screen camera layout", () => {
     expect(root.querySelectorAll("button")).toHaveLength(5); // the surface + four controls, nothing else
     act(() => talk.click());
     expect(f.raw.onTalk).toHaveBeenCalledTimes(1);
-    act(() => stop.click());
-    expect(f.raw.onStop).toHaveBeenCalledTimes(1);
-    // the gesture surface still talks and stops as before
+    // the red button is the "Stop and exit" control, not barge-in: it must not call onStop
+    expect(leave.dataset.testid).toBe("live-leave");
+    // the gesture surface still talks (click) and barges in / stops AIRA (long-press / Escape)
     act(() => { surface.dispatchEvent(new MouseEvent("click", { bubbles: true, detail: 0 })); });
     expect(f.raw.onTalk).toHaveBeenCalledTimes(2);
     act(() => { surface.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "Escape" })); });
-    expect(f.raw.onStop).toHaveBeenCalledTimes(2);
+    expect(f.raw.onStop).toHaveBeenCalledTimes(1);
     // "Hide camera" leaves the live layout for the column, with the card hidden, and persists as before
     act(() => hide.click());
     expect(live()).toBeNull();
     expect(root.querySelector("[data-testid=camera-preview]")).toBeNull();
     expect(localStorage.getItem(PREVIEW_KEY)).toBe("hidden");
     expect(byLabel(LIVE_TEXT.enter)).toBeNull(); // nothing to fill the screen with while the card is hidden
+  });
+
+  it("the red Stop and exit button tears down the session and returns to the start screen", () => {
+    const f = fakeWired();
+    mount(f.w, () => sharedVideo().v);
+    expect(live()).not.toBeNull();
+    act(() => byLabel(LIVE_TEXT.leave)!.click());
+    expect(f.raw.dispose).toHaveBeenCalled();    // full teardown: camera + mic off, socket closed (session ends)
+    expect(f.raw.onStop).not.toHaveBeenCalled(); // the red button is not barge-in
+    expect(live()).toBeNull();                   // left the live screen
+    expect(root.querySelector("button.onboard__start")).not.toBeNull(); // back at the start screen
   });
 
   it("Exit full screen goes back to the column layout with the camera card, remembers it, and can come back", () => {

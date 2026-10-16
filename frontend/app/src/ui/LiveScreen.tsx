@@ -24,7 +24,7 @@ import type { ScreenState } from "./screenState";
 /** Helper-facing control names (English, like the camera card's own text). */
 export const LIVE_TEXT = {
   talk: "Talk to AIRA",
-  stop: "Stop AIRA",
+  leave: "Stop and exit",
   exit: "Exit full screen",
   enter: "Full screen camera",
 } as const;
@@ -53,14 +53,17 @@ type Props = {
   previewShown: boolean;
   onTogglePreview(): void;
   onTalk(): void;
+  /** Barge-in: stop AIRA talking for the current turn (long-press on the surface). Not the red button. */
   onStop(): void;
+  /** The red button: stop streaming and leave the app (full teardown, back to the start screen). */
+  onLeave(): void;
   /** Back to the card layout (the choice is remembered by the caller). */
   onExit(): void;
 };
 
 export function LiveScreen({
   state, level = 0, lang = "en", progress = null, confirmPending = false, preview, max = 140,
-  previewShown, onTogglePreview, onTalk, onStop, onExit,
+  previewShown, onTogglePreview, onTalk, onStop, onLeave, onExit,
 }: Props) {
   const { status, userText, airaText, task } = state;
   const lv = Math.min(1, Math.max(0, Number.isFinite(level) ? level : 0));
@@ -109,7 +112,7 @@ export function LiveScreen({
           <svg class="live__icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d={ICON.mic} /></svg>
         </button>
         <CameraToggle shown={previewShown} onToggle={onTogglePreview} round />
-        <button type="button" class="live__btn live__btn--stop" aria-label={LIVE_TEXT.stop} onClick={onStop} data-testid="live-stop">
+        <button type="button" class="live__btn live__btn--stop" aria-label={LIVE_TEXT.leave} onClick={onLeave} data-testid="live-leave">
           <svg class="live__icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d={ICON.stop} /></svg>
         </button>
       </div>
