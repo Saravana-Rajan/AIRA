@@ -88,7 +88,7 @@ export function Layout(props: {
     );
   }
   const live = props.route === "#/live";
-  const shell = ["shell", collapsed && "shell--compact", menuOpen && "shell--menu-open"].filter(Boolean).join(" ");
+  const shell = ["shell", collapsed && "shell--compact", menuOpen && "shell--menu-open", live && "shell--live"].filter(Boolean).join(" ");
   return (
     <>
       <a class="skip-link" href="#main" onClick={skipToMain}>Skip to content</a>

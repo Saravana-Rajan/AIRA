@@ -704,3 +704,42 @@
 .cam__head .cam__chip { background: rgba(255, 255, 255, 0.92); }
 .cam__view { padding: 0; background: none; box-shadow: none; }
 .camera { height: clamp(320px, calc(100dvh - 200px), 1200px); }
+
+/* Landscape phone (wide and short): stacked bar/camera/chat overflows and the camera's 320px floor is cut off
+   below the fold. Pin the Live view to the viewport and lay the camera and conversation side by side, like the
+   desktop, so the picture fills the height instead of scrolling off. Scoped to the Live route via .shell--live
+   (Layout.tsx), so every other page still scrolls as normal. */
+@media (max-width: 1023px) and (orientation: landscape) {
+  .shell--live .shell__body {
+    height: 100vh;
+    height: 100dvh;
+    overflow: hidden;
+  }
+  .main.main--live {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-height: 0;
+    overflow: hidden;
+    padding: 6px 12px 8px;
+  }
+  .livepage {
+    flex: 1;
+    min-height: 0;
+    height: auto;
+    gap: 8px;
+    grid-template-columns: minmax(0, 1fr) clamp(220px, 34vw, 340px);
+    grid-template-rows: auto minmax(0, 1fr);
+    grid-template-areas:
+      "bar bar"
+      "cam chat";
+  }
+  .camera {
+    height: 100%;
+    max-height: 100%;
+  }
+  .chat {
+    max-height: none;
+    min-height: 0;
+  }
+}
