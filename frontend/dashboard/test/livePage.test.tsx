@@ -402,7 +402,8 @@ describe("LivePage: listen", () => {
     const el = page(stateOf([started]), "live", { listen: l });
     const btn = el.querySelector<HTMLButtonElement>(".chat__head .listen__btn")!;
     expect(text(btn)).toBe(LISTEN_TEXT);
-    expect(LISTEN_TEXT).toBe("🔊 Listen");
+    expect(LISTEN_TEXT).toBe("Listen");
+    expect(btn.querySelector(".listen__icon")).not.toBeNull(); // a real icon, not an emoji
     expect(btn.getAttribute("aria-pressed")).toBe("false");
     expect(btn.getAttribute("type")).toBe("button");
     expect(el.querySelector(".meter")).toBeNull();
@@ -416,7 +417,7 @@ describe("LivePage: listen", () => {
     const el = page(stateOf([started]), "live", { listen: l });
     const btn = el.querySelector<HTMLButtonElement>(".listen__btn")!;
     expect(text(btn)).toBe(STOP_LISTEN_TEXT);
-    expect(STOP_LISTEN_TEXT).toBe("🔇 Stop listening");
+    expect(STOP_LISTEN_TEXT).toBe("Stop");
     expect(btn.getAttribute("aria-pressed")).toBe("true");
     expect(btn.className).toContain("listen__btn--on");
     expect([...el.querySelectorAll(".meter__label")].map(text)).toEqual(["Mic", "AIRA"]);

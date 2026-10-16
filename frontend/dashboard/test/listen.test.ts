@@ -146,9 +146,9 @@ describe("playback: in order, a small jitter buffer, late chunks dropped", () =>
     r.l.receive(chunk("owner", 512));
     r.l.receive(chunk("aira", 2400)); // 100 ms at 24 kHz
     r.l.receive(chunk("aira", 2400));
-    expect(JITTER_S).toBe(0.2);
+    expect(JITTER_S).toBe(0.45);
     expect(r.started.map((s) => [s.who, s.rate, s.frames, Math.round((s.at ?? 0) * 1000)])).toEqual([
-      ["owner", 16000, 512, 10200], ["owner", 16000, 512, 10232], ["aira", 24000, 2400, 10200], ["aira", 24000, 2400, 10300],
+      ["owner", 16000, 512, 10450], ["owner", 16000, 512, 10482], ["aira", 24000, 2400, 10450], ["aira", 24000, 2400, 10550],
     ]);
     expect(r.gains.map((g) => g.gain.value)).toEqual([1, 1]);
     r.l.setGain("aira", 0.25);
@@ -159,21 +159,21 @@ describe("playback: in order, a small jitter buffer, late chunks dropped", () =>
     r.l.want("s1");
     r.l.start();
     r.raw.currentTime = 1;
-    r.l.receive(chunk("owner", 1600)); // 100 ms: plays 1.2-1.3
+    r.l.receive(chunk("owner", 1600)); // 100 ms: plays 1.45-1.55
     r.raw.currentTime = 2; // silence passed: the lane's clock is in the past
-    r.l.receive(chunk("owner", 1600)); // re-buffered: 2.2-2.3
-    expect(r.started.map((s) => s.at)).toEqual([1.2, 2.2]);
+    r.l.receive(chunk("owner", 1600)); // re-buffered: 2.45-2.55
+    expect(r.started.map((s) => s.at)).toEqual([1.45, 2.45]);
     // a stall then a burst: chunks pile up ahead of the clock until MAX_LEAD_S, the rest are late and dropped
-    expect(MAX_LEAD_S).toBe(0.6);
+    expect(MAX_LEAD_S).toBe(1.0);
     for (let i = 0; i < 10; i++) r.l.receive(chunk("owner", 1600));
     const ahead = r.started.slice(2).map((s) => Math.round(((s.at ?? 0) - 2) * 100) / 100);
-    expect(ahead).toEqual([0.3, 0.4, 0.5, 0.6]); // 0.7 would be late
-    expect(r.l.state().dropped).toBe(6);
-    expect(r.states[r.states.length - 1].dropped).toBe(6);
-    r.raw.currentTime = 2.65; // time moved on: the lane is within reach again
+    expect(ahead).toEqual([0.55, 0.65, 0.75, 0.85, 0.95]); // 1.05 would be late
+    expect(r.l.state().dropped).toBe(5);
+    expect(r.states[r.states.length - 1].dropped).toBe(5);
+    r.raw.currentTime = 3.0; // time moved on: the lane is within reach again
     r.l.receive(chunk("owner", 1600));
-    expect(r.started[r.started.length - 1].at).toBeCloseTo(2.7, 6);
-    expect(r.l.state().dropped).toBe(6);
+    expect(r.started[r.started.length - 1].at).toBeCloseTo(3.05, 6);
+    expect(r.l.state().dropped).toBe(5);
   });
   it("switching person starts the new one's sound afresh; stop and start reset the lanes and the drop count", () => {
     const r = rig();
@@ -186,7 +186,7 @@ describe("playback: in order, a small jitter buffer, late chunks dropped", () =>
     r.l.want("s2");
     r.raw.currentTime = 5.05;
     r.l.receive(chunk("aira", 2400, "s2"));
-    expect(r.started[r.started.length - 1].at).toBeCloseTo(5.25, 6); // not queued behind s1's sound
+    expect(r.started[r.started.length - 1].at).toBeCloseTo(5.5, 6); // not queued behind s1's sound
     r.l.stop();
     r.l.start();
     expect(r.l.state().dropped).toBe(0);

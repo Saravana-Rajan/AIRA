@@ -504,7 +504,7 @@ describe("useMonitor: hearing the followed session", () => {
     audio.raw.currentTime = 3;
     h.send({ kind: "audio", who: "owner", rate: 16000, pcm: "AAAAAAAAAAA=", session: "s1" });
     h.send({ kind: "audio", who: "aira", rate: 24000, pcm: "AAAAAAAAAAA=", session: "s2" }); // not the followed one
-    expect(audio.starts).toEqual([{ at: 3.2, rate: 16000 }]);
+    expect(audio.starts).toEqual([{ at: 3.45, rate: 16000 }]);
     act(() => h.mon().follow("s2"));
     expect(h.last().sent.filter((m) => m.includes('"listen"'))).toEqual([listenLine("s1"), listenLine("s2")]);
     h.send({ kind: "audio", who: "aira", rate: 24000, pcm: "AAAAAAAAAAA=", session: "s2" });

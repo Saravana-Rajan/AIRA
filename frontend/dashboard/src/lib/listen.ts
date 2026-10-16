@@ -15,10 +15,13 @@ import type { MonitorListenMsg, MonitorMsg, MonitorVoice } from "@aira/contracts
 
 export type AudioMsg = Extract<MonitorMsg, { kind: "audio" }>;
 
-/** Lead given to the first chunk after silence or an underrun (the jitter buffer), seconds. */
-export const JITTER_S = 0.2;
-/** A chunk that would start further ahead than this is late and dropped instead of adding delay, seconds. */
-export const MAX_LEAD_S = 0.6;
+/** Lead given to the first chunk after silence or an underrun (the jitter buffer), seconds. Bigger = smoother
+ *  playback (fewer underrun gaps and crackle) at the cost of a little delay. Sized for watching / recording a
+ *  demo on a laptop, where a touch of latency is fine but clean audio is not negotiable. */
+export const JITTER_S = 0.45;
+/** A chunk that would start further ahead than this is late and dropped instead of adding delay, seconds. Kept
+ *  comfortably above JITTER_S so the larger buffer is not itself treated as "too far ahead" and dropped. */
+export const MAX_LEAD_S = 1.0;
 
 // The slice of the Web Audio API this uses; a real AudioContext satisfies it, tests pass a fake.
 export interface AudioBufferLike { duration: number; getChannelData(channel: number): Float32Array }
