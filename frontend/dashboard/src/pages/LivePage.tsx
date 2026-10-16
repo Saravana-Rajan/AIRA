@@ -1,11 +1,18 @@
-// The Live page: who is using AIRA right now and what the selected person's phone sees. Three things, top
-// to bottom: the header (logo, "<shop> - Live", the connection), the people selector (one card per live
-// phone session, the followed one black) and that person's camera, large. The picture is the WebRTC stream
-// when the viewer has one, else the latest JPEG frame on a canvas. AIRA's own look: light, Inter, soft
-// 20 px panels; nothing else on the page.
+// The Live page: who is using AIRA right now, what the selected person's phone sees and what is being said.
+// One thin bar on top (the connection and the people selector: one chip per live phone session, the followed
+// one black), then that person's camera, large, with the conversation beside it (below it on a narrow
+// screen): the followed session's live transcript, the person's words on the right and AIRA's replies on the
+// left, partial captions updating in place, newest at the bottom. The picture is the WebRTC stream when the
+// viewer has one, else the latest JPEG frame on a canvas. When the server relays audio, a Listen button in the
+// conversation's head plays the person's microphone and AIRA's voice on this computer. AIRA's own look: light,
+// Inter, soft panels; nothing else on the page.
+import type { MonitorRole, MonitorVoice } from "@aira/contracts";
 import { useEffect, useMemo, useRef, useState } from "preact/hooks";
 import { browserDeps, createFrameDrawer, type DrawDeps } from "../lib/frameDraw";
-import { listSessions, sessionLabel, sinceText, type Connection, type Frame, type LiveState, type MonitorState, type SessionInfo } from "../lib/monitor";
+import {
+  listSessions, sessionLabel, sinceText,
+  type Connection, type Frame, type LiveState, type MonitorState, type SessionInfo, type TranscriptLine,
+} from "../lib/monitor";
 import type { VideoState } from "../lib/rtcViewer";
 import type { AuthStatus, ViewerUser } from "../lib/viewerAuth";
 import { RtcVideo } from "../components/RtcVideo";
@@ -22,11 +29,23 @@ export interface LiveAuth {
   onSignOut: () => void;
 }
 
+/** Hearing the followed session on this computer (lib/useMonitor fills it; tests pass a value). */
+export interface LiveListen {
+  /** The server relays audio to a monitor that asks (AIRA_MONITOR_AUDIO=1); false hides the button. */
+  available: boolean;
+  on: boolean;
+  onToggle: () => void;
+  /** Subscribes a meter to each voice's level (0-1) as chunks play; returns the unsubscribe. No meter without it. */
+  levels?: (cb: (who: MonitorVoice, level: number) => void) => () => void;
+}
+
 export interface LivePageProps {
   state: LiveState;
   conn: Connection;
   /** Who is signed in to watch. Left out (older callers, tests of the feed itself): treated as signed in. */
   auth?: LiveAuth;
+  /** Hearing the session. Left out: no button. */
+  listen?: LiveListen;
   /** The WebRTC picture (lib/rtcViewer): played while mode is "webrtc", else the JPEG frames. */
   video?: VideoState;
   /** False when the dashboard has no AIRA Live address (VITE_AIRA_LIVE_WS): nothing to connect to. */
@@ -53,6 +72,14 @@ export const REJECTED_TEXT = "This address isn't allowed to watch AIRA Live. Ope
 const UNAUTHORIZED_TEXT = "This Google account isn't allowed to watch AIRA Live. Ask the shop owner to add it.";
 
 const LANG_NAME: Record<string, string> = { ta: "Tamil", hi: "Hindi", en: "English" };
+const SPEAKER: Record<MonitorRole, string> = { owner: "Owner", customer: "Customer", aira: "AIRA" };
+const VOICE: Record<MonitorVoice, string> = { owner: "Mic", aira: "AIRA" };
+/** The conversation shows the newest this many lines (the reducer keeps MAX_LINES). */
+export const MAX_SHOWN = 50;
+/** Scrolled up more than this (px from the bottom): the viewer is reading, auto-scroll stops until they return. */
+export const STICK_PX = 24;
+export const LISTEN_TEXT = "🔊 Listen";
+export const STOP_LISTEN_TEXT = "🔇 Stop listening";
 
 /** A clock that ticks four times a second while the page is open, for the "since" text. */
 function useNow(now: () => number): number {
@@ -65,7 +92,7 @@ function useNow(now: () => number): number {
 }
 
 export function LivePage({
-  state, conn, auth, video, configured = true, onFollow, shopName = "AIRA", now = Date.now, drawDeps = browserDeps,
+  state, conn, auth, listen, video, configured = true, onFollow, shopName = "AIRA", now = Date.now, drawDeps = browserDeps,
 }: LivePageProps) {
   const t = useNow(now);
   const liveVideo = video?.mode === "webrtc" && video.stream !== null;
@@ -111,7 +138,93 @@ export function LivePage({
           {hasPicture ? <Camera frame={state.frame} drawDeps={drawDeps} video={video} /> : empty}
         </div>
       </section>
+
+      <Conversation lines={state.transcript} listen={listen} />
     </div>
+  );
+}
+
+// ---------- the conversation: what the followed person and AIRA say, live ----------
+/**
+ * The followed session's transcript as chat bubbles: the person's words (Owner or Customer, as the feed's role
+ * says) on the right, AIRA's replies on the left, a partial caption updating in place until its final line
+ * replaces it. Newest at the bottom; the list follows new lines unless the viewer scrolled up to read, and
+ * follows again once they return to the bottom. Switching person switches the transcript (the reducer starts
+ * the new person's from a clean slate). The Listen button lives in its head when the server relays audio.
+ */
+function Conversation({ lines, listen }: { lines: TranscriptLine[]; listen?: LiveListen }) {
+  const shown = lines.length > MAX_SHOWN ? lines.slice(lines.length - MAX_SHOWN) : lines;
+  const ref = useRef<HTMLOListElement>(null);
+  const stick = useRef(true);
+  const last = shown[shown.length - 1];
+  useEffect(() => {
+    const el = ref.current;
+    if (!el || !stick.current) return;
+    try {
+      el.scrollTop = el.scrollHeight;
+    } catch {
+      /* jsdom or a detached node */
+    }
+  }, [last?.id, last?.text, shown.length]);
+  const onScroll = () => {
+    const el = ref.current;
+    if (!el) return;
+    stick.current = el.scrollHeight - el.scrollTop - el.clientHeight <= STICK_PX;
+  };
+  return (
+    <section class="chat" aria-labelledby="chat-title">
+      <div class="chat__head">
+        <h3 id="chat-title" class="chat__title">Conversation</h3>
+        {listen?.available && <ListenControl listen={listen} />}
+      </div>
+      {shown.length === 0 ? (
+        <p class="chat__empty">Nothing said yet.</p>
+      ) : (
+        <ol class="chat__list" ref={ref} onScroll={onScroll} aria-live="polite" aria-relevant="additions text">
+          {shown.map((l) => (
+            <li key={l.id} class={`msg msg--${l.role}${l.final ? "" : " msg--partial"}`}>
+              {l.role === "aira" && <span class="msg__avatar" aria-hidden="true">A</span>}
+              <div class="msg__bubble">
+                <span class="msg__who">{SPEAKER[l.role]}</span>
+                <p class="msg__text">{l.text}</p>
+              </div>
+            </li>
+          ))}
+        </ol>
+      )}
+    </section>
+  );
+}
+
+/** The Listen toggle (a click: the user gesture browsers need to start sound) and, while on, a small level meter per voice. */
+function ListenControl({ listen }: { listen: LiveListen }) {
+  return (
+    <div class="listen">
+      {listen.on && listen.levels && <Meter levels={listen.levels} />}
+      <button class={`listen__btn${listen.on ? " listen__btn--on" : ""}`} type="button" aria-pressed={listen.on} onClick={listen.onToggle}
+        title={listen.on ? "Stop playing this person's microphone and AIRA's voice" : "Play this person's microphone and AIRA's voice on this computer"}>
+        {listen.on ? STOP_LISTEN_TEXT : LISTEN_TEXT}
+      </button>
+    </div>
+  );
+}
+
+/** Two tiny bars (Mic, AIRA) driven straight from the player's levels, outside the render loop. */
+function Meter({ levels }: { levels: NonNullable<LiveListen["levels"]> }) {
+  const bars = useRef<Record<MonitorVoice, HTMLSpanElement | null>>({ owner: null, aira: null });
+  useEffect(() => levels((who, level) => {
+    const el = bars.current[who];
+    if (el) el.style.transform = `scaleX(${Math.min(1, level * 3).toFixed(3)})`; // speech sits around 0.1-0.3 RMS: shown fuller
+  }), [levels]);
+  return (
+    <span class="meter" aria-hidden="true">
+      {(["owner", "aira"] as MonitorVoice[]).map((who) => (
+        <span key={who} class={`meter__voice meter__voice--${who}`}>
+          <span class="meter__label">{VOICE[who]}</span>
+          <span class="meter__bar"><span class="meter__fill" ref={(el) => { bars.current[who] = el; }} /></span>
+        </span>
+      ))}
+    </span>
   );
 }
 

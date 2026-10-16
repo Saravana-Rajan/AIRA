@@ -25,6 +25,17 @@ Who is talking: a user transcript is the owner's, unless a sale is open for that
 active_sale``) and the line does not address AIRA by name; a sale tool may also say ``speaker="customer"``
 (``set_speaker``) and that word wins while the sale is open.
 
+Hearing a session (``AIRA_MONITOR_AUDIO=1``, ``config.monitor_audio``; off by default): a monitor that sends
+``{t:"listen", session}`` (``listen``) gets that one session's audio as kind ``audio``: the phone's microphone
+chunks as they arrive (``audio_in``, ``who: "owner"``, 16 kHz) and AIRA's voice on its way to the phone
+(``mirror`` of ``AudioOutMsg``, ``who: "aira"``, 24 kHz), base64 PCM16 untouched. Nothing is relayed to a monitor
+that did not ask, a ``listen`` for another session replaces the first, ``session: null``, the monitor leaving or
+the session ending stops it, and a room camera's session never carries audio. Audio has its own bounded queue per
+monitor (``MAX_AUDIO_QUEUE`` chunks): a monitor whose socket is backed up loses chunks (``audio_dropped``, logged
+every ``AUDIO_DROP_LOG_EVERY``), never the service's memory. With the flag off ``listen`` is ignored, and the
+``ready`` line every monitor gets after the session list (``ready_line``; its ``session`` is the monitor's own id)
+says ``audio: false`` so the dashboard hides its button.
+
 Access (shared/docs/ops/security.md §2a): by default (``AIRA_MONITOR_AUTH`` unset, the owner's decision) there
 is NO authentication: ``authenticate`` returns None without reading a message and the socket is subscribed at
 once; anyone who can open the dashboard address watches. What still applies: the browser Origin allowlist,
@@ -64,10 +75,14 @@ from aira_live.auth import FirebaseUser, uid_hash
 from aira_live.contracts import (
     MONITOR_CLOSE_UNAUTHENTICATED,
     MONITOR_CLOSE_UNAUTHORIZED,
+    AudioOutMsg,
     CountMsg,
     CueMsg,
     ErrorMsg,
+    MonAudioMsg,
     MonAuthMsg,
+    MonListenMsg,
+    MonReadyMsg,
     RequestFrameMsg,
     RtcMsg,
     StateMsg,
@@ -95,6 +110,8 @@ JPEG_QUALITY = 60     # 0.6
 MAX_FPS = 4           # per session, frames of any purpose but the preview
 PREVIEW_MAX_FPS = 10  # per session, the phone's own ``preview`` stream (already small: relayed as it is)
 MAX_QUEUE = 64        # lines a slow monitor may fall behind before it loses the oldest
+MAX_AUDIO_QUEUE = 32  # audio chunks a listening monitor may fall behind (the phone sends 32 ms ones: about 1 s)
+AUDIO_DROP_LOG_EVERY = 100  # one log line per this many chunks a backed-up monitor lost
 MAX_MONITORS_PER_SHOP = 8
 STATS_INTERVAL_S = 2.0
 _MIN_FRAME_GAP_S = 1.0 / MAX_FPS
@@ -111,12 +128,20 @@ class Subscriber:
     A line pushed with a ``key`` replaces any queued line with the same key: a frame of a session supersedes
     the frame of that session still waiting, so a monitor that fell behind gets the newest picture, never a
     backlog of old ones.
+
+    Audio (``push_audio``) waits in its own bounded queue so a burst of chunks never pushes transcripts or
+    status lines out of the line queue; the sender drains lines first. A full audio queue loses its oldest
+    chunk (the monitor hears the newest sound after a stall, never a growing delay) and counts it in
+    ``audio_dropped``. ``listening`` is the session this monitor asked to hear, or None.
     """
 
     def __init__(self, shop_id: str, viewer: FirebaseUser | None = None):
         self.shop_id = shop_id
         self.viewer = viewer  # the verified account behind a /monitor socket (None for an in-process subscriber)
+        self.listening: str | None = None
+        self.audio_dropped = 0
         self._lines: deque[tuple[str | None, str]] = deque(maxlen=MAX_QUEUE)
+        self._audio: deque[str] = deque(maxlen=MAX_AUDIO_QUEUE)
         self._event = asyncio.Event()
         try:  # the loop that serves this monitor; a publisher on another loop or thread wakes it safely
             self._loop: asyncio.AbstractEventLoop | None = asyncio.get_running_loop()
@@ -127,6 +152,21 @@ class Subscriber:
         if key is not None and any(k == key for k, _ in self._lines):
             self._lines = deque((item for item in self._lines if item[0] != key), maxlen=MAX_QUEUE)
         self._lines.append((key, line))  # a full deque drops its oldest line
+        self._wake()
+
+    def push_audio(self, line: str) -> bool:
+        """Queue one serialised audio chunk; False (and one more in ``audio_dropped``) when the queue was full
+        and its oldest chunk was lost to make room."""
+        dropped = len(self._audio) >= MAX_AUDIO_QUEUE
+        if dropped:
+            self.audio_dropped += 1
+            if self.audio_dropped % AUDIO_DROP_LOG_EVERY == 0:
+                log.warning("monitor: a backed-up monitor of %s has lost %d audio chunks", self.shop_id, self.audio_dropped)
+        self._audio.append(line)
+        self._wake()
+        return not dropped
+
+    def _wake(self) -> None:
         try:
             same_loop = self._loop is None or asyncio.get_running_loop() is self._loop
         except RuntimeError:
@@ -137,17 +177,26 @@ class Subscriber:
             self._loop.call_soon_threadsafe(self._event.set)
 
     def take(self) -> list[dict]:
-        """Every pending line, parsed (tests); empties the queue."""
+        """Every pending line, parsed (tests); empties the line queue (audio waits in ``take_audio``)."""
         out = [json.loads(line) for _, line in self._lines]
         self._lines.clear()
         self._event.clear()
         return out
 
+    def take_audio(self) -> list[dict]:
+        """Every pending audio chunk, parsed (tests); empties the audio queue."""
+        out = [json.loads(line) for line in self._audio]
+        self._audio.clear()
+        return out
+
     async def next_line(self) -> str:
-        while not self._lines:
+        """The next text frame to send: lines first (few, and what the page is built on), then audio."""
+        while not self._lines and not self._audio:
             self._event.clear()
             await self._event.wait()
-        return self._lines.popleft()[1]
+        if self._lines:
+            return self._lines.popleft()[1]
+        return self._audio.popleft()
 
 
 _HUB: dict[str, list[Subscriber]] = {}
@@ -378,8 +427,9 @@ async def authenticate(ws, shop_id: str) -> FirebaseUser | None:
 async def serve(ws, sub: Subscriber, viewer: FirebaseUser | None) -> None:
     """Pump ``sub``'s lines to ``ws`` until the monitor goes away, its token expires unrefreshed, or a refresh
     fails. Inbound text acted on: ``{t:"auth", idToken}`` (a refresh: verified again, same account required,
-    extends the expiry deadline) and WebRTC signalling (``{t:"rtc", ...}``, relayed by ``aira_live.rtc`` to a
-    phone of the shop, rate-limited). The feed itself stays read-only and anything else is ignored.
+    extends the expiry deadline), WebRTC signalling (``{t:"rtc", ...}``, relayed by ``aira_live.rtc`` to a
+    phone of the shop, rate-limited) and ``{t:"listen", session}`` (``listen``: hear that session's audio, only
+    with ``AIRA_MONITOR_AUDIO``). The feed itself stays read-only and anything else is ignored.
 
     ``viewer`` is None without ``AIRA_MONITOR_AUTH``: then there is no expiry watchdog and an auth message is
     ignored like anything else (not verified; the socket stays open)."""
@@ -428,6 +478,8 @@ async def serve(ws, sub: Subscriber, viewer: FirebaseUser | None) -> None:
                 diag("monitor", event="refresh", ok=True, shop=sub.shop_id, uid=uid_hash(viewer.uid), exp=fresh.exp)
             elif isinstance(msg, RtcMsg) and rtc_limit.allow():
                 await rtc.from_monitor(sub, msg)
+            elif isinstance(msg, MonListenMsg):
+                listen(sub, msg.session)
     finally:
         for t in (task, expiry):
             t.cancel()
@@ -536,6 +588,9 @@ def session_started(session) -> None:
 
 def session_ended(session) -> None:
     rtc.session_ended(session)  # its monitors hear bye first, then the session end
+    for sub in _HUB.get(session.shop_id, ()):  # nobody keeps listening to a session that is over
+        if sub.listening == session.session_id:
+            sub.listening = None
     publish(session.shop_id, "session", session.session_id, state="end", **session_fields(session))
     forget(session.session_id)
 
@@ -614,6 +669,63 @@ def _mirror(session, msg: BaseModel) -> None:
             status(session, state)
     elif isinstance(msg, ErrorMsg):
         event(session, "error", code=msg.code, say=msg.say)
+    elif isinstance(msg, AudioOutMsg):  # AIRA's voice: only to a monitor listening to this session
+        _relay_audio(session, "aira", 24000, msg.pcm24)
+
+
+# ---------- hearing a session ----------
+def audio_enabled() -> bool:
+    return config.load().monitor_audio
+
+
+def ready_line(sub: Subscriber) -> str:
+    """The ``ready`` line a monitor gets once, after the session list: whether it may ask to listen. Its
+    ``session`` is the monitor's own id (the ``from`` of its rtc signalling), not a phone session."""
+    return dump_monitor_msg(MonReadyMsg(session=rtc.monitor_id(sub) or "", ts=int(time.time() * 1000),
+                                        audio=audio_enabled()))
+
+
+def listen(sub: Subscriber, session_id: str | None) -> bool:
+    """``{t:"listen", session}`` from a monitor: hear that session (None = stop); the previous choice is replaced.
+    Ignored (False) without ``AIRA_MONITOR_AUDIO``. The session is only ever matched by id inside the monitor's
+    own shop (``_relay_audio`` runs from the session's side), so naming a session of another shop hears nothing."""
+    if not audio_enabled():
+        if session_id is not None:
+            log.info("monitor: listen ignored for %s (AIRA_MONITOR_AUDIO is off)", sub.shop_id)
+        sub.listening = None
+        return False
+    sub.listening = session_id
+    diag("monitor", event="listen", shop=sub.shop_id, session=session_id, dropped=sub.audio_dropped)
+    return True
+
+
+def listeners(session) -> list[Subscriber]:
+    return [sub for sub in _HUB.get(session.shop_id, ()) if sub.listening == session.session_id]
+
+
+def _relay_audio(session, who: str, rate: int, pcm_b64: str) -> int:
+    """One chunk to every monitor listening to ``session``; serialised once. Returns how many got it (a monitor
+    whose audio queue was full lost its oldest chunk instead and is counted too). Never raises."""
+    subs = listeners(session)
+    if not subs or not pcm_b64:
+        return 0
+    try:
+        line = dump_monitor_msg(MonAudioMsg(session=session.session_id, ts=int(time.time() * 1000), who=who,
+                                            rate=rate, pcm=pcm_b64))
+    except Exception:  # noqa: BLE001 - a chunk never breaks the phone's socket
+        log.exception("monitor: audio chunk dropped")
+        return 0
+    for sub in subs:
+        sub.push_audio(line)
+    return len(subs)
+
+
+def audio_in(session, pcm16_b64: str) -> int:
+    """The phone's microphone chunk (16 kHz PCM16 base64, as sent): to the monitors listening to this session.
+    A room camera's session (uid ``camera:<name>``) is never relayed, whatever it sends."""
+    if not monitored(session.shop_id) or not _streams_frames(session):
+        return 0
+    return _relay_audio(session, "owner", 16000, pcm16_b64)
 
 
 def hand(session, data: dict | None, near: bool) -> bool:

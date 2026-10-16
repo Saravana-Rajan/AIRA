@@ -261,6 +261,34 @@ describe("reduce: camera, vision, hand, status, stats, events and sessions", () 
   });
 });
 
+describe("reduce: the feed's own lines (ready, audio)", () => {
+  it("ready records whether the server relays audio and never adopts its session (the monitor's own id)", () => {
+    const s = apply([mon({ kind: "ready", audio: true, session: "m1a2b3c4" })]);
+    expect(s.audio).toBe(true);
+    expect(s.session).toBeNull();
+    expect(s.sessions).toEqual({});
+    expect(initialState().audio).toBe(false);
+    expect(apply([mon({ kind: "ready", audio: false, session: "m1" })], s).audio).toBe(false);
+  });
+  it("what the server said of itself survives a session start, a switch of person and a session end", () => {
+    const s = apply([
+      mon({ kind: "ready", audio: true, session: "m1" }),
+      mon({ kind: "session", state: "start", lang: "ta", uid: "u1" }),
+      mon({ kind: "session", state: "start", lang: "en", uid: "u2", session: "s2", ts: 2 }),
+    ]);
+    expect(s.audio).toBe(true);
+    expect(follow(s, "s2").audio).toBe(true);
+    expect(reduce(s, mon({ kind: "session", state: "end", lang: "ta" })).audio).toBe(true);
+    expect(reduce(reduce(s, mon({ kind: "session", state: "end", lang: "ta" })), mon({ kind: "session", state: "end", lang: "en", session: "s2" })).audio).toBe(true);
+  });
+  it("an audio chunk that reaches the reducer changes nothing and adopts no session", () => {
+    const s0 = initialState();
+    expect(reduce(s0, mon({ kind: "audio", who: "owner", rate: 16000, pcm: "AAAA" }))).toBe(s0);
+    const s1 = apply([mon({ kind: "session", state: "start", lang: "ta", uid: "u1" })]);
+    expect(reduce(s1, mon({ kind: "audio", who: "aira", rate: 24000, pcm: "AAAA", session: "s2" }))).toBe(s1);
+  });
+});
+
 describe("reduce: everyone using AIRA (the session list)", () => {
   const start = (session: string, ts: number, extra: Record<string, unknown> = {}) =>
     mon({ kind: "session", state: "start", lang: "ta", uid: `u-${session}`, session, ts, ...extra } as MonInput);
@@ -509,14 +537,35 @@ describe("reconnect backoff, sign-in and refusal", () => {
       const onMsg = vi.fn();
       const onConn = vi.fn();
       const port = { attach: vi.fn(), detach: vi.fn(), receive: vi.fn() };
+      const listen = { attach: vi.fn(), detach: vi.fn(), receive: vi.fn() };
       const stop = openMonitor("ws://x/monitor?shop=s", onMsg, onConn, {
         connect: () => { const s = fakeSocket(); sockets.push(s); return s; },
         setTimer: (fn: () => void, ms: number) => { timers.push({ fn, ms }); return timers.length; },
         clearTimer: () => {},
-        signal: port, now: () => T0,
+        signal: port, listen, now: () => T0,
       });
-      return { sockets, timers, onMsg, onConn, port, stop };
+      return { sockets, timers, onMsg, onConn, port, listen, stop };
     }
+
+    it("attaches the player with the signal port, hands it every audio line (which never reaches the page) and lets it send listen requests", () => {
+      const r = openRig();
+      r.sockets[0].onopen!({});
+      expect(r.listen.attach).toHaveBeenCalledTimes(1);
+      const audio = { t: "mon", kind: "audio", session: "s1", ts: 1, who: "owner", rate: 16000, pcm: "AAAA" };
+      r.sockets[0].onmessage!({ data: JSON.stringify(audio) });
+      r.sockets[0].onmessage!({ data: JSON.stringify({ t: "mon", kind: "ready", session: "m1", ts: 1, audio: true }) });
+      expect(r.listen.receive).toHaveBeenCalledTimes(1);
+      expect(r.listen.receive).toHaveBeenCalledWith(audio);
+      expect(r.onMsg).toHaveBeenCalledTimes(1);
+      expect(r.onMsg.mock.calls[0][0]).toMatchObject({ kind: "ready", audio: true });
+      const send = r.listen.attach.mock.calls[0][0] as (m: unknown) => boolean;
+      expect(send({ t: "listen", session: "s1" })).toBe(true);
+      expect(r.sockets[0].sent).toEqual([JSON.stringify({ t: "listen", session: "s1" })]);
+      r.sockets[0].onclose!({ code: 1006 });
+      expect(r.listen.detach).toHaveBeenCalledTimes(1);
+      expect(send({ t: "listen", session: null })).toBe(false); // the old socket is gone
+      r.stop();
+    });
 
     it("is live the moment the socket opens: nothing sent, the port attached, messages delivered, no timer booked", () => {
       const r = openRig();

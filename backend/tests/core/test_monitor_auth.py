@@ -382,6 +382,7 @@ def test_a_refresh_for_another_account_or_a_bad_token_closes_the_socket(token, c
             with client.websocket_connect(f"/monitor?shop={SHOP}", headers=ORIGIN) as mon:
                 mon.send_json({"t": "auth", "idToken": TOKEN_VIEWER})
                 _wait(lambda: monitor.monitored(SHOP))
+                assert mon.receive_json()["kind"] == "ready"  # the one line every monitor gets after the session list
                 mon.send_json({"t": "auth", "idToken": token})
                 mon.receive_json()
         assert closed.value.code == code
@@ -394,6 +395,7 @@ def test_a_refresh_for_an_account_that_was_delisted_closes_with_4403(monkeypatch
             with client.websocket_connect(f"/monitor?shop={SHOP}", headers=ORIGIN) as mon:
                 mon.send_json({"t": "auth", "idToken": TOKEN_VIEWER})
                 _wait(lambda: monitor.monitored(SHOP))
+                assert mon.receive_json()["kind"] == "ready"
                 monkeypatch.setenv("AIRA_MONITOR_VIEWERS", "someone-else@example.com")
                 mon.send_json({"t": "auth", "idToken": TOKEN_VIEWER})
                 mon.receive_json()

@@ -11,6 +11,7 @@ import { useState } from "preact/hooks";
 import { cleanup, flush, mount } from "./helpers/render";
 import { jwt } from "./helpers/jwt";
 import { useMonitor, type Monitor, type MonitorDeps } from "../src/lib/useMonitor";
+import type { AudioCtxLike } from "../src/lib/listen";
 import type { SocketLike } from "../src/lib/monitor";
 import type { PeerCtor, PeerLike } from "../src/lib/rtcViewer";
 import type { ViewerAuth, ViewerUser } from "../src/lib/viewerAuth";
@@ -73,12 +74,34 @@ class FakePC implements PeerLike {
   close() { this.closed = true; }
 }
 
-function harness(enabled = true, peer?: PeerCtor, auth = fakeAuth(), env: Record<string, unknown> = ENV) {
+/** A fake AudioContext that records the chunks scheduled on it. */
+function fakeAudio() {
+  const starts: Array<{ at: number | undefined; rate: number }> = [];
+  const ctx = {
+    currentTime: 0, state: "suspended", destination: {},
+    resume: vi.fn(async () => { ctx.state = "running"; }),
+    suspend: vi.fn(async () => { ctx.state = "suspended"; }),
+    close: vi.fn(async () => { ctx.state = "closed"; }),
+    createBuffer: (_c: number, length: number, sampleRate: number) => {
+      const data = new Float32Array(length);
+      return { duration: length / sampleRate, rate: sampleRate, getChannelData: () => data };
+    },
+    createBufferSource: () => {
+      const src = { buffer: null as { rate: number } | null, onended: null, connect: (d: unknown) => d, start: (when?: number) => { starts.push({ at: when, rate: src.buffer?.rate ?? 0 }); } };
+      return src;
+    },
+    createGain: () => ({ gain: { value: 1 }, connect: (d: unknown) => d }),
+  };
+  return { ctx: ctx as unknown as AudioCtxLike, starts, raw: ctx };
+}
+
+function harness(enabled = true, peer?: PeerCtor, auth = fakeAuth(), env: Record<string, unknown> = ENV, audio?: ReturnType<typeof fakeAudio>) {
   const sockets: Fake[] = [];
   const timers: Array<{ fn: () => void; ms: number }> = [];
   const deps: MonitorDeps = {
     connect: () => { const s = fakeSocket(); sockets.push(s); return s; },
     setTimer: (fn, ms) => { timers.push({ fn, ms }); return timers.length; }, clearTimer: () => {}, now: () => T0, peer, auth,
+    ...(audio ? { audioContext: () => audio.ctx } : {}),
   };
   let latest: Monitor | null = null;
   let setEnabled: (v: boolean) => void = () => {};
@@ -458,5 +481,70 @@ describe("useMonitor: no sign-in (the default)", () => {
     await h.open();
     h.send({ kind: "session", state: "start", lang: "en", uid: "u1" });
     expect(h.last().sent).toEqual([JSON.stringify({ t: "rtc", kind: "want", to: "s1" })]);
+  });
+});
+
+describe("useMonitor: hearing the followed session", () => {
+  const listenLine = (session: string | null) => JSON.stringify({ t: "listen", session });
+  it("offers Listen only once the server's ready line says it relays audio; the button starts the AudioContext, asks for the followed session, re-targets on a switch and stops with null", async () => {
+    const audio = fakeAudio();
+    const h = harness(true, undefined, fakeAuth(), OPEN_ENV, audio);
+    await h.open();
+    expect(h.mon().listen).toMatchObject({ available: false, on: false, dropped: 0 });
+    h.send({ kind: "ready", audio: true, session: "m1" });
+    expect(h.mon().listen.available).toBe(true);
+    expect(h.mon().state.session).toBeNull(); // the ready line adopted no session
+    h.send({ kind: "session", state: "start", lang: "ta", uid: "u1", session: "s1", startedAt: T0 });
+    h.send({ kind: "session", state: "start", lang: "en", uid: "u2", session: "s2", ts: 2, startedAt: T0 + 1 });
+    expect(h.last().sent.filter((m) => m.includes('"listen"'))).toEqual([]); // nothing asked before the click
+    act(() => h.mon().listen.toggle());
+    expect(audio.raw.resume).toHaveBeenCalledTimes(1);
+    expect(h.mon().listen.on).toBe(true);
+    expect(h.last().sent.filter((m) => m.includes('"listen"'))).toEqual([listenLine("s1")]);
+    audio.raw.currentTime = 3;
+    h.send({ kind: "audio", who: "owner", rate: 16000, pcm: "AAAAAAAAAAA=", session: "s1" });
+    h.send({ kind: "audio", who: "aira", rate: 24000, pcm: "AAAAAAAAAAA=", session: "s2" }); // not the followed one
+    expect(audio.starts).toEqual([{ at: 3.2, rate: 16000 }]);
+    act(() => h.mon().follow("s2"));
+    expect(h.last().sent.filter((m) => m.includes('"listen"'))).toEqual([listenLine("s1"), listenLine("s2")]);
+    h.send({ kind: "audio", who: "aira", rate: 24000, pcm: "AAAAAAAAAAA=", session: "s2" });
+    expect(audio.starts).toHaveLength(2);
+    expect(audio.starts[1].rate).toBe(24000);
+    act(() => h.mon().listen.toggle());
+    expect(h.mon().listen.on).toBe(false);
+    expect(h.last().sent.filter((m) => m.includes('"listen"'))).toEqual([listenLine("s1"), listenLine("s2"), listenLine(null)]);
+    h.send({ kind: "audio", who: "aira", rate: 24000, pcm: "AAAAAAAAAAA=", session: "s2" });
+    expect(audio.starts).toHaveLength(2); // off: nothing more is played
+    expect(h.mon().state.transcript).toEqual([]); // and sound never touched the page's state
+  });
+  it("keeps Listen on across a reconnect (asks again on the new socket) and tells the server to stop when the page is left", async () => {
+    const audio = fakeAudio();
+    const h = harness(true, undefined, fakeAuth(), OPEN_ENV, audio);
+    await h.open();
+    h.send({ kind: "ready", audio: true, session: "m1" });
+    h.send({ kind: "session", state: "start", lang: "ta", uid: "u1", session: "s1", startedAt: T0 });
+    act(() => h.mon().listen.toggle());
+    expect(h.last().sent).toEqual([listenLine("s1")]);
+    act(() => h.last().onclose!({ code: 1006 }));
+    expect(h.mon().listen.on).toBe(true);
+    act(() => h.timers[h.timers.length - 1].fn());
+    await h.open();
+    expect(h.sockets).toHaveLength(2);
+    h.send({ kind: "ready", audio: true, session: "m2" });
+    h.send({ kind: "session", state: "start", lang: "ta", uid: "u1", session: "s1", startedAt: T0 });
+    expect(h.last().sent).toEqual([listenLine("s1")]); // asked again, once
+    h.setEnabled(false); // the Live page is left
+    expect(h.last().sent).toEqual([listenLine("s1"), listenLine(null)]);
+    expect(h.last().closed).toBe(true);
+    expect(h.mon().listen.on).toBe(false);
+  });
+  it("in the sign-in build the listen request only ever goes out after the token", async () => {
+    const audio = fakeAudio();
+    const h = harness(true, undefined, fakeAuth(), ENV, audio);
+    act(() => h.mon().listen.toggle()); // pressed before the socket is live
+    await h.open();
+    h.send({ kind: "session", state: "start", lang: "ta", uid: "u1", session: "s1", startedAt: T0 });
+    expect(h.last().sent[0]).toBe(authLine(token()));
+    expect(h.last().sent.slice(1)).toEqual([listenLine("s1")]);
   });
 });

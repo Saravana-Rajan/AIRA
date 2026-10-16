@@ -53,6 +53,11 @@ class Settings:
     # account in ``monitor_viewers``). Unset or "0" (the default, the owner's decision): no authentication, anyone
     # who can open the dashboard watches the live feed (shared/docs/ops/security.md §2a).
     monitor_auth: bool = False
+    # AIRA_MONITOR_AUDIO=1: a monitor that asks ({t:"listen", session}) hears that session live: the phone's
+    # microphone (16 kHz) and AIRA's voice (24 kHz) are relayed to it (aira_live.monitor.listen). Off by default:
+    # listen requests are ignored and the dashboard hides its Listen button. With it on and no AIRA_MONITOR_AUTH,
+    # anyone who can open the Live page can hear the owner's microphone (shared/docs/ops/security.md §2a).
+    monitor_audio: bool = False
     # AIRA_MONITOR_ORIGINS (comma-separated): browser Origins that may open the read-only /monitor socket
     # (aira_live.monitor.origin_allowed). Defence in depth only, not authentication: a script can send any Origin.
     monitor_origins: tuple[str, ...] = DEFAULT_MONITOR_ORIGINS
@@ -115,6 +120,7 @@ def load() -> Settings:
         app_key=_env("AIRA_APP_KEY"),
         job_token=_env("AIRA_JOB_TOKEN"),
         monitor_auth=os.getenv("AIRA_MONITOR_AUTH", "0") == "1",
+        monitor_audio=os.getenv("AIRA_MONITOR_AUDIO", "0") == "1",
         monitor_origins=_origins(_env("AIRA_MONITOR_ORIGINS")),
         firebase_project_id=_env("AIRA_FIREBASE_PROJECT") or _env("GCP_PROJECT"),
         monitor_viewers=_viewers(_env("AIRA_MONITOR_VIEWERS")),

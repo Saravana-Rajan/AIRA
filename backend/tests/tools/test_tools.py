@@ -35,6 +35,7 @@ EXPECTED = {
     "scene_recall": ["item"],  # what AIRA last counted, with age and evidence (tools/camera.py; read-only)
     # Live's silent answer to a [SCENE CHECK]: what it sees, for the last-seen memory (tools/memory.py)
     "scene_report": ["check_id", "items"],
+    "flashlight": ["on"],  # the owner's own torch on/off (tools/light.py, AIRA_TORCH)
     "light_switch_find": ["target"],  # low light (tools/light.py): guide the finger to a switch, never a socket
 }
 
