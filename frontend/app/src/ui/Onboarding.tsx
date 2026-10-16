@@ -61,7 +61,6 @@ export function Onboarding({ onDone, initial, languages }: Props) {
           <img class="onboard__logo" src="/icons/aira-logo-192.png" alt="" width={40} height={40} />
           <span class="onboard__titles">
             <h1 class="onboard__title">AIRA</h1>
-            <span class="onboard__shop">{shopName()}</span>
           </span>
         </header>
 
