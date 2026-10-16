@@ -117,11 +117,10 @@ describe("Onboarding", () => {
     expect(root.textContent!.split("any language")).toHaveLength(2); // said once, not twice
   });
 
-  it("shows the AIRA title (no shop subheading) and labels every control for screen readers", () => {
+  it("names the shop and labels every control for screen readers", () => {
     mount({ onDone: () => {}, languages: ["en"] });
+    expect(root.textContent).toContain("Sunrise Dairy");
     expect(root.querySelector("h1")!.textContent).toContain("AIRA");
-    expect(root.querySelector(".onboard__shop")).toBeNull();      // the shop subheading was removed
-    expect(root.textContent).not.toContain("Sunrise Dairy");
     for (const input of root.querySelectorAll("input")) expect(input.closest("label")).not.toBeNull();
   });
 });
