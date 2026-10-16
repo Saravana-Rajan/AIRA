@@ -6,8 +6,8 @@ The phone decides the light level over seconds with hysteresis (frontend/app/src
 - **Torch (AIRA_TORCH).** Sustained darkness with the torch off: AIRA turns the flashlight on by itself and
   says so, informing the owner rather than asking. The spoken line goes once per dark episode; the phone answers
   with its real state: ``on``, or ``unsupported`` (then AIRA says once that it cannot switch the flashlight on
-  this phone and stops). Bright again with the torch on, sustained for ``TORCH_OFF_BRIGHT_S`` at a luma of at
-  least ``TORCH_OFF_LUMA``: AIRA turns it off by itself and says so. The phone also switches it off after
+  this phone and stops). Bright again with the torch on, at the bright level (hysteresis-smoothed, not the noisy
+  raw luma) for ``TORCH_OFF_BRIGHT_S``: AIRA turns it off by itself and says so. The phone also switches it off after
   ``TORCH_AUTO_OFF_MS`` (frontend/app/src/camera/torch.ts); while it is still dark the next report re-lights it
   quietly. The owner can override by voice at any time (the ``flashlight`` tool); a spoken "turn it off" holds
   the auto-on until the view is no longer dark. The light-switch flow below still asks before using the torch.
@@ -60,11 +60,11 @@ NO_BOARD_EN = "I can't see the switch board. Turn slowly."
 NO_MORE_EN = "No more switches here."
 SWITCH_STOPPED_EN = "I stopped guiding to the switch."
 
-# Luma (0-255, the phone's raw mean) that must be reached, sustained for TORCH_OFF_BRIGHT_S, before AIRA asks to
-# turn the torch off. Not measured on a device yet: a torch lighting a dark shelf from the chest gave no
-# measurement to quote; the bar is set high so a torch alone is unlikely to count as "bright".
-TORCH_OFF_LUMA = 120.0
-TORCH_OFF_BRIGHT_S = 20.0
+# How long the view must stay at the "bright" LEVEL, with the torch on, before AIRA turns it off. The decision
+# rides the phone's level (which is hysteresis-smoothed over seconds), not the raw luma: on a real device the
+# raw luma swings wildly even in steady light (measured 75-220 within seconds), so a raw-luma bar never settles,
+# while the torch alone only reaches "dim", so the level stays dark/dim until real ambient light arrives.
+TORCH_OFF_BRIGHT_S = 8.0
 # A luma rise after a press that counts as "the light came on". Not measured on a device yet.
 BRIGHT_RISE_LUMA = 30.0
 # How long after "press it" the loop waits for the brightness to rise before "still dark".
@@ -227,11 +227,12 @@ async def on_light(session: Session, msg: LightMsg) -> None:
             st.dark_offered = True
             await _tell(session, "light.torch_on_dark", TORCH_ON_DARK_EN)
         return
-    # Bright again, sustained for TORCH_OFF_BRIGHT_S at a real luma: turn it off and say so, once per torch-on
-    # episode (off_offered, cleared when the phone reports the torch off).
+    # Bright again, sustained for TORCH_OFF_BRIGHT_S: turn it off and say so, once per torch-on episode
+    # (off_offered, cleared when the phone reports the torch off). Rides the hysteresis-smoothed level, not the
+    # noisy raw luma, so a steady lit room turns it off reliably and the torch alone (only "dim") never does.
     if msg.torch == "on":
         now = _monotonic()
-        if msg.level == "bright" and float(msg.luma) >= TORCH_OFF_LUMA:
+        if msg.level == "bright":
             if st.bright_since is None:
                 st.bright_since = now
             elif now - st.bright_since >= TORCH_OFF_BRIGHT_S and not st.off_offered and st.torch_requested is None:
