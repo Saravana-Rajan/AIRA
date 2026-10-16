@@ -101,6 +101,13 @@ const browserContext = (): AudioCtxLike => new AudioContext() as unknown as Audi
 
 interface Lane { gain: GainLike; nextAt: number }
 
+/**
+ * The relayed shop audio (a chest-mounted phone mic, with AIRA's voice coming through it) arrives quiet on a
+ * laptop, so playing it at unity is too soft. This lifts it toward phone loudness. `gains` stays the 0-1 per-voice
+ * control; this multiplies the actual output. Tune down if a loud voice distorts, up if it is still too quiet.
+ */
+export const LISTEN_BOOST = 2.5;
+
 export function createListener(deps: ListenDeps = {}): Listener {
   const makeContext = deps.audioContext ?? browserContext;
   let ctx: AudioCtxLike | null = null;
@@ -142,8 +149,8 @@ export function createListener(deps: ListenDeps = {}): Listener {
         return { gain, nextAt: 0 };
       };
       lanes = { owner: lane(), aira: lane() };
-      lanes.owner.gain.gain.value = gains.owner;
-      lanes.aira.gain.gain.value = gains.aira;
+      lanes.owner.gain.gain.value = gains.owner * LISTEN_BOOST;
+      lanes.aira.gain.gain.value = gains.aira * LISTEN_BOOST;
     }
     return ctx;
   };
@@ -207,7 +214,7 @@ export function createListener(deps: ListenDeps = {}): Listener {
     },
     setGain(who, value) {
       gains[who] = Math.max(0, Math.min(1, value));
-      if (lanes) lanes[who].gain.gain.value = gains[who];
+      if (lanes) lanes[who].gain.gain.value = gains[who] * LISTEN_BOOST;
     },
     receive(m) {
       if (!on || !ctx || !lanes || m.session !== session) return;

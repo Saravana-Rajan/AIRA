@@ -5,7 +5,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { MonitorVoice } from "@aira/contracts";
 import {
-  JITTER_S, MAX_LEAD_S, createListener, decodePcm16, rms,
+  JITTER_S, LISTEN_BOOST, MAX_LEAD_S, createListener, decodePcm16, rms,
   type AudioBufferLike, type AudioCtxLike, type AudioMsg, type GainLike, type SourceLike,
 } from "../src/lib/listen";
 
@@ -150,9 +150,9 @@ describe("playback: in order, a small jitter buffer, late chunks dropped", () =>
     expect(r.started.map((s) => [s.who, s.rate, s.frames, Math.round((s.at ?? 0) * 1000)])).toEqual([
       ["owner", 16000, 512, 10200], ["owner", 16000, 512, 10232], ["aira", 24000, 2400, 10200], ["aira", 24000, 2400, 10300],
     ]);
-    expect(r.gains.map((g) => g.gain.value)).toEqual([1, 1]);
+    expect(r.gains.map((g) => g.gain.value)).toEqual([LISTEN_BOOST, LISTEN_BOOST]); // unity per-voice x the boost
     r.l.setGain("aira", 0.25);
-    expect(r.gains[1].gain.value).toBe(0.25);
+    expect(r.gains[1].gain.value).toBe(0.25 * LISTEN_BOOST);
   });
   it("after an underrun the next chunk gets a fresh jitter buffer; a chunk that would start more than MAX_LEAD_S ahead is dropped and counted", () => {
     const r = rig();
