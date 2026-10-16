@@ -1,0 +1,664 @@
+{
+  "note": "ZYNK cricket store, drafted 2026-10-16 from the owner's 8 photos. 'front' in each zone's views = facing INTO the shop from the glass door (the grey back wall with the bat racks ahead). ROUTE STEP COUNTS ARE ESTIMATES FROM THE PHOTOS, NOT MEASURED: walk every route once with the phone on the chest at normal pace, count the steps and replace them before relying on them. Turn directions follow the layout read from the photos; check them in the store. The light switch board has no labels yet: add which switch is which after testing them.",
+  "shop": {
+    "id": "zynk_cricket",
+    "name": "ZYNK"
+  },
+  "draft": true,
+  "zones": [
+    {
+      "id": "entrance",
+      "name": "entrance",
+      "aliases": {
+        "en": [
+          "entrance",
+          "door",
+          "glass door",
+          "front door",
+          "balcony door",
+          "exit"
+        ],
+        "ta": [
+          "வாசல்",
+          "கதவு",
+          "கண்ணாடி கதவு"
+        ]
+      },
+      "landmarks": "tall glass door with a black handle onto a balcony with red and white checkered tiles; street and trees outside",
+      "photos": [
+        "1000545336.jpeg"
+      ],
+      "views": {
+        "front": "the big wooden table in the middle of the room, the grey back wall with bat racks behind it",
+        "left": "the black billing counter, then the wooden slatted wall with the ZYNK sign and the green circle mural",
+        "right": "the windows along the street, a water dispenser and boxes on the floor below them",
+        "back": "the glass door and the balcony with checkered tiles"
+      }
+    },
+    {
+      "id": "counter",
+      "name": "billing counter",
+      "aliases": {
+        "en": [
+          "counter",
+          "billing counter",
+          "cash counter",
+          "billing desk",
+          "desk",
+          "light switch",
+          "switch board",
+          "switches"
+        ],
+        "ta": [
+          "கவுண்டர்",
+          "பில் கவுண்டர்",
+          "கேஷ் கவுண்டர்",
+          "லைட் சுவிட்ச்",
+          "சுவிட்ச்"
+        ]
+      },
+      "landmarks": "black L-shaped desk with a laptop just inside the glass door, next to a wooden slatted wall with a yellow ZYNK sign",
+      "photos": [
+        "1000545336.jpeg",
+        "1000545333.jpeg"
+      ],
+      "views": {
+        "front": "the big wooden table, the ZYNK green circle mural on the left side",
+        "left": "the wooden slatted wall with two white switch plates",
+        "right": "the glass door and the windows",
+        "back": "the wooden slatted wall with the yellow ZYNK sign"
+      },
+      "fixed_points": [
+        {
+          "id": "light_switch_board",
+          "name": "light switch board",
+          "where": "two white switch plates on the wooden slatted wall beside the billing counter, about waist to chest height"
+        }
+      ]
+    },
+    {
+      "id": "mural",
+      "name": "ZYNK mural",
+      "aliases": {
+        "en": [
+          "mural",
+          "zynk logo",
+          "green circle",
+          "logo wall",
+          "photo wall",
+          "dhoni wall"
+        ],
+        "ta": [
+          "சுவர் ஓவியம்",
+          "பச்சை வட்டம்",
+          "லோகோ சுவர்"
+        ]
+      },
+      "landmarks": "black wall with a big green circle and the ZYNK logo, black and white portraits of two cricketers, a small shelf with balls under it",
+      "photos": [
+        "1000545333.jpeg",
+        "1000545330.jpeg"
+      ],
+      "views": {
+        "front": "the green circle with the ZYNK logo and the two cricketer portraits",
+        "left": "the wooden slatted wall with the ZYNK sign and the glass door",
+        "right": "bat racks with branded bats on the grey wall",
+        "back": "the big wooden table and the black kit wall beyond it"
+      }
+    },
+    {
+      "id": "table",
+      "name": "big table",
+      "aliases": {
+        "en": [
+          "table",
+          "big table",
+          "wooden table",
+          "middle",
+          "centre",
+          "center"
+        ],
+        "ta": [
+          "மேசை",
+          "பெரிய மேசை",
+          "நடுவில்"
+        ]
+      },
+      "landmarks": "long brown wooden table in the middle of the room with laptops and a helmet on it, chairs and tall stools around it",
+      "photos": [
+        "1000545334.jpeg",
+        "1000545331.jpeg"
+      ],
+      "views": {
+        "front": "the grey back wall with bat racks and a tall standing mirror",
+        "left": "the black wall with the green circle ZYNK mural",
+        "right": "the black kit wall with gloves, pads and helmets",
+        "back": "the glass door and the billing counter"
+      }
+    },
+    {
+      "id": "branded_bats",
+      "name": "branded bats",
+      "aliases": {
+        "en": [
+          "bats",
+          "bat wall",
+          "branded bats",
+          "ss bats",
+          "sg bats",
+          "mrf bats",
+          "dsc bats",
+          "english willow"
+        ],
+        "ta": [
+          "பேட்",
+          "பேட் சுவர்",
+          "கிரிக்கெட் பேட்"
+        ]
+      },
+      "landmarks": "grey wall with bats in three rows on black racks: SS, SG, MRF and DSC labels, next to the green circle mural",
+      "photos": [
+        "1000545335.jpeg",
+        "1000545331.jpeg",
+        "1000545333.jpeg"
+      ],
+      "views": {
+        "front": "bats hanging in rows: SS, SG, MRF, DSC",
+        "left": "the green circle ZYNK mural",
+        "right": "a tall standing mirror, then more bats with ZYNK labels",
+        "back": "the big wooden table"
+      }
+    },
+    {
+      "id": "zynk_bats",
+      "name": "ZYNK bats",
+      "aliases": {
+        "en": [
+          "zynk bats",
+          "zynk",
+          "own brand bats",
+          "red handle bats",
+          "yellow handle bats"
+        ],
+        "ta": [
+          "சிங்க் பேட்",
+          "சொந்த பேட்"
+        ]
+      },
+      "landmarks": "bats with ZYNK labels and red or yellow handles in two rows on black racks, a tall standing mirror to their left",
+      "photos": [
+        "1000545335.jpeg",
+        "1000545334.jpeg",
+        "1000545332.jpeg"
+      ],
+      "views": {
+        "front": "rows of ZYNK bats with red and yellow handles",
+        "left": "a tall standing mirror, then the branded bats",
+        "right": "the black kit wall with gloves, pads and shoe boxes",
+        "back": "the big wooden table and the green circle mural"
+      }
+    },
+    {
+      "id": "kit_wall",
+      "name": "kit wall",
+      "aliases": {
+        "en": [
+          "kit wall",
+          "gloves",
+          "batting gloves",
+          "inner gloves",
+          "pads",
+          "helmets",
+          "shoes",
+          "kit bags",
+          "accessories",
+          "thigh guard",
+          "abdomen guard"
+        ],
+        "ta": [
+          "கிட் சுவர்",
+          "கையுறை",
+          "கிளவுஸ்",
+          "பேட்",
+          "ஹெல்மெட்",
+          "ஷூ"
+        ]
+      },
+      "landmarks": "black pegboard wall with gloves, pads, helmets, shoe boxes and kit bags on hooks; two air conditioners above it",
+      "photos": [
+        "1000545334.jpeg",
+        "1000545332.jpeg"
+      ],
+      "views": {
+        "front": "the black pegboard with gloves, pads and helmets hanging on hooks",
+        "left": "the ZYNK bats with red and yellow handles",
+        "right": "the windows, a water dispenser and boxes on the floor",
+        "back": "the big wooden table and the green circle mural"
+      }
+    },
+    {
+      "id": "windows",
+      "name": "window side",
+      "aliases": {
+        "en": [
+          "windows",
+          "window",
+          "window side",
+          "water",
+          "water dispenser"
+        ],
+        "ta": [
+          "ஜன்னல்",
+          "தண்ணீர்"
+        ]
+      },
+      "landmarks": "row of sliding windows onto the street and trees, a water can on a stand, boxes and plastic bags on the floor",
+      "photos": [
+        "1000545334.jpeg",
+        "1000545336.jpeg"
+      ],
+      "views": {
+        "front": "the windows with the street and trees outside",
+        "left": "the black kit wall",
+        "right": "the glass door",
+        "back": "the big wooden table"
+      }
+    }
+  ],
+  "hazards": [
+    {
+      "type": "obstacle",
+      "zone": "table",
+      "between": [
+        "entrance",
+        "zynk_bats"
+      ],
+      "text": "the big wooden table in the middle, with chairs and tall stools around it, blocks the straight line from the door to the back wall",
+      "id": "big_table"
+    },
+    {
+      "type": "mirror",
+      "zone": "branded_bats",
+      "reflects": [
+        "table",
+        "windows",
+        "entrance"
+      ],
+      "text": "a tall standing mirror between the branded bats and the ZYNK bats: anything seen in it is a reflection, NOT a real place",
+      "id": "tall_mirror"
+    },
+    {
+      "type": "obstacle",
+      "zone": "windows",
+      "text": "cardboard boxes, plastic bags and a water dispenser on the floor below the windows",
+      "id": "floor_boxes"
+    },
+    {
+      "type": "other",
+      "zone": "entrance",
+      "text": "the glass door is clear glass and may not look like an obstacle",
+      "id": "glass_door"
+    }
+  ],
+  "routes": [
+    {
+      "from": "entrance",
+      "to": "counter",
+      "start_facing": "front",
+      "legs": [
+        {
+          "type": "turn",
+          "dir": "left"
+        },
+        {
+          "type": "walk",
+          "steps": 2
+        },
+        {
+          "type": "checkpoint",
+          "zone": "counter",
+          "say": "The billing counter is just in front of you. Reach forward carefully to confirm."
+        }
+      ]
+    },
+    {
+      "from": "entrance",
+      "to": "table",
+      "start_facing": "front",
+      "legs": [
+        {
+          "type": "walk",
+          "steps": 3
+        },
+        {
+          "type": "checkpoint",
+          "zone": "table",
+          "say": "The big table is just ahead. Reach forward carefully to confirm."
+        }
+      ]
+    },
+    {
+      "from": "entrance",
+      "to": "mural",
+      "start_facing": "front",
+      "legs": [
+        {
+          "type": "walk",
+          "steps": 2
+        },
+        {
+          "type": "turn",
+          "dir": "left"
+        },
+        {
+          "type": "walk",
+          "steps": 4
+        },
+        {
+          "type": "checkpoint",
+          "zone": "mural",
+          "say": "The ZYNK mural wall is just ahead. Reach forward carefully to confirm."
+        }
+      ]
+    },
+    {
+      "from": "entrance",
+      "to": "kit_wall",
+      "start_facing": "front",
+      "legs": [
+        {
+          "type": "walk",
+          "steps": 2
+        },
+        {
+          "type": "checkpoint",
+          "landmark": "the corner of the big table",
+          "say": "There's a big table ahead, turn right."
+        },
+        {
+          "type": "turn",
+          "dir": "right"
+        },
+        {
+          "type": "walk",
+          "steps": 2
+        },
+        {
+          "type": "turn",
+          "dir": "left"
+        },
+        {
+          "type": "walk",
+          "steps": 4
+        },
+        {
+          "type": "checkpoint",
+          "zone": "kit_wall",
+          "say": "The kit wall with gloves and pads is just ahead. Reach forward carefully to confirm."
+        }
+      ]
+    },
+    {
+      "from": "entrance",
+      "to": "branded_bats",
+      "start_facing": "front",
+      "legs": [
+        {
+          "type": "walk",
+          "steps": 2
+        },
+        {
+          "type": "checkpoint",
+          "landmark": "the corner of the big table",
+          "say": "There's a big table ahead, turn left."
+        },
+        {
+          "type": "turn",
+          "dir": "left"
+        },
+        {
+          "type": "walk",
+          "steps": 2
+        },
+        {
+          "type": "turn",
+          "dir": "right"
+        },
+        {
+          "type": "walk",
+          "steps": 5
+        },
+        {
+          "type": "checkpoint",
+          "zone": "branded_bats",
+          "say": "The branded bats are just ahead. Reach forward carefully to confirm."
+        }
+      ]
+    },
+    {
+      "from": "entrance",
+      "to": "zynk_bats",
+      "start_facing": "front",
+      "legs": [
+        {
+          "type": "walk",
+          "steps": 2
+        },
+        {
+          "type": "checkpoint",
+          "landmark": "the corner of the big table",
+          "say": "There's a big table ahead, turn right."
+        },
+        {
+          "type": "turn",
+          "dir": "right"
+        },
+        {
+          "type": "walk",
+          "steps": 2
+        },
+        {
+          "type": "turn",
+          "dir": "left"
+        },
+        {
+          "type": "walk",
+          "steps": 5
+        },
+        {
+          "type": "checkpoint",
+          "zone": "zynk_bats",
+          "say": "The ZYNK bats are just ahead. Reach forward carefully to confirm."
+        }
+      ]
+    },
+    {
+      "from": "entrance",
+      "to": "windows",
+      "start_facing": "front",
+      "legs": [
+        {
+          "type": "turn",
+          "dir": "right"
+        },
+        {
+          "type": "walk",
+          "steps": 3
+        },
+        {
+          "type": "checkpoint",
+          "zone": "windows",
+          "say": "The windows are just ahead. Mind the boxes on the floor."
+        }
+      ]
+    },
+    {
+      "from": "counter",
+      "to": "entrance",
+      "start_facing": "right",
+      "legs": [
+        {
+          "type": "walk",
+          "steps": 2
+        },
+        {
+          "type": "checkpoint",
+          "zone": "entrance",
+          "say": "The glass door is just ahead. Reach forward carefully to confirm."
+        }
+      ]
+    },
+    {
+      "from": "table",
+      "to": "entrance",
+      "start_facing": "back",
+      "legs": [
+        {
+          "type": "walk",
+          "steps": 3
+        },
+        {
+          "type": "checkpoint",
+          "zone": "entrance",
+          "say": "The glass door is just ahead. Reach forward carefully to confirm."
+        }
+      ]
+    },
+    {
+      "from": "mural",
+      "to": "entrance",
+      "start_facing": "back",
+      "legs": [
+        {
+          "type": "walk",
+          "steps": 4
+        },
+        {
+          "type": "turn",
+          "dir": "right"
+        },
+        {
+          "type": "walk",
+          "steps": 2
+        },
+        {
+          "type": "checkpoint",
+          "zone": "entrance",
+          "say": "The glass door is just ahead. Reach forward carefully to confirm."
+        }
+      ]
+    },
+    {
+      "from": "kit_wall",
+      "to": "entrance",
+      "start_facing": "back",
+      "legs": [
+        {
+          "type": "walk",
+          "steps": 4
+        },
+        {
+          "type": "turn",
+          "dir": "right"
+        },
+        {
+          "type": "walk",
+          "steps": 2
+        },
+        {
+          "type": "turn",
+          "dir": "left"
+        },
+        {
+          "type": "walk",
+          "steps": 2
+        },
+        {
+          "type": "checkpoint",
+          "zone": "entrance",
+          "say": "The glass door is just ahead. Reach forward carefully to confirm."
+        }
+      ]
+    },
+    {
+      "from": "branded_bats",
+      "to": "entrance",
+      "start_facing": "back",
+      "legs": [
+        {
+          "type": "walk",
+          "steps": 5
+        },
+        {
+          "type": "turn",
+          "dir": "left"
+        },
+        {
+          "type": "walk",
+          "steps": 2
+        },
+        {
+          "type": "turn",
+          "dir": "right"
+        },
+        {
+          "type": "walk",
+          "steps": 2
+        },
+        {
+          "type": "checkpoint",
+          "zone": "entrance",
+          "say": "The glass door is just ahead. Reach forward carefully to confirm."
+        }
+      ]
+    },
+    {
+      "from": "zynk_bats",
+      "to": "entrance",
+      "start_facing": "back",
+      "legs": [
+        {
+          "type": "walk",
+          "steps": 5
+        },
+        {
+          "type": "turn",
+          "dir": "right"
+        },
+        {
+          "type": "walk",
+          "steps": 2
+        },
+        {
+          "type": "turn",
+          "dir": "left"
+        },
+        {
+          "type": "walk",
+          "steps": 2
+        },
+        {
+          "type": "checkpoint",
+          "zone": "entrance",
+          "say": "The glass door is just ahead. Reach forward carefully to confirm."
+        }
+      ]
+    },
+    {
+      "from": "windows",
+      "to": "entrance",
+      "start_facing": "back",
+      "legs": [
+        {
+          "type": "walk",
+          "steps": 3
+        },
+        {
+          "type": "checkpoint",
+          "zone": "entrance",
+          "say": "The glass door is just ahead. Reach forward carefully to confirm."
+        }
+      ]
+    }
+  ]
+}

@@ -155,3 +155,17 @@ def test_prompt_text_lists_zones_views_and_the_mirror_within_the_cap(demo):
     assert len(text) <= shop_map.ZONE_PROMPT_MAX_CHARS
     short = demo.prompt_text(max_chars=120)
     assert len(short) <= 120 and short.startswith("ZONES") and short.count("\n") < text.count("\n")
+
+
+def test_the_zynk_store_map_loads_and_routes_from_the_door_to_every_place():
+    """The real store's map (drafted from the owner's photos; step counts are estimates until walked)."""
+    from pathlib import Path
+
+    m = shop_map.load_file(Path(__file__).resolve().parents[3] / "shared" / "catalog" / "zynk_cricket_map.json")
+    assert len(m.zones) == 8 and m.draft is True
+    assert m.resolve("inner gloves") == "kit_wall" and m.resolve("கையுறை") == "kit_wall"
+    assert m.resolve("light switch") == "counter"
+    for zone in m.zones:
+        if zone != "entrance":
+            assert m.plan("entrance", zone) and m.plan(zone, "entrance"), zone
+    assert m.mirror_reflects("table")          # never localise from the tall mirror's reflection
