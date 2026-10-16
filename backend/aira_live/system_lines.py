@@ -163,6 +163,16 @@ LINES: dict[str, dict[str, str]] = {
         "ta": "டார்ச் லைட்டை அணைக்கிறேன்.",
         "hi": "टॉर्च बंद कर रहा हूँ।",
     },
+    "light.torch_on_dark": {
+        "en": "It's getting dark, turning on the flashlight.",
+        "ta": "இருட்டாகிறது, டார்ச் லைட்டை போடுகிறேன்.",
+        "hi": "अँधेरा हो रहा है, टॉर्च जला रहा हूँ।",
+    },
+    "light.torch_off_bright": {
+        "en": "It's bright again, turning the flashlight off.",
+        "ta": "மறுபடியும் வெளிச்சமாகிறது, டார்ச் லைட்டை அணைக்கிறேன்.",
+        "hi": "फिर से रोशनी है, टॉर्च बंद कर रहा हूँ।",
+    },
     "light.torch_unsupported": {
         "en": "I can't turn on the flashlight on this phone.",
         "ta": "இந்த போனில் என்னால் டார்ச் லைட்டை போட முடியாது.",

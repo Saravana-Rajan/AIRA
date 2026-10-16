@@ -1,6 +1,7 @@
-"""Low light (tools/light.py): the flashlight is proposed, never commanded without a spoken yes; an unsupported
-torch is said once; bright again asks before turning off; the switch loop guides to a switch and never to a
-socket; the press is judged by the brightness before and after. Everything is faked; no model, no network."""
+"""Low light (tools/light.py): in the dark the flashlight turns on and AIRA says so (it informs, it does not
+ask); it turns off again when it is bright; the owner can override by voice and that holds the auto-on; an
+unsupported torch is said once; the switch loop still asks, guides to a switch and never to a socket, and judges
+the press by the brightness before and after. Everything is faked; no model, no network."""
 import sys
 import types
 
@@ -78,48 +79,60 @@ async def test_light_switch_tool_is_registered_only_with_the_flag():
     assert "light_switch_find" in {f.__name__ for f in active_tools(light=True)}
 
 
-# ---------- torch: proposed once per dark episode, commanded only after yes ----------
-async def test_dark_proposes_the_torch_once_and_no_command_goes_without_a_yes(session, flags):
+# ---------- torch: on in the dark, off when bright, informing (never asking on the passive path) ----------
+def torch_on_dark_count(rec):
+    return [m.text for m in msgs(rec, TranscriptMsg)].count(line("light.torch_on_dark", "ta"))
+
+
+async def test_dark_turns_the_torch_on_and_informs_once_per_episode(session, flags):
     s, rec = session
     await light.on_light(s, report("dark", 12.0, "off"))
-    await light.on_light(s, report("dark", 10.0, "off"))   # still dark: no second question
-    confirms = msgs(rec, ConfirmMsg)
-    assert len(confirms) == 1 and confirms[0].kind == "generic" and confirms[0].prompt == light.TORCH_OFFER_EN
-    assert msgs(rec, TorchMsg) == []
-    # without a Live bridge the phone captions the fixed Tamil line
-    assert msgs(rec, TranscriptMsg)[-1].text == line("light.torch_offer", "ta")
-    # "no" never commands; and the same dark episode is not asked again
-    r = await confirm.resolve(confirms[0].id, "no")
-    assert r["status"] == "rejected" and msgs(rec, TorchMsg) == []
-    await light.on_light(s, report("dark", 8.0, "off"))
-    assert len(msgs(rec, ConfirmMsg)) == 1
-    # bright again, then dark again: a new episode, one new question
+    # auto-on + a spoken line, and no question
+    assert msgs(rec, ConfirmMsg) == []
+    assert [m.on for m in msgs(rec, TorchMsg)] == [True]
+    assert msgs(rec, TranscriptMsg)[-1].text == line("light.torch_on_dark", "ta")
+    assert light.state(s).torch_requested == "on"          # not on until the phone says so
+    # still dark, the phone has not applied it yet: the command is held and the line is not repeated
+    await light.on_light(s, report("dark", 10.0, "off"))
+    assert [m.on for m in msgs(rec, TorchMsg)] == [True]
+    assert torch_on_dark_count(rec) == 1
+    # the phone reports it on, then it is bright, then dark again: a new episode informs once more
+    await light.on_light(s, report("dim", 40.0, "on"))
+    assert light.state(s).torch_requested is None
+    await light.on_light(s, report("bright", 150.0, "on"))
+    await light.on_light(s, report("dark", 9.0, "off"))
+    assert torch_on_dark_count(rec) == 2
+
+
+async def test_relight_is_quiet_after_the_phone_auto_off_while_still_dark(session, flags):
+    s, rec = session
+    await light.on_light(s, report("dark", 12.0, "off"))   # on + spoken
+    await light.on_light(s, report("dark", 11.0, "on"))    # the phone applied it
+    # the phone's own 5-minute auto-off fires while it is still dark (the torch is reported off again)
+    await light.on_light(s, report("dark", 10.0, "off"))
+    # it re-lights, but without a second spoken line (still the same dark episode)
+    assert [m.on for m in msgs(rec, TorchMsg)] == [True, True]
+    assert torch_on_dark_count(rec) == 1
+
+
+async def test_owner_off_by_voice_holds_the_auto_on_until_it_is_not_dark(session, flags):
+    s, rec = session
+    await light.on_light(s, report("dark", 12.0, "off"))   # auto-on
+    await light.on_light(s, report("dark", 11.0, "on"))    # the phone applied it
+    await light.flashlight(False)                          # the owner turns it off by voice
+    await light.on_light(s, report("dark", 10.0, "off"))   # the phone reports it off, still dark
+    assert [m.on for m in msgs(rec, TorchMsg)] == [True, False]   # it stays off: the override holds
+    # bright then dark again lifts the override, and auto-on resumes
     await light.on_light(s, report("bright", 150.0, "off"))
     await light.on_light(s, report("dark", 9.0, "off"))
-    assert len(msgs(rec, ConfirmMsg)) == 2
+    assert [m.on for m in msgs(rec, TorchMsg)] == [True, False, True]
 
 
-async def test_yes_sends_the_torch_command_and_the_phone_report_is_the_truth(session, flags):
+async def test_unsupported_torch_is_said_once_and_not_commanded_again(session, flags):
     s, rec = session
-    await light.on_light(s, report("dark", 12.0, "off"))
-    cid = msgs(rec, ConfirmMsg)[0].id
-    r = await confirm.resolve(cid, "yes")
-    assert r["status"] == "committed" and r["say_en"] == light.TORCH_ON_EN
+    await light.on_light(s, report("dark", 12.0, "off"))         # auto-on tried
     assert [m.on for m in msgs(rec, TorchMsg)] == [True]
-    st = light.state(s)
-    assert st.torch == "off" and st.torch_requested == "on"   # not on until the phone says so
-    await light.on_light(s, report("dim", 70.0, "on"))
-    assert st.torch == "on" and st.torch_requested is None
-    # a yes twice commits once: one command only
-    await confirm.resolve(cid, "yes")
-    assert len(msgs(rec, TorchMsg)) == 1
-
-
-async def test_unsupported_torch_is_said_once_and_never_offered_again(session, flags):
-    s, rec = session
-    await light.on_light(s, report("dark", 12.0, "off"))
-    await confirm.resolve(msgs(rec, ConfirmMsg)[0].id, "yes")
-    await light.on_light(s, report("dark", 12.0, "unsupported"))
+    await light.on_light(s, report("dark", 12.0, "unsupported")) # the phone cannot
     said = [m.text for m in msgs(rec, TranscriptMsg)]
     assert said.count(line("light.torch_unsupported", "ta")) == 1
     await light.on_light(s, report("dark", 11.0, "unsupported"))
@@ -127,32 +140,32 @@ async def test_unsupported_torch_is_said_once_and_never_offered_again(session, f
     await light.on_light(s, report("dark", 9.0, "unsupported"))
     said = [m.text for m in msgs(rec, TranscriptMsg)]
     assert said.count(line("light.torch_unsupported", "ta")) == 1
-    assert len(msgs(rec, ConfirmMsg)) == 1   # never offered again in this session
+    assert [m.on for m in msgs(rec, TorchMsg)] == [True]         # never commanded again in this session
+    assert msgs(rec, ConfirmMsg) == []
 
 
-async def test_bright_again_sustained_asks_before_turning_off(session, flags):
+async def test_bright_again_sustained_turns_it_off_and_says_so(session, flags):
     s, rec = session
-    await light.on_light(s, report("dark", 12.0, "off"))
-    await confirm.resolve(msgs(rec, ConfirmMsg)[0].id, "yes")
-    await light.on_light(s, report("dim", 70.0, "on"))
-    # the torch itself lighting a shelf: bright but under the bar, or not long enough: no question
+    await light.on_light(s, report("dark", 12.0, "off"))   # auto-on
+    await light.on_light(s, report("dim", 70.0, "on"))     # the phone applied it
+    before = len(msgs(rec, TorchMsg))                       # one command so far (the on)
+    # the torch itself lighting a shelf: bright but under the bar, or not long enough: no turn-off
     await light.on_light(s, report("bright", 100.0, "on"))
     s.clock.t += 60
     await light.on_light(s, report("bright", 100.0, "on"))
-    assert len(msgs(rec, ConfirmMsg)) == 1
-    await light.on_light(s, report("bright", 150.0, "on"))
+    assert len(msgs(rec, TorchMsg)) == before
+    await light.on_light(s, report("bright", 150.0, "on"))  # starts the bright timer
     s.clock.t += light.TORCH_OFF_BRIGHT_S - 1
     await light.on_light(s, report("bright", 150.0, "on"))
-    assert len(msgs(rec, ConfirmMsg)) == 1
+    assert len(msgs(rec, TorchMsg)) == before               # not long enough yet
     s.clock.t += 2
+    await light.on_light(s, report("bright", 150.0, "on"))  # sustained: auto-off + inform, no question
+    assert [m.on for m in msgs(rec, TorchMsg)] == [True, False]
+    assert msgs(rec, TranscriptMsg)[-1].text == line("light.torch_off_bright", "ta")
+    assert msgs(rec, ConfirmMsg) == []
+    # not commanded twice in the same torch-on episode
     await light.on_light(s, report("bright", 150.0, "on"))
-    confirms = msgs(rec, ConfirmMsg)
-    assert len(confirms) == 2 and confirms[1].prompt == light.TORCH_OFF_OFFER_EN
-    assert [m.on for m in msgs(rec, TorchMsg)] == [True]   # still on: no command without the yes
-    await light.on_light(s, report("bright", 150.0, "on"))
-    assert len(msgs(rec, ConfirmMsg)) == 2                  # asked once per torch-on episode
-    r = await confirm.resolve(confirms[1].id, "yes")
-    assert r["say_en"] == light.TORCH_OFF_EN and [m.on for m in msgs(rec, TorchMsg)] == [True, False]
+    assert [m.on for m in msgs(rec, TorchMsg)] == [True, False]
 
 
 # ---------- the light switch tool ----------
@@ -327,11 +340,14 @@ async def test_owner_says_turn_on_and_it_comes_on_or_says_it_cannot(session, fla
     assert len(msgs(rec, TorchMsg)) == 1                                  # never pretends: no second command
 
 
-async def test_a_pending_offer_is_answered_by_his_own_request(session, flags):
+async def test_a_pending_offer_is_answered_by_his_own_request(session, flags, monkeypatch):
+    # The passive dark path no longer asks, but the switch flow still proposes the torch first: the owner's own
+    # flashlight request answers that pending offer.
     s, rec = session
-    await light.on_light(s, report())
-    s.clock.t += 5
-    await light.on_light(s, report())                                     # sustained dark: the offer is pending
+    monkeypatch.setitem(sys.modules, light.ROUTE_MODULE, None)
+    monkeypatch.setattr(light.SwitchLoop, "run", _idle_run)
+    light.state(s).level, light.state(s).luma = "dark", 10.0
+    await light.light_switch_find()
     assert light.state(s).pending
     await light.flashlight(on=False)
     assert light.state(s).pending == {}

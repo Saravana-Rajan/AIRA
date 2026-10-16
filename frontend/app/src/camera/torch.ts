@@ -1,7 +1,8 @@
 // frontend/app/src/camera/torch.ts
 // The rear-camera flashlight (AIRA_TORCH). Pure apart from the injected track: nothing here ever turns the
-// torch on by itself. Only a server `torch` command does, and the server sends one only after the owner's
-// spoken "yes" (backend/aira_live/tools/light.py). The torch goes on only when the camera track reports the
+// torch on by itself. Only a server `torch` command does, and the server sends one when the view is dark,
+// when it is bright again, or on the owner's spoken request (backend/aira_live/tools/light.py). The torch
+// goes on only when the camera track reports the
 // capability (`getCapabilities().torch === true`) and `applyConstraints({advanced: [{torch: true}]})` succeeds;
 // otherwise the phone reports "unsupported" and never pretends. iPhone Safari (WebKit) does not expose the torch
 // capability, so there the report is always "unsupported". The torch switches itself off after TORCH_AUTO_OFF_MS

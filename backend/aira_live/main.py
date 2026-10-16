@@ -475,7 +475,7 @@ async def ws_endpoint(ws: WebSocket) -> None:
                 if msg.name == "steps" and session.walking:   # the phone's step count feeds the route follower
                     await _lane_hook("aira_live.tools.walk", "on_client_event", session, msg.name, msg.data)
                 await _lane_hook("aira_live.tools.light", "handle_client_event", session, msg.name, msg.data)
-            elif isinstance(msg, LightMsg):  # low light: recorded; with AIRA_TORCH a flashlight PROPOSAL may follow
+            elif isinstance(msg, LightMsg):  # low light: recorded; with AIRA_TORCH a flashlight command may follow
                 await _lane_hook("aira_live.tools.light", "on_light", session, msg)
             elif isinstance(msg, RtcMsg):  # WebRTC signalling for a dashboard monitor: relayed, never read
                 if rtc_limit.allow():
