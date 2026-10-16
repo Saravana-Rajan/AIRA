@@ -29,7 +29,10 @@ export const CONFIRM_ANSWERS = Object.freeze(["yes", "no"] as const);
 export type ConfirmAnswer = (typeof CONFIRM_ANSWERS)[number];
 
 // "talk": the owner tapped to talk (his next turn); after a long-press Stop it lets AIRA speak again.
-export const CLIENT_EVENT_NAMES = Object.freeze(["visibility", "network", "fingertip_in_target", "talk"] as const);
+// "steps": the phone's cumulative step count during a server walk, data {total, available}; `available: false`
+// once when the phone has no motion sensor or the owner refused it. Sent at most twice a second; the server
+// reads it only with step-by-step routes on (AIRA_ROUTES) and never answers it.
+export const CLIENT_EVENT_NAMES = Object.freeze(["visibility", "network", "fingertip_in_target", "talk", "steps"] as const);
 export type ClientEventName = (typeof CLIENT_EVENT_NAMES)[number];
 
 export const TRANSCRIPT_ROLES = Object.freeze(["user", "aira"] as const);
@@ -45,6 +48,16 @@ export const BOX_SOURCES = Object.freeze(["mediapipe", "er2", "bump"] as const);
 export type BoxSource = (typeof BOX_SOURCES)[number];
 export const BOX_SEVERITIES = Object.freeze(["danger"] as const);
 export type BoxSeverity = (typeof BOX_SEVERITIES)[number];
+
+// Low light (phone `light` message): how bright the camera view is, decided on the phone over several seconds
+// with hysteresis (camera/lowlight.ts), never from one frame. "dark": too dark to see; "dim": usable with a
+// boost; "bright": fine.
+export const LIGHT_LEVELS = Object.freeze(["dark", "dim", "bright"] as const);
+export type LightLevel = (typeof LIGHT_LEVELS)[number];
+// The rear-camera flashlight as the phone reports it: off, on, or "unsupported" (this browser cannot switch it,
+// e.g. iPhone Safari). The server never assumes it is on: only the phone's report says so.
+export const TORCH_STATES = Object.freeze(["off", "on", "unsupported"] as const);
+export type TorchState = (typeof TORCH_STATES)[number];
 
 export const ORDER_STATES = Object.freeze([
   "DRAFT", "ORDER_PLACED", "DELIVERY_PENDING", "DELIVERY_RECONCILED", "DISCREPANCY",

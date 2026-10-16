@@ -6,12 +6,12 @@ import { shopName } from "../src/lib/shopName";
 const DEMO = { mode: "demo", shopId: "sunrise_dairy", role: "owner" };
 
 describe("resolveAccess", () => {
-  it("the one shop is sunrise_dairy, shown as Sunrise Dairy everywhere", () => {
+  it("the one shop is sunrise_dairy, shown as AIRA everywhere", () => {
     expect(DEMO_SHOP_ID).toBe("sunrise_dairy");
-    expect(SHOP_NAME).toBe("Sunrise Dairy");
-    expect(shopName()).toBe("Sunrise Dairy");
-    expect(shopName("someone_else")).toBe("Sunrise Dairy"); // a legacy id argument changes nothing
-    expect(shopName(null)).toBe("Sunrise Dairy");
+    expect(SHOP_NAME).toBe("AIRA");
+    expect(shopName()).toBe("AIRA");
+    expect(shopName("someone_else")).toBe("AIRA"); // a legacy id argument changes nothing
+    expect(shopName(null)).toBe("AIRA");
   });
   it("every visitor gets the one shop as its owner, with or without an argument", () => {
     expect(resolveAccess()).toEqual(DEMO);

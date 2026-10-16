@@ -4,7 +4,7 @@
 /** The one shop's Firestore id (shops/{id}/...), the same value aira-live serves as its demo shop. */
 export const DEMO_SHOP_ID = "sunrise_dairy";
 /** The one shop's display name (header, menu, Live page, phone app). */
-export const SHOP_NAME = "Sunrise Dairy";
+export const SHOP_NAME = "AIRA";
 
 export type AccessRole = "owner";
 

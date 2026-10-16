@@ -24,6 +24,9 @@ import { shareToneContext } from "../guidance/tones";
 import { announceToRegion } from "../ui/ScreenReaderRegion";
 import { initialScreen, reduceScreen, type LocalEvent, type ScreenState } from "../ui/screenState";
 import type { CountProgress } from "../ui/view";
+import { handsfreeFlags, type HandsfreeFlags } from "../handsfree/flags";
+import { attachMediaButton, audioKeepAlive, type KeepAlive, type MediaButton, type MediaSessionLike } from "../handsfree/mediaButton";
+import { HANDSFREE_STRINGS } from "../handsfree/strings";
 
 export const APP_VERSION = "0.1.0";
 /** The mic closes after this long with no talk gesture and no user speech. */
@@ -95,6 +98,10 @@ export interface WireEnv {
   startMic(opts: StartMicOpts): Promise<{ stop(): void }>;
   /** navigator.mediaDevices, for the earphones watcher (voice/route). Missing or null: no watcher. */
   mediaDevices?: DeviceSource | null;
+  /** navigator.mediaSession, for the earphone button (handsfree/mediaButton). Missing or null: no button. */
+  mediaSession?: MediaSessionLike | null;
+  /** The near-silent looping <audio> that makes this page the active media session (only with the flag on). */
+  mediaKeepAlive?: () => KeepAlive | null;
   queueStore(): QueueStore;
   storage: Storage | null;
   win: Listenable;
@@ -135,6 +142,8 @@ export interface WireOpts {
   /** false: wire everything but send no hello (the demo page connects the socket itself). */
   connect?: boolean;
   env?: Partial<WireEnv>;
+  /** Hands-free flags; default: the build's VITE_AIRA_* values (handsfree/flags.ts), all off unless set. */
+  handsfree?: Partial<HandsfreeFlags>;
 }
 
 export interface WiredApp {
@@ -218,6 +227,8 @@ export function browserEnv(): WireEnv {
     announce: announceToRegion,
     startMic,
     mediaDevices: typeof navigator === "undefined" ? null : navigator.mediaDevices ?? null,
+    mediaSession: typeof navigator === "undefined" ? null : (navigator as Navigator & { mediaSession?: MediaSessionLike }).mediaSession ?? null,
+    mediaKeepAlive: () => (typeof document === "undefined" ? null : audioKeepAlive(document)),
     queueStore: () => defaultStore(),
     storage: safeStorage(),
     win: window,
@@ -639,6 +650,8 @@ export function wireApp(opts: WireOpts): WiredApp {
   // first startListening/talk until an explicit stop or dispose. While it holds, re-check that the mic is open
   // and reopen it if not — the safety net for an idle-close, a dead worklet, or any silent loss of capture.
   let listening = false;
+  // The earphone button (handsfree/mediaButton), attached below once the gestures exist; a no-op until then.
+  let mediaButton: MediaButton | null = null;
   let watchdog: ReturnType<typeof setTimeout> | null = null;
   const armWatchdog = () => {
     if (watchdog || disposed) return;
@@ -649,8 +662,8 @@ export function wireApp(opts: WireOpts): WiredApp {
       armWatchdog();
     }, MIC_WATCHDOG_MS);
   };
-  const startSession = () => { listening = true; armWatchdog(); };
-  const endSession = () => { listening = false; };
+  const startSession = () => { listening = true; armWatchdog(); mediaButton?.setListening(true); };
+  const endSession = () => { listening = false; mediaButton?.setListening(false); };
 
   // ---- earphones come and go ----
   // The OS routes audio (voice/mic.ts): earphones when paired, the loudspeaker otherwise. A stream opened
@@ -679,6 +692,7 @@ export function wireApp(opts: WireOpts): WiredApp {
   // No ack earcon and no thinking timer: nothing was asked yet. Audio output may still be locked (the
   // AudioContext was created without a gesture), but Chrome lets a page with a live getUserMedia stream start
   // Web Audio, so resume once more after the mic opens, then play the listening earcon and greet.
+  let saidEarphoneButton = false;
   const startListening = async (): Promise<boolean> => {
     local("talk");
     const ok = await openMic(true);
@@ -692,6 +706,10 @@ export function wireApp(opts: WireOpts): WiredApp {
       tryRun(() => env.playEarcon(ctx!, "listening"));
     }
     api.speak(STRINGS.greeting[lang()]);
+    if (mediaButton?.attached && !saidEarphoneButton) {
+      saidEarphoneButton = true; // once per wiring: the owner learns the button exists, then it is just there
+      api.speak(HANDSFREE_STRINGS.earphoneButton[lang()]);
+    }
     return true;
   };
 
@@ -740,6 +758,29 @@ export function wireApp(opts: WireOpts): WiredApp {
     local("stop");
   };
 
+  // ---- earphone button (VITE_AIRA_MEDIA_BUTTON, off by default) ----
+  // The headset's play/pause key does exactly what the screen gestures do: play = double-tap (yes, or talk),
+  // pause / stop = long-press (no, or a hard stop). Feature-detected; nothing is attached without the flag or
+  // the API. The keep-alive element starts here, inside the Start tap, so the browser lets it play.
+  const flags: HandsfreeFlags = { ...handsfreeFlags(), ...opts.handsfree };
+  try {
+    mediaButton = attachMediaButton({
+      enabled: flags.mediaButton,
+      mediaSession: env.mediaSession,
+      onTalk: () => { if (!answer("double")) talk(); },
+      onStop: () => { if (!answer("long")) stop(); },
+      keepAlive: flags.mediaButton ? env.mediaKeepAlive?.() ?? null : null,
+      metadata: { title: "AIRA", artist: STRINGS.listening[uiLang] },
+    });
+    if (mediaButton.attached) {
+      mediaButton.setListening(listening);
+      clientLog("media_button", { attached: true });
+    }
+  } catch {
+    mediaButton = null; // the gestures are untouched
+  }
+  cleanups.push(() => { mediaButton?.dispose(); mediaButton = null; });
+
   // ---- phone status ----
   const on = (target: Listenable, type: string, fn: () => void) => {
     target.addEventListener(type, fn);
@@ -760,7 +801,9 @@ export function wireApp(opts: WireOpts): WiredApp {
   // phone call or Siri, and (after a gesture-less start) leaves it suspended until a tap. Resume on every return
   // to the page, on a bfcache restore, when the state drops while visible, and on the owner's next touch.
   const wakeAudio = () => {
-    if (!ctx || disposed || env.doc.hidden) return;
+    if (disposed || env.doc.hidden) return;
+    mediaButton?.resume(); // the keep-alive clip also stops on a call or Siri; best effort, no-op if playing
+    if (!ctx) return;
     const st = String(ctx.state);
     if (st === "running" || st === "closed") return;
     tryRun(() => { void ctx!.resume().catch(() => {}); });

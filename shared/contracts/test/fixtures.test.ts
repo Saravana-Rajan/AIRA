@@ -15,6 +15,8 @@ import {
   CONFIRM_KINDS,
   ENTITIES,
   ERROR_CODES,
+  LIGHT_LEVELS,
+  TORCH_STATES,
 } from "../src/index";
 
 type Raw = Record<string, any>;
@@ -44,6 +46,29 @@ describe("contract fixtures", () => {
     expect(valuesOf(server, "confirm", "kind")).toEqual(new Set(CONFIRM_KINDS));
     expect(valuesOf(server, "state", "entity")).toEqual(new Set(ENTITIES));
     expect(valuesOf(server, "error", "code")).toEqual(new Set(ERROR_CODES));
+  });
+
+  it("low light: the phone reports a sustained level, raw luma and the real torch state; the server only commands", () => {
+    expect(LIGHT_LEVELS).toEqual(["dark", "dim", "bright"]);
+    expect(TORCH_STATES).toEqual(["off", "on", "unsupported"]);
+    expect(valuesOf(client, "light", "level")).toEqual(new Set(LIGHT_LEVELS));
+    expect(valuesOf(client, "light", "torch")).toEqual(new Set(TORCH_STATES));
+    expect(valuesOf(server, "torch", "on")).toEqual(new Set([true, false]));
+    expect(isClientMsg({ t: "light", level: "dark", luma: 0, torch: "off" })).toBe(true);
+    expect(isClientMsg({ t: "light", level: "bright", luma: 255, torch: "unsupported" })).toBe(true);
+    // rejected: an unknown level or torch state, a luma outside 0-255 or not a number, a missing field
+    expect(isClientMsg({ t: "light", level: "pitch", luma: 10, torch: "off" })).toBe(false);
+    expect(isClientMsg({ t: "light", level: "dark", luma: 10, torch: "maybe" })).toBe(false);
+    expect(isClientMsg({ t: "light", level: "dark", luma: -1, torch: "off" })).toBe(false);
+    expect(isClientMsg({ t: "light", level: "dark", luma: 256, torch: "off" })).toBe(false);
+    expect(isClientMsg({ t: "light", level: "dark", luma: "10", torch: "off" })).toBe(false);
+    expect(isClientMsg({ t: "light", level: "dark", torch: "off" })).toBe(false);
+    // the torch command is server -> phone only, with a boolean
+    expect(isServerMsg({ t: "torch", on: true })).toBe(true);
+    expect(isServerMsg({ t: "torch", on: "yes" })).toBe(false);
+    expect(isServerMsg({ t: "torch" })).toBe(false);
+    expect(isClientMsg({ t: "torch", on: true })).toBe(false);
+    expect(isServerMsg({ t: "light", level: "dark", luma: 10, torch: "off" })).toBe(false);
   });
 
   it("a finished user transcript carries the language AIRA detected (any code, not only the label languages)", () => {

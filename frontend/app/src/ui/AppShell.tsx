@@ -57,8 +57,10 @@ export function localizeStatus(s: ScreenState, lang: Lang, progress: CountProgre
     const detail = localizeLabel(task.detail, lang);
     if (title !== task.title || detail !== task.detail) task = { ...task, title, detail };
   }
-  if (next === label && task === s.task) return s;
-  return { ...s, status: { kind, label: next }, task };
+  // The flashlight rides on the chip while it is on ("Ready · Flashlight on"): the phone's own report, never assumed.
+  const withTorch = s.torch === "on" ? `${next} · ${LABELS.torchOn[lang]}` : next;
+  if (withTorch === label && task === s.task) return s;
+  return { ...s, status: { kind, label: withTorch }, task };
 }
 
 function useWiredView(w: WiredApp | null): AppView | null {

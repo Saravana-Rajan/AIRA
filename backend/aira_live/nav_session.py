@@ -39,11 +39,17 @@ MIN_FRAMES = 2   # frames the session must have before its first check
 OnReport = Callable[[dict], Awaitable[None]]
 
 
-def system_prompt(shop_name: str = "the shop") -> str:
+def system_prompt(shop_name: str = "the shop", zones_text: str | None = None) -> str:
+    """AIRA's walking prompt, the checker note and, with routes on, the map's zone list (``ShopMap.prompt_text``,
+    already cut to its character cap: a small part of the 32k-token compression window)."""
     from aira_live.prompt import render_prompt
 
     walk_prompt = render_prompt({"name": shop_name}, [], [], "en", "short", er2=False, walk=True)
-    return f"{walk_prompt}\n{NAV_SYSTEM}"
+    text = f"{walk_prompt}\n{NAV_SYSTEM}"
+    if zones_text:
+        text += ("\n" + zones_text + "\nWith every nav_report also give current_zone (one of the zone ids above, or "
+                 "unknown), facing (which of that zone's views the picture matches), confidence and reflection.")
+    return text
 
 
 def _config(types: Any, nav_tool: Any, system: str | None = None) -> Any:
@@ -67,7 +73,7 @@ def _nav_declaration(types: Any) -> Any:
     return decl
 
 
-async def _default_connect() -> tuple[Any, contextlib.AsyncExitStack]:
+async def _default_connect(system: str | None = None) -> tuple[Any, contextlib.AsyncExitStack]:
     """Open a Live session on the live model with the shared Gemini client. Returns (session, exit stack)."""
     from google.genai import types
 
@@ -75,7 +81,7 @@ async def _default_connect() -> tuple[Any, contextlib.AsyncExitStack]:
     from aira_live.vision import gemini
 
     stack = contextlib.AsyncExitStack()
-    cfg = _config(types, _nav_declaration(types))
+    cfg = _config(types, _nav_declaration(types), system)
     live = await stack.enter_async_context(gemini.client().aio.live.connect(model=model_for("live"), config=cfg))
     return live, stack
 
@@ -85,10 +91,11 @@ class NavSession:
     it drops or closes; callers fall back to the conversation session then. Never raises."""
 
     def __init__(self, session_id: str, on_report: OnReport,
-                 connect: Callable[[], Awaitable[tuple[Any, Any]]] | None = None):
+                 connect: Callable[[], Awaitable[tuple[Any, Any]]] | None = None, system: str | None = None):
         self.session_id = session_id
         self._on_report = on_report
-        self._connect = connect or _default_connect
+        self.system = system                      # a system instruction override (routes: with the zone list)
+        self._connect = connect or (lambda: _default_connect(system))
         self._live: Any = None
         self._stack: Any = None
         self._task: asyncio.Task | None = None

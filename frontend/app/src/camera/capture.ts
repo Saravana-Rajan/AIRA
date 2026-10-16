@@ -5,6 +5,7 @@ import type { ClientMsg, FramePurpose } from "@aira/contracts";
 import { app } from "../core/app";
 import { clientLog, shortText, type LogData } from "../core/clientLog";
 import { toGray, qualityHint, noteFrameQuality } from "./quality";
+import { boostPixels } from "./lowlight";
 import { overrideSource } from "./source";
 import { ensureBackCamera, type BackCameraResult, type CameraFacing } from "./backCamera";
 import { beginLooking } from "./looking";
@@ -196,6 +197,20 @@ let video: HTMLVideoElement | null = null;
 let starting: Promise<HTMLVideoElement> | null = null;
 let qualityListener: ((h: "dark" | "blurry") => void) | null = null;
 let qualityCounter = 0;
+// Low-light boost (AIRA_LOWLIGHT): a gain above 1 brightens the pixels of UPLOADED frames (tool, live, describe)
+// right before they are encoded, on the canvas path only (the encode worker gets raw pixels, so a boosted frame
+// skips it). The quality check and the reported luma read the raw pixels first. The monitor preview and the bump
+// guard are never boosted: the preview is for the dashboard, and the guard grabs the <video> itself (walk/start.ts).
+let boostGain = 1;
+
+/** The upload boost gain (1 = off). Set by the camera wiring from the light watch; null clears it. */
+export function setFrameBoost(gain: number | null): void {
+  boostGain = gain !== null && Number.isFinite(gain) && gain > 1 ? gain : 1;
+}
+
+export function frameBoost(): number {
+  return boostGain;
+}
 let seq = 0;
 let facing: CameraFacing = "unknown";
 let denied = false;
@@ -368,10 +383,12 @@ async function captureFrameRaw(purpose: FramePurpose, keep?: FrameKeep): Promise
   // Preview frames are for the dashboard only: they never earn the owner a "hold still" hint.
   const checkQuality = isToolPurpose(purpose) && qualityListener !== null && ++qualityCounter % 3 === 0;
   const retryQuality = Math.min(spec.quality, JPEG_RETRY_QUALITY);
+  // Low light: boost the pixels Gemini sees (never the monitor preview). A boosted frame takes the canvas path.
+  const boost = boostGain > 1 && purpose !== "preview" ? boostGain : 1;
   // The worker path: the frame is scaled and encoded off the main thread. Any worker trouble (other than a frame
   // that is too big at both qualities) falls back to the canvas path below, for this frame and, once the worker
   // died, for good.
-  const worker = !demo && src.grab ? deps.worker() : null;
+  const worker = !demo && src.grab && boost === 1 ? deps.worker() : null;
   if (worker && !worker.dead) {
     let out: { jpeg: string; gray: Float32Array | null } | null = null;
     let grabbedAt = Date.now();
@@ -397,11 +414,17 @@ async function captureFrameRaw(purpose: FramePurpose, keep?: FrameKeep): Promise
   const drawnAt = Date.now(); // the picture's moment: the draw copies the current video frame
   src.draw(ctx, w, h);
   let quality: "ok" | "dark" | "blurry" | "skipped" = "skipped";
-  if (checkQuality || keep) {
+  if (checkQuality || keep || boost > 1) {
     const img = ctx.getImageData(0, 0, w, h);
-    const gray = toGray(img.data, w, h);
-    quality = checkFrame(gray, w, h, checkQuality);
-    if (keep && !keep(gray, w, h)) return null;
+    if (checkQuality || keep) { // the raw picture is judged BEFORE any boost: a boosted frame never hides "dark"
+      const gray = toGray(img.data, w, h);
+      quality = checkFrame(gray, w, h, checkQuality);
+      if (keep && !keep(gray, w, h)) return null;
+    }
+    if (boost > 1) {
+      boostPixels(img.data, boost);
+      ctx.putImageData(img, 0, 0);
+    }
   }
   let jpeg = await deps.encoder(canvas, spec.quality);
   if (jpeg.length > MAX_B64) jpeg = await deps.encoder(canvas, retryQuality);

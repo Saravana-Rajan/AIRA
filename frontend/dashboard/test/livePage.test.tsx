@@ -46,9 +46,10 @@ describe("LivePage: chrome", () => {
   it("is the header, the people selector and the camera, in that order, and nothing else", () => {
     const el = page(initialState(), "connecting");
     expect(el.querySelector("img.lv-logo")!.getAttribute("src")).toMatch(/aira-logo-192\.png$/);
-    expect(text(el.querySelector(".lv-title"))).toBe("Sunrise Dairy - Live");
+    expect(text(el.querySelector(".lv-title"))).toBe("AIRA - Live");
     expect(findAllByText(el, ".lv-conn__text", "Connecting…")).toHaveLength(1);
-    expect([...el.querySelectorAll(".livepage > *")].map((n) => n.className)).toEqual(["lv-head", "people", "cam"]);
+    expect([...el.querySelectorAll(".livepage > *")].map((n) => n.className)).toEqual(["lv-bar", "cam"]);
+    expect([...el.querySelectorAll(".lv-bar > *")].map((n) => n.className)).toEqual(["lv-head", "people"]); // one thin bar
     expect([...el.querySelectorAll("h3")].map(text)).toEqual(["People using AIRA now (0)", "Camera"]);
     expect(el.querySelector(".legend, .ov, svg.camera__overlay, .steps, .step, .chat, .msg, .tl, .bar, .bar__btn, .lv-pill, .room, .roomcam, .captions, [data-testid=record], .record__exit, .camera__badge")).toBeNull();
     expect(text(el)).not.toMatch(/Waiting for a task|Record mode|Pause camera|Conversation|MediaPipe|Gemini Robotics|Obstacle|Fingertip|Idle|Listening/);

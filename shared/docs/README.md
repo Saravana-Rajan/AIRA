@@ -40,6 +40,12 @@
 |---|---|
 | [aira-research.md](research/aira-research.md) | Prior art for shop owners, India context (NHFDC, kirana), verified Google model/API facts, WhatsApp/Telegram ordering notes |
 
+## Proposals (`proposals/`)
+
+| Doc | What it covers |
+|---|---|
+| [native-android-shell.md](proposals/native-android-shell.md) | Proposal only, needs owner approval: a native Android shell for the volume-button trigger and the "Hello AIRA" wake word (shell options, Play accessibility policy, Android 14 microphone-service rules, wake engines and licences, test plan). The built parts are in [ops/handsfree.md](ops/handsfree.md) |
+
 ## Plans (`superpowers/plans/`)
 
 | Plan | Owner | What it covers |

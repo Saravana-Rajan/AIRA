@@ -1,0 +1,131 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "AIRA shop map (step-by-step indoor routes)",
+  "description": "Zones of one shop with short landmark text per view, fixed points (light switch board...), hazards and hand-written routes between zones as ordered legs. Loaded by backend/aira_live/shop_map.py when AIRA_ROUTES=1; a map that fails this schema turns the feature off. Step counts are the owner's own measured counts for his stride; nothing here is a distance.",
+  "type": "object",
+  "required": ["note", "shop", "zones", "routes"],
+  "additionalProperties": false,
+  "properties": {
+    "note": {"type": "string", "minLength": 1},
+    "shop": {
+      "type": "object",
+      "required": ["id", "name"],
+      "additionalProperties": false,
+      "properties": {
+        "id": {"type": "string", "pattern": "^[a-z0-9_]+$"},
+        "name": {"type": "string", "minLength": 1}
+      }
+    },
+    "draft": {
+      "description": "true while the view texts are machine drafts not yet checked by a person (shared/scripts/describe_shop_photos.py sets it).",
+      "type": "boolean"
+    },
+    "zones": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/zone"}},
+    "hazards": {"type": "array", "items": {"$ref": "#/$defs/hazard"}},
+    "routes": {"type": "array", "items": {"$ref": "#/$defs/route"}}
+  },
+  "$defs": {
+    "zoneId": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$"},
+    "facing": {"enum": ["front", "left", "right", "back"]},
+    "aliases": {
+      "type": "object",
+      "required": ["en", "ta", "hi"],
+      "additionalProperties": false,
+      "properties": {
+        "en": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}},
+        "ta": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}},
+        "hi": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}}
+      }
+    },
+    "zone": {
+      "type": "object",
+      "required": ["id", "name", "aliases", "landmarks", "views"],
+      "additionalProperties": false,
+      "properties": {
+        "id": {"$ref": "#/$defs/zoneId"},
+        "name": {"type": "string", "minLength": 1, "description": "Short English name, spoken by Live in the owner's language."},
+        "aliases": {"$ref": "#/$defs/aliases"},
+        "landmarks": {"type": "string", "minLength": 1, "maxLength": 160, "description": "What marks this zone, in a few words."},
+        "photos": {"type": "array", "items": {"type": "string", "minLength": 1}, "description": "Reference photo file names (shared/catalog/photos/<shop_id>/...), never committed with people in them."},
+        "views": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "What the chest camera sees in this zone facing each way. 'front' is the direction of the zone's main photo; left/right/back are relative to it. Short text.",
+          "properties": {
+            "front": {"type": "string", "maxLength": 160},
+            "left": {"type": "string", "maxLength": 160},
+            "right": {"type": "string", "maxLength": 160},
+            "back": {"type": "string", "maxLength": 160}
+          }
+        },
+        "draft_views": {
+          "type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/facing"},
+          "description": "Views whose text was written by the photo script and not yet edited by a person."
+        },
+        "fixed_points": {"type": "array", "items": {"$ref": "#/$defs/fixedPoint"}}
+      }
+    },
+    "fixedPoint": {
+      "type": "object",
+      "required": ["id", "name", "where"],
+      "additionalProperties": false,
+      "properties": {
+        "id": {"$ref": "#/$defs/zoneId"},
+        "name": {"type": "string", "minLength": 1},
+        "where": {"type": "string", "minLength": 1, "maxLength": 160},
+        "switches": {
+          "type": "array", "items": {"type": "string", "minLength": 1},
+          "description": "For a light switch board: one label per switch, e.g. '2nd from left = shop light'."
+        }
+      }
+    },
+    "hazard": {
+      "type": "object",
+      "required": ["id", "type", "text"],
+      "additionalProperties": false,
+      "properties": {
+        "id": {"$ref": "#/$defs/zoneId"},
+        "type": {"enum": ["obstacle", "mirror", "step", "other"]},
+        "text": {"type": "string", "minLength": 1, "maxLength": 160},
+        "zone": {"$ref": "#/$defs/zoneId", "description": "The zone the hazard is in (a mirror: where it hangs)."},
+        "between": {"type": "array", "minItems": 2, "maxItems": 2, "items": {"$ref": "#/$defs/zoneId"}},
+        "reflects": {
+          "type": "array", "items": {"$ref": "#/$defs/zoneId"},
+          "description": "Mirror only: zones that can appear in its reflection. A report naming one of them is trusted only with high confidence and no reflection flag."
+        }
+      }
+    },
+    "leg": {
+      "oneOf": [
+        {
+          "type": "object", "required": ["type", "steps"], "additionalProperties": false,
+          "properties": {"type": {"const": "walk"}, "steps": {"type": "integer", "minimum": 1, "maximum": 60}}
+        },
+        {
+          "type": "object", "required": ["type", "dir"], "additionalProperties": false,
+          "properties": {"type": {"const": "turn"}, "dir": {"enum": ["left", "right", "around"]}}
+        },
+        {
+          "type": "object", "required": ["type", "say"], "additionalProperties": false,
+          "properties": {
+            "type": {"const": "checkpoint"},
+            "zone": {"$ref": "#/$defs/zoneId"},
+            "landmark": {"type": "string", "minLength": 1, "maxLength": 160},
+            "say": {"type": "string", "minLength": 1, "maxLength": 160}
+          }
+        }
+      ]
+    },
+    "route": {
+      "type": "object",
+      "required": ["from", "to", "legs"],
+      "additionalProperties": false,
+      "properties": {
+        "from": {"$ref": "#/$defs/zoneId"},
+        "to": {"$ref": "#/$defs/zoneId"},
+        "start_facing": {"$ref": "#/$defs/facing", "description": "The facing (in the from-zone's views) the first walk leg assumes. Default front."},
+        "legs": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/leg"}}
+      }
+    }
+  }
+}

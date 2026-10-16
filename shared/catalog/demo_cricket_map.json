@@ -1,0 +1,129 @@
+{
+  "note": "PLACEHOLDER map of a small cricket shop for tests and the demo. Step counts are placeholders for the owner's own measured counts (count them with the phone on your chest, at your walking pace, and replace). View texts are to be rewritten from real photos (shared/scripts/describe_shop_photos.py drafts them; a person checks them). 'front' is the direction of the zone's main photo.",
+  "shop": {"id": "demo_cricket", "name": "Demo Cricket Shop"},
+  "draft": false,
+  "zones": [
+    {
+      "id": "entrance",
+      "name": "entrance",
+      "aliases": {"en": ["entrance", "door", "front door", "shop door", "entry"],
+                  "ta": ["வாசல்", "கதவு", "நுழைவு"],
+                  "hi": ["दरवाज़ा", "प्रवेश", "गेट"]},
+      "landmarks": "glass door with a metal frame, a doormat, daylight from outside",
+      "photos": ["entrance_front.jpg", "entrance_back.jpg"],
+      "views": {
+        "front": "the counter straight ahead across the floor, bat wall on the right",
+        "left": "the kit wall with gloves and pads, a big table in front of it",
+        "right": "the bat wall with bats standing in racks, a tall mirror at its end",
+        "back": "the glass door and the street outside"
+      },
+      "fixed_points": [
+        {"id": "light_switch_board", "name": "light switch board", "where": "on the wall just left of the door at shoulder height",
+         "switches": ["1st from left = fan", "2nd from left = shop light", "3rd from left = sign board"]}
+      ]
+    },
+    {
+      "id": "counter",
+      "name": "counter",
+      "aliases": {"en": ["counter", "billing counter", "cash counter", "desk"],
+                  "ta": ["கவுண்டர்", "பில் கவுண்டர்", "மேசை"],
+                  "hi": ["काउंटर", "बिलिंग काउंटर", "कैश काउंटर"]},
+      "landmarks": "a wooden counter with a glass top, the cash box and the UPI soundbox on it",
+      "photos": ["counter_front.jpg"],
+      "views": {
+        "front": "the glass-topped counter with the soundbox, a shelf of balls behind it",
+        "left": "the bat wall seen from its far end",
+        "right": "the kit wall and the big table",
+        "back": "the entrance door at the far end of the shop"
+      },
+      "fixed_points": [
+        {"id": "soundbox", "name": "UPI soundbox", "where": "on the counter, left of the cash box"}
+      ]
+    },
+    {
+      "id": "bat_wall",
+      "name": "bat wall",
+      "aliases": {"en": ["bat wall", "bats", "bat rack", "cricket bats"],
+                  "ta": ["மட்டை சுவர்", "மட்டைகள்", "பேட்"],
+                  "hi": ["बल्ले की दीवार", "बल्ले", "बैट"]},
+      "landmarks": "bats standing upright in wooden racks along the wall, a tall mirror at the far end",
+      "photos": ["bat_wall_front.jpg"],
+      "views": {
+        "front": "rows of bats standing in racks, handles up",
+        "left": "the entrance door",
+        "right": "the counter and the ball shelf",
+        "back": "the kit wall across the floor"
+      },
+      "fixed_points": []
+    },
+    {
+      "id": "kit_wall",
+      "name": "kit wall",
+      "aliases": {"en": ["kit wall", "gloves", "pads", "gloves wall", "kit", "batting gloves"],
+                  "ta": ["கையுறை", "கிட் சுவர்", "பேட்", "கையுறைகள்"],
+                  "hi": ["दस्ताने", "किट की दीवार", "पैड", "ग्लव्स"]},
+      "landmarks": "gloves and pads hanging on hooks, helmets on the top shelf, a big table in front",
+      "photos": ["kit_wall_front.jpg"],
+      "views": {
+        "front": "gloves and pads on hooks, helmets on the top shelf",
+        "left": "the counter",
+        "right": "the entrance door",
+        "back": "the bat wall across the floor"
+      },
+      "fixed_points": []
+    },
+    {
+      "id": "ball_shelf",
+      "name": "ball shelf",
+      "aliases": {"en": ["ball shelf", "balls", "cricket balls", "ball rack"],
+                  "ta": ["பந்து அலமாரி", "பந்துகள்", "பந்து"],
+                  "hi": ["गेंद की शेल्फ", "गेंदें", "बॉल"]},
+      "landmarks": "a shelf of red and white balls in boxes behind the counter",
+      "photos": ["ball_shelf_front.jpg"],
+      "views": {
+        "front": "boxes of red and white balls on a shelf",
+        "left": "the back wall with posters",
+        "right": "the counter from behind",
+        "back": "the counter and the shop floor"
+      },
+      "fixed_points": []
+    }
+  ],
+  "hazards": [
+    {"id": "big_table", "type": "obstacle", "between": ["entrance", "kit_wall"],
+     "text": "a big table stands between the entrance and the kit wall"},
+    {"id": "tall_mirror", "type": "mirror", "zone": "bat_wall", "reflects": ["entrance", "counter", "kit_wall"],
+     "text": "a tall mirror at the end of the bat wall: what it shows is a reflection, not a real place"}
+  ],
+  "routes": [
+    {"from": "entrance", "to": "counter", "start_facing": "front",
+     "legs": [{"type": "walk", "steps": 8},
+              {"type": "checkpoint", "zone": "counter", "say": "The counter is in front of you."}]},
+    {"from": "counter", "to": "entrance", "start_facing": "back",
+     "legs": [{"type": "walk", "steps": 8},
+              {"type": "checkpoint", "zone": "entrance", "say": "The door is in front of you."}]},
+    {"from": "entrance", "to": "bat_wall", "start_facing": "front",
+     "legs": [{"type": "walk", "steps": 3},
+              {"type": "turn", "dir": "right"},
+              {"type": "walk", "steps": 4},
+              {"type": "checkpoint", "zone": "bat_wall", "say": "The bats are in front of you."}]},
+    {"from": "entrance", "to": "kit_wall", "start_facing": "front",
+     "legs": [{"type": "walk", "steps": 5},
+              {"type": "checkpoint", "landmark": "past the big table", "say": "The big table is behind you now."},
+              {"type": "turn", "dir": "left"},
+              {"type": "walk", "steps": 4},
+              {"type": "checkpoint", "zone": "kit_wall", "say": "The gloves are in front of you."}]},
+    {"from": "counter", "to": "ball_shelf", "start_facing": "front",
+     "legs": [{"type": "turn", "dir": "right"},
+              {"type": "walk", "steps": 3},
+              {"type": "turn", "dir": "left"},
+              {"type": "walk", "steps": 2},
+              {"type": "checkpoint", "zone": "ball_shelf", "say": "The ball shelf is in front of you."}]},
+    {"from": "bat_wall", "to": "counter", "start_facing": "right",
+     "legs": [{"type": "walk", "steps": 5},
+              {"type": "checkpoint", "zone": "counter", "say": "The counter is in front of you."}]},
+    {"from": "kit_wall", "to": "counter", "start_facing": "left",
+     "legs": [{"type": "walk", "steps": 5},
+              {"type": "checkpoint", "zone": "counter", "say": "The counter is in front of you."}]}
+  ]
+}

@@ -132,7 +132,7 @@ Network loss and recovery:
 - **Phone socket drops**: `main._end_session` -> `tools.walk.stop_session` ends the walk (nobody sees him
   move), closes the navigation session and cancels its tasks; the phone's `ready` after a reconnect ends its
   own server-walk mode. The walk is **not** resumed by itself: `on_session_resumed` (needs the main.py hook,
-  see §6) tells Live the walk ended so it tells the owner and calls `walk_to` again only when he asks.
+  see §7) tells Live the walk ended so it tells the owner and calls `walk_to` again only when he asks.
 - **Gemini Live socket drops (phone fine)**: the bridge reconnects with its resumption handle; meanwhile
   checks through the conversation are "busy" (not failures), the navigation session keeps answering, and walk
   lines are queued and replayed on reconnect (stale notices older than `NOTICE_DEDUPE_S` dropped). If the
@@ -150,6 +150,8 @@ Network loss and recovery:
 | `AIRA_OWNER_NAME` | unset | stops address him by name ("Sam, stop."); unset: "Stop.". |
 | `AIRA_MOCK` / no `GEMINI_API_KEY` | mock when the key is missing | **mock isolation**: no Live bridge, no navigation session (`default_nav_factory` returns None and no reopen is tried), no checks are sent, no cloud call; a walk started in mock degrades to the honest caption after 3 looks. |
 | `AIRA_LIVE_VIDEO` | `1` | must stay on: the walk's frames are the conversation session's realtime video (`main.live_frame`); off, no frame ever reaches a check (`fail.no_frame` -> DEGRADED). |
+| `AIRA_ROUTES` | `0` (off) | `1` (with `AIRA_WALK=1`): step-by-step routes from the shop map (§6). Off, or on with a missing / invalid map (one `routes off` log line): the walk behaves exactly as described above. |
+| `AIRA_ROUTES_MAP` | unset | the map file's path. Unset: `shared/catalog/<demo shop id>_map.json` in a repo checkout (the Cloud Run image copies only `aira_live/`, so production needs this path or a map added to the image). |
 | `AIRA_ER2` | `1` | legacy: the Robotics-ER tools and ambient mode. Referenced in `config.py` (`Settings.er2`), `main.py` (tool list, ambient start, precount), `prompt.py` (`rules_for`, `RULES_LIVE_ONLY`), `tools/__init__.py` (`active_tools`), `nav_session.py` (`render_prompt(er2=False, walk=True)`), tests `test_er2_switch.py` / `test_walk.py`. Walking never uses ER; the flag only decides which other camera tools exist. |
 
 Local (`backend/.env`): `GEMINI_API_KEY=<key>`, `AIRA_WALK=1`, `AIRA_WALK_NAV_SESSION=1`,
@@ -188,7 +190,120 @@ Diagnostics to watch (`aira` field in the JSON logs): `walk_start`, `walk_state`
 - Reports come from a model: a report can be wrong in both directions (a missed obstacle, a phantom one).
   The 2-of-3 confirmation limits phantom stops for small objects; nothing limits a missed one.
 
-## 6. What is NOT verified on a device, and the open main.py hooks
+## 6. Step-by-step routes (`AIRA_ROUTES=1`, off by default)
+
+With a **shop map** the walk can say "Go ahead 8 steps", "Turn right", "The counter is in front of you" instead
+of the view-only directions of §2. Everything in §1-§5 stays as it is: the same checks, the same `nav_report`,
+the same stops, the same arrival candidate. Routes only replace the *direction* lines, and only when the flag
+is on, the map loaded and the target is one of its zones. Code: `backend/aira_live/shop_map.py` (the map),
+`backend/aira_live/vision/route.py` (localisation and the follower, pure code), `tools/walk.py` (`route_for`,
+`WalkLoop.route`, `on_steps`, `on_client_event`), `frontend/app/src/walk/steps.ts` (the phone's step events),
+`shared/scripts/describe_shop_photos.py` (view texts drafted from photos).
+
+### 6.1 The map (`shared/catalog/<shop_id>_map.json`, schema `shared/catalog/schemas/shop_map.schema.json`)
+
+- `zones[]`: `id`, `name` (short English, Live says it in the owner's language), `aliases` in `en` / `ta` /
+  `hi` (what he may call it: `walk_to` resolves the target through them, any language), `landmarks` (a few
+  words), `photos` (reference photo names), `views` (`front` / `left` / `right` / `back`: what the chest camera
+  sees in that zone facing each way; `front` is the direction of the zone's main photo), `fixed_points`
+  (e.g. the light switch board with one label per switch, "2nd from left = shop light", for a later feature).
+- `hazards[]`: fixed obstacles (`between` two zones), steps, and **mirrors** (`zone` where it hangs,
+  `reflects`: the zones its reflection can show). The sample map's tall mirror on the bat wall reflects the
+  entrance, the counter and the kit wall.
+- `routes[]`: `from` -> `to`, `start_facing` (which view of the from-zone the first walk leg assumes), and
+  `legs` in order: `{"type":"walk","steps":N}` | `{"type":"turn","dir":"left"|"right"|"around"}` |
+  `{"type":"checkpoint","zone":<id>|"landmark":<text>,"say":<English meaning>}`. The last leg is the arrival
+  checkpoint. No route from A to B: the planner chains routes (fewest hops); none at all: "I have no route
+  from the ball shelf to the entrance."
+- **Step counts are the owner's**: he counts them himself with the phone on his chest at his pace, for his
+  stride, and writes them in. Nothing in the map is a distance and nothing is measured by the system.
+- The sample `shared/catalog/demo_cricket_map.json` (placeholder cricket shop: entrance, counter, bat wall,
+  kit wall, ball shelf) exists so the tests run; its counts and view texts are placeholders to replace.
+- A map that fails the schema, references an unknown zone, or whose route does not end in a checkpoint is
+  refused as a whole (`routes off: shop map ... unusable (<where>: <why>)`); the service never crashes on it.
+- Routes are written by hand (there is no "record route" mode yet): walk each route once, count the steps of
+  each straight stretch, note the turns and the landmark you reach, and write the legs.
+
+### 6.2 View texts from photos (`shared/scripts/describe_shop_photos.py`)
+
+`uv run --project backend python shared/scripts/describe_shop_photos.py --map <map> --photos <folder>
+[--zone <id>] [--overwrite] [--dry-run]`. Photos are named `<zone_id>_<facing>.jpg`. The model role `describe`
+(`models.py`, Flash) returns one short sentence per photo as JSON; the script writes it into `views` only
+when the text is empty or was written by the script before (`draft_views` lists those facings), never over a
+person's text without `--overwrite`, marks the map `"draft": true` until every drafted view has been checked
+(remove the facing from `draft_views` once edited), validates the result against the schema and writes
+nothing on `--dry-run` or when nothing changed. A reply that is not JSON skips that view with a warning.
+Run it first with `--dry-run`; its prompt has not been tried on the real API yet.
+
+### 6.3 Localisation: where he is, in code
+
+- Every `[NAV CHECK]` (§1) also asks for `current_zone` (one of the map's zone ids, or `unknown`), `facing`
+  (`front` / `left` / `right` / `back` of that zone's views, or `unknown`), `confidence` (`low` / `medium` /
+  `high`) and `reflection` (true for a mirror image). The navigation session's system instruction carries the
+  map's zone list (`ShopMap.prompt_text`: one line per zone with its landmarks and views, plus the mirrors),
+  cut at `ZONE_PROMPT_MAX_CHARS` = 2000 characters so it stays a small part of the session's 32k -> 16k token
+  compression window; the check text itself lists only the zone ids. A fallback check through the
+  conversation session (no navigation session) has the ids but not the view texts.
+- `current_zone` is a **string parameter, not an enum**: zone ids vary by map while the tool declaration is
+  fixed when the Live session opens, and an enum with an empty value is refused by Live (1007).
+  `parse_report` validates it against the loaded map (anything else reads as `unknown`); `facing` and
+  `confidence` are fixed enums with `unknown` / `low` as their safe values. A report with only position
+  fields and nothing about the view is still an empty report (a failed look), exactly as before.
+- **2 of 3**: a zone is trusted only when the same id appears in 2 of the last 3 reports; a facing only among
+  the reports of that zone. Until then: "Turn slowly until I recognise where you are." (every 10 s).
+- **Mirror rule**: a report with `reflection: true` carries no zone at all; a `low` confidence never counts;
+  a zone that a mirror in the map can show (`reflects`) counts only with `high` confidence; and nothing is
+  ever localised from one report. This limits a false "you are at the counter" from the mirror; it cannot
+  rule it out when the model is both wrong and confident twice.
+
+### 6.4 Steps from the phone
+
+- `walk/motion.ts` keeps a cumulative step total next to the existing 2.5 s window (same peak detection and
+  debounce); `walk/steps.ts` sends it as the client event `{t:"event", name:"steps", data:{total, available}}`
+  while a server walk is on (the same `request_frame purpose="walk"` signal as before), at most every
+  `STEP_REPORT_MS` = 500 ms and only when the total changed. The phone sends these on every server walk; the
+  server reads them only with a route (and never answers them). A phone without a motion sensor, or an owner
+  who refused the iOS prompt, sends `available: false` once.
+- An **event name** rather than a new message type: the steps are a phone-side observation like
+  `fingertip_in_target`, every `event` already reaches the server hooks, and no new pydantic / TypeScript
+  message was needed (`CLIENT_EVENT_NAMES` + fixtures on both sides).
+- No sensor: "I can't count your steps on this phone. I'll guide you by landmarks only." once; walk legs
+  become "Go ahead slowly toward the counter." and only confirmed checkpoints advance the route.
+
+### 6.5 Following the route (`vision/route.py`, every decision in code)
+
+| Phase | Said | Advances when |
+|---|---|---|
+| LOCALISE | "Turn slowly until I recognise where you are." (every 10 s) | a zone is trusted (2 of 3) -> a plan from it |
+| FACING | "First turn until you face this: <the from-zone's view text>." | that facing is trusted in the from-zone |
+| WALK | "Go ahead N steps." then "2 more steps." / "1 more step." | the phone's count reaches N (the count when the leg began is its baseline) |
+| TURN | "Turn left / right / around. Stop when you face the new way." | the new facing is trusted (2 of 3) |
+| checkpoint | its `say` line ("The counter is in front of you.") | its zone is trusted, from anywhere on the route (snap), or its steps are done (landmark) |
+| RELOCALISE | "Sam, stop. I expected the counter by now. Turn slowly until I recognise where you are." (urgent) | N + `OVERSHOOT_STEPS` (2) steps without the checkpoint zone; a trusted zone then gives a new plan |
+| ARRIVED | "The counter appears to be just ahead. Reach forward carefully to confirm." | never certain: the last leg's steps are done or the target zone is trusted; 2 more steps without the zone -> RELOCALISE |
+
+- A trusted zone that is not where the plan expects (he wandered) makes a new plan from there.
+- **Safety first**: hazards, obstacles, a blocked or unusable view (`vision.walk.decide`) and the phone's fast
+  stop are decided before any route line and put the walk in HAZARD / DEGRADED exactly as in §2; a step line
+  that falls due while he is stopped waits, and after the usual two clear reports the resume line comes first,
+  then the route carries on. The `walk_speech_never_claims_distance...` rule still covers every §2 line; route
+  lines name the owner's own step counts by design, never metres.
+- Pacing: route lines go through the same `Speech` (2 s minimum gap, urgent stop lines never held);
+  a leg's line is said once per leg and plan; diag `walk_route` (`phase`, `leg`, `here`, `key`).
+
+### 6.6 Limitations
+
+- The step count is the phone's peak detector over a chest-mounted accelerometer: a shuffle, a stumble or a
+  bump can add or miss steps; the overshoot rule (2 extra steps) and the checkpoints are the only correction.
+- Position comes from a language model reading a 1 fps frame against short view texts: it can confuse look-
+  alike corners, and the mirror rule (§6.3) limits but does not remove reflections. Every trusted position
+  needs 2 of 3 reports, so a correct position is used at the earliest about two checks (4 s) after it is seen.
+- Routes cover only the zone pairs written in the map (or chains of them); anything else falls back to the
+  view-only guidance of §2 without a word about routes.
+- Not tried on a device or on the real API in this pass: the model's use of `current_zone` / `facing` with
+  real photos, the step counter's accuracy on a real walk, the length of a real map against the prompt cap.
+
+## 7. What is NOT verified on a device, and the open main.py hooks
 
 Not verified on a real phone in this pass (all logic is covered by fakes in `backend/tests/tools/test_walk.py`,
 `backend/tests/core/test_nav_session.py`, `frontend/app/test/walk.*.test.ts`, `wire.test.ts`):

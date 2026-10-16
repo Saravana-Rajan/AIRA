@@ -66,7 +66,7 @@ AREA_EN = {"top": "Top shelf", "middle": "Middle shelf", "bottom": "Bottom shelf
            "floor": "On the floor", "counter": "On the counter", "other": "Also"}
 
 ASK_PROMPT = (
-    "You are the eyes of a blind shopkeeper wearing this chest camera in a small dairy shop. "
+    "You are the eyes of a blind shopkeeper wearing this chest camera in a small shop. "
     "Question: \"{question}\". Answer in plain English. Describe what is there so a blind person can act on it: "
     "list the main objects (at most 3, nearest and most relevant first), each with a short plain label, "
     "its point [y, x] normalized 0-1000 (x: 0 is the owner's left, 1000 the right), "

@@ -1197,3 +1197,16 @@ a { color: var(--neu-info); }
 .table thead th:last-child,
 .table tbody tr:hover > :first-child,
 .table tbody tr:hover > :last-child { border-radius: 0; }
+
+/* The AIRA name in the sidebar: a brand word mark (Sora, tight tracking, the logo's blue → purple → pink). */
+.sidebar__shop {
+  font-family: "Sora", var(--font-sans);
+  font-weight: 700;
+  font-size: 22px;
+  letter-spacing: 0.01em;
+  background: linear-gradient(90deg, #2563EB 0%, #7C3AED 55%, #DB2777 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+@media (forced-colors: active) { .sidebar__shop { color: CanvasText; background: none; } }

@@ -57,14 +57,28 @@ SERVER = load("server_msgs.json")
 def test_every_client_fixture_validates_and_covers_all_types():
     seen = {client_adapter.validate_python(m).t for m in CLIENT}
     assert seen == set(ts_list(MESSAGES_TS, "CLIENT_MSG_TYPES"))
-    assert seen == {"hello", "audio", "frame", "text", "event", "confirm", "stop", "log", "boxes", "rtc"}
+    assert seen == {"hello", "audio", "frame", "text", "event", "confirm", "stop", "log", "boxes", "rtc", "light"}
 
 
 def test_every_server_fixture_validates_and_covers_all_types():
     seen = {server_adapter.validate_python(m).t for m in SERVER}
     assert seen == set(ts_list(MESSAGES_TS, "SERVER_MSG_TYPES"))
     assert seen == {"ready", "audio", "transcript", "request_frame", "target", "count", "state", "confirm", "cue", "error",
-                    "boxes", "rtc"}
+                    "boxes", "rtc", "torch"}
+
+
+def test_light_and_torch_messages():
+    """Low light: the phone reports (level, raw luma, real torch state); the server only commands the torch."""
+    assert {m["level"] for m in CLIENT if m["t"] == "light"} == set(typing.get_args(contracts.LightLevel))
+    assert {m["torch"] for m in CLIENT if m["t"] == "light"} == set(typing.get_args(contracts.TorchState))
+    assert {m["on"] for m in SERVER if m["t"] == "torch"} == {True, False}
+    msg = parse_client_msg('{"t":"light","level":"dark","luma":21.5,"torch":"off"}')
+    assert msg.t == "light" and msg.level == "dark" and msg.luma == 21.5 and msg.torch == "off"
+    out = json.loads(dump_server_msg(contracts.TorchMsg(on=True)))
+    assert out == {"t": "torch", "on": True}
+    assert parse_server_msg(json.dumps(out)).on is True
+    assert parse_client_msg(json.dumps(out)) is None  # a command is never accepted from the phone
+    assert parse_server_msg('{"t":"light","level":"dark","luma":1,"torch":"off"}') is None
 
 
 def test_type_tuples_match_ts():
@@ -126,6 +140,8 @@ def test_hello_is_valid_without_a_shop_id():
         ("ErrorCode", "ERROR_CODES"),
         ("BoxSource", "BOX_SOURCES"),
         ("BoxSeverity", "BOX_SEVERITIES"),
+        ("LightLevel", "LIGHT_LEVELS"),
+        ("TorchState", "TORCH_STATES"),
     ],
 )
 def test_literal_matches_ts_enum(alias, ts_const):
@@ -148,6 +164,14 @@ BAD_CLIENT = [
     {"t": "event", "name": "shake", "data": {}},
     {"t": "event", "name": "network", "data": None},
     {"t": "audio"},
+    # light: a known level and torch state, a luma number in 0-255
+    {"t": "light", "level": "pitch", "luma": 10, "torch": "off"},
+    {"t": "light", "level": "dark", "luma": 10, "torch": "maybe"},
+    {"t": "light", "level": "dark", "luma": -1, "torch": "off"},
+    {"t": "light", "level": "dark", "luma": 256, "torch": "off"},
+    {"t": "light", "level": "dark", "luma": "10", "torch": "off"},
+    {"t": "light", "level": "dark", "torch": "off"},
+    {"t": "torch", "on": True},
     {"t": "text"},
     {"t": "frame", "id": "f", "jpeg": "x", "w": 1.5, "h": 1, "ts": 1, "purpose": "count"},
     {"t": "frame", "id": "f", "jpeg": "x", "w": "640", "h": 1, "ts": 1, "purpose": "count"},
@@ -193,6 +217,9 @@ BAD_SERVER = [
     {"t": "audio", "pcm16": "AAAA"},
     {"t": "confirm", "id": "c1", "answer": "yes"},
     {"t": "boxes", "source": "lidar", "objects": []},
+    {"t": "torch", "on": "yes"},
+    {"t": "torch"},
+    {"t": "light", "level": "dark", "luma": 10, "torch": "off"},
     {"t": "boxes", "source": "er2", "objects": [{"label": "x", "box": [0, 0, 10, 10]}], "found": "yes"},
     {"t": "boxes", "source": "er2", "objects": [{"label": "x", "box": [0, 0, 10, 10]}], "target": 7},
     {"t": "boxes", "source": "er2", "objects": [{"label": "x", "box": [0, 0, 10, 10], "severity": "danger"}] * 33},

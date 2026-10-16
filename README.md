@@ -28,6 +28,37 @@ AIRA runs in Safari. You do not need an app from the App Store.
 6. iPhone has no vibration for web apps. Every warning still plays its beep and is spoken, so keep one earphone in or the volume up.
 7. Keep the Ring/Silent switch on Ring. In Silent mode iPhone can mute AIRA's beeps until the microphone is on.
 
+### Open AIRA by voice (no code needed)
+
+AIRA itself cannot listen while it is closed: a web app gets no microphone in the background, and only the
+phone's own assistant has an always-on wake word. So the hands-free way to open AIRA is the phone's assistant.
+Both work only if that assistant is turned on and can hear you.
+
+**Android: "Hey Google, open AIRA".**
+
+1. Install AIRA from Chrome (menu, **Add to Home screen** or **Install app**) or install the AIRA APK. The
+   launcher name must be **AIRA**; that is the name Google Assistant looks for.
+2. Turn on Google Assistant with "Hey Google" (Google app, Settings, Voice, Voice Match).
+3. Say "Hey Google, open AIRA". AIRA opens listening if you have tapped Start once before (the hands-free start
+   in `core/autostart.ts`); the first launch ever still needs one tap.
+
+If Assistant opens a search instead, say "open the AIRA app", or long-press the AIRA icon and add the **Talk to
+AIRA** shortcut to the home screen.
+
+**iPhone: "Hey Siri, open AIRA".**
+
+1. Add AIRA to the Home Screen from Safari (above). Siri can open a Home Screen web app by name, but this is
+   not guaranteed on every iOS version, so also add a Shortcut:
+2. Open **Shortcuts**, tap **+**, add the action **Open URL** with `https://aira-shop.web.app/?start=1`, name
+   the shortcut **Open AIRA**, done.
+3. Turn on "Hey Siri" (Settings, Siri & Search, Listen for).
+4. Say "Hey Siri, open AIRA". Safari or the Home Screen app opens. iPhone always needs one **Tap to start**
+   after that, because iOS unlocks sound and the microphone only after a tap.
+
+Hands-free start from an earphone button, the volume buttons and a "Hello AIRA" wake word are described in
+[shared/docs/ops/handsfree.md](shared/docs/ops/handsfree.md). All three are off by default; only the earphone
+button runs in the web app, and none has been tested on a phone yet.
+
 ## What AIRA does
 
 | # | Sam says or does | AIRA does |

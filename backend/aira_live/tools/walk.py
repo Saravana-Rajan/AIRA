@@ -52,13 +52,14 @@ import logging
 import re
 import time
 from collections import deque
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from typing import Literal
 
-from aira_live import config
+from aira_live import config, shop_map
 from aira_live.contracts import CueMsg, RequestFrameMsg, TranscriptMsg
 from aira_live.diag import diag
 from aira_live.session import Session, get_session, notice_key
+from aira_live.vision import route as vroute
 from aira_live.vision import walk as vwalk
 
 log = logging.getLogger(__name__)
@@ -94,13 +95,19 @@ CHECK_PREFIX = "[NAV CHECK"
 _ACTIVE: dict[str, "WalkLoop"] = {}
 
 
-def check_text(check_id: int, target: str) -> str:
-    """The system note that asks Live for one observation. Never from the owner, never to be spoken about."""
-    return (f"{CHECK_PREFIX} {check_id}] System check for the walk to the {target}; not from the owner. Look at the "
+def check_text(check_id: int, target: str, zones: Sequence[str] = ()) -> str:
+    """The system note that asks Live for one observation. Never from the owner, never to be spoken about. With
+    routes on, ``zones`` (the map's zone ids) asks for the position fields too."""
+    text = (f"{CHECK_PREFIX} {check_id}] System check for the walk to the {target}; not from the owner. Look at the "
             f"newest camera frame and call nav_report once with check_id={check_id}: whether the {target} is "
             "visible (its side and size), the obstacles on the floor (label, side, whether in his walking path "
             "straight ahead, size), path clear_in_view / blocked / uncertain, and view_ok false if the view is "
-            "dark, blurred or covered. Do not speak.")
+            "dark, blurred or covered.")
+    if zones:
+        text += (f" Also current_zone (one of: {', '.join(zones)}; or unknown), facing (front / left / right / back "
+                 "of that zone's views, or unknown), confidence (low / medium / high) and reflection true when "
+                 "the view is a mirror image.")
+    return text + " Do not speak."
 
 
 def notice_text(meaning: str, facts: dict | None) -> str:
@@ -128,17 +135,17 @@ class NavChecker:
         self._bridge = bridge
         self._nav = nav or (lambda: None)
 
-    async def request(self, check_id: int, target: str) -> bool:
+    async def request(self, check_id: int, target: str, zones: Sequence[str] = ()) -> bool:
         nav = self._nav()
         if nav is not None and getattr(nav, "alive", False):
             if not getattr(nav, "ready", True):
                 return False          # opened, not holding a picture yet: the next tick tries again
-            return bool(await nav.request(check_text(check_id, target)))
+            return bool(await nav.request(check_text(check_id, target, zones)))
         bridge = self._bridge()
         send = getattr(bridge, "request_nav_check", None)
         if send is None:
             return False
-        return bool(await send(check_text(check_id, target)))
+        return bool(await send(check_text(check_id, target, zones)))
 
 
 class WalkLoop:
@@ -146,8 +153,12 @@ class WalkLoop:
                  sleep: Callable[[float], Awaitable] = asyncio.sleep, bridge: Callable[[], object] | None = None,
                  interval_s: float = CHECK_INTERVAL_S, check_timeout_s: float = CHECK_TIMEOUT_S,
                  max_s: float = MAX_S, memory_place: str | None = None, memory_side: str | None = None,
-                 checker: NavChecker | None = None, nav_factory: Callable[["WalkLoop"], object] | None = None):
+                 checker: NavChecker | None = None, nav_factory: Callable[["WalkLoop"], object] | None = None,
+                 route: vroute.RouteGuide | None = None):
         self.session, self.target = session, target
+        # AIRA_ROUTES with a loaded map and a target that is one of its zones: the route follower drives the
+        # guidance lines (vision.route); None: today's direction policy (vision.walk.decide) only.
+        self.route = route
         self._clock, self._sleep = clock, sleep
         self._bridge = bridge or (lambda: _bridge_of(session))
         self.nav = None                          # the walk's own navigation Live session, once open
@@ -202,10 +213,15 @@ class WalkLoop:
         self.resume_streak = 0
         self.state = state
 
-    def retarget(self, target: str) -> None:
+    def retarget(self, target: str, route: vroute.RouteGuide | None = None) -> None:
         """walk_to with a new destination while walking: same loop, new target. Any check in flight was about
-        the old target, so its report is ignored."""
+        the old target, so its report is ignored. ``route``: the new destination's follower (routes on)."""
         self.target = target
+        if route is not None and self.route is not None:
+            route.motion = self.route.motion          # the phone's step counting is known already
+            route.no_motion_said = self.route.no_motion_said
+            route.total = self.route.total
+        self.route = route
         self.pending = None
         self.scene_changed_at = None
         self.last_report_at = self._clock()    # a fresh grace period for the new destination
@@ -300,7 +316,8 @@ class WalkLoop:
             return False
         check_id, frame_at = self.check_seq + 1, picture
         try:
-            sent = await self.checker.request(check_id, self.target)
+            zones = tuple(self.route.shop_map.zones) if self.route is not None else ()
+            sent = await self.checker.request(check_id, self.target, zones)
         except Exception:
             log.warning("walk: nav check not sent for %s", self.session.session_id, exc_info=True)
             self.last_check_at = now
@@ -379,6 +396,8 @@ class WalkLoop:
             if report.target_side in ("left", "right"):
                 self.search.last_side = report.target_side
         self.search.lost_s = now - self.last_seen_at
+        if self.route is not None:
+            self.route.observe(report)       # the position evidence (2 of 3, mirrors ignored) feeds the follower
         ins = vwalk.decide(report, self.target, list(self.recent), self.search, name=self.owner_name)
         if ins.key == "walk.not_found":
             self.last_seen_at = now           # say it once per NOT_FOUND_S of searching
@@ -426,6 +445,10 @@ class WalkLoop:
             self.hazard_label = None
             self.speech.mark(line.key, now)
             return line, line.text
+        if self.route is not None:
+            # Routes on: the follower's line (localise / go N steps / turn / checkpoint / arrival candidate)
+            # replaces the direction policy. Safety above was decided first and still wins.
+            return self._route_line(now)
         if vwalk.gate(ins, 0.0 if fresh else None) is None:
             return None, None                 # too old to say anything but a stop
         if self.recent_keys.count(ins.key) < 2:
@@ -437,6 +460,44 @@ class WalkLoop:
         reassure = self.state == NAVIGATING and fresh and report.usable \
             and now - self.speech.last_at >= vwalk.REASSURE_S
         return ins, self.speech.pick(ins, now, reassure=reassure)
+
+    def _route_line(self, now: float) -> tuple[vwalk.Instruction | None, str | None]:
+        """The route follower's line due now, paced by Speech; None while nothing is due or he is stopped."""
+        if self.route is None or self.state in (HAZARD, DEGRADED):
+            return None, None
+        ins = self.route.instruction(now)
+        if ins is None:
+            return None, None
+        if ins.kind == vwalk.ARRIVAL_KIND:
+            self._to(ARRIVAL_CANDIDATE, "route_arrival")
+        elif ins.kind == vroute.ROUTE_KIND and self.state in (ACQUIRING, ARRIVAL_CANDIDATE):
+            self._to(NAVIGATING, "route")
+        text = self.speech.pick(ins, now)
+        if text is not None:
+            self.route.mark(ins.key, now)
+            diag("walk_route", session=self.session.session_id, phase=self.route.phase, leg=self.route.leg,
+                 here=self.route.here, key=ins.key)
+        return ins, text
+
+    async def on_steps(self, total: int, available: bool = True) -> None:
+        """The phone's cumulative step count (client event ``steps``). Only the route follower reads it; a phone
+        without a motion sensor (``available`` false) puts it in landmark-only mode, said once. A step line
+        is said at once unless he is stopped (HAZARD / DEGRADED): safety lines are never delayed by steps, and
+        the step line waits for the next report."""
+        if not self.active or self.route is None:
+            return
+        now = self._clock()
+        if not available:
+            self.route.no_motion()
+            diag("walk_route", session=self.session.session_id, steps="unavailable")
+        else:
+            try:
+                self.route.on_steps(int(total))
+            except (TypeError, ValueError):
+                return
+        said, text = self._route_line(now)
+        if said is not None and text is not None:
+            await self._say(text, cue="warn" if said.urgent else None, facts=said.facts, urgent=said.urgent)
 
     def _degraded_line(self, now: float) -> str | None:
         if self.degraded_said:
@@ -500,6 +561,10 @@ class WalkLoop:
                 and now - self.last_spoken_at > HOLD_SILENT_S and now - self.last_hold_at >= HOLD_SILENT_S):
             self.last_hold_at = now               # never silent for long while he waits stopped
             await self._say(HOLD_TEXT, facts={"action": "stay_stopped", "reason": "checking_the_way"})
+        if self.active and self.route is not None and self.state not in (HAZARD, DEGRADED) and self.recent:
+            said, text = self._route_line(now)    # a route line due now (held back by pacing or a stop)
+            if said is not None and text is not None:
+                await self._say(text, cue="warn" if said.urgent else None, facts=said.facts, urgent=said.urgent)
 
     async def run(self) -> None:
         deadline = self.started_at + self.max_s
@@ -633,19 +698,38 @@ async def remembered_place(session: Session, target: str) -> tuple[str | None, s
 # --- start / stop ----------------------------------------------------------------------------------------------------
 
 
+def route_for(session: Session, target: str, name: str | None = None) -> vroute.RouteGuide | None:
+    """The route follower for ``target`` when AIRA_ROUTES is on, the shop map loads and the target names one
+    of its zones (any language); None otherwise (the walk then works exactly as without the flag)."""
+    settings = config.load()
+    if not settings.routes:
+        return None
+    m = shop_map.load_for(session.shop_id, settings.routes_map)
+    if m is None:
+        return None
+    zone = m.resolve(target)
+    diag("walk_route", session=session.session_id, target=target, zone=zone, map=m.shop_id)
+    if zone is None:
+        return None
+    return vroute.RouteGuide(m, zone, name=name or getattr(session, "owner_name", None) or settings.owner_name)
+
+
 async def start(session: Session, target: str, run: bool = True, **kw) -> WalkLoop:
     """Start a walk for ``session`` (one loop per session: an earlier walk is stopped first)."""
     await stop_walk(session)
     _ENDED_BY_DISCONNECT.pop(session.session_id, None)
     if "memory_place" not in kw:
         kw["memory_place"], kw["memory_side"] = await remembered_place(session, target)
+    if "route" not in kw:
+        kw["route"] = route_for(session, target)
     loop = WalkLoop(session, target, **kw)
     await session.send(RequestFrameMsg(purpose=PURPOSE, continuous=True))   # the phone's "walk active" signal
     _ACTIVE[session.session_id] = loop
     if run:
         loop.task = asyncio.create_task(loop.run(), name=f"walk-{session.session_id}")
         loop._nav_task = asyncio.create_task(loop.open_nav(), name=f"walk-nav-{session.session_id}")
-    diag("walk_start", session=session.session_id, memory=kw.get("memory_place") is not None)
+    diag("walk_start", session=session.session_id, memory=kw.get("memory_place") is not None,
+         route=loop.route is not None)
     diag("walk_state", session=session.session_id, frm=None, to=ACQUIRING, why="start")
     return loop
 
@@ -674,6 +758,21 @@ async def on_phone_boxes(session: Session, msg) -> None:
         await loop.on_phone_boxes(getattr(msg, "objects", None) or [])
     except Exception:
         log.warning("walk: phone boxes failed for %s", session.session_id, exc_info=True)
+
+
+async def on_client_event(session: Session, name: str, data: dict | None) -> None:
+    """main.py hook for every client ``event``: only ``steps`` matters here (the phone's cumulative step count
+    during a walk, data ``{total, available}``). Ignored without a route. Never raises."""
+    if name != "steps":
+        return
+    loop = active(session)
+    if loop is None or loop.route is None:
+        return
+    d = data or {}
+    try:
+        await loop.on_steps(int(d.get("total") or 0), bool(d.get("available", True)))
+    except Exception:
+        log.warning("walk: steps event failed for %s", session.session_id, exc_info=True)
 
 
 async def on_live_frame(session: Session, changed: bool = False, jpeg_b64: str | None = None,
@@ -754,11 +853,12 @@ async def walk_to(target: str) -> dict:
         if vwalk.same_thing(name, loop.target) and name.casefold() == loop.target.casefold():
             return {"active": True, "target": name, "action": "walk_slowly", "already": True,
                     "say_en": f"I am guiding you to the {name}. Walk slowly."}
-        loop.retarget(name)
+        loop.retarget(name, route_for(s, name, loop.owner_name))
         return {"active": True, "target": name, "action": "walk_slowly", "changed": True,
+                "route": loop.route is not None,
                 "say_en": f"Okay. Now I will guide you to the {name}. Walk slowly."}
-    await start(s, name)
-    return {"active": True, "target": name, "action": "walk_slowly",
+    loop = await start(s, name)
+    return {"active": True, "target": name, "action": "walk_slowly", "route": loop.route is not None,
             "say_en": f"I'll guide you to the {name} and tell you about anything in the way. Walk slowly."}
 
 
@@ -778,40 +878,52 @@ async def nav_report(target_visible: bool = False,
                      obstacles: list[dict] | None = None,
                      path: Literal["clear_in_view", "blocked", "uncertain"] = "uncertain",
                      view_ok: bool = True,
-                     check_id: int = 0) -> dict:
+                     check_id: int = 0,
+                     current_zone: str = "unknown",
+                     facing: Literal["front", "left", "right", "back", "unknown"] = "unknown",
+                     confidence: Literal["low", "medium", "high"] = "low",
+                     reflection: bool = False) -> dict:
     """System only: call it ONLY when a "[NAV CHECK n]" message asks, once, with check_id=n, and never speak
     about it. Report what the newest camera frame shows for the walk: target_visible and the target's side
     (left / ahead / right, none when not visible) and size (small / medium / large: large means close; none
     when not visible); obstacles on the floor as a
     list of {label, side: left|ahead|right, in_path: true if in his walking path straight ahead, size:
     small|medium|large}; path: clear_in_view, blocked or uncertain; view_ok false when the view is dark,
-    blurred or covered. Never guess: when unsure use uncertain."""
+    blurred or covered. Never guess: when unsure use uncertain. Only when the check lists ZONES: current_zone
+    is the zone id from that list the view matches (or unknown), facing which of that zone's views it matches
+    (front / left / right / back, or unknown), confidence low / medium / high for zone and facing together, and
+    reflection true when the view is a mirror image (then current_zone is unknown)."""
     s: Session = get_session()
     loop = active(s)
     if loop is not None:
         await _handle_report(loop, dict(target_visible=target_visible, target_side=target_side,
                                         target_size=target_size, obstacles=obstacles, path=path, view_ok=view_ok,
-                                        check_id=check_id))
+                                        check_id=check_id, current_zone=current_zone, facing=facing,
+                                        confidence=confidence, reflection=reflection))
     return {"status": "ok", "retryable": False, "message": ""}
 
 
 _REPORT_DEFAULTS = dict(target_visible=False, target_side="none", target_size="none", obstacles=None,
-                        path="uncertain", view_ok=True, check_id=0)
+                        path="uncertain", view_ok=True, check_id=0, current_zone="unknown", facing="unknown",
+                        confidence="low", reflection=False)
+# Fields that say nothing about the view: a report with only these (at any value) is still an empty report.
+_NOT_OBSERVATIONS = ("check_id", "obstacles", "current_zone", "facing", "confidence", "reflection")
 
 
 async def _handle_report(loop: WalkLoop, args: dict) -> None:
     """One nav_report (from either Live session) into the walk. Missing fields take the tool's defaults; a
-    report with nothing but check_id is no observation. Never raises."""
+    report with nothing but check_id (and position fields) is no observation. Never raises."""
     a = {k: args.get(k, d) if args.get(k) is not None else d for k, d in _REPORT_DEFAULTS.items()}
     try:
         a["check_id"] = int(a["check_id"])
-        report = vwalk.parse_report(loop.target, **a)
+        zone_ids = tuple(loop.route.shop_map.zones) if loop.route is not None else ()
+        report = vwalk.parse_report(loop.target, zone_ids=zone_ids, **a)
         obstacles = [o for o in (a["obstacles"] or []) if isinstance(o, dict) and o.get("label")]
         if obstacles:   # what the walk saw on the floor stays answerable later ("where was the box?")
             loop.session.scene_memory.observe(
                 [{"name": o["label"], "on": "the floor", "side": o.get("side")} for o in obstacles],
                 replace_view=False)
-        empty = all(a[k] == d for k, d in _REPORT_DEFAULTS.items() if k not in ("check_id", "obstacles")) \
+        empty = all(a[k] == d for k, d in _REPORT_DEFAULTS.items() if k not in _NOT_OBSERVATIONS) \
             and not a["obstacles"]
         await loop.on_report(report, empty=empty)
     except Exception:   # never an error inside a Live run loop: the check times out and counts as failed
@@ -823,6 +935,8 @@ def default_nav_factory(loop: WalkLoop):
     settings = config.load()
     if not settings.walk_nav_session or settings.mock:
         return None
-    from aira_live.nav_session import NavSession
+    from aira_live.nav_session import NavSession, system_prompt
 
-    return NavSession(loop.session.session_id, loop.on_nav_report)
+    # Routes on: the navigation session also gets the map's short zone list (landmarks per view, the mirrors).
+    system = system_prompt(zones_text=loop.route.shop_map.prompt_text()) if loop.route is not None else None
+    return NavSession(loop.session.session_id, loop.on_nav_report, system=system)

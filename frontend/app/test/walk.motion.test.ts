@@ -69,6 +69,21 @@ describe("step counter", () => {
     stride(c, 0, 20, 100);                              // 10 Hz buzz
     expect(c.steps(2000)).toBeLessThanOrEqual(5);        // at most one per 400 ms
   });
+
+  it("total() counts every step across the window; reset zeroes it", () => {
+    const c = createStepCounter();
+    expect(c.total()).toBe(0);
+    stride(c, 0, 10, 500);                              // 5 s of walking: the window holds only the last 2.5 s
+    expect(c.steps(5000)).toBeLessThanOrEqual(6);
+    expect(c.total()).toBeGreaterThanOrEqual(9);
+    expect(c.total()).toBeLessThanOrEqual(11);
+    const before = c.total();
+    still(c, 5020, 3000);                               // standing still: the window empties, the total holds
+    expect(c.steps(8020)).toBe(0);
+    expect(c.total()).toBe(before);
+    c.reset();
+    expect(c.total()).toBe(0);
+  });
 });
 
 describe("startMotionSensor", () => {
@@ -79,6 +94,7 @@ describe("startMotionSensor", () => {
     const s = await startMotionSensor();
     expect(s.available).toBe(false);
     expect(s.isWalking(0)).toBe(false);
+    expect(s.totalSteps?.()).toBe(0);
     s.stop();
   });
 
@@ -103,6 +119,7 @@ describe("startMotionSensor", () => {
       handler({ timeStamp: t, accelerationIncludingGravity: { x: 0, y: G + 3 * Math.sin((2 * Math.PI * t) / 500), z: 0 } });
     }
     expect(ok.isWalking(t)).toBe(true);
+    expect(ok.totalSteps?.()).toBeGreaterThanOrEqual(3);   // the cumulative count the walk reporter sends
     ok.stop();
     expect(remove).toHaveBeenCalledWith("devicemotion", handler, expect.anything());
   });
