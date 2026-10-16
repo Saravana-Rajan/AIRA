@@ -46,6 +46,7 @@ from aira_live.contracts import (
     EventMsg,
     FrameMsg,
     HelloMsg,
+    LightMsg,
     LogMsg,
     ReadyMsg,
     RtcMsg,
@@ -255,10 +256,11 @@ async def _start_live(session: Session, resume_handle: str | None = None) -> Liv
         er2 = settings.er2  # AIRA_ER2=0: Live-only test mode, no Robotics-ER tools
         walk = settings.walk  # AIRA_WALK=1: walk with me (Live-only perception), with or without ER2
         scene = settings.scene_memory  # AIRA_SCENE_MEMORY=1: Live silently reports what it sees
+        light = settings.lowlight  # AIRA_LOWLIGHT=1: the light-switch tool (tools.light)
         prompt = await build_system_prompt(session.shop_id, session.lang, session.verbosity,
                                            **({} if er2 else {"er2": False}), **({"walk": True} if walk else {}),
                                            **({"scene": True} if scene else {}))
-        tools = live_tools(active_tools(er2, walk, scene), session, NON_BLOCKING_TOOLS, SILENT_TOOLS)
+        tools = live_tools(active_tools(er2, walk, scene, light), session, NON_BLOCKING_TOOLS, SILENT_TOOLS)
         bridge = LiveBridge(session, lambda: app.state.backend_factory(session), prompt, tools,
                             resume_handle=resume_handle, live_nudge=_live_nudge_on())
         await bridge.start()
@@ -285,6 +287,8 @@ async def _end_session(session: Session, bridge: LiveBridge | None) -> None:
     precount.forget(session.session_id)
     tool_runtime.end_session(session.session_id)  # running tool calls cancelled, their results dropped
     await _lane_hook("aira_live.tools.walk", "stop_session", session)
+    await _lane_hook("aira_live.tools.light", "stop_session", session)
+    await _lane_hook("aira_live.tools.light", "forget", session.session_id)
     await _lane_hook("aira_live.scene_watch", "forget", session.session_id)
     if bridge is not None:
         await bridge.close()
@@ -392,6 +396,7 @@ async def ws_endpoint(ws: WebSocket) -> None:
                         log.exception("cancelling proposals on stop failed")
                     await _guidance_hook("stop_guidance", session)
                     await _lane_hook("aira_live.tools.walk", "stop_session", session)
+                    await _lane_hook("aira_live.tools.light", "stop_session", session)
                 await send(CueMsg(cue="done"))
             elif isinstance(msg, LogMsg):  # a phone diagnostic: logged, never answered, capped per socket
                 if log_limit.allow():
@@ -465,6 +470,9 @@ async def ws_endpoint(ws: WebSocket) -> None:
                 if bridge and msg.name == "talk":  # a talk tap is the owner's next turn: a long-press stop ends
                     bridge.user_turn()
                 await _guidance_hook("handle_client_event", session, msg.name, msg.data)
+                await _lane_hook("aira_live.tools.light", "handle_client_event", session, msg.name, msg.data)
+            elif isinstance(msg, LightMsg):  # low light: recorded; with AIRA_TORCH a flashlight PROPOSAL may follow
+                await _lane_hook("aira_live.tools.light", "on_light", session, msg)
             elif isinstance(msg, RtcMsg):  # WebRTC signalling for a dashboard monitor: relayed, never read
                 if rtc_limit.allow():
                     await rtc.from_phone(session, msg)

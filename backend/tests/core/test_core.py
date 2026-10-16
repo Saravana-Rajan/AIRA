@@ -128,7 +128,8 @@ def test_system_lines_are_only_the_no_live_lines_in_three_languages():
         return sorted(f for _, f, _, _ in string.Formatter().parse(text) if f)
 
     for key, row in system_lines.LINES.items():
-        assert key.split(".")[0] in ("auth", "live", "error", "mock", "check"), key  # never an answer
+        # never an answer ("light": the low-light captions when no Live session speaks, tools/light.py)
+        assert key.split(".")[0] in ("auth", "live", "error", "mock", "check", "light"), key
         assert set(row) == {"en", "ta", "hi"}, key
         assert fields(row["ta"]) == fields(row["en"]) == fields(row["hi"]), key
 
