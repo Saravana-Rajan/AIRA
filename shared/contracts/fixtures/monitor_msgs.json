@@ -27,5 +27,6 @@
   {"t":"mon","kind":"ready","session":"m1a2b3c4","ts":1760000000100,"audio":true},
   {"t":"mon","kind":"ready","session":"m1a2b3c4","ts":1760000000100,"audio":false},
   {"t":"mon","kind":"audio","session":"s1","ts":1760000007000,"who":"owner","rate":16000,"pcm":"AAAAAAAAAAA="},
-  {"t":"mon","kind":"audio","session":"s1","ts":1760000007100,"who":"aira","rate":24000,"pcm":"AQACAAMABAA="}
+  {"t":"mon","kind":"audio","session":"s1","ts":1760000007100,"who":"aira","rate":24000,"pcm":"AQACAAMABAA="},
+  {"t":"mon","kind":"orientation","session":"s1","ts":1760000006500,"angle":90}
 ]

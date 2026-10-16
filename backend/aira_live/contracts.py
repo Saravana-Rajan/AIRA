@@ -56,6 +56,9 @@ BoxSeverity = Literal["danger"]
 # torch (e.g. iPhone Safari); the server never assumes it is on.
 LightLevel = Literal["dark", "dim", "bright"]
 TorchState = Literal["off", "on", "unsupported"]
+# The phone's screen orientation as screen.orientation.angle: 0 upright portrait, 90/270 the two landscapes,
+# 180 upside down. Relayed to a dashboard monitor so it can turn the live picture to match.
+OrientationAngle = Literal[0, 90, 180, 270]
 
 # Spatial coordinates: point [y, x], box [ymin, xmin, ymax, xmax], integers 0..NORM_MAX.
 NORM_MAX = 1000
@@ -243,9 +246,17 @@ class LightMsg(_ClientWire):
     torch: TorchState
 
 
+class OrientationMsg(_ClientWire):
+    """The phone's screen orientation (screen.orientation.angle). Sent on change and once at the start; relayed
+    to a dashboard monitor so it can turn the live picture to match the phone it cannot see rotate."""
+
+    t: Literal["orientation"]
+    angle: OrientationAngle
+
+
 ClientMsg = Annotated[
     Union[HelloMsg, AudioInMsg, FrameMsg, TextMsg, EventMsg, ConfirmReplyMsg, StopMsg, LogMsg, BoxesMsg, RtcMsg,
-          LightMsg],
+          LightMsg, OrientationMsg],
     Field(discriminator="t"),
 ]
 
@@ -435,6 +446,8 @@ class MonSessionMsg(_MonWire):
     # Epoch ms when the phone session began (``startedAt`` on the wire); sent on ``start``, so a monitor that
     # joins late still knows how long the session has been running.
     started_at: Optional[Num] = None
+    # The phone's last-known screen orientation, so a monitor that joins late is not left showing it unrotated.
+    orientation: Optional[OrientationAngle] = None
 
 
 class MonTranscriptMsg(_MonWire):
@@ -497,6 +510,13 @@ class MonStatusMsg(_MonWire):
     state: MonitorState
 
 
+class MonOrientationMsg(_MonWire):
+    """The phone's screen orientation changed; the dashboard turns the live picture to match."""
+
+    kind: Literal["orientation"] = "orientation"
+    angle: OrientationAngle
+
+
 class MonStatsMsg(_MonWire):
     """Session counters, every 2 s per live session: Live API turns, ER 2 and Flash calls, the average vision
     latency (ms, null before the first call) and the phone's frame rate over the last window."""
@@ -541,12 +561,12 @@ class MonAudioMsg(_MonWire):
 
 MonitorMsg = Annotated[
     Union[MonSessionMsg, MonTranscriptMsg, MonFrameMsg, MonVisionMsg, MonHandMsg, MonEventMsg, MonStatusMsg,
-          MonStatsMsg, MonReadyMsg, MonAudioMsg],
+          MonOrientationMsg, MonStatsMsg, MonReadyMsg, MonAudioMsg],
     Field(discriminator="kind"),
 ]
 monitor_adapter: TypeAdapter[MonitorMsg] = TypeAdapter(MonitorMsg)
-MONITOR_KINDS: tuple[str, ...] = ("session", "transcript", "frame", "vision", "hand", "event", "status", "stats",
-                                  "ready", "audio")
+MONITOR_KINDS: tuple[str, ...] = ("session", "transcript", "frame", "vision", "hand", "event", "status",
+                                  "orientation", "stats", "ready", "audio")
 
 
 def dump_monitor_msg(msg: BaseModel) -> str:
@@ -556,7 +576,7 @@ def dump_monitor_msg(msg: BaseModel) -> str:
 
 def parse_monitor_msg(raw: str | bytes) -> (
     MonSessionMsg | MonTranscriptMsg | MonFrameMsg | MonVisionMsg | MonHandMsg | MonEventMsg | MonStatusMsg
-    | MonStatsMsg | MonReadyMsg | MonAudioMsg | None
+    | MonOrientationMsg | MonStatsMsg | MonReadyMsg | MonAudioMsg | None
 ):
     """Parse one /monitor text frame. None for bad JSON or an unknown/invalid message."""
     try:
