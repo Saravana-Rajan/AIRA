@@ -1,12 +1,14 @@
-// The Live page: the header, the people selector and the selected person's camera. Nothing else: no box
-// legend or overlay, no task steps, no conversation, no timeline, no record mode, no status pills.
+// The Live page: the top bar (header and people selector), the selected person's camera and, beside it, the
+// conversation (the followed session's transcript, with the Listen button when the server relays audio).
+// Nothing else: no box legend or overlay, no task steps, no timeline, no record mode, no status pills.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { act } from "preact/test-utils";
+import { useState } from "preact/hooks";
 import type { MonitorMsg } from "@aira/contracts";
 import { cleanup, findAllByText, mount, text } from "./helpers/render";
-import { LivePage, REJECTED_TEXT, type LiveAuth } from "../src/pages/LivePage";
+import { LISTEN_TEXT, LivePage, MAX_SHOWN, REJECTED_TEXT, STOP_LISTEN_TEXT, type LiveAuth, type LiveListen } from "../src/pages/LivePage";
 import type { DrawDeps, Drawable } from "../src/lib/frameDraw";
-import { initialState, reduce, type Frame, type LiveState } from "../src/lib/monitor";
+import { follow, initialState, reduce, type Frame, type LiveState } from "../src/lib/monitor";
 import type { VideoState } from "../src/lib/rtcViewer";
 
 afterEach(cleanup);
@@ -35,7 +37,7 @@ function fakeDraw() {
   return { deps, rafs, decoded, tick: () => rafs.splice(0).forEach((cb) => cb()) };
 }
 
-const page = (state: LiveState, conn: Conn = "live", extra: { drawDeps?: DrawDeps; video?: VideoState; auth?: LiveAuth; configured?: boolean; onFollow?: (id: string) => void } = {}) =>
+const page = (state: LiveState, conn: Conn = "live", extra: { drawDeps?: DrawDeps; video?: VideoState; auth?: LiveAuth; listen?: LiveListen; configured?: boolean; onFollow?: (id: string) => void } = {}) =>
   mount(<LivePage state={state} conn={conn} now={() => T0 + 84_500} {...extra} />);
 
 const frame = mon({ kind: "frame", jpeg_b64: "AAAA", w: 480, h: 640, purpose: "preview", ts: T0 + 84_000 });
@@ -43,17 +45,18 @@ const started = mon({ kind: "session", state: "start", lang: "ta", uid: "u1", ts
 const second = mon({ kind: "session", state: "start", lang: "en", uid: "u2", session: "s2", ts: T0 + 1, startedAt: T0 + 1 });
 
 describe("LivePage: chrome", () => {
-  it("is the header, the people selector and the camera, in that order, and nothing else", () => {
+  it("is the top bar, the camera and the conversation, in that order, and nothing else", () => {
     const el = page(initialState(), "connecting");
     expect(el.querySelector("img.lv-logo")!.getAttribute("src")).toMatch(/aira-logo-192\.png$/);
     expect(text(el.querySelector(".lv-title"))).toBe("AIRA - Live");
     expect(findAllByText(el, ".lv-conn__text", "Connecting…")).toHaveLength(1);
-    expect([...el.querySelectorAll(".livepage > *")].map((n) => n.className)).toEqual(["lv-bar", "cam"]);
+    expect([...el.querySelectorAll(".livepage > *")].map((n) => n.className)).toEqual(["lv-bar", "cam", "chat"]);
     expect([...el.querySelectorAll(".lv-bar > *")].map((n) => n.className)).toEqual(["lv-head", "people"]); // one thin bar
-    expect([...el.querySelectorAll("h3")].map(text)).toEqual(["People using AIRA now (0)", "Camera"]);
-    expect(el.querySelector(".legend, .ov, svg.camera__overlay, .steps, .step, .chat, .msg, .tl, .bar, .bar__btn, .lv-pill, .room, .roomcam, .captions, [data-testid=record], .record__exit, .camera__badge")).toBeNull();
-    expect(text(el)).not.toMatch(/Waiting for a task|Record mode|Pause camera|Conversation|MediaPipe|Gemini Robotics|Obstacle|Fingertip|Idle|Listening/);
+    expect([...el.querySelectorAll("h3")].map(text)).toEqual(["People using AIRA now (0)", "Camera", "Conversation"]);
+    expect(el.querySelector(".legend, .ov, svg.camera__overlay, .steps, .step, .msg, .tl, .bar, .bar__btn, .lv-pill, .room, .roomcam, .captions, [data-testid=record], .record__exit, .camera__badge, .listen")).toBeNull();
+    expect(text(el)).not.toMatch(/Waiting for a task|Record mode|Pause camera|MediaPipe|Gemini Robotics|Obstacle|Fingertip|Idle|Listening/);
     expect(el.querySelector("canvas, video")).toBeNull();
+    expect(text(el.querySelector(".chat__empty"))).toBe("Nothing said yet.");
   });
   it("takes the shop's name, and shows the language and connection once a session is open", () => {
     const el = mount(<LivePage state={stateOf([started])} conn="live" shopName="Sunrise Dairy East" now={() => T0 + 84_500} />);
@@ -311,5 +314,123 @@ describe("LivePage: sign-in", () => {
     const noProp = page(initialState(), "unauthorized");
     expect(text(noProp.querySelector(".cam__empty-sub"))).toBe(REJECTED_TEXT);
     expect(findAllByText(noProp, ".lv-conn__text", "Refused")).toHaveLength(1);
+  });
+});
+
+// ---------- the conversation beside the camera ----------
+const line = (role: "owner" | "customer" | "aira", t: string, final = true, ts = T0 + 1) =>
+  mon({ kind: "transcript", role, text: t, lang: "en", final, ts });
+const bubbles = (el: HTMLElement) => [...el.querySelectorAll<HTMLElement>(".msg")].map((m) => ({
+  role: [...m.classList].find((c) => /^msg--(owner|customer|aira)$/.test(c))!.slice(5),
+  who: text(m.querySelector(".msg__who")), text: text(m.querySelector(".msg__text")), partial: m.classList.contains("msg--partial"),
+}));
+/** jsdom lays nothing out: give the list a size so the stick rule has numbers to work with. */
+function sized(list: HTMLElement, scrollHeight: number, clientHeight: number) {
+  Object.defineProperty(list, "scrollHeight", { configurable: true, get: () => scrollHeight });
+  Object.defineProperty(list, "clientHeight", { configurable: true, get: () => clientHeight });
+  let top = 0;
+  Object.defineProperty(list, "scrollTop", { configurable: true, get: () => top, set: (v: number) => { top = v; } });
+}
+
+describe("LivePage: conversation", () => {
+  it("shows the followed session's turns as bubbles: the person (Owner or Customer) on the right, AIRA on the left with an avatar, newest last", () => {
+    const el = page(stateOf([started, line("owner", "Where is the milk?"), line("aira", "Fridge two."), line("customer", "One curd please")]));
+    expect(text(el.querySelector(".chat__title"))).toBe("Conversation");
+    expect(el.querySelector(".chat__empty")).toBeNull();
+    expect(bubbles(el)).toEqual([
+      { role: "owner", who: "Owner", text: "Where is the milk?", partial: false },
+      { role: "aira", who: "AIRA", text: "Fridge two.", partial: false },
+      { role: "customer", who: "Customer", text: "One curd please", partial: false },
+    ]);
+    expect([...el.querySelectorAll(".msg")].map((m) => m.querySelector(".msg__avatar") !== null)).toEqual([false, true, false]);
+    expect(el.querySelector(".chat__list")!.getAttribute("aria-live")).toBe("polite");
+  });
+  it("a partial caption updates in place, marked partial, until its final line replaces it", () => {
+    const s1 = stateOf([started, line("aira", "Fridge", false)]);
+    const el = page(s1);
+    expect(bubbles(el)).toEqual([{ role: "aira", who: "AIRA", text: "Fridge", partial: true }]);
+    cleanup();
+    const s2 = reduce(reduce(s1, line("aira", "Fridge two", false)), line("aira", "Fridge two.", true));
+    expect(bubbles(page(s2))).toEqual([{ role: "aira", who: "AIRA", text: "Fridge two.", partial: false }]);
+  });
+  it("says so when nothing was said, and shows only the newest MAX_SHOWN lines", () => {
+    expect(text(page(stateOf([started])).querySelector(".chat__empty"))).toBe("Nothing said yet.");
+    cleanup();
+    expect(MAX_SHOWN).toBe(50);
+    const many = Array.from({ length: MAX_SHOWN + 7 }, (_, i) => line("owner", `line ${i}`, true, T0 + i));
+    const got = bubbles(page(stateOf([started, ...many])));
+    expect(got).toHaveLength(MAX_SHOWN);
+    expect(got[0].text).toBe("line 7");
+    expect(got[got.length - 1].text).toBe(`line ${MAX_SHOWN + 6}`);
+  });
+  it("switching person switches the transcript: the new person's starts empty", () => {
+    const s = stateOf([started, second, line("owner", "hello")]);
+    expect(bubbles(page(s))).toHaveLength(1);
+    cleanup();
+    const el = page(follow(s, "s2"));
+    expect(el.querySelector(".msg")).toBeNull();
+    expect(text(el.querySelector(".chat__empty"))).toBe("Nothing said yet.");
+  });
+  it("follows new lines to the bottom, stops when the viewer scrolls up to read, and follows again once they return", () => {
+    const s0 = stateOf([started, line("owner", "one")]);
+    let setState: (s: LiveState | ((prev: LiveState) => LiveState)) => void = () => {};
+    function Probe() {
+      const [s, set] = useState(s0);
+      setState = set;
+      return <LivePage state={s} conn="live" now={() => T0 + 84_500} />;
+    }
+    const el = mount(<Probe />);
+    const list = el.querySelector<HTMLElement>(".chat__list")!;
+    sized(list, 1000, 200);
+    act(() => setState(reduce(s0, line("aira", "two", true, T0 + 2))));
+    expect(list.scrollTop).toBe(1000); // stuck to the bottom: scrolled to the end
+    list.scrollTop = 300; // the viewer scrolls up to read
+    act(() => { list.dispatchEvent(new Event("scroll")); });
+    act(() => setState((s: LiveState) => reduce(s, line("owner", "three", true, T0 + 3))));
+    expect(list.scrollTop).toBe(300); // not moved under them
+    list.scrollTop = 1000 - 200 - 10; // back within STICK_PX of the bottom
+    act(() => { list.dispatchEvent(new Event("scroll")); });
+    act(() => setState((s: LiveState) => reduce(s, line("aira", "four", true, T0 + 4))));
+    expect(list.scrollTop).toBe(1000);
+  });
+});
+
+describe("LivePage: listen", () => {
+  const listenProp = (on: boolean, available = true, extra: Partial<LiveListen> = {}): LiveListen => ({ available, on, onToggle: vi.fn(), ...extra });
+  it("offers Listen in the conversation's head when the server relays audio, and hands the click back", () => {
+    const l = listenProp(false);
+    const el = page(stateOf([started]), "live", { listen: l });
+    const btn = el.querySelector<HTMLButtonElement>(".chat__head .listen__btn")!;
+    expect(text(btn)).toBe(LISTEN_TEXT);
+    expect(LISTEN_TEXT).toBe("🔊 Listen");
+    expect(btn.getAttribute("aria-pressed")).toBe("false");
+    expect(btn.getAttribute("type")).toBe("button");
+    expect(el.querySelector(".meter")).toBeNull();
+    act(() => { btn.click(); });
+    expect(l.onToggle).toHaveBeenCalledTimes(1);
+  });
+  it("reads Stop listening while on, pressed and black, with a meter per voice fed by the player's levels", () => {
+    let feed: ((who: "owner" | "aira", level: number) => void) | null = null;
+    const unsub = vi.fn();
+    const l = listenProp(true, true, { levels: (cb) => { feed = cb; return unsub; } });
+    const el = page(stateOf([started]), "live", { listen: l });
+    const btn = el.querySelector<HTMLButtonElement>(".listen__btn")!;
+    expect(text(btn)).toBe(STOP_LISTEN_TEXT);
+    expect(STOP_LISTEN_TEXT).toBe("🔇 Stop listening");
+    expect(btn.getAttribute("aria-pressed")).toBe("true");
+    expect(btn.className).toContain("listen__btn--on");
+    expect([...el.querySelectorAll(".meter__label")].map(text)).toEqual(["Mic", "AIRA"]);
+    expect(feed).not.toBeNull();
+    feed!("owner", 0.2);
+    expect(el.querySelector<HTMLElement>(".meter__voice--owner .meter__fill")!.style.transform).toBe("scaleX(0.600)");
+    feed!("aira", 1);
+    expect(el.querySelector<HTMLElement>(".meter__voice--aira .meter__fill")!.style.transform).toBe("scaleX(1.000)");
+    cleanup();
+    expect(unsub).toHaveBeenCalledTimes(1);
+  });
+  it("shows no button when the server does not relay audio, or when the page has no listen at all", () => {
+    expect(page(stateOf([started]), "live", { listen: listenProp(false, false) }).querySelector(".listen, .listen__btn")).toBeNull();
+    cleanup();
+    expect(page(stateOf([started]), "live").querySelector(".listen, .listen__btn")).toBeNull();
   });
 });
