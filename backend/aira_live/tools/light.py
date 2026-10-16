@@ -64,7 +64,9 @@ SWITCH_STOPPED_EN = "I stopped guiding to the switch."
 # rides the phone's level (which is hysteresis-smoothed over seconds), not the raw luma: on a real device the
 # raw luma swings wildly even in steady light (measured 75-220 within seconds), so a raw-luma bar never settles,
 # while the torch alone only reaches "dim", so the level stays dark/dim until real ambient light arrives.
-TORCH_OFF_BRIGHT_S = 8.0
+# The phone already needs ~3 s of steady brightness before it reports "bright", so this short hold on top keeps
+# the light-returns-to-torch-off latency around 6 s total while still filtering a brief flash or reflection.
+TORCH_OFF_BRIGHT_S = 2.0
 # A luma rise after a press that counts as "the light came on". Not measured on a device yet.
 BRIGHT_RISE_LUMA = 30.0
 # How long after "press it" the loop waits for the brightness to rise before "still dark".
