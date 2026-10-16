@@ -52,9 +52,36 @@ Behind a strict NAT (symmetric NAT on the phone's mobile network, a corporate fi
 peers never connect and the Live page simply stays on the JPEG preview. Adding a TURN server is optional
 later: put its `urls`/`username`/`credential` into `ICE_SERVERS` in both `rtcSender.ts` and `rtcViewer.ts`.
 
+## Live audio: hear the session on the laptop (`AIRA_MONITOR_AUDIO=1`)
+
+Audio does not ride on WebRTC. When the server runs with `AIRA_MONITOR_AUDIO=1` (its `ready` line on `/monitor`
+says `audio: true`; otherwise the dashboard shows no button), the Live page's **Listen** button sends
+`{t:"listen", session: <followed session id>}` on the same `/monitor` socket and the server relays that
+session's sound as `{t:"mon", kind:"audio", session, ts, who, rate, pcm}`: `who: "owner"` is the phone's
+microphone exactly as the phone sends it to Gemini (`rate: 16000`), `who: "aira"` is AIRA's voice exactly as
+Gemini Live produced it on its way to the phone (`rate: 24000`), both mono PCM16 little-endian base64. The
+request follows the person the page follows (a switch re-sends it), `session: null` stops it, and the relay
+also stops when the monitor leaves or the session ends. Nothing is stored or transcoded on the server.
+
+The dashboard (`frontend/dashboard/src/lib/listen.ts`) plays both voices on one `AudioContext` started by the
+button's click (browsers need the gesture), one gain node per voice, each chunk an `AudioBufferSourceNode` at
+the stream's own sample rate scheduled back to back on the context clock. The first chunk after silence starts
+0.2 s ahead (the jitter buffer); a chunk that would start more than 0.6 s ahead is dropped so a stalled socket
+never turns into a growing delay. A server-side queue of 32 chunks per monitor drops the oldest when a socket is
+backed up (the count is in the monitor's close log line).
+
+Bandwidth, **computed from the formats, not measured**: the microphone is 16 000 samples/s x 2 bytes = 32 kB/s raw,
+about 43 kB/s as base64 (~340 kbit/s) while the phone streams; AIRA's voice is 24 000 x 2 = 48 kB/s raw, about
+64 kB/s as base64 (~510 kbit/s) while she speaks. Both come on top of the preview frames or the WebRTC video.
+
+Known limits: a laptop in the same room as the phone plays the owner's microphone back into it (echo, and AIRA
+may hear herself): listen with headphones, or from another room. There is no echo cancellation and no
+recording.
+
 ## Privacy and cleanup
 
-- Video only, never an audio track.
+- Video only on the WebRTC track, never audio; the audio relay above is a separate, opt-in path on `/monitor`
+  (`AIRA_MONITOR_AUDIO=1`, see `security.md` §2a for who can hear it).
 - The peer connection is closed (with `bye`) when the monitor leaves the Live page or hides the tab, when
   the phone's page hides, when the camera wiring is disposed, and when the session ends.
 - The server holds no media and no SDP: only "which monitor is connected to which session", in memory.
