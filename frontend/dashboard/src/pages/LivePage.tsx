@@ -384,22 +384,11 @@ function Camera({ frame, drawDeps, video, orientation = 0 }: { frame: Frame | nu
       ) : angle === 0 ? (
         <FrameCanvas frame={frame!} deps={drawDeps} class="camera__canvas" />
       ) : (
-        // Turn the JPEG picture to match the phone. The box aspect was swapped above when the phone is sideways,
-        // so the holder is sized in the box's OWN dimensions (cqh/cqw): for a sideways phone it is box-height wide
-        // and box-width tall, so turning it 90deg maps it exactly onto the box and the frame fills it with no black
-        // bars; at 180deg the box keeps the frame shape, so 100% x 100% already fills. `angle` is the single knob to
-        // flip (to 360 - angle) if a real device shows the picture backwards. WebRTC is intentionally left unrotated.
-        <div
-          class="camera__rot"
-          style={{
-            position: "absolute",
-            top: "50%",
-            left: "50%",
-            width: sideways ? "100cqh" : "100%",
-            height: sideways ? "100cqw" : "100%",
-            transform: `translate(-50%, -50%) rotate(${angle}deg)`,
-          }}
-        >
+        // Turn the JPEG picture to match the phone. The holder keeps the frame's own w/h shape and rotates inside
+        // the box (its aspect swapped above when the phone is sideways), so the whole frame stays visible, upright.
+        // `angle` is the single knob to flip (to 360 - angle) if a real device shows the picture mirrored or
+        // backwards; that is the one thing to verify on a real phone. WebRTC is intentionally left unrotated.
+        <div class="camera__rot" style={{ position: "absolute", top: "50%", left: "50%", width: "100%", aspectRatio: `${w} / ${h}`, transform: `translate(-50%, -50%) rotate(${angle}deg)` }}>
           <FrameCanvas frame={frame!} deps={drawDeps} class="camera__canvas" />
         </div>
       )}

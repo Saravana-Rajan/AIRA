@@ -4,7 +4,7 @@
   "name": "AIRA",
   "launcherName": "AIRA",
   "display": "standalone",
-  "orientation": "any",
+  "orientation": "portrait",
   "themeColor": "#FFFFFF",
   "themeColorDark": "#FFFFFF",
   "navigationColor": "#FFFFFF",
