@@ -261,6 +261,15 @@ export function AppShell({
     );
   }
 
+  // The red "Stop and exit" button on the live screen: stop streaming and leave the app. Full teardown -
+  // dispose() stops the camera and mic and closes the socket (which ends the server Live session) - then
+  // setW(null) returns to the start screen. dispose() is idempotent, and the [w] cleanup effect above runs it
+  // again harmlessly when w clears.
+  const leave = () => {
+    w?.dispose();
+    setW(null);
+  };
+
   const v = view ?? w.view.get();
   const state = localizeStatus(v.screen, v.lang, v.progress);
 
@@ -281,6 +290,7 @@ export function AppShell({
           onTogglePreview={togglePreview}
           onTalk={w.onTalk}
           onStop={w.onStop}
+          onLeave={leave}
           onExit={toggleFullScreen}
         />
       </>
