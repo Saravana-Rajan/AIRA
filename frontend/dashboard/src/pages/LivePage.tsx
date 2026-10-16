@@ -65,7 +65,7 @@ function useNow(now: () => number): number {
 }
 
 export function LivePage({
-  state, conn, auth, video, configured = true, onFollow, shopName = "Sunrise Dairy", now = Date.now, drawDeps = browserDeps,
+  state, conn, auth, video, configured = true, onFollow, shopName = "AIRA", now = Date.now, drawDeps = browserDeps,
 }: LivePageProps) {
   const t = useNow(now);
   const liveVideo = video?.mode === "webrtc" && video.stream !== null;

@@ -39,7 +39,7 @@ describe("Layout", () => {
     expect(skip.getAttribute("href")).toBe("#main");
     const h1s = el.querySelectorAll("h1");
     expect(h1s).toHaveLength(1);
-    expect(text(h1s[0])).toContain("Sunrise Dairy");
+    expect(text(h1s[0])).toContain("AIRA");
     const nav = el.querySelector("nav[aria-label='Dashboard sections']")!;
     expect([...nav.querySelectorAll("a")].map((a) => text(a))).toEqual(["Overview", "Today", "Stock", "Prices", "Orders & deliveries", "Audit trail", "Forecast", "Live"]);
     expect(el.querySelector("main#main")?.getAttribute("tabindex")).toBe("-1");

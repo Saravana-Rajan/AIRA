@@ -46,7 +46,7 @@ describe("LivePage: chrome", () => {
   it("is the header, the people selector and the camera, in that order, and nothing else", () => {
     const el = page(initialState(), "connecting");
     expect(el.querySelector("img.lv-logo")!.getAttribute("src")).toMatch(/aira-logo-192\.png$/);
-    expect(text(el.querySelector(".lv-title"))).toBe("Sunrise Dairy - Live");
+    expect(text(el.querySelector(".lv-title"))).toBe("AIRA - Live");
     expect(findAllByText(el, ".lv-conn__text", "Connecting…")).toHaveLength(1);
     expect([...el.querySelectorAll(".livepage > *")].map((n) => n.className)).toEqual(["lv-head", "people", "cam"]);
     expect([...el.querySelectorAll("h3")].map(text)).toEqual(["People using AIRA now (0)", "Camera"]);

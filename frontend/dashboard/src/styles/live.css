@@ -380,12 +380,13 @@
   background: var(--neu-bg-sunken);
   box-shadow: var(--neu-inset);
 }
-/* The picture fills the width in its own aspect ratio (the frame's w/h or the stream's), capped by the panel's height. */
+/* The picture in its own shape (the frame's w/h or the stream's): as tall as the screen allows, its width following
+   from that, so a phone's tall picture shows whole with no black bars beside it; a wide one is capped by the width. */
 .camera {
   position: relative;
-  width: 100%;
+  height: clamp(320px, calc(100dvh - 300px), 1100px);
+  width: auto;
   max-width: 100%;
-  max-height: 100%;
   margin: 0 auto;
   border-radius: 20px;
   background: var(--lv-video);
@@ -395,7 +396,7 @@
   display: block;
   width: 100%;
   height: 100%;
-  object-fit: contain;
+  object-fit: cover;
   background: var(--lv-video);
 }
 
