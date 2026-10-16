@@ -496,3 +496,20 @@ body,
 .cam-controls .cam-toggle {
   position: static;
 }
+
+/* ---------- short landscape: keep the portrait column fitting when the phone is turned ----------
+   The app rotates with the phone now (manifest "orientation": "any"). Turned to a short, wide viewport the
+   big orb would push the task card and the hint off-screen, so shrink the orb and tighten the spacing; it stays
+   the same column, just compact. A tall landscape window (a laptop) keeps the full-size layout. */
+@media (orientation: landscape) and (max-height: 540px) {
+  .screen {
+    --orb-size: clamp(72px, 26vh, 132px);
+    gap: 8px;
+    padding-top: max(8px, env(safe-area-inset-top));
+    padding-bottom: max(8px, env(safe-area-inset-bottom));
+  }
+  .stage {
+    min-height: 0;
+    padding: 2px 0;
+  }
+}

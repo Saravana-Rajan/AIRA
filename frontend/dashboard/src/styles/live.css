@@ -388,6 +388,9 @@
   border-radius: 20px;
   background: var(--lv-video);
   overflow: hidden;
+  /* A size container so a sideways frame's rotation holder can be sized in the box's OWN height/width
+     (cqh/cqw): turned 90deg it then maps exactly onto the box, filling it with no black bars. */
+  container-type: size;
 }
 .camera__canvas {
   display: block;
