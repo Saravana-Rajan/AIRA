@@ -180,6 +180,22 @@ async def test_a_dip_out_of_bright_resets_the_turn_off_timer(session, flags):
     assert [m.on for m in msgs(rec, TorchMsg)] == [True, False]
 
 
+async def test_auto_off_still_fires_after_the_owner_turns_it_on_manually(session, flags):
+    # Regression: a spoken "turn it on" while the torch is already on left torch_requested stuck at "on" (the
+    # phone's next report is not a state change, so the old code never cleared it), and that blocked the
+    # automatic turn-off. The request now clears as soon as the phone confirms the state.
+    s, rec = session
+    await light.on_light(s, report("dark", 12.0, "off"))   # auto-on
+    await light.on_light(s, report("dark", 11.0, "on"))    # the phone applied it (a real change clears the flag)
+    await light.flashlight(True)                           # the owner also says "turn it on" (already on)
+    await light.on_light(s, report("dark", 11.0, "on"))    # no state change, but the flag must still clear here
+    assert light.state(s).torch_requested is None
+    await light.on_light(s, report("bright", 150.0, "on"))  # a sustained bright now turns it off automatically
+    s.clock.t += light.TORCH_OFF_BRIGHT_S + 1
+    await light.on_light(s, report("bright", 150.0, "on"))
+    assert [m.on for m in msgs(rec, TorchMsg)] == [True, True, False]  # auto-on, the owner's on, then auto-off
+
+
 # ---------- the light switch tool ----------
 async def test_switch_find_delegates_to_a_route_follower_when_one_is_importable(session, flags, monkeypatch):
     s, rec = session
