@@ -147,24 +147,36 @@ async def test_unsupported_torch_is_said_once_and_not_commanded_again(session, f
 async def test_bright_again_sustained_turns_it_off_and_says_so(session, flags):
     s, rec = session
     await light.on_light(s, report("dark", 12.0, "off"))   # auto-on
-    await light.on_light(s, report("dim", 70.0, "on"))     # the phone applied it
+    # dim is not bright, even at a high raw-luma spike: no turn-off (the decision ignores the noisy raw luma)
+    await light.on_light(s, report("dim", 240.0, "on"))    # the phone applied it; dim level
     before = len(msgs(rec, TorchMsg))                       # one command so far (the on)
-    # the torch itself lighting a shelf: bright but under the bar, or not long enough: no turn-off
-    await light.on_light(s, report("bright", 100.0, "on"))
-    s.clock.t += 60
-    await light.on_light(s, report("bright", 100.0, "on"))
-    assert len(msgs(rec, TorchMsg)) == before
-    await light.on_light(s, report("bright", 150.0, "on"))  # starts the bright timer
+    await light.on_light(s, report("bright", 95.0, "on"))   # bright level: the timer starts (low raw luma, ignored)
     s.clock.t += light.TORCH_OFF_BRIGHT_S - 1
-    await light.on_light(s, report("bright", 150.0, "on"))
-    assert len(msgs(rec, TorchMsg)) == before               # not long enough yet
+    await light.on_light(s, report("bright", 240.0, "on"))  # still bright, not long enough yet
+    assert len(msgs(rec, TorchMsg)) == before
     s.clock.t += 2
-    await light.on_light(s, report("bright", 150.0, "on"))  # sustained: auto-off + inform, no question
+    await light.on_light(s, report("bright", 110.0, "on"))  # sustained bright: auto-off + inform, no question
     assert [m.on for m in msgs(rec, TorchMsg)] == [True, False]
     assert msgs(rec, TranscriptMsg)[-1].text == line("light.torch_off_bright", "ta")
     assert msgs(rec, ConfirmMsg) == []
     # not commanded twice in the same torch-on episode
-    await light.on_light(s, report("bright", 150.0, "on"))
+    await light.on_light(s, report("bright", 240.0, "on"))
+    assert [m.on for m in msgs(rec, TorchMsg)] == [True, False]
+
+
+async def test_a_dip_out_of_bright_resets_the_turn_off_timer(session, flags):
+    # The real-world fix: the raw luma swings wildly, but the level is hysteresis-smoothed, so the turn-off rides
+    # the level. A real drop out of "bright" restarts the timer; it only turns off after a sustained bright stretch.
+    s, rec = session
+    await light.on_light(s, report("dark", 12.0, "off"))   # auto-on
+    await light.on_light(s, report("bright", 150.0, "on"))  # the phone applied it + bright: the timer starts
+    s.clock.t += light.TORCH_OFF_BRIGHT_S - 1
+    await light.on_light(s, report("dim", 80.0, "on"))     # a real dip out of bright resets the timer
+    s.clock.t += 2
+    await light.on_light(s, report("bright", 150.0, "on"))  # bright again, but the clock restarted
+    assert [m.on for m in msgs(rec, TorchMsg)] == [True]    # not off yet
+    s.clock.t += light.TORCH_OFF_BRIGHT_S
+    await light.on_light(s, report("bright", 150.0, "on"))  # now sustained from the restart
     assert [m.on for m in msgs(rec, TorchMsg)] == [True, False]
 
 
