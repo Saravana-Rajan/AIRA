@@ -202,7 +202,6 @@ class Subscriber:
 _HUB: dict[str, list[Subscriber]] = {}
 _LAST_FRAME: dict[str, float] = {}   # session_id -> when its last frame went out
 _SPEAKER: dict[str, str] = {}        # session_id -> the speaker a sale tool named ("owner" | "customer")
-_ORIENTATION: dict[str, int] = {}    # session_id -> the phone's last-known screen orientation angle
 _STATS_TASKS: dict[str, asyncio.Task] = {}  # shop_id -> the stats ticker while the shop is watched
 _PREVIEW_TASKS: set[asyncio.Task] = set()   # preview start/stop requests on their way to the phones
 
@@ -505,7 +504,6 @@ def forget(session_id: str) -> None:
     _VOICES.pop(session_id, None)
     _LAST_FRAME.pop(session_id, None)
     _COUNTERS.pop(session_id, None)
-    _ORIENTATION.pop(session_id, None)
 
 
 class _Voices:
@@ -580,10 +578,6 @@ def session_fields(session) -> dict[str, Any]:
     started_at = getattr(session, "started_at", None)
     if isinstance(started_at, (int, float)) and not isinstance(started_at, bool):
         fields["started_at"] = int(started_at * 1000)
-    sid = getattr(session, "session_id", None)
-    angle = _ORIENTATION.get(sid) if sid is not None else None
-    if angle is not None:
-        fields["orientation"] = angle
     return fields
 
 
@@ -614,13 +608,6 @@ def status(session, state: str) -> None:
 def event(session, name: str, /, **detail: Any) -> None:
     """``name`` is positional-only, so a detail may be called ``name`` too (``event(s, "client_event", name=...)``)."""
     publish(session.shop_id, "event", session.session_id, name=name, detail=_jsonable(detail))
-
-
-def orientation(session, angle: int) -> None:
-    """The phone turned: remember its screen orientation and tell the shop's monitors, so a dashboard watching on
-    a laptop can turn the live picture to match (it cannot see the phone physically rotate)."""
-    _ORIENTATION[session.session_id] = angle
-    publish(session.shop_id, "orientation", session.session_id, angle=angle)
 
 
 def confirm_proposed(session, confirm_id: str, kind: str, prompt: str) -> None:

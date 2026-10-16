@@ -216,28 +216,6 @@
   }
 }
 
-/* ---------- short landscape: fit the one Start column when the phone is turned ----------
-   The app rotates with the phone now. Turned to a short, wide viewport, shrink the orb and tighten the spacing
-   so the header, Start and the TalkBack rows all fit without scrolling. A tall window keeps the full layout. */
-@media (orientation: landscape) and (max-height: 540px) {
-  .onboard {
-    padding-top: 0;
-    padding-bottom: 0;
-  }
-  .onboard__col {
-    min-height: 100dvh;
-  }
-  .onboard__orb {
-    --orb-size: clamp(72px, 24vh, 130px);
-    margin-bottom: 8px;
-  }
-  .onboard__start {
-    min-height: 0;
-    gap: 4px;
-    padding: 8px;
-  }
-}
-
 @media (prefers-reduced-motion: reduce) {
   .tb-switch__track,
   .tb-switch__knob,

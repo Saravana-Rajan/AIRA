@@ -4,6 +4,6 @@
   display: block;
   width: 100%;
   height: 100%;
-  object-fit: contain; /* show the whole frame; a wide (landscape) feed fits inside the box, nothing cropped */
+  object-fit: cover; /* the box already has the picture's shape: nothing real is cut */
   background: var(--lv-video, #14181C);
 }

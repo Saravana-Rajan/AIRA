@@ -21,7 +21,6 @@ import { createFrameRequestHandler, defaultSleep } from "./requests";
 import { createRtcSender } from "./rtcSender";
 import { createHintSpeaker } from "./hints";
 import { startTiltHints } from "./tilt";
-import { startOrientation } from "./orientation";
 import { createGuidanceSession } from "../guidance/session";
 import { freshHand, trackFingertip } from "../guidance/hands";
 import { clientLog } from "../core/clientLog";
@@ -118,7 +117,6 @@ export function wireCameraAndGuidance(opts: WireOptions = {}): CameraWiring {
   const hint = createHintSpeaker(speak, lang);
   setQualityListener((h) => hint(h));
   const stopTilt = startTiltHints((h) => hint(h));
-  const stopOrientation = startOrientation({ send: (m) => app.send(m) });
 
   const handleFrame = createFrameRequestHandler({
     capture: captureToolFrame, // waits (bounded) for the socket to drain: mic audio goes first
@@ -231,7 +229,6 @@ export function wireCameraAndGuidance(opts: WireOptions = {}): CameraWiring {
       stopLive,
       () => rtc.dispose(),
       stopTilt,
-      stopOrientation,
       () => setQualityListener(null),
       () => guidance.end(),
       () => { light?.stop(); torch?.dispose(); setFrameBoost(null); torchListeners.clear(); },
