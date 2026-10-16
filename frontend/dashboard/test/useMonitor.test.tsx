@@ -87,7 +87,7 @@ function fakeAudio() {
       return { duration: length / sampleRate, rate: sampleRate, getChannelData: () => data };
     },
     createBufferSource: () => {
-      const src = { buffer: null as { rate: number } | null, onended: null, connect: (d: unknown) => d, start: (when?: number) => { starts.push({ at: when, rate: src.buffer?.rate ?? 0 }); } };
+      const src = { buffer: null as { rate: number } | null, onended: null, connect: (d: unknown) => d, start: (when?: number) => { starts.push({ at: when, rate: src.buffer?.rate ?? 0 }); }, stop: () => {} };
       return src;
     },
     createGain: () => ({ gain: { value: 1 }, connect: (d: unknown) => d }),

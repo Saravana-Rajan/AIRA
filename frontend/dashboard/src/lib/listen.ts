@@ -7,9 +7,13 @@
 // clock position (`nextAt`) on the context's timeline. Chunks are scheduled back to back as AudioBufferSource
 // nodes at the stream's own sample rate (the context resamples; nothing is converted here). The first chunk
 // after silence or an underrun starts JITTER_S ahead, a small buffer that absorbs network jitter; a chunk that
-// would start more than MAX_LEAD_S ahead is late (the socket stalled and then burst) and is dropped, so the
-// delay never grows. `attach`/`detach` follow the socket like the WebRTC viewer: a reconnect re-sends the listen
-// request while Listen is on; `want` follows the person the page follows and re-targets the request.
+// would start more than MAX_LEAD_S ahead is late and dropped. That ahead-limit is per voice: the owner's mic is
+// live, so it is tight (a stalled-then-burst socket drops stale mic audio rather than growing the delay); AIRA's
+// voice is a whole turn Gemini Live delivers faster than real time, so it is large enough to buffer the turn
+// instead of dropping its tail and cutting the voice off. A lane can therefore hold seconds of sound ahead, so
+// Stop and a switch of person cancel it (`resetLane`) rather than let it play on. `attach`/`detach` follow the
+// socket like the WebRTC viewer: a reconnect re-sends the listen request while Listen is on; `want` follows the
+// person the page follows and re-targets the request.
 // No DOM here: the page renders the button and the meters from `state()` and `subscribeLevels`.
 import type { MonitorListenMsg, MonitorMsg, MonitorVoice } from "@aira/contracts";
 
@@ -19,14 +23,20 @@ export type AudioMsg = Extract<MonitorMsg, { kind: "audio" }>;
  *  playback (fewer underrun gaps and crackle) at the cost of a little delay. Sized for watching / recording a
  *  demo on a laptop, where a touch of latency is fine but clean audio is not negotiable. */
 export const JITTER_S = 0.45;
-/** A chunk that would start further ahead than this is late and dropped instead of adding delay, seconds. Kept
- *  comfortably above JITTER_S so the larger buffer is not itself treated as "too far ahead" and dropped. */
-export const MAX_LEAD_S = 1.0;
+/** How far ahead a chunk may be scheduled before it is dropped as late, per voice (seconds).
+ *  - The owner's microphone is live, so keep it tight: if the socket stalls then bursts, the stale mic audio is
+ *    dropped rather than played late and growing the delay.
+ *  - AIRA's voice is a whole spoken turn that Gemini Live produces faster than real time, so the dashboard
+ *    receives several seconds of it in one burst. Those chunks are not stale - they are the rest of the sentence
+ *    arriving early - so allow an entire turn to buffer instead of dropping its tail (which cut the voice off
+ *    mid-sentence and left it silent). The large value is a runaway guard, not a latency bound: a Stop or a
+ *    switch of person cancels whatever is still buffered (`resetLane`), so it never lingers. */
+export const MAX_LEAD_S: Record<MonitorVoice, number> = { owner: 1.0, aira: 30.0 };
 
 // The slice of the Web Audio API this uses; a real AudioContext satisfies it, tests pass a fake.
 export interface AudioBufferLike { duration: number; getChannelData(channel: number): Float32Array }
 export interface AudioNodeLike { connect(destination: unknown): unknown }
-export interface SourceLike extends AudioNodeLike { buffer: AudioBufferLike | null; start(when?: number): void; onended: (() => void) | null }
+export interface SourceLike extends AudioNodeLike { buffer: AudioBufferLike | null; start(when?: number): void; stop(when?: number): void; onended: (() => void) | null }
 export interface GainLike extends AudioNodeLike { gain: { value: number } }
 export interface AudioCtxLike {
   currentTime: number;
@@ -102,7 +112,7 @@ export function rms(samples: Float32Array): number {
 
 const browserContext = (): AudioCtxLike => new AudioContext() as unknown as AudioCtxLike;
 
-interface Lane { gain: GainLike; nextAt: number }
+interface Lane { gain: GainLike; nextAt: number; sources: SourceLike[] }
 
 export function createListener(deps: ListenDeps = {}): Listener {
   const makeContext = deps.audioContext ?? browserContext;
@@ -142,7 +152,7 @@ export function createListener(deps: ListenDeps = {}): Listener {
       const lane = (): Lane => {
         const gain = ctx!.createGain();
         gain.connect(ctx!.destination);
-        return { gain, nextAt: 0 };
+        return { gain, nextAt: 0, sources: [] };
       };
       lanes = { owner: lane(), aira: lane() };
       lanes.owner.gain.gain.value = gains.owner;
@@ -151,10 +161,25 @@ export function createListener(deps: ListenDeps = {}): Listener {
     return ctx;
   };
 
+  /** Stop and release a lane's scheduled sound and rewind its clock. A lane can hold seconds of audio buffered
+   *  ahead (a whole AIRA turn), so Stop, a switch of person, and a fresh start must cancel it or it would play
+   *  on after the viewer meant it to end. */
+  const resetLane = (lane: Lane): void => {
+    const pending = lane.sources;
+    lane.sources = [];
+    for (const s of pending) {
+      try { s.stop(); } catch { /* already finished: stopping a stopped source throws */ }
+    }
+    lane.nextAt = 0;
+  };
+  const resetLanes = (): void => {
+    if (lanes) { resetLane(lanes.owner); resetLane(lanes.aira); }
+  };
+
   const start = () => {
     const c = ensureContext();
     if (c.state !== "running") c.resume().catch(() => undefined);
-    if (lanes) lanes.owner.nextAt = lanes.aira.nextAt = 0; // the first chunk gets a fresh jitter buffer
+    resetLanes(); // the first chunk of each voice gets a fresh jitter buffer
     dropped = 0;
     on = true;
     sync();
@@ -165,6 +190,7 @@ export function createListener(deps: ListenDeps = {}): Listener {
     if (!on) return;
     on = false;
     sync();
+    resetLanes(); // silence what is buffered ahead so Stop is immediate, not "stop in a few seconds"
     if (ctx && ctx.state === "running") ctx.suspend().catch(() => undefined);
     notify();
   };
@@ -191,7 +217,7 @@ export function createListener(deps: ListenDeps = {}): Listener {
     want(id) {
       if (id === session) return;
       session = id;
-      if (lanes) lanes.owner.nextAt = lanes.aira.nextAt = 0; // another person: start their sound afresh
+      resetLanes(); // another person: cancel the last one's buffered sound and start theirs afresh
       sync();
       notify();
     },
@@ -225,8 +251,8 @@ export function createListener(deps: ListenDeps = {}): Listener {
       const now = ctx.currentTime;
       let at = lane.nextAt;
       if (at < now) at = now + JITTER_S; // silence or an underrun: buffer a little before the next sound
-      else if (at - now - MAX_LEAD_S > 1e-6) {
-        dropped += 1; // the socket stalled and burst: this chunk would only add delay
+      else if (at - now - MAX_LEAD_S[m.who] > 1e-6) {
+        dropped += 1; // too far ahead for this voice: a live-mic burst would only add delay (AIRA's turn is let through)
         notify();
         return;
       }
@@ -237,6 +263,11 @@ export function createListener(deps: ListenDeps = {}): Listener {
       src.connect(lane.gain);
       src.start(at);
       lane.nextAt = at + buf.duration;
+      lane.sources.push(src); // kept so Stop / switch-person can cancel sound buffered ahead
+      src.onended = () => {
+        const i = lane.sources.indexOf(src);
+        if (i >= 0) lane.sources.splice(i, 1); // release each buffer as it finishes playing
+      };
       const level = rms(samples);
       for (const fn of levelListeners) {
         try { fn(m.who, level); } catch { /* a meter must not break playback */ }
