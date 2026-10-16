@@ -38,23 +38,12 @@ describe("monitor contract (/monitor, read-only dashboard feed)", () => {
   });
 
   it("lists are fixed", () => {
-    expect(MONITOR_KINDS).toEqual(["session", "transcript", "frame", "vision", "hand", "event", "status", "orientation", "stats", "ready", "audio"]);
+    expect(MONITOR_KINDS).toEqual(["session", "transcript", "frame", "vision", "hand", "event", "status", "stats", "ready", "audio"]);
     expect(MONITOR_VOICES).toEqual(["owner", "aira"]);
     expect(MONITOR_AUDIO_RATES).toEqual([16000, 24000]);
     expect(MONITOR_ROLES).toEqual(["owner", "customer", "aira"]);
     expect(MONITOR_VISION_SOURCES).toEqual(["mediapipe", "er2", "bump"]);
     expect(MONITOR_STATES).toEqual(["listening", "thinking", "guiding", "found", "idle"]);
-  });
-
-  it("orientation: the phone's screen angle (0/90/180/270) and nothing else", () => {
-    const base = { t: "mon", kind: "orientation", session: "s1", ts: 1 };
-    expect(isMonitorMsg({ ...base, angle: 90 })).toBe(true);
-    expect(isMonitorMsg({ ...base, angle: 45 })).toBe(false);
-    expect(isMonitorMsg(base)).toBe(false);
-    // a session message may carry the last-known orientation, for a monitor that joins late
-    const sess = { t: "mon", kind: "session", session: "s1", ts: 1, state: "start", lang: "ta" };
-    expect(isMonitorMsg({ ...sess, orientation: 180 })).toBe(true);
-    expect(isMonitorMsg({ ...sess, orientation: 45 })).toBe(false);
   });
 
   it("a vision object carries a box or point, or null for each, and optional score, severity and distance", () => {

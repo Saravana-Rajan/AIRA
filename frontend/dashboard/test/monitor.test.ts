@@ -107,23 +107,6 @@ describe("reduce: camera, vision, hand, status, stats, events and sessions", () 
     const s = apply([mon({ kind: "frame", jpeg_b64: "AAAA", w: 480, h: 640, purpose: "guide" })]);
     expect(s.frame).toMatchObject({ src: "data:image/jpeg;base64,AAAA", w: 480, h: 640, purpose: "guide" });
   });
-  it("turns the followed camera to the phone's orientation, and seeds it from a session-start for late joiners", () => {
-    const s = apply([
-      mon({ kind: "session", state: "start", lang: "en" }),
-      mon({ kind: "orientation", angle: 90 }),
-    ]);
-    expect(s.orientation).toBe(90);
-    expect(s.sessions.s1.orientation).toBe(90);
-    // a session-start carrying the last-known orientation seeds the followed state
-    expect(apply([mon({ kind: "session", state: "start", lang: "en", orientation: 270 })]).orientation).toBe(270);
-    // following another listed session restores that session's last-known orientation
-    const two = apply([
-      mon({ kind: "session", state: "start", lang: "en" }),
-      mon({ kind: "session", state: "start", session: "s2", lang: "ta", orientation: 180 }),
-    ]);
-    expect(follow(two, "s2").orientation).toBe(180);
-  });
-
   it("keeps ER 2 and MediaPipe boxes apart; an obstacle is logged once", () => {
     const s = apply([
       mon({ kind: "vision", source: "er2", objects: [{ label: "milk", box: box([1, 2, 3, 4]), point: null }], context: "camera_ask" }),
@@ -224,7 +207,7 @@ describe("reduce: camera, vision, hand, status, stats, events and sessions", () 
     expect(s.session).toBe("s1");
     expect(Object.keys(s.sessions)).toEqual(["s1", "s2"]);
     // Its list entry still follows what it says (status, last heard), nothing else does.
-    expect(s.sessions.s2).toEqual({ id: "s2", uid: "u2", lang: "ta", startedAt: 3, lastSeenAt: 6, status: "thinking", orientation: 0 });
+    expect(s.sessions.s2).toEqual({ id: "s2", uid: "u2", lang: "ta", startedAt: 3, lastSeenAt: 6, status: "thinking" });
     expect(s.transcript.map((l) => l.text)).toEqual(["hi from s1"]);
     expect(s.frame).toBeNull();
     expect(s.status).toBe("listening");
@@ -312,7 +295,7 @@ describe("reduce: everyone using AIRA (the session list)", () => {
 
   it("a session start carries the server's startedAt into the list and the page clock, falling back to the message time", () => {
     const s = apply([start("s1", 50, { startedAt: 10 }), start("s2", 60), start("s3", 70, { startedAt: "soon" })]);
-    expect(s.sessions.s1).toEqual({ id: "s1", uid: "u-s1", lang: "ta", startedAt: 10, lastSeenAt: 50, status: "idle", orientation: 0 });
+    expect(s.sessions.s1).toEqual({ id: "s1", uid: "u-s1", lang: "ta", startedAt: 10, lastSeenAt: 50, status: "idle" });
     expect(s.sessions.s2.startedAt).toBe(60);
     expect(s.sessions.s3.startedAt).toBe(70); // a startedAt that is not a number is ignored
     expect(s).toMatchObject({ session: "s1", sessionStartedAt: 10 });

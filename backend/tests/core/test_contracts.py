@@ -57,7 +57,7 @@ SERVER = load("server_msgs.json")
 def test_every_client_fixture_validates_and_covers_all_types():
     seen = {client_adapter.validate_python(m).t for m in CLIENT}
     assert seen == set(ts_list(MESSAGES_TS, "CLIENT_MSG_TYPES"))
-    assert seen == {"hello", "audio", "frame", "text", "event", "confirm", "stop", "log", "boxes", "rtc", "light", "orientation"}
+    assert seen == {"hello", "audio", "frame", "text", "event", "confirm", "stop", "log", "boxes", "rtc", "light"}
 
 
 def test_every_server_fixture_validates_and_covers_all_types():

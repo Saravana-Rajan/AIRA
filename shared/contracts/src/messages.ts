@@ -4,11 +4,10 @@
 // integers normalised 0..1000.
 import {
   BOX_SEVERITIES, BOX_SOURCES, CLIENT_EVENT_NAMES, CONFIRM_ANSWERS, CONFIRM_KINDS, CUE_NAMES, ENTITIES, ERROR_CODES,
-  FRAME_PURPOSES, LANGS, LIGHT_LEVELS, MAX_BOXES, NORM_MAX, ORIENTATION_ANGLES, TORCH_STATES, TRANSCRIPT_ROLES,
-  VERBOSITIES,
+  FRAME_PURPOSES, LANGS, LIGHT_LEVELS, MAX_BOXES, NORM_MAX, TORCH_STATES, TRANSCRIPT_ROLES, VERBOSITIES,
   type BoxSeverity, type BoxSource, type ClientEventName, type ConfirmAnswer, type ConfirmKind, type CueName,
-  type Entity, type ErrorCode, type FramePurpose, type Lang, type LightLevel, type OrientationAngle,
-  type TorchState, type TranscriptRole, type Verbosity,
+  type Entity, type ErrorCode, type FramePurpose, type Lang, type LightLevel, type TorchState, type TranscriptRole,
+  type Verbosity,
 } from "./enums";
 
 export type Point = [number, number];
@@ -48,9 +47,6 @@ export type ClientMsg =
   // can offer the flashlight (committed only after a spoken yes) and compare brightness before and after a
   // light switch is pressed. Nothing here changes state on its own.
   | { t: "light"; level: LightLevel; luma: number; torch: TorchState }
-  // The phone's screen orientation (screen.orientation.angle), sent on change and once at the start. The server
-  // relays it to a dashboard monitor so it can turn the live picture to match the phone it cannot see rotate.
-  | { t: "orientation"; angle: OrientationAngle }
   // WebRTC signalling from the phone to a dashboard monitor (`to` is the monitor id a `want` carried in `from`).
   // The server fills `from` with the session id and relays it; it never reads the SDP.
   | RtcClientMsg;
@@ -104,7 +100,7 @@ export type ClientMsgOf<T extends ClientMsgType> = Extract<ClientMsg, { t: T }>;
 export type ServerMsgOf<T extends ServerMsgType> = Extract<ServerMsg, { t: T }>;
 
 export const CLIENT_MSG_TYPES = Object.freeze([
-  "hello", "audio", "frame", "text", "event", "confirm", "stop", "log", "boxes", "rtc", "light", "orientation",
+  "hello", "audio", "frame", "text", "event", "confirm", "stop", "log", "boxes", "rtc", "light",
 ] as const);
 export const SERVER_MSG_TYPES = Object.freeze([
   "ready", "audio", "transcript", "request_frame", "target", "count", "state", "confirm", "cue", "error", "boxes", "rtc",
@@ -190,8 +186,6 @@ export function isClientMsg(x: unknown): x is ClientMsg {
       return isRtcClientMsg(x);
     case "light":
       return inList(LIGHT_LEVELS, x.level) && isNum(x.luma) && x.luma >= 0 && x.luma <= 255 && inList(TORCH_STATES, x.torch);
-    case "orientation":
-      return isInt(x.angle) && (ORIENTATION_ANGLES as readonly number[]).includes(x.angle);
   }
   return false;
 }
@@ -290,7 +284,7 @@ export const MONITOR_CLOSE_UNAUTHENTICATED = 4401;
 export const MONITOR_CLOSE_UNAUTHORIZED = 4403;
 /** The server waits this long for the auth message after the upgrade. */
 export const MONITOR_AUTH_TIMEOUT_S = 5;
-export const MONITOR_KINDS = Object.freeze(["session", "transcript", "frame", "vision", "hand", "event", "status", "orientation", "stats", "ready", "audio"] as const);
+export const MONITOR_KINDS = Object.freeze(["session", "transcript", "frame", "vision", "hand", "event", "status", "stats", "ready", "audio"] as const);
 export type MonitorKind = (typeof MONITOR_KINDS)[number];
 /** Whose audio a chunk is: the phone's microphone (the owner, and whoever stands near him) or AIRA's voice. */
 export const MONITOR_VOICES = Object.freeze(["owner", "aira"] as const);
@@ -326,16 +320,13 @@ type MonBase = { t: "mon"; session: string; ts: number };
 export type MonitorMsg = MonBase & (
   // uid "camera:<name>" marks a room camera's session. startedAt: epoch ms when the phone session began; sent
   // on start, so a monitor that joins late still knows how long it has been running.
-  | { kind: "session"; state: MonitorSessionState; lang: string; uid?: string; startedAt?: number; orientation?: OrientationAngle }
+  | { kind: "session"; state: MonitorSessionState; lang: string; uid?: string; startedAt?: number }
   | { kind: "transcript"; role: MonitorRole; text: string; lang: string; final: boolean }
   | { kind: "frame"; jpeg_b64: string; w: number; h: number; purpose: FramePurpose }
   | { kind: "vision"; source: VisionSource; objects: VisionObject[]; target?: string; found?: boolean; severity?: BoxSeverity; context?: string; frameId?: string }
   | { kind: "hand"; point: Point; near: boolean }
   | { kind: "event"; name: string; detail: Record<string, unknown> }
   | { kind: "status"; state: MonitorState }
-  // The phone's screen orientation changed (screen.orientation.angle). The dashboard turns the live picture to
-  // match; session-start carries the last-known value so a monitor that joins late is not left unrotated.
-  | { kind: "orientation"; angle: OrientationAngle }
   // Every 2 s per live session: Live API turns, ER 2 / Flash calls, average vision latency (ms; null before
   // the first call) and the phone's frame rate over the last window.
   | { kind: "stats"; turns: number; er2Calls: number; flashCalls: number; visionMs: number | null; fps: number }
@@ -392,7 +383,7 @@ export function isMonitorMsg(x: unknown): x is MonitorMsg {
   switch (x.kind as MonitorKind) {
     case "session":
       return inList(MONITOR_SESSION_STATES, x.state) && isStr(x.lang) && optional(x.uid, isStr) &&
-        optional(x.startedAt, isNum) && optional(x.orientation, (v) => isInt(v) && (ORIENTATION_ANGLES as readonly number[]).includes(v));
+        optional(x.startedAt, isNum);
     case "transcript":
       return inList(MONITOR_ROLES, x.role) && isStr(x.text) && isStr(x.lang) && isBool(x.final);
     case "frame":
@@ -407,8 +398,6 @@ export function isMonitorMsg(x: unknown): x is MonitorMsg {
       return isStr(x.name) && isObj(x.detail);
     case "status":
       return inList(MONITOR_STATES, x.state);
-    case "orientation":
-      return isInt(x.angle) && (ORIENTATION_ANGLES as readonly number[]).includes(x.angle);
     case "stats":
       return isInt(x.turns) && isInt(x.er2Calls) && isInt(x.flashCalls) && (x.visionMs === null || isInt(x.visionMs)) && isNum(x.fps);
     case "ready":

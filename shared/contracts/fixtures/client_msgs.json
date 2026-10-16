@@ -31,7 +31,5 @@
   {"t":"rtc","kind":"bye","to":"m1"},
   {"t":"light","level":"dark","luma":21.5,"torch":"off"},
   {"t":"light","level":"dim","luma":64,"torch":"on"},
-  {"t":"light","level":"bright","luma":142,"torch":"unsupported"},
-  {"t":"orientation","angle":0},
-  {"t":"orientation","angle":90}
+  {"t":"light","level":"bright","luma":142,"torch":"unsupported"}
 ]

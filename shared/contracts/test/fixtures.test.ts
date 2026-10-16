@@ -71,14 +71,6 @@ describe("contract fixtures", () => {
     expect(isServerMsg({ t: "light", level: "dark", luma: 10, torch: "off" })).toBe(false);
   });
 
-  it("orientation: the phone reports its screen angle (0/90/180/270), nothing else", () => {
-    expect(isClientMsg({ t: "orientation", angle: 0 })).toBe(true);
-    expect(isClientMsg({ t: "orientation", angle: 270 })).toBe(true);
-    expect(isClientMsg({ t: "orientation", angle: 45 })).toBe(false);
-    expect(isClientMsg({ t: "orientation", angle: "90" })).toBe(false);
-    expect(isClientMsg({ t: "orientation" })).toBe(false);
-  });
-
   it("a finished user transcript carries the language AIRA detected (any code, not only the label languages)", () => {
     const withLang = server.filter((m) => m.t === "transcript" && typeof m.lang === "string");
     expect(withLang.length).toBeGreaterThan(0);

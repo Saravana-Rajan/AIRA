@@ -6,7 +6,7 @@
 // viewer has one, else the latest JPEG frame on a canvas. When the server relays audio, a Listen button in the
 // conversation's head plays the person's microphone and AIRA's voice on this computer. AIRA's own look: light,
 // Inter, soft panels; nothing else on the page.
-import type { MonitorRole, MonitorVoice, OrientationAngle } from "@aira/contracts";
+import type { MonitorRole, MonitorVoice } from "@aira/contracts";
 import { useEffect, useMemo, useRef, useState } from "preact/hooks";
 import { browserDeps, createFrameDrawer, type DrawDeps } from "../lib/frameDraw";
 import {
@@ -135,7 +135,7 @@ export function LivePage({
           <Chip conn={conn} hasPicture={hasPicture} />
         </div>
         <div class="cam__view">
-          {hasPicture ? <Camera frame={state.frame} drawDeps={drawDeps} video={video} orientation={state.orientation} /> : empty}
+          {hasPicture ? <Camera frame={state.frame} drawDeps={drawDeps} video={video} /> : empty}
         </div>
       </section>
 
@@ -367,31 +367,15 @@ function FrameCanvas({ frame, deps, class: cls }: { frame: Frame; deps: DrawDeps
 const RTC_DEFAULT_SIZE = { w: 640, h: 480 };
 
 /** The picture, in its own aspect ratio: the WebRTC video when the viewer is connected, else the latest JPEG frame on a canvas. */
-function Camera({ frame, drawDeps, video, orientation = 0 }: { frame: Frame | null; drawDeps: DrawDeps; video?: VideoState; orientation?: OrientationAngle }) {
+function Camera({ frame, drawDeps, video }: { frame: Frame | null; drawDeps: DrawDeps; video?: VideoState }) {
   const live = video?.mode === "webrtc" ? video.stream : null;
   const [videoSize, setVideoSize] = useState(RTC_DEFAULT_SIZE);
   if (!frame && !live) return null;
   const w = live ? videoSize.w : frame!.w;
   const h = live ? videoSize.h : frame!.h;
-  // Only the JPEG picture is turned here, by the phone's screen angle; the WebRTC <video> rotates itself through
-  // the browser's own video-orientation (CVO) and reports its already-rotated size, so it is left alone.
-  const angle = live ? 0 : orientation;
-  const sideways = angle === 90 || angle === 270;
   return (
-    <div class="camera" style={{ aspectRatio: sideways ? `${h} / ${w}` : `${w} / ${h}` }}>
-      {live ? (
-        <RtcVideo stream={live} onSize={setVideoSize} />
-      ) : angle === 0 ? (
-        <FrameCanvas frame={frame!} deps={drawDeps} class="camera__canvas" />
-      ) : (
-        // Turn the JPEG picture to match the phone. The holder keeps the frame's own w/h shape and rotates inside
-        // the box (its aspect swapped above when the phone is sideways), so the whole frame stays visible, upright.
-        // `angle` is the single knob to flip (to 360 - angle) if a real device shows the picture mirrored or
-        // backwards; that is the one thing to verify on a real phone. WebRTC is intentionally left unrotated.
-        <div class="camera__rot" style={{ position: "absolute", top: "50%", left: "50%", width: "100%", aspectRatio: `${w} / ${h}`, transform: `translate(-50%, -50%) rotate(${angle}deg)` }}>
-          <FrameCanvas frame={frame!} deps={drawDeps} class="camera__canvas" />
-        </div>
-      )}
+    <div class="camera" style={{ aspectRatio: `${w} / ${h}` }}>
+      {live ? <RtcVideo stream={live} onSize={setVideoSize} /> : <FrameCanvas frame={frame!} deps={drawDeps} class="camera__canvas" />}
     </div>
   );
 }
