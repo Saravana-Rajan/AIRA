@@ -26,3 +26,6 @@ shared/docs/submission/*.mp4
 
 # hosting bundle copied next to shared/infra/firebase.json for firebase deploy
 shared/infra/public/
+
+# the shop map is copied into the image by the deploy (shared/catalog is the source)
+backend/aira_live/maps/
