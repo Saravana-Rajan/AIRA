@@ -206,6 +206,11 @@ async def on_light(session: Session, msg: LightMsg) -> None:
             st.unsupported_said = True
             await _tell(session, "light.torch_unsupported", TORCH_UNSUPPORTED_EN, cue="warn")
         if msg.torch == "off":
+            st.bright_since = None
+        if msg.torch == "on":
+            # A fresh torch-on episode: allow a new automatic turn-off. off_offered is reset here (not only when
+            # the torch turns off) so a manual "turn it off" from the previous episode, which sets off_offered
+            # while the torch is already off, cannot carry over and block this episode's auto-off.
             st.off_offered, st.bright_since = False, None
         if st.switch_after_torch and msg.torch in ("on", "unsupported"):
             st.switch_after_torch = False
