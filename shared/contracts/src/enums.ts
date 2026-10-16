@@ -29,7 +29,10 @@ export const CONFIRM_ANSWERS = Object.freeze(["yes", "no"] as const);
 export type ConfirmAnswer = (typeof CONFIRM_ANSWERS)[number];
 
 // "talk": the owner tapped to talk (his next turn); after a long-press Stop it lets AIRA speak again.
-export const CLIENT_EVENT_NAMES = Object.freeze(["visibility", "network", "fingertip_in_target", "talk"] as const);
+// "steps": the phone's cumulative step count during a server walk, data {total, available}; `available: false`
+// once when the phone has no motion sensor or the owner refused it. Sent at most twice a second; the server
+// reads it only with step-by-step routes on (AIRA_ROUTES) and never answers it.
+export const CLIENT_EVENT_NAMES = Object.freeze(["visibility", "network", "fingertip_in_target", "talk", "steps"] as const);
 export type ClientEventName = (typeof CLIENT_EVENT_NAMES)[number];
 
 export const TRANSCRIPT_ROLES = Object.freeze(["user", "aira"] as const);
