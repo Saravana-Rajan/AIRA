@@ -3,7 +3,7 @@ import type { Settings } from "./types";
 
 export const SETTINGS_KEY = "aira.settings";
 /** The one shop this build serves, as shown on screen. Its id lives on the server (config demo_shop_id). */
-export const SHOP_NAME = "Sunrise Dairy";
+export const SHOP_NAME = "AIRA Cricket Store";
 
 /** Treat as read-only: copy it (`{ ...DEFAULT_SETTINGS }`) before changing anything. */
 export const DEFAULT_SETTINGS: Readonly<Settings> = {

@@ -20,7 +20,7 @@ describe("settings", () => {
   it("returns defaults when nothing is stored", () => {
     expect(loadSettings(store)).toEqual(DEFAULT_SETTINGS);
     expect(DEFAULT_SETTINGS).not.toHaveProperty("shopId"); // one shop: the server picks it, the app never names it
-    expect(SHOP_NAME).toBe("Sunrise Dairy");
+    expect(SHOP_NAME).toBe("AIRA Cricket Store");
   });
 
   it("drops an older build's saved shopId without error and never writes one", () => {
