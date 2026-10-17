@@ -1,0 +1,6 @@
+[
+  {"file": "inv_001.jpg", "supplier": "Sakthi Dairy", "total": 990, "has_error": false, "error_fields": [],
+   "lines": [{"name": "Sakthi Curd 1L", "qty": 30, "unit": "L", "unit_price": 33, "line_total": 990}]},
+  {"file": "inv_021.jpg", "supplier": "Sakthi Dairy", "total": 1000, "has_error": true, "error_fields": ["line 1 line_total"],
+   "lines": [{"name": "Sakthi Curd 1L", "qty": 30, "unit": "L", "unit_price": 33, "line_total": 1000}]}
+]

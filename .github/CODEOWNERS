@@ -1,0 +1,29 @@
+# Default owner
+*                                              @Saravana-Rajan
+
+# Teammates: replace with real GitHub usernames and uncomment.
+# /frontend/app/                               @<ishwarya-github>
+# /shared/bench/                               @<ishwarya-github>
+# /backend/aira_live/vision/                   @<sarmitha-github>
+# /backend/aira_live/memory/                   @<sarmitha-github>
+# /backend/aira_live/tools/products.py         @<sarmitha-github>
+# /backend/aira_live/business/                 @<kanish-github>
+# /backend/aira_live/messaging/                @<kanish-github>
+# /backend/aira_live/tools/orders.py           @<kanish-github>
+# /backend/aira_live/tools/delivery.py         @<kanish-github>
+# /backend/aira_live/tools/payments.py         @<kanish-github>
+# /backend/aira_live/tools/sales.py            @<kanish-github>
+# /backend/aira_live/tools/stock.py            @<kanish-github>
+# /frontend/dashboard/                         @<kanish-github>
+# /shared/catalog/                             @<kanish-github>
+
+# Contracts always need Saravana's review
+/shared/contracts/                             @Saravana-Rajan
+/backend/aira_live/contracts.py                @Saravana-Rajan
+
+# Build, deploy and team configuration
+/.github/                                      @Saravana-Rajan
+/frontend/package.json                         @Saravana-Rajan
+/frontend/package-lock.json                    @Saravana-Rajan
+/shared/infra/                                 @Saravana-Rajan
+/shared/.env.example                           @Saravana-Rajan

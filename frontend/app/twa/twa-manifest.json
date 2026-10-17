@@ -1,0 +1,43 @@
+{
+  "packageId": "in.techjays.aira",
+  "host": "aira-shop.web.app",
+  "name": "AIRA",
+  "launcherName": "AIRA",
+  "display": "standalone",
+  "orientation": "portrait",
+  "themeColor": "#FFFFFF",
+  "themeColorDark": "#FFFFFF",
+  "navigationColor": "#FFFFFF",
+  "navigationColorDark": "#FFFFFF",
+  "navigationDividerColor": "#E3E9F4",
+  "navigationDividerColorDark": "#E3E9F4",
+  "backgroundColor": "#FFFFFF",
+  "enableNotifications": false,
+  "startUrl": "/",
+  "iconUrl": "https://aira-shop.web.app/icons/aira-logo-512.png",
+  "maskableIconUrl": "https://aira-shop.web.app/icons/aira-logo-512.png",
+  "splashScreenFadeOutDuration": 300,
+  "signingKey": {
+    "path": "./aira.keystore",
+    "alias": "aira"
+  },
+  "appVersionName": "1.0.0",
+  "appVersion": "1.0.0",
+  "appVersionCode": 1,
+  "shortcuts": [],
+  "generatorApp": "bubblewrap-cli",
+  "webManifestUrl": "https://aira-shop.web.app/manifest.webmanifest",
+  "fallbackType": "customtabs",
+  "features": {},
+  "alphaDependencies": {
+    "enabled": false
+  },
+  "enableSiteSettingsShortcut": true,
+  "isChromeOSOnly": false,
+  "isMetaQuest": false,
+  "fullScopeUrl": "https://aira-shop.web.app/",
+  "minSdkVersion": 24,
+  "fingerprints": [],
+  "additionalTrustedOrigins": [],
+  "retainedBundles": []
+}

@@ -1,0 +1,157 @@
+# Push to main of Saravana-Rajan/AIRA: run the tests, then deploy aira-live (Cloud Run) and the
+# aira-shop Hosting site. Keyless auth through Workload Identity Federation (shared/infra/setup_github_deploy.sh).
+# Repository SECRETS (the repo is public; secrets are masked in logs):
+#   GCP_PROJECT, GCP_WIF_PROVIDER, GCP_DEPLOY_SA, VITE_FIREBASE_*, VITE_AIRA_APP_KEY (the shared demo
+#   key the app sends as hello.idToken; the same value is Secret Manager aira-app-key -> AIRA_APP_KEY on
+#   aira-live; shared/docs/ops/security.md).
+# The aira-live image is built in the runner and pushed to Artifact Registry (no Cloud Build).
+name: Deploy
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-main
+  cancel-in-progress: false
+
+jobs:
+  test:
+    name: Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            frontend/package-lock.json
+            shared/contracts/package-lock.json
+
+      - name: Shared contracts
+        working-directory: shared/contracts
+        run: npm ci && npm test && npm run typecheck
+
+      - name: Frontend workspaces
+        working-directory: frontend
+        run: npm ci && npm test && npm run typecheck
+
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+        with:
+          enable-cache: true
+          cache-dependency-glob: backend/uv.lock
+
+      - name: backend
+        run: cd backend && uv sync --frozen && uv run pytest -q
+
+  deploy:
+    name: Deploy
+    needs: test
+    if: github.repository == 'Saravana-Rajan/AIRA' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Check repository secrets
+        env:
+          GCP_PROJECT: ${{ secrets.GCP_PROJECT }}
+          GCP_WIF_PROVIDER: ${{ secrets.GCP_WIF_PROVIDER }}
+          GCP_DEPLOY_SA: ${{ secrets.GCP_DEPLOY_SA }}
+        run: |
+          missing=0
+          for name in GCP_PROJECT GCP_WIF_PROVIDER GCP_DEPLOY_SA; do
+            if [ -z "${!name}" ]; then
+              echo "::error::Repository secret $name is not set (see shared/infra/setup_github_deploy.sh)"
+              missing=1
+            fi
+          done
+          exit "$missing"
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install npm workspaces
+        working-directory: frontend
+        run: npm ci
+
+      - id: auth
+        uses: google-github-actions/auth@c200f3691d83b41bf9bbd8638997a462592937ed # v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WIF_PROVIDER }}
+          service_account: ${{ secrets.GCP_DEPLOY_SA }}
+          create_credentials_file: true
+
+      - uses: google-github-actions/setup-gcloud@e427ad8a34f8676edf47cf7d7925499adf3eb74f # v2
+
+      - name: Configure Docker for Artifact Registry
+        run: gcloud auth configure-docker asia-south1-docker.pkg.dev --quiet
+
+      - name: Build the aira-live image
+        run: docker build -t asia-south1-docker.pkg.dev/${{ secrets.GCP_PROJECT }}/aira/aira-live:${{ github.sha }} backend
+
+      - name: Push the aira-live image
+        run: docker push asia-south1-docker.pkg.dev/${{ secrets.GCP_PROJECT }}/aira/aira-live:${{ github.sha }}
+
+      # --update-* (not --set-*) keeps env vars and secrets added on the service later, such as the
+      # WhatsApp tokens. Public access was granted once on the service and carries over to new
+      # revisions; the deployer only holds run.developer on aira-live.
+      - name: Deploy aira-live (Cloud Run, asia-south1)
+        run: |
+          gcloud run deploy aira-live \
+            --image asia-south1-docker.pkg.dev/${{ secrets.GCP_PROJECT }}/aira/aira-live:${{ github.sha }} \
+            --region asia-south1 \
+            --project ${{ secrets.GCP_PROJECT }} \
+            --service-account aira-live@${{ secrets.GCP_PROJECT }}.iam.gserviceaccount.com \
+            --min-instances 0 \
+            --max-instances 1 \
+            --cpu 1 \
+            --memory 512Mi \
+            --no-cpu-boost \
+            --cpu-throttling \
+            --timeout 3600 \
+            --session-affinity \
+            --update-secrets GEMINI_API_KEY=aira-gemini-api-key:latest,AIRA_JOB_TOKEN=aira-job-token:latest,WHATSAPP_VERIFY_TOKEN=aira-whatsapp-verify-token:latest,TELEGRAM_WEBHOOK_SECRET=aira-telegram-webhook-secret:latest,AIRA_APP_KEY=aira-app-key:latest \
+            --update-env-vars FIRESTORE_DATABASE=aira,AIRA_DEMO_SHOP=sunrise_dairy,AIRA_ALLOW_NO_TOKEN=1,AIRA_MOCK=0,AIRA_WALK=1,AIRA_SCENE_MEMORY=1,AIRA_ROUTES=1,AIRA_TORCH=1,AIRA_LOWLIGHT=1,AIRA_MONITOR_AUDIO=1,GCP_PROJECT=${{ secrets.GCP_PROJECT }} \
+            --quiet
+
+      - name: Read the aira-live WebSocket URL
+        id: live
+        run: |
+          WS_HOST="$(gcloud run services describe aira-live --region asia-south1 --project ${{ secrets.GCP_PROJECT }} --format='value(status.url)' | sed 's#https://##')"
+          test -n "$WS_HOST"
+          echo "ws=wss://$WS_HOST/ws" >> "$GITHUB_OUTPUT"
+
+      - name: Build the hosting bundle
+        env:
+          VITE_AIRA_LIVE_WS: ${{ steps.live.outputs.ws }}
+          VITE_AIRA_APP_KEY: ${{ secrets.VITE_AIRA_APP_KEY }}
+          VITE_FIREBASE_API_KEY: ${{ secrets.VITE_FIREBASE_API_KEY }}
+          VITE_FIREBASE_AUTH_DOMAIN: ${{ secrets.VITE_FIREBASE_AUTH_DOMAIN }}
+          VITE_FIREBASE_PROJECT_ID: ${{ secrets.VITE_FIREBASE_PROJECT_ID }}
+          VITE_FIREBASE_STORAGE_BUCKET: ${{ secrets.VITE_FIREBASE_STORAGE_BUCKET }}
+          VITE_FIREBASE_MESSAGING_SENDER_ID: ${{ secrets.VITE_FIREBASE_MESSAGING_SENDER_ID }}
+          VITE_FIREBASE_APP_ID: ${{ secrets.VITE_FIREBASE_APP_ID }}
+          # Owner's decision (2026-10-16): these features are on in production (code defaults stay off).
+          VITE_AIRA_MEDIA_BUTTON: "1"
+          VITE_AIRA_TORCH: "1"
+          VITE_AIRA_LOWLIGHT: "1"
+        run: bash shared/scripts/build_hosting.sh
+
+      # --config: firebase.json lives in shared/infra; its hosting.public is ../../dist/hosting (paths in the
+      # config resolve relative to the config file).
+      - name: Deploy hosting (aira-shop)
+        run: npx firebase-tools@15.33.0 deploy --config shared/infra/firebase.json --only hosting:aira-shop --project ${{ secrets.GCP_PROJECT }} --non-interactive

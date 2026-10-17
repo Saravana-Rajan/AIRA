@@ -1,0 +1,266 @@
+/* Full-screen camera layout (ui/LiveScreen). The live picture fills the phone edge to edge; the status chip,
+   the caption bubbles, the task card and the control row float over it. Everything over the picture is white
+   on a dark fade, so the light tokens (navy text on white) are NOT used here on purpose: this is the one
+   screen with a photo behind the words. Still a light-theme app: no dark-mode media query anywhere. */
+
+/* No page scroll or rubber-banding behind the fixed screen. */
+html.live-full,
+html.live-full body {
+  height: 100%;
+  overflow: hidden;
+  overscroll-behavior: none;
+}
+
+.live {
+  --level: 0;
+  --live-pad-top: max(var(--gutter), env(safe-area-inset-top, 0px));
+  --live-pad-bottom: max(var(--gutter), env(safe-area-inset-bottom, 0px));
+  --live-pad-left: max(var(--gutter), env(safe-area-inset-left, 0px));
+  --live-pad-right: max(var(--gutter), env(safe-area-inset-right, 0px));
+  --live-btn: 64px;
+  position: fixed;
+  inset: 0;
+  height: 100vh;
+  height: 100dvh;
+  overflow: hidden;
+  background: #000;
+  color: #fff;
+  touch-action: manipulation;
+}
+
+/* The gesture surface is the whole picture: no min-height column, just the box it is in. */
+.live .surface {
+  position: absolute;
+  inset: 0;
+  min-height: 0;
+  height: 100%;
+  background: #000;
+  overflow: hidden;
+}
+.live .surface:focus-visible {
+  outline-offset: -6px;
+}
+.live__camera {
+  position: absolute;
+  inset: 0;
+  display: block;
+}
+
+/* Dark fades so the chip (top) and the captions (bottom) read over any picture. */
+.live__shade {
+  position: absolute;
+  left: 0;
+  right: 0;
+  display: block;
+  pointer-events: none;
+}
+.live__shade--top {
+  top: 0;
+  height: calc(var(--live-pad-top) + 96px);
+  background: linear-gradient(to bottom, rgba(0, 0, 0, 0.55), rgba(0, 0, 0, 0));
+}
+.live__shade--bottom {
+  bottom: 0;
+  height: 60%;
+  background: linear-gradient(to top, rgba(0, 0, 0, 0.82) 0%, rgba(0, 0, 0, 0.55) 45%, rgba(0, 0, 0, 0));
+}
+
+/* ---------- captions: the last exchange as bubbles, just above the control row ---------- */
+.live__captions {
+  position: absolute;
+  left: var(--live-pad-left);
+  right: var(--live-pad-right);
+  bottom: calc(var(--live-pad-bottom) + var(--live-btn) + 28px);
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 10px;
+  max-height: 55%;
+  overflow: hidden;
+  justify-content: flex-end;
+}
+.live__bubble {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-width: 88%;
+  padding: 10px 16px;
+  border-radius: 20px;
+  background: rgba(20, 24, 36, 0.72);
+  -webkit-backdrop-filter: blur(10px);
+  backdrop-filter: blur(10px);
+  color: #fff;
+  overflow-wrap: anywhere;
+}
+.live__bubble--user {
+  align-self: flex-end;
+  border-bottom-right-radius: 6px;
+  background: rgba(31, 111, 255, 0.78);
+}
+.live__bubble--aira {
+  align-self: flex-start;
+  border-bottom-left-radius: 6px;
+}
+.live__bubble--hint {
+  align-self: center;
+  max-width: 100%;
+  font-size: var(--text-label);
+  font-weight: 500;
+  text-align: center;
+  text-wrap: balance;
+  color: rgba(255, 255, 255, 0.9);
+}
+.live__who {
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  color: var(--brand-cyan);
+}
+/* Anchored to the bottom like the caption card: a long line loses its oldest words, newest stay in view. */
+.live__text {
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  max-height: calc(3 * 1.45em);
+  overflow: hidden;
+  line-height: 1.45;
+}
+.live__bubble--user .live__text {
+  font-size: clamp(17px, 4.4vw, 22px);
+  font-weight: 500;
+}
+.live__bubble--aira .live__text {
+  font-size: clamp(18px, 4.8vw, 24px);
+  font-weight: 600;
+}
+
+/* The task card keeps its light surface, a little translucent, full width under the bubbles. */
+.live__captions .task-card {
+  align-self: stretch;
+  background: rgba(245, 248, 253, 0.92);
+  border-color: rgba(255, 255, 255, 0.6);
+  padding: 12px 14px;
+}
+.live__captions .task-card__detail {
+  font-size: clamp(18px, 4.6vw, 22px);
+}
+
+/* ---------- top bar: status chip left, exit right ---------- */
+.live__top {
+  position: absolute;
+  top: var(--live-pad-top);
+  left: var(--live-pad-left);
+  right: var(--live-pad-right);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  z-index: 2;
+  pointer-events: none;
+}
+.live__top > * {
+  pointer-events: auto;
+}
+.live .status-chip[data-kind] {
+  background: rgba(0, 0, 0, 0.55);
+  color: #fff;
+  border-color: var(--state);
+  font-size: 17px;
+  -webkit-backdrop-filter: blur(8px);
+  backdrop-filter: blur(8px);
+}
+.live .status-chip[data-kind="stop"] {
+  background: var(--danger);
+}
+
+/* ---------- control row ---------- */
+.live__controls {
+  position: absolute;
+  left: var(--live-pad-left);
+  right: var(--live-pad-right);
+  bottom: var(--live-pad-bottom);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 28px;
+  z-index: 2;
+}
+.live__btn,
+.live .cam-toggle--round {
+  position: static;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--live-btn);
+  height: var(--live-btn);
+  min-width: 56px;
+  min-height: 56px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.22);
+  color: #fff;
+  font: inherit;
+  cursor: pointer;
+  -webkit-backdrop-filter: blur(10px);
+  backdrop-filter: blur(10px);
+  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.35);
+  transition: transform 90ms linear, background 150ms ease;
+}
+.live__btn:focus-visible,
+.live .cam-toggle--round:focus-visible {
+  outline: 4px solid #fff;
+  outline-offset: 3px;
+}
+.live__btn--exit {
+  width: 56px;
+  height: 56px;
+  background: rgba(0, 0, 0, 0.55);
+}
+/* Talk swells with the mic or speaker level, like the orb does on the card layout. */
+.live__btn--talk {
+  background: var(--brand-blue);
+  transform: scale(calc(1 + var(--level) * 0.14));
+  box-shadow: 0 0 0 calc(var(--level) * 14px) rgba(31, 111, 255, 0.35), 0 4px 18px rgba(0, 0, 0, 0.35);
+}
+.live[data-status="listening"] .live__btn--talk {
+  background: var(--brand-cyan);
+}
+.live[data-status="thinking"] .live__btn--talk {
+  background: var(--brand-purple);
+}
+.live__btn--stop {
+  background: var(--danger);
+}
+.live__icon,
+.live .cam-toggle__icon {
+  width: 30px;
+  height: 30px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2.2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* Wider than a phone (a laptop in the demo): the picture still fills the window; the overlays keep a
+   phone-width column in the middle so the bubbles do not stretch across the screen. */
+@media (min-width: 600px) {
+  .live__captions,
+  .live__top,
+  .live__controls {
+    left: max(var(--live-pad-left), calc((100% - var(--phone-width)) / 2 + var(--gutter)));
+    right: max(var(--live-pad-right), calc((100% - var(--phone-width)) / 2 + var(--gutter)));
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .live__btn--talk {
+    transform: none;
+    box-shadow: 0 4px 18px rgba(0, 0, 0, 0.35);
+  }
+  .live__btn,
+  .live .cam-toggle--round {
+    transition: none;
+  }
+}

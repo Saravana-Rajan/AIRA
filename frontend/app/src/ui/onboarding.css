@@ -1,0 +1,231 @@
+/* Onboarding: the one Start tap. LIGHT THEME ONLY; every colour comes from tokens.css.
+   Layout: ONE phone-width column (tokens.css --phone-width, 480 px) centred on a white page. On a phone it
+   is full width with the 16 px gutter; on anything wider it sits in the middle with a faint surface
+   frame, so a laptop sees a phone, not a page stretched edge to edge.
+   Top to bottom: a compact header (40 px logo, AIRA, shop), the Start button and the TalkBack row.
+   Start is the whole middle of the screen and it is transparent: no card, no slab. It holds the same
+   glowing orb as the voice screen (app.css .orb, sized here by --orb-size and given its colour by
+   --state), "Tap to start" and one muted line. It takes every free pixel (flex 1), so a blind owner can
+   tap anywhere between the header and the TalkBack row. Pressing shrinks the orb a touch; the keyboard
+   focus ring is drawn just inside the column. The orb breathes slowly while idle (off under reduced
+   motion). The TalkBack switch is one row at the bottom, over the safe-area inset. */
+@import "./tokens.css";
+
+.onboard {
+  --state: var(--brand-blue);
+  --onboard-title: 24px;
+  --onboard-shop: 15px;
+  --onboard-start: clamp(24px, 7vw, 26px);
+  --onboard-hint: 15px;
+  --onboard-radius: 24px;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  min-height: 100dvh;
+  margin: 0;
+  padding: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-size: var(--text-body);
+  line-height: 1.4;
+  overflow-x: hidden;
+}
+.onboard *,
+.onboard *::before,
+.onboard *::after {
+  box-sizing: inherit;
+}
+
+/* ---------- the phone column ---------- */
+.onboard__col {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  width: 100%;
+  max-width: var(--phone-width);
+  min-height: 100dvh;
+  padding: max(16px, env(safe-area-inset-top)) var(--gutter) max(var(--gutter), env(safe-area-inset-bottom));
+}
+
+/* ---------- logo, name, shop ---------- */
+.onboard__head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.onboard__logo {
+  width: 40px;
+  height: 40px;
+  border-radius: 12px;
+}
+.onboard__titles {
+  display: flex;
+  flex-direction: column;
+}
+.onboard__title {
+  margin: 0;
+  font-size: var(--onboard-title);
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: -0.02em;
+}
+.onboard__shop {
+  margin-top: 3px;
+  font-size: var(--onboard-shop);
+  font-weight: 500;
+  line-height: 1.2;
+  color: var(--text-muted);
+}
+
+/* ---------- Start: the orb and two lines, on the bare page ---------- */
+.onboard__start {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  /* every free pixel between the header and the TalkBack row */
+  flex: 1 1 auto;
+  width: 100%;
+  min-height: 300px;
+  margin: 0;
+  padding: 16px 8px;
+  border: 0;
+  border-radius: var(--onboard-radius);
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  text-align: center;
+  cursor: pointer;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+.onboard__start:focus-visible {
+  outline: var(--focus-ring);
+  outline-offset: -4px;
+}
+
+/* The orb from the voice screen, a little larger than there, breathing while it waits. */
+.onboard__orb {
+  --orb-size: clamp(150px, 46vw, 210px);
+  display: block;
+  margin-bottom: 20px;
+  transition: transform 120ms ease;
+}
+.onboard__orb .orb__core {
+  animation: onboard-idle 3.2s ease-in-out infinite;
+}
+.onboard__start:active .onboard__orb {
+  transform: scale(0.96);
+}
+@keyframes onboard-idle {
+  0%, 100% { transform: scale(1); box-shadow: 0 10px 40px -12px var(--state); }
+  50% { transform: scale(1.04); box-shadow: 0 12px 56px -8px var(--state); }
+}
+
+.onboard__start-label {
+  font-size: var(--onboard-start);
+  font-weight: 700;
+  line-height: 1.15;
+  letter-spacing: -0.01em;
+}
+.onboard__start-hint {
+  max-width: 30ch;
+  font-size: var(--onboard-hint);
+  line-height: 1.4;
+  color: var(--text-muted);
+}
+
+/* ---------- TalkBack switch: the last row ---------- */
+.tb-switch {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 8px 0 0;
+  padding: 14px 0 4px;
+  border-top: 1px solid var(--border);
+  cursor: pointer;
+}
+.tb-switch .tb-switch__input {
+  position: absolute;
+  inset: 0;
+  margin: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+.tb-switch__track {
+  flex: none;
+  position: relative;
+  width: 52px;
+  height: 30px;
+  border-radius: var(--radius-pill);
+  background: var(--border);
+  transition: background-color 160ms ease;
+}
+.tb-switch__knob {
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: var(--bg);
+  box-shadow: 0 1px 3px color-mix(in srgb, var(--text) 30%, transparent);
+  transition: transform 160ms ease;
+}
+.tb-switch__input:checked + .tb-switch__track { background: var(--brand-blue); }
+.tb-switch__input:checked + .tb-switch__track .tb-switch__knob { transform: translateX(22px); }
+.tb-switch__input:focus-visible + .tb-switch__track {
+  outline: var(--focus-ring);
+  outline-offset: 3px;
+}
+.tb-switch__text {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.tb-switch__label {
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 1.3;
+}
+.tb-switch__hint {
+  font-size: 14px;
+  line-height: 1.3;
+  color: var(--text-muted);
+}
+
+/* ---------- wide screens: a framed phone in the middle ---------- */
+@media (min-width: 600px) {
+  .onboard {
+    justify-content: center;
+    padding: 40px var(--gutter);
+  }
+  .onboard__col {
+    flex: 0 1 auto;
+    /* a phone's worth of height, so Start still has room around the orb; shorter on a short window */
+    min-height: min(680px, calc(100dvh - 80px));
+    padding: 28px 28px 24px;
+    border: 1px solid var(--border);
+    border-radius: 32px;
+    background: var(--bg);
+    box-shadow: 0 24px 60px -32px color-mix(in srgb, var(--text) 28%, transparent);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tb-switch__track,
+  .tb-switch__knob,
+  .onboard__orb {
+    transition: none;
+  }
+  .onboard__orb .orb__core {
+    animation: none;
+  }
+  .onboard__start:active .onboard__orb {
+    transform: none;
+  }
+}

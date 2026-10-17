@@ -1,0 +1,942 @@
+""""Walk with me": ``walk_to`` / ``walk_stop`` / ``nav_report`` Live tools and the background walk loop.
+
+Gemini Live is the only model: it sees the phone's 1 fps live video, talks with the owner, and is also the walk's
+eyes. No Robotics-ER call anywhere in walking.
+
+The owner says once "take me to the fridge" (any language); Live calls ``walk_to`` (NON_BLOCKING) which starts
+``WalkLoop`` on the session and returns at once. The loop then drives perception WITHOUT waiting for the owner:
+every ``CHECK_INTERVAL_S`` (and at once when the phone marks a live frame ``changed``) it sends ONE short
+``[NAV CHECK n]`` system note into the same Live session (``LiveBridge.send_text``: not a notice and not an owner
+turn, so it never lifts a long-press stop). Live answers by calling ``nav_report(check_id=n, ...)`` (scheduled
+SILENT: its function response never makes Live speak). The report goes through the policy in code
+(``vision.walk.decide`` / ``gate`` / ``Speech``) and at most one line is said through the notice path
+(``bridge.speak_notice``: urgent for stops, with a "warn" earcon).
+
+State machine (``WalkLoop.state``; every transition is logged as ``walk_state``)::
+
+    walk_to -> ACQUIRING --first usable report--> NAVIGATING <----2 clear fresh reports---- HAZARD
+                  |                                 |  ^  \\--obstacle / hazard / phone stop--> HAZARD
+                  |                                 |  |   \\--target large + ahead (confirmed)--> ARRIVAL_CANDIDATE
+                  |                                 v  |                                          (keeps watching)
+                  +--unusable view / 3 failed checks--> DEGRADED --2 usable fresh reports--> NAVIGATING
+    ACQUIRING / NAVIGATING / ARRIVAL_CANDIDATE --no observation for OBSERVATION_GAP_S (any reason)--> DEGRADED
+    any state --walk_stop / long-press / disconnect / timeout / Live gone--> STOPPED (late reports ignored)
+
+Pausing is walk_stop then walk_to again. Arrival is never claimed: ARRIVAL_CANDIDATE says "The fridge appears to
+be just ahead. Reach forward carefully to confirm." and keeps watching; the walk ends on walk_stop (the owner says he is
+there, or stop, in any language: Live decides), the long-press, a disconnect, or after ``MAX_S``.
+
+Freshness: an observation's age is (now - when the newest live frame was forwarded to Live before its check was
+sent), measured just before its line is said, so it includes the check's latency. Stops are always said; other
+lines only when age <= ``vision.walk.WALK_DIRECTION_MAX_AGE_S``. A report whose check was replaced, timed out or
+belongs to an ended walk is ignored. A report for a check sent BEFORE the phone marked the scene changed
+describes an older view: it may stop him but never direct him, and the new view is checked at once.
+
+Watchdogs: whatever keeps observations away (a busy conversation without a navigation session, a navigation
+session that dropped, no frames, a Live reconnect), a walk in a moving state with no observation for
+``OBSERVATION_GAP_S`` goes DEGRADED and says the honest line once; it never stays silently NAVIGATING on old
+evidence. The navigation session is reopened on its own (every ``NAV_REOPEN_S``, at most ``NAV_MAX_OPENS``
+opens per walk) with quiet-moment checks through the conversation in between. A conversation bridge that gave up
+(``LiveBridge.closed``) ends the walk: there is no voice left to guide with.
+
+The phone signal: walk start sends ``RequestFrameMsg(purpose="walk", continuous=True)`` and the end sends its
+``stop=True`` twin, unchanged, only as the "walk active" signal for the phone. The loop never waits for or reads
+``walk`` frames.
+"""
+from __future__ import annotations
+
+import asyncio
+import base64
+import json
+import logging
+import re
+import time
+from collections import deque
+from collections.abc import Awaitable, Callable, Sequence
+from typing import Literal
+
+from aira_live import config, shop_map
+from aira_live.contracts import CueMsg, RequestFrameMsg, TranscriptMsg
+from aira_live.diag import diag
+from aira_live.session import Session, get_session, notice_key
+from aira_live.vision import route as vroute
+from aira_live.vision import walk as vwalk
+
+log = logging.getLogger(__name__)
+
+PURPOSE = "walk"
+TICK_S = 0.5               # the loop's own heartbeat (timeouts, check pacing)
+CHECK_INTERVAL_S = 2.0     # a nav check at most this often (one in flight at a time)
+CHANGED_CHECK_GAP_S = 0.75  # a "changed" live frame triggers a check this soon after the previous one
+CHECK_TIMEOUT_S = 4.0      # a check without its nav_report after this long counts as a failed look
+MAX_FAILS = 3              # failed looks in a row -> DEGRADED
+NAV_WARMUP_CHECKS = 3      # a new navigation session's first empty answers are warm-up, not failed looks
+CLEAR_TO_RESUME = 2        # fresh usable reports without the hazard before directions resume
+MAX_S = 300.0
+STILL_GUIDING_SILENT_S = 20.0
+STILL_GUIDING_EVERY_S = 60.0
+HOLD_SILENT_S = 15.0       # stopped (HAZARD / DEGRADED) and silent this long: "Stay stopped..." again
+HOLD_TEXT = "Stay stopped. I'm still checking the way."
+MEMORY_TIMEOUT_S = 1.5
+FAST_STOP_GAP_S = 3.0
+MAX_IN_FLIGHT = 1          # nav checks in flight at once
+OBSERVATION_GAP_S = 10.0   # moving with no observation this long (any reason): DEGRADED, honest line once
+NAV_REOPEN_S = 10.0        # a navigation session that failed to open or dropped is reopened this often...
+NAV_MAX_OPENS = 4          # ...at most this many opens per walk (the first one included)
+DISCONNECT_NOTE_S = 60.0   # a walk ended by a disconnect is reported to Live on a resume within this long
+
+_ENDED_BY_DISCONNECT: dict[str, tuple[str, float]] = {}   # session id -> (target, ended at)
+
+ACQUIRING, NAVIGATING, HAZARD = "ACQUIRING", "NAVIGATING", "HAZARD"
+ARRIVAL_CANDIDATE, DEGRADED, STOPPED = "ARRIVAL_CANDIDATE", "DEGRADED", "STOPPED"
+
+CHECK_PREFIX = "[NAV CHECK"
+
+_ACTIVE: dict[str, "WalkLoop"] = {}
+
+
+def check_text(check_id: int, target: str, zones: Sequence[str] = ()) -> str:
+    """The system note that asks Live for one observation. Never from the owner, never to be spoken about. With
+    routes on, ``zones`` (the map's zone ids) asks for the position fields too."""
+    text = (f"{CHECK_PREFIX} {check_id}] System check for the walk to the {target}; not from the owner. Look at the "
+            f"newest camera frame and call nav_report once with check_id={check_id}: whether the {target} is "
+            "visible (its side and size), the obstacles on the floor (label, side, whether in his walking path "
+            "straight ahead, size), path clear_in_view / blocked / uncertain, and view_ok false if the view is "
+            "dark, blurred or covered.")
+    if zones:
+        text += (f" Also current_zone (one of: {', '.join(zones)}; or unknown), facing (front / left / right / back "
+                 "of that zone's views, or unknown), confidence (low / medium / high) and reflection true when "
+                 "the view is a mirror image.")
+    return text + " Do not speak."
+
+
+def notice_text(meaning: str, facts: dict | None) -> str:
+    """What goes to Live's notice path: the facts, then the English meaning as a hint."""
+    if not facts:
+        return meaning
+    shown = {k: v for k, v in facts.items() if v not in (None, "")}
+    return f"{json.dumps(shown, ensure_ascii=False)} (meaning: {meaning})"
+
+
+def _bridge_of(s: Session):
+    from aira_live import sessions
+
+    return next((b for sess, b in sessions.by_shop(s.shop_id) if sess.session_id == s.session_id), None)
+
+
+class NavChecker:
+    """How a nav check reaches Live. With the walk's own navigation session alive (aira_live.nav_session) the check
+    goes there, whatever the conversation is doing. Otherwise it asks the conversation bridge
+    (``LiveBridge.request_nav_check``), which sends only in a quiet moment (not answering, the owner not speaking,
+    not just after words, not stopped) and never lifts a long-press stop or counts as an owner turn. ``request``
+    returns False when the check could not go now (try again later)."""
+
+    def __init__(self, bridge: Callable[[], object], nav: Callable[[], object] | None = None):
+        self._bridge = bridge
+        self._nav = nav or (lambda: None)
+
+    async def request(self, check_id: int, target: str, zones: Sequence[str] = ()) -> bool:
+        nav = self._nav()
+        if nav is not None and getattr(nav, "alive", False):
+            if not getattr(nav, "ready", True):
+                return False          # opened, not holding a picture yet: the next tick tries again
+            return bool(await nav.request(check_text(check_id, target, zones)))
+        bridge = self._bridge()
+        send = getattr(bridge, "request_nav_check", None)
+        if send is None:
+            return False
+        return bool(await send(check_text(check_id, target, zones)))
+
+
+class WalkLoop:
+    def __init__(self, session: Session, target: str, *, clock: Callable[[], float] = time.monotonic,
+                 sleep: Callable[[float], Awaitable] = asyncio.sleep, bridge: Callable[[], object] | None = None,
+                 interval_s: float = CHECK_INTERVAL_S, check_timeout_s: float = CHECK_TIMEOUT_S,
+                 max_s: float = MAX_S, memory_place: str | None = None, memory_side: str | None = None,
+                 checker: NavChecker | None = None, nav_factory: Callable[["WalkLoop"], object] | None = None,
+                 route: vroute.RouteGuide | None = None):
+        self.session, self.target = session, target
+        # AIRA_ROUTES with a loaded map and a target that is one of its zones: the route follower drives the
+        # guidance lines (vision.route); None: today's direction policy (vision.walk.decide) only.
+        self.route = route
+        self._clock, self._sleep = clock, sleep
+        self._bridge = bridge or (lambda: _bridge_of(session))
+        self.nav = None                          # the walk's own navigation Live session, once open
+        self._nav_factory = nav_factory if nav_factory is not None else default_nav_factory
+        self._nav_task: asyncio.Task | None = None
+        self.nav_opens = 0                       # opens tried (start + reopens), bounded by NAV_MAX_OPENS
+        self.nav_open_at = float("-inf")         # when the last open was tried (loop clock)
+        self.checker = checker or NavChecker(self._bridge, lambda: self.nav)
+        self.owner_name: str | None = getattr(session, "owner_name", None) or config.load().owner_name
+        self.hazard_label: str | None = None   # what the last stop was for (the resume line names it)
+        self.interval_s, self.check_timeout_s, self.max_s = interval_s, check_timeout_s, max_s
+        self.started_at = clock()
+        self.state = ACQUIRING
+        self.active = True
+        self.ended: str | None = None          # why: stopped | timeout
+        self.task: asyncio.Task | None = None
+        # perception
+        self.frame_at: float | None = None     # when the newest live frame was forwarded to Live (loop clock)
+        self.bridge_frame_at: float | None = None   # ... to the conversation session itself (fallback checks)
+        self.check_seq = 0
+        self.pending: tuple[int, float, float] | None = None   # (check id, sent at, frame forwarded at)
+        self.scene_changed_at: float | None = None   # a changed frame arrived while a check was in flight
+        self.last_report_at = self.started_at  # the last observation (a non-empty report) for the watchdog
+        self._checking = False                 # a check is being handed to Live (tick and changed-frame race)
+        self.deferred_since: float | None = None  # when checks started waiting for a quiet voice channel
+        self.preempted = 0                     # checks the conversation overtook (not failures)
+        self.last_check_at = float("-inf")
+        self.last_check_frame_at = float("-inf")
+        self.checks_sent = 0
+        self.fails = 0
+        # policy
+        self.recent: deque[vwalk.NavReport] = deque(maxlen=3)
+        self.recent_keys: deque[str] = deque(maxlen=3)
+        self.search = vwalk.Search(memory_place=memory_place, memory_side=memory_side)
+        self.last_seen_at = self.started_at
+        self.speech = vwalk.Speech()
+        self.resume_streak = 0                 # fresh usable reports in a row while HAZARD / DEGRADED
+        self.degraded_said = False
+        self.last_spoken_at = self.started_at
+        self.last_still_at = self.started_at
+        self.last_hold_at = self.started_at     # "Stay stopped" reminder while HAZARD / DEGRADED
+        self.fast_stop_at = float("-inf")
+        self.fast_stop_label = ""
+
+    # ---------- state ----------
+    def _to(self, state: str, why: str) -> None:
+        if state == self.state:
+            return
+        diag("walk_state", session=self.session.session_id, frm=self.state, to=state, why=why)
+        if state != DEGRADED:
+            self.degraded_said = False
+        self.resume_streak = 0
+        self.state = state
+
+    def retarget(self, target: str, route: vroute.RouteGuide | None = None) -> None:
+        """walk_to with a new destination while walking: same loop, new target. Any check in flight was about
+        the old target, so its report is ignored. ``route``: the new destination's follower (routes on)."""
+        self.target = target
+        if route is not None and self.route is not None:
+            route.motion = self.route.motion          # the phone's step counting is known already
+            route.no_motion_said = self.route.no_motion_said
+            route.total = self.route.total
+        self.route = route
+        self.pending = None
+        self.scene_changed_at = None
+        self.last_report_at = self._clock()    # a fresh grace period for the new destination
+        self.recent.clear()
+        self.recent_keys.clear()
+        self.search = vwalk.Search()
+        self.last_seen_at = self._clock()
+        self.speech.reset()
+        self._to(ACQUIRING, "retarget")
+        diag("walk_retarget", session=self.session.session_id)
+
+    # ---------- perception: nav checks ----------
+    def on_live_frame(self, now: float | None = None, *, to_bridge: bool = True) -> None:
+        """A live frame was just forwarded to Live (main.live_frame); ``to_bridge``: the conversation session got
+        it too (False: only the walk's navigation session did)."""
+        t = self._clock() if now is None else now
+        self.frame_at = t
+        if to_bridge:
+            self.bridge_frame_at = t
+
+    def nav_alive(self) -> bool:
+        return self.nav is not None and bool(getattr(self.nav, "alive", False))
+
+    async def open_nav(self) -> None:
+        """Open (or reopen) the walk's navigation session, in the background: the walk never waits for it. One
+        of at most ``NAV_MAX_OPENS`` tries per walk; a factory that gives None (flag off, mock) ends the tries."""
+        self.nav_opens += 1
+        self.nav_open_at = self._clock()
+        nav = self._nav_factory(self)
+        if nav is None:
+            self.nav_opens = NAV_MAX_OPENS
+            return
+        old, self.nav = self.nav, None            # a dropped session is replaced, never reused
+        if old is not None:
+            await old.close()
+        diag("walk_nav", session=self.session.session_id, event="open", attempt=self.nav_opens)
+        if await nav.start() and self.active:
+            self.nav = nav
+            return
+        await nav.close()
+        diag("walk_nav", session=self.session.session_id, event="open_failed", attempt=self.nav_opens,
+             more=self.active and self.nav_opens < NAV_MAX_OPENS)
+
+    def _maybe_reopen_nav(self, now: float) -> None:
+        """A navigation session that never opened or dropped mid-walk is reopened every ``NAV_REOPEN_S``, at
+        most ``NAV_MAX_OPENS`` opens per walk; in between, checks go through the conversation in quiet moments.
+        Only after ``start`` made the first try (a loop built without it never opens one)."""
+        if (not self.active or self.nav_alive() or self.nav_opens < 1 or self.nav_opens >= NAV_MAX_OPENS
+                or now - self.nav_open_at < NAV_REOPEN_S
+                or (self._nav_task is not None and not self._nav_task.done())):
+            return
+        diag("walk_nav", session=self.session.session_id, event="reopen", attempt=self.nav_opens + 1)
+        self._nav_task = asyncio.create_task(self.open_nav(), name=f"walk-nav-{self.session.session_id}")
+
+    async def on_nav_report(self, args: dict) -> None:
+        """A nav_report from the navigation session: the same handling as the conversation session's tool."""
+        await _handle_report(self, args)
+
+    async def maybe_check(self, reason: str = "tick") -> bool:
+        """Send one nav check into Live when none is in flight and the voice channel is free. True when sent."""
+        if not self.active or self.pending is not None or self._checking:
+            return False
+        self._checking = True
+        try:
+            return await self._send_check(reason)
+        finally:
+            self._checking = False
+
+    async def _send_check(self, reason: str) -> bool:
+        now = self._clock()
+        bridge = self._bridge()
+        if bridge is None:
+            self.last_check_at = now
+            await self._failed("no_live")
+            return False
+        if getattr(bridge, "closed", False):   # Live gave up reconnecting: no voice is left to guide with
+            await self._end("no_live", "I stopped guiding: I lost the voice connection. Please stop and ask me "
+                            "again when you are ready.", cue="warn",
+                            facts={"action": "stop", "reason": "guidance_ended", "cause": "live_lost"})
+            return False
+        if not self.nav_alive() and self._voice_busy():   # waiting for a quiet moment is never a failed look
+            if self.deferred_since is None:
+                self.deferred_since = now
+                diag("walk_check", session=self.session.session_id, sent=False, reason=reason, skipped="busy")
+            return False
+        # The picture this check looks at: the newest one of the session that will answer it. A fallback check
+        # through the conversation session never counts a frame only the (now gone) navigation session received.
+        picture = self.frame_at if self.nav_alive() else self.bridge_frame_at
+        if picture is None or picture <= self.last_check_frame_at:
+            self.last_check_at = now      # no new picture: try again next interval
+            await self._failed("no_frame")
+            return False
+        check_id, frame_at = self.check_seq + 1, picture
+        try:
+            zones = tuple(self.route.shop_map.zones) if self.route is not None else ()
+            sent = await self.checker.request(check_id, self.target, zones)
+        except Exception:
+            log.warning("walk: nav check not sent for %s", self.session.session_id, exc_info=True)
+            self.last_check_at = now
+            await self._failed("send")
+            return False
+        if not self.active:
+            return False
+        if not sent:   # Live is answering, the owner is speaking or a stop holds: try again on the next tick
+            if self.deferred_since is None:   # one diag line per busy stretch, not one per tick
+                self.deferred_since = now
+                diag("walk_check", session=self.session.session_id, sent=False, reason=reason, skipped="busy")
+            return False
+        deferred_ms = round((now - self.deferred_since) * 1000) if self.deferred_since is not None else None
+        self.deferred_since = None
+        self.check_seq = check_id
+        self.pending = (check_id, now, frame_at)
+        self.last_check_at, self.last_check_frame_at = now, frame_at
+        self.checks_sent += 1
+        diag("walk_check", session=self.session.session_id, sent=True, reason=reason, check=check_id,
+             frame_age_ms=round((now - frame_at) * 1000), deferred_ms=deferred_ms)
+        return True
+
+    async def on_changed_frame(self) -> None:
+        """The phone saw the scene change: check now (if a check may go at all). With a check already in
+        flight, its report will describe the older view: remembered, so that report may stop him but never
+        direct him, and the new view is checked as soon as it comes back."""
+        if not self.active:
+            return
+        if self.pending is not None:
+            self.scene_changed_at = self._clock()
+        if self._clock() - self.last_check_at >= CHANGED_CHECK_GAP_S:
+            await self.maybe_check("changed")
+
+    async def on_report(self, report: vwalk.NavReport, *, empty: bool = False) -> str:
+        """Live's ``nav_report`` for a check: acted on only when it answers the check in flight. An ``empty`` one
+        (Live sent only check_id: seen on a real first check) is no observation: it counts as a failed look."""
+        if not self.active:
+            return "inactive"
+        if self.pending is None or report.check_id != self.pending[0]:
+            diag("walk_tick", session=self.session.session_id, state=self.state, said="stale_report",
+                 check=report.check_id)
+            return "stale"
+        _, sent_at, frame_at = self.pending
+        self.pending = None
+        if empty:
+            if self.nav_alive() and getattr(self.nav, "checks", 0) <= NAV_WARMUP_CHECKS:
+                # a new navigation session's first answers came back empty on real Live (warm-up): not yet a
+                # failed look; empties after that count (3 in a row: "I can't see the path clearly")
+                diag("walk_tick", session=self.session.session_id, state=self.state, key="nav.warmup", said=None)
+                return "empty"
+            await self._failed("empty")
+            return "empty"
+        self.fails = 0
+        now = self._clock()
+        self.last_report_at = now
+        scene_changed = self.scene_changed_at is not None and self.scene_changed_at > sent_at
+        self.scene_changed_at = None
+        if scene_changed:
+            # The scene changed after this check went: its report is about an older view. Stops still count
+            # (age None: nothing but a stop is said) and the new view is checked at once.
+            diag("walk_tick", session=self.session.session_id, state=self.state, said="scene_changed",
+                 check=report.check_id)
+            await self.process(report, None, ms=round((now - sent_at) * 1000))
+            self.last_check_at = float("-inf")
+            await self.maybe_check("scene_changed")
+            return "stale_scene"
+        await self.process(report, now - frame_at, ms=round((now - sent_at) * 1000))
+        return "ok"
+
+    # ---------- the policy ----------
+    async def process(self, report: vwalk.NavReport, age: float | None, ms: int = 0) -> None:
+        s, now = self.session, self._clock()
+        self.recent.append(report)
+        if report.target_visible:
+            self.last_seen_at = now
+            if report.target_side in ("left", "right"):
+                self.search.last_side = report.target_side
+        self.search.lost_s = now - self.last_seen_at
+        if self.route is not None:
+            self.route.observe(report)       # the position evidence (2 of 3, mirrors ignored) feeds the follower
+        ins = vwalk.decide(report, self.target, list(self.recent), self.search, name=self.owner_name)
+        if ins.key == "walk.not_found":
+            self.last_seen_at = now           # say it once per NOT_FOUND_S of searching
+        self.recent_keys.append(ins.key)
+        fresh = not vwalk.expired(age)
+        said, text = self._choose(ins, report, fresh, now)
+        age_ms = round(age * 1000) if age is not None and fresh else None
+        diag("walk_tick", session=s.session_id, state=self.state, has_target=report.target_visible,
+             n_obstacles=len(report.obstacles), corridor=report.path, view_ok=report.view_ok, age_ms=age_ms,
+             key=ins.key, said=said.key if said and text else None, ms=ms)
+        if said is not None and text is not None:
+            await self._say(text, cue="warn" if said.urgent else None, facts=said.facts, urgent=said.urgent)
+
+    def _choose(self, ins: vwalk.Instruction, report: vwalk.NavReport, fresh: bool,
+                now: float) -> tuple[vwalk.Instruction | None, str | None]:
+        """The state transition for this instruction, and the instruction + line to say now (or Nones)."""
+        if ins.kind in (vwalk.HAZARD_KIND, vwalk.OBSTACLE_KIND):
+            self._to(HAZARD, ins.kind)
+            self.resume_streak = 0
+            self.hazard_label = ins.facts.get("obstacle") or ins.facts.get("hazard") or None
+            return ins, self.speech.pick(ins, now)          # stops: never held back
+        if ins.kind == vwalk.DEGRADED_KIND:
+            self._to(DEGRADED, "view")
+            self.resume_streak = 0
+            return ins, self._degraded_line(now)
+        if ins.kind == vwalk.HOLD_KIND:                     # maybe something in the path: wait, no direction
+            self.resume_streak = 0
+            return None, None
+        # A usable view with nothing in the path.
+        if self.state in (HAZARD, DEGRADED):
+            if not fresh:
+                return None, None             # too old to count either way: the streak waits for a fresh one
+            self.resume_streak += 1
+            if self.resume_streak < CLEAR_TO_RESUME:
+                return None, None
+            was = self.state
+            self._to(NAVIGATING, "clear")
+            self.speech.last_key = None       # the next direction counts as new
+            if was == HAZARD:
+                line = vwalk.resume_line(self.target, self.hazard_label)
+            else:
+                line = vwalk.Instruction("walk.resume", f"I can see the path again. Walk on slowly toward the "
+                                         f"{self.target}.", facts={"action": "resume", "target": self.target,
+                                                                   "view": "clear_again", "slowly": True})
+            self.hazard_label = None
+            self.speech.mark(line.key, now)
+            return line, line.text
+        if self.route is not None:
+            # Routes on: the follower's line (localise / go N steps / turn / checkpoint / arrival candidate)
+            # replaces the direction policy. Safety above was decided first and still wins.
+            return self._route_line(now)
+        if vwalk.gate(ins, 0.0 if fresh else None) is None:
+            return None, None                 # too old to say anything but a stop
+        if self.recent_keys.count(ins.key) < 2:
+            return None, None                 # not confirmed yet: 2 of the last 3 reports
+        if ins.kind == vwalk.ARRIVAL_KIND:
+            self._to(ARRIVAL_CANDIDATE, "target_close")
+        elif self.state in (ACQUIRING, ARRIVAL_CANDIDATE):
+            self._to(NAVIGATING, ins.kind)
+        reassure = self.state == NAVIGATING and fresh and report.usable \
+            and now - self.speech.last_at >= vwalk.REASSURE_S
+        return ins, self.speech.pick(ins, now, reassure=reassure)
+
+    def _route_line(self, now: float) -> tuple[vwalk.Instruction | None, str | None]:
+        """The route follower's line due now, paced by Speech; None while nothing is due or he is stopped."""
+        if self.route is None or self.state in (HAZARD, DEGRADED):
+            return None, None
+        ins = self.route.instruction(now)
+        if ins is None:
+            return None, None
+        if ins.kind == vwalk.ARRIVAL_KIND:
+            self._to(ARRIVAL_CANDIDATE, "route_arrival")
+        elif ins.kind == vroute.ROUTE_KIND and self.state in (ACQUIRING, ARRIVAL_CANDIDATE):
+            self._to(NAVIGATING, "route")
+        text = self.speech.pick(ins, now)
+        if text is not None:
+            self.route.mark(ins.key, now)
+            diag("walk_route", session=self.session.session_id, phase=self.route.phase, leg=self.route.leg,
+                 here=self.route.here, key=ins.key)
+        return ins, text
+
+    async def on_steps(self, total: int, available: bool = True) -> None:
+        """The phone's cumulative step count (client event ``steps``). Only the route follower reads it; a phone
+        without a motion sensor (``available`` false) puts it in landmark-only mode, said once. A step line
+        is said at once unless he is stopped (HAZARD / DEGRADED): safety lines are never delayed by steps, and
+        the step line waits for the next report."""
+        if not self.active or self.route is None:
+            return
+        now = self._clock()
+        if not available:
+            self.route.no_motion()
+            diag("walk_route", session=self.session.session_id, steps="unavailable")
+        else:
+            try:
+                self.route.on_steps(int(total))
+            except (TypeError, ValueError):
+                return
+        said, text = self._route_line(now)
+        if said is not None and text is not None:
+            await self._say(text, cue="warn" if said.urgent else None, facts=said.facts, urgent=said.urgent)
+
+    def _degraded_line(self, now: float) -> str | None:
+        if self.degraded_said:
+            return None
+        self.degraded_said = True
+        self.speech.mark("walk.degraded", now)
+        return vwalk.DEGRADED_TEXT
+
+    async def _failed(self, why: str) -> None:
+        self.fails += 1
+        diag("walk_tick", session=self.session.session_id, state=self.state, key=f"fail.{why}", said=None,
+             fails=self.fails)
+        if self.fails >= MAX_FAILS:
+            self._to(DEGRADED, f"fail.{why}")
+            text = self._degraded_line(self._clock())
+            if text:
+                await self._say(text, cue="warn", urgent=True,
+                                facts={"action": "stop", "reason": "camera_unclear", "wait_for": "clear_view"})
+
+    # ---------- the loop ----------
+    def _voice_busy(self) -> bool:
+        """The owner is talking or Live is answering him (the bridge's own view)."""
+        b = self._bridge()
+        return b is not None and bool(getattr(b, "answering", False) or getattr(b, "user_speaking", False))
+
+    async def tick(self) -> None:
+        now = self._clock()
+        if self.pending is not None and not self.nav_alive() and self._voice_busy():
+            # The conversation overtook the check (measured on real Live: a check in flight when the owner starts
+            # talking is either dropped or answered late). Not a failed look: forget it (a late report is then
+            # rejected as stale) and check again as soon as the voice channel is quiet.
+            diag("walk_check", session=self.session.session_id, sent=False, check=self.pending[0],
+                 skipped="preempted")
+            self.pending = None
+            self.preempted += 1
+        if self.pending is not None and now - self.pending[1] > self.check_timeout_s:
+            diag("walk_check", session=self.session.session_id, sent=False, check=self.pending[0],
+                 skipped="timeout")
+            self.pending = None
+            await self._failed("timeout")
+        self._maybe_reopen_nav(now)
+        if self.pending is None and now - self.last_check_at >= self.interval_s:
+            await self.maybe_check("tick")
+        if (self.active and self.state in (ACQUIRING, NAVIGATING, ARRIVAL_CANDIDATE)
+                and now - self.last_report_at > OBSERVATION_GAP_S):
+            # Moving on old evidence, whatever kept the observations away (a busy conversation without a
+            # navigation session, a dropped one, no frames, a Live reconnect): stop him honestly, once.
+            # The usual recovery applies: two fresh usable reports and he walks on.
+            self._to(DEGRADED, "no_observation")
+            text = self._degraded_line(now)
+            if text:
+                await self._say(text, cue="warn", urgent=True,
+                                facts={"action": "stop", "reason": "no_fresh_view", "wait_for": "clear_view"})
+        if (self.active and self.state in (NAVIGATING, ACQUIRING)
+                and now - self.last_spoken_at > STILL_GUIDING_SILENT_S
+                and now - self.last_still_at >= STILL_GUIDING_EVERY_S):
+            self.last_still_at = now
+            await self._say(f"Still guiding you to the {self.target}.",
+                            facts={"action": "still_guiding", "target": self.target})
+        if (self.active and self.state in (HAZARD, DEGRADED)
+                and now - self.last_spoken_at > HOLD_SILENT_S and now - self.last_hold_at >= HOLD_SILENT_S):
+            self.last_hold_at = now               # never silent for long while he waits stopped
+            await self._say(HOLD_TEXT, facts={"action": "stay_stopped", "reason": "checking_the_way"})
+        if self.active and self.route is not None and self.state not in (HAZARD, DEGRADED) and self.recent:
+            said, text = self._route_line(now)    # a route line due now (held back by pacing or a stop)
+            if said is not None and text is not None:
+                await self._say(text, cue="warn" if said.urgent else None, facts=said.facts, urgent=said.urgent)
+
+    async def run(self) -> None:
+        deadline = self.started_at + self.max_s
+        while self.active:
+            if self._clock() >= deadline:
+                await self._end("timeout", "I stopped guiding. Ask me again when you are ready.", cue="done",
+                                facts={"action": "guidance_ended", "reason": "timeout"})
+                return
+            try:
+                await self.tick()
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                log.exception("walk tick failed for %s", self.session.session_id)
+            await self._sleep(TICK_S)
+
+    # ---------- fast stop from the phone's own detector ----------
+    async def on_phone_boxes(self, objects) -> bool:
+        """The phone's MediaPipe / bump-guard boxes (5 a second): a danger box, or a person or large object
+        close in the corridor, says "Stop." at once. Never for the target. The detector sends 5 boxes a second:
+        the SAME label is said again only after ``FAST_STOP_GAP_S`` (a rate limit, not a cooldown on new
+        dangers: a different label is said at once)."""
+        if not self.active:
+            return False
+        now = self._clock()
+        hit = vwalk.fast_stop_label(objects, self.target)
+        if hit is None:
+            return False
+        if hit.casefold() == self.fast_stop_label and now - self.fast_stop_at < FAST_STOP_GAP_S:
+            return False
+        self.fast_stop_at, self.fast_stop_label = now, hit.casefold()
+        self._to(HAZARD, "phone")
+        self.resume_streak = 0
+        self.hazard_label = hit
+        self.speech.mark("walk.fast_stop", now)
+        diag("walk_fast_stop", session=self.session.session_id)
+        await self._say(f"{vwalk.stop_word(self.owner_name)} {vwalk._cap(hit)} in front.", cue="warn", urgent=True,
+                        facts={"action": "stop", "hazard": hit, "address": self.owner_name})
+        return True
+
+    # ---------- speaking and ending ----------
+    async def _say(self, text: str, cue: str | None = None, facts: dict | None = None, urgent: bool = False,
+                   final: bool = False) -> None:
+        """Caption + earcon + the live voice (the notice path); urgent lines cut in at once. Nothing once the walk
+        ended (``final``: the walk's own last line)."""
+        if not self.active and not final:
+            return
+        s = self.session
+        notice = notice_text(text, facts)
+        self.last_spoken_at = self._clock()
+        try:
+            await s.send(TranscriptMsg(role="aira", text=text, final=True, lang="en"))
+            if cue:
+                await s.send(CueMsg(cue=cue))
+            bridge = self._bridge()
+            if bridge is not None:
+                getattr(bridge, "_notices", {}).pop(notice_key(notice), None)   # Speech already dedupes
+                await bridge.speak_notice(notice, urgent=urgent or cue == "warn")
+        except Exception:
+            log.warning("walk: session %s unreachable", s.session_id, exc_info=True)
+
+    async def _end(self, why: str, text: str | None, cue: str = "done", facts: dict | None = None) -> bool:
+        if not self.active:
+            return False
+        self.active = False
+        self.ended = why
+        self.pending = None
+        self._to(STOPPED, why)
+        sid = self.session.session_id
+        if _ACTIVE.get(sid) is self:
+            del _ACTIVE[sid]
+        diag("walk_end", session=sid, why=why, s=round(self._clock() - self.started_at, 1),
+             checks=self.checks_sent)
+        if text:
+            await self._say(text, cue=cue, facts=facts, final=True)
+        await self._cleanup()
+        return True
+
+    async def stop(self) -> None:
+        """Stop quietly: no more checks or lines; late reports are ignored. Safe twice and on a closed socket."""
+        if not self.active:
+            return
+        self.active = False
+        self.pending = None
+        self.ended = self.ended or "stopped"
+        self._to(STOPPED, self.ended)
+        await self._cleanup()
+
+    async def _cleanup(self) -> None:
+        try:   # the phone's "walk ended" signal (the same message as before; no walk frames are used)
+            await self.session.send(RequestFrameMsg(purpose=PURPOSE, stop=True))
+        except Exception as exc:  # noqa: BLE001 - the phone socket may already be closed
+            log.debug("walk: stop not sent to session %s: %s", self.session.session_id, exc)
+        if self.task is not None and self.task is not asyncio.current_task() and not self.task.done():
+            self.task.cancel()
+        if self._nav_task is not None and not self._nav_task.done():
+            self._nav_task.cancel()
+        nav, self.nav = self.nav, None
+        if nav is not None:
+            await nav.close()
+
+
+# --- the saved location (Firestore only, no model) -----------------------------------------------------------------
+
+
+async def remembered_place(session: Session, target: str) -> tuple[str | None, str | None]:
+    """``(place, side)`` from the last-seen memory, e.g. ("on your left, a few steps away", "left"); Nones when
+    there is nothing (or the memory is slow or down: the walk never waits on it)."""
+    try:
+        from aira_live.memory import items
+
+        async def _find():
+            cfg = await items.settings(session.shop_id)
+            name = items.canonical_item(target, cfg["items"]) or items.normalize_name(target)
+            return await items.last_seen(session.shop_id, name)
+
+        sighting = await asyncio.wait_for(_find(), MEMORY_TIMEOUT_S)
+    except Exception:
+        log.debug("walk: no saved place for %r", target, exc_info=True)
+        return None, None
+    if sighting is None:
+        return None, None
+    side_key = str((sighting.place_parts or {}).get("side") or "")
+    side = "left" if "left" in side_key else "right" if "right" in side_key else None
+    if side is None:
+        low = sighting.place.casefold()
+        side = "left" if "left" in low else "right" if "right" in low else None
+    return items.speak_place(sighting, "en"), side
+
+
+# --- start / stop ----------------------------------------------------------------------------------------------------
+
+
+def route_for(session: Session, target: str, name: str | None = None) -> vroute.RouteGuide | None:
+    """The route follower for ``target`` when AIRA_ROUTES is on, the shop map loads and the target names one
+    of its zones (any language); None otherwise (the walk then works exactly as without the flag)."""
+    settings = config.load()
+    if not settings.routes:
+        return None
+    m = shop_map.load_for(session.shop_id, settings.routes_map)
+    if m is None:
+        return None
+    zone = m.resolve(target)
+    diag("walk_route", session=session.session_id, target=target, zone=zone, map=m.shop_id)
+    if zone is None:
+        return None
+    return vroute.RouteGuide(m, zone, name=name or getattr(session, "owner_name", None) or settings.owner_name)
+
+
+async def start(session: Session, target: str, run: bool = True, **kw) -> WalkLoop:
+    """Start a walk for ``session`` (one loop per session: an earlier walk is stopped first)."""
+    await stop_walk(session)
+    _ENDED_BY_DISCONNECT.pop(session.session_id, None)
+    if "memory_place" not in kw:
+        kw["memory_place"], kw["memory_side"] = await remembered_place(session, target)
+    if "route" not in kw:
+        kw["route"] = route_for(session, target)
+    loop = WalkLoop(session, target, **kw)
+    await session.send(RequestFrameMsg(purpose=PURPOSE, continuous=True))   # the phone's "walk active" signal
+    _ACTIVE[session.session_id] = loop
+    if run:
+        loop.task = asyncio.create_task(loop.run(), name=f"walk-{session.session_id}")
+        loop._nav_task = asyncio.create_task(loop.open_nav(), name=f"walk-nav-{session.session_id}")
+    diag("walk_start", session=session.session_id, memory=kw.get("memory_place") is not None,
+         route=loop.route is not None)
+    diag("walk_state", session=session.session_id, frm=None, to=ACQUIRING, why="start")
+    return loop
+
+
+def active(session: Session) -> WalkLoop | None:
+    loop = _ACTIVE.get(session.session_id)
+    return loop if isinstance(loop, WalkLoop) else None
+
+
+async def stop_walk(session: Session) -> bool:
+    """Stop the walk of ``session`` quietly. True when one was running. Safe to call twice."""
+    loop = _ACTIVE.pop(session.session_id, None)
+    if not isinstance(loop, WalkLoop):
+        return False
+    loop.ended = loop.ended or "stopped"
+    await loop.stop()
+    return True
+
+
+async def on_phone_boxes(session: Session, msg) -> None:
+    """main.py hook for every phone ``boxes`` message: feeds the walk's fast stop. Never raises."""
+    loop = active(session)
+    if loop is None:
+        return
+    try:
+        await loop.on_phone_boxes(getattr(msg, "objects", None) or [])
+    except Exception:
+        log.warning("walk: phone boxes failed for %s", session.session_id, exc_info=True)
+
+
+async def on_client_event(session: Session, name: str, data: dict | None) -> None:
+    """main.py hook for every client ``event``: only ``steps`` matters here (the phone's cumulative step count
+    during a walk, data ``{total, available}``). Ignored without a route. Never raises."""
+    if name != "steps":
+        return
+    loop = active(session)
+    if loop is None or loop.route is None:
+        return
+    d = data or {}
+    try:
+        await loop.on_steps(int(d.get("total") or 0), bool(d.get("available", True)))
+    except Exception:
+        log.warning("walk: steps event failed for %s", session.session_id, exc_info=True)
+
+
+async def on_live_frame(session: Session, changed: bool = False, jpeg_b64: str | None = None,
+                        sent: bool = True) -> None:
+    """main.py hook: a live frame reached the camera path during a walk (and ``changed``: check now). The same
+    picture goes to the walk's navigation session, so both sessions see the same camera. ``sent`` is whether
+    the conversation session got it (main.py passes it once it calls the hook for every walking frame); the
+    navigation session is fed either way, and the frame counts as a picture for checks when at least one of
+    the two sessions has it."""
+    loop = active(session)
+    if loop is None:
+        return
+    try:
+        fed = False
+        if jpeg_b64 and loop.nav_alive():
+            fed = await loop.nav.send_frame(base64.b64decode(jpeg_b64))
+        if not sent and not fed:
+            return
+        loop.on_live_frame(to_bridge=sent)
+        if changed:
+            await loop.on_changed_frame()
+    except Exception:
+        log.warning("walk: live frame hook failed for %s", session.session_id, exc_info=True)
+
+
+async def stop_session(session: Session) -> None:
+    """main.py hook: a `stop` message or a disconnect ends the walk. A disconnect (the session is no longer
+    registered: ``_end_session`` unregisters it first) is remembered for ``on_session_resumed``."""
+    loop = active(session)
+    target = loop.target if loop is not None else None
+    if not await stop_walk(session):
+        return
+    from aira_live import sessions
+
+    if target and not any(s.session_id == session.session_id for s, _ in sessions.by_shop(session.shop_id)):
+        _ENDED_BY_DISCONNECT[session.session_id] = (target, time.monotonic())
+        for sid, (_, at) in list(_ENDED_BY_DISCONNECT.items()):
+            if time.monotonic() - at > DISCONNECT_NOTE_S:
+                del _ENDED_BY_DISCONNECT[sid]
+
+
+async def on_session_resumed(session: Session, bridge) -> bool:
+    """main.py hook (after a resumed hello attached its Live bridge): a walk that ended when the phone's
+    connection dropped is NOT resumed by itself (nobody saw him move meanwhile); Live is told, so it tells the
+    owner the walk stopped and calls walk_to again only when he asks. True when a note went."""
+    entry = _ENDED_BY_DISCONNECT.pop(session.session_id, None)
+    if entry is None or bridge is None:
+        return False
+    target, at = entry
+    if time.monotonic() - at > DISCONNECT_NOTE_S:
+        return False
+    diag("walk_end", session=session.session_id, why="disconnect_resumed", target=target)
+    await bridge.send_text(
+        f"[SYSTEM NOTE] The walk to the {target} ended when the phone's connection dropped; nothing has been "
+        "checked since. Tell the owner now, in the language he is speaking, that the walking guidance stopped and "
+        "he should stand still; if he wants to continue, he asks again and you call walk_to.")
+    return True
+
+
+# --- Live tools ------------------------------------------------------------------------------------------------------
+
+
+async def walk_to(target: str) -> dict:
+    """Walk the owner to a place or thing in the shop and keep guiding him: call it ONCE when he wants to go
+    somewhere or reach something, in any language ("take me to the fridge", "guide me to the curd shelf", "help
+    me reach the door"). target: what to reach, in short English ("fridge", "curd shelf", "door"). Calling it
+    again with a new target changes the destination. The system then guides him by itself with short
+    [SYSTEM NOTE] lines until he says stop. While he walks, do not chatter; answer his questions normally (the
+    walk goes on). The result is facts with a short English say_en meaning hint: say it to the owner in the
+    language he is speaking.
+    """
+    s: Session = get_session()
+    name = re.sub(r"\s+", " ", target or "").strip()[:40]
+    if not name:
+        return {"active": False, "reason": "no_target", "ask": "where to go", "say_en": "Where do you want to go?"}
+    loop = active(s)
+    if loop is not None and loop.active:
+        if vwalk.same_thing(name, loop.target) and name.casefold() == loop.target.casefold():
+            return {"active": True, "target": name, "action": "walk_slowly", "already": True,
+                    "say_en": f"I am guiding you to the {name}. Walk slowly."}
+        loop.retarget(name, route_for(s, name, loop.owner_name))
+        return {"active": True, "target": name, "action": "walk_slowly", "changed": True,
+                "route": loop.route is not None,
+                "say_en": f"Okay. Now I will guide you to the {name}. Walk slowly."}
+    loop = await start(s, name)
+    return {"active": True, "target": name, "action": "walk_slowly", "route": loop.route is not None,
+            "say_en": f"I'll guide you to the {name} and tell you about anything in the way. Walk slowly."}
+
+
+async def walk_stop() -> dict:
+    """Stop walking guidance at once. Call it the moment the owner wants to stop, wait, cancel, has had enough
+    or says he is there while walking, in ANY language ("stop", "wait", "I'm here", "that's enough", "நில்லு",
+    "போதும்", "रुको", "बस"). Nothing else stops the walk by voice: only this call. Say the result to the owner in
+    the language he is speaking."""
+    s: Session = get_session()
+    was = await stop_walk(s)
+    return {"stopped": True, "was_active": was, "say_en": "Okay, stopped."}
+
+
+async def nav_report(target_visible: bool = False,
+                     target_side: Literal["left", "ahead", "right", "none"] = "none",
+                     target_size: Literal["small", "medium", "large", "none"] = "none",
+                     obstacles: list[dict] | None = None,
+                     path: Literal["clear_in_view", "blocked", "uncertain"] = "uncertain",
+                     view_ok: bool = True,
+                     check_id: int = 0,
+                     current_zone: str = "unknown",
+                     facing: Literal["front", "left", "right", "back", "unknown"] = "unknown",
+                     confidence: Literal["low", "medium", "high"] = "low",
+                     reflection: bool = False) -> dict:
+    """System only: call it ONLY when a "[NAV CHECK n]" message asks, once, with check_id=n, and never speak
+    about it. Report what the newest camera frame shows for the walk: target_visible and the target's side
+    (left / ahead / right, none when not visible) and size (small / medium / large: large means close; none
+    when not visible); obstacles on the floor as a
+    list of {label, side: left|ahead|right, in_path: true if in his walking path straight ahead, size:
+    small|medium|large}; path: clear_in_view, blocked or uncertain; view_ok false when the view is dark,
+    blurred or covered. Never guess: when unsure use uncertain. Only when the check lists ZONES: current_zone
+    is the zone id from that list the view matches (or unknown), facing which of that zone's views it matches
+    (front / left / right / back, or unknown), confidence low / medium / high for zone and facing together, and
+    reflection true when the view is a mirror image (then current_zone is unknown)."""
+    s: Session = get_session()
+    loop = active(s)
+    if loop is not None:
+        await _handle_report(loop, dict(target_visible=target_visible, target_side=target_side,
+                                        target_size=target_size, obstacles=obstacles, path=path, view_ok=view_ok,
+                                        check_id=check_id, current_zone=current_zone, facing=facing,
+                                        confidence=confidence, reflection=reflection))
+    return {"status": "ok", "retryable": False, "message": ""}
+
+
+_REPORT_DEFAULTS = dict(target_visible=False, target_side="none", target_size="none", obstacles=None,
+                        path="uncertain", view_ok=True, check_id=0, current_zone="unknown", facing="unknown",
+                        confidence="low", reflection=False)
+# Fields that say nothing about the view: a report with only these (at any value) is still an empty report.
+_NOT_OBSERVATIONS = ("check_id", "obstacles", "current_zone", "facing", "confidence", "reflection")
+
+
+async def _handle_report(loop: WalkLoop, args: dict) -> None:
+    """One nav_report (from either Live session) into the walk. Missing fields take the tool's defaults; a
+    report with nothing but check_id (and position fields) is no observation. Never raises."""
+    a = {k: args.get(k, d) if args.get(k) is not None else d for k, d in _REPORT_DEFAULTS.items()}
+    try:
+        a["check_id"] = int(a["check_id"])
+        zone_ids = tuple(loop.route.shop_map.zones) if loop.route is not None else ()
+        report = vwalk.parse_report(loop.target, zone_ids=zone_ids, **a)
+        obstacles = [o for o in (a["obstacles"] or []) if isinstance(o, dict) and o.get("label")]
+        if obstacles:   # what the walk saw on the floor stays answerable later ("where was the box?")
+            loop.session.scene_memory.observe(
+                [{"name": o["label"], "on": "the floor", "side": o.get("side")} for o in obstacles],
+                replace_view=False)
+        empty = all(a[k] == d for k, d in _REPORT_DEFAULTS.items() if k not in _NOT_OBSERVATIONS) \
+            and not a["obstacles"]
+        await loop.on_report(report, empty=empty)
+    except Exception:   # never an error inside a Live run loop: the check times out and counts as failed
+        log.warning("walk: nav_report failed for %s", loop.session.session_id, exc_info=True)
+
+
+def default_nav_factory(loop: WalkLoop):
+    """The walk's navigation Live session, or None (AIRA_WALK_NAV_SESSION=0, mock mode, or no API key)."""
+    settings = config.load()
+    if not settings.walk_nav_session or settings.mock:
+        return None
+    from aira_live.nav_session import NavSession, system_prompt
+
+    # Routes on: the navigation session also gets the map's short zone list (landmarks per view, the mirrors).
+    system = system_prompt(zones_text=loop.route.shop_map.prompt_text()) if loop.route is not None else None
+    return NavSession(loop.session.session_id, loop.on_nav_report, system=system)

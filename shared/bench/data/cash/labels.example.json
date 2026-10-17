@@ -1,0 +1,4 @@
+[
+  {"file": "cash_001.jpg", "notes": [{"denomination": 500, "count": 2}], "total": 1000, "overlapping": false},
+  {"file": "cash_002.jpg", "notes": [{"denomination": 100, "count": 1}, {"denomination": 50, "count": 1}, {"denomination": 10, "count": 2}], "total": 170, "overlapping": false}
+]

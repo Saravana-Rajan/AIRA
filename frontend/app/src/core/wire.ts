@@ -1,0 +1,887 @@
+// Wires the voice app together after the onboarding Start tap: socket, audio, gestures,
+// confirmations, offline queue and the screen's view state. Browser APIs come in through
+// `WireEnv`, so every rule here is tested with fakes.
+import type { ClientMsg, CueName, Lang, ServerMsg } from "@aira/contracts";
+import { AiraSocket } from "../net/socket";
+import { micDropCount, micMaySend, noteSpeech } from "../net/sendPriority";
+import { OfflineQueue, defaultStore, type QueueStore } from "../net/offline-queue";
+import { initApp } from "./app";
+import { clientLog, loadBuildInfo, shortText, type BuildInfo } from "./clientLog";
+import { langFromPhone, phoneLanguages, uiLangFor } from "./lang";
+import { saveSettings } from "./settings";
+import { vibrate } from "./haptics";
+import { requestMotionAccess } from "./motionPermission";
+import { ThinkingTimer } from "./thinking";
+import { ConfirmState } from "./confirm";
+import { createDispatcher } from "./dispatch";
+import type { AppApi, HapticName, Settings, UrgentInfo } from "./types";
+import { STRINGS } from "../i18n/strings";
+import { DEFAULT_MAX_HOLD_MS, PlaybackQueue, type PlaybackOpts } from "../voice/playback";
+import { playEarcon, type EarconName } from "../voice/earcons";
+import { startMic, type StartMicOpts } from "../voice/mic";
+import { watchHeadset, type DeviceSource } from "../voice/route";
+import { shareToneContext } from "../guidance/tones";
+import { announceToRegion } from "../ui/ScreenReaderRegion";
+import { initialScreen, reduceScreen, type LocalEvent, type ScreenState } from "../ui/screenState";
+import type { CountProgress } from "../ui/view";
+import { handsfreeFlags, type HandsfreeFlags } from "../handsfree/flags";
+import { attachMediaButton, audioKeepAlive, type KeepAlive, type MediaButton, type MediaSessionLike } from "../handsfree/mediaButton";
+import { HANDSFREE_STRINGS } from "../handsfree/strings";
+
+export const APP_VERSION = "0.1.0";
+/** The mic closes after this long with no talk gesture and no user speech. */
+export const MIC_IDLE_MS = 30_000;
+/** Mic RMS level (0-1) at/above which the owner counts as speaking. Speech re-arms the idle timer, so the mic
+ * never closes mid-conversation: the timer previously re-armed only on a server user-transcript, which lags at
+ * turn boundaries and stalls during slow tool / live-video turns, deadlocking the mic shut. */
+export const MIC_VOICE_LEVEL = 0.02;
+/** While a listening session is live, re-check this often that the mic is still open, and reopen it if not.
+ * The completion-guarantee net: recovers from an idle-close, a dead worklet, or any other silent loss of
+ * capture, so a hands-free conversation can never dead-end with no way back. */
+export const MIC_WATCHDOG_MS = 2_000;
+/** The soft thinking sound repeats at this interval until AIRA answers. */
+export const THINKING_LOOP_MS = 1200;
+/** The same sentence handed to speak() twice within this window is announced or spoken once. */
+export const SPEAK_DEDUPE_MS = 10_000;
+/** A local line waits while AIRA's Live audio plays or is queued; one that waited this long is dropped. */
+export const SPEAK_STALE_MS = 8_000;
+/** Live audio that ended less than this long ago still counts as busy: the next chunk is usually in flight. */
+export const SPEAK_WAIT_GAP_MS = 400;
+const SPEAK_POLL_MS = 250;
+/** An identical urgent (safety) line within this window is spoken once; a repeat after it always speaks. */
+export const URGENT_DEDUPE_MS = 2_000;
+/**
+ * After an urgent line, Live audio chunks that arrive are held back this long (then played in order), and
+ * non-urgent local lines wait: nothing talks over "Stop". About the length of the longest warning phrase.
+ */
+export const URGENT_QUIET_MS = 900;
+/**
+ * Mic chunks are dropped only while more than MIC_MAX_BUFFERED_BYTES sit unsent on the socket (net/sendPriority).
+ * Every camera stream stops well below that cap, so under congestion video is skipped first and the owner's speech
+ * keeps going; on a truly stalled link a little speech is dropped rather than heard seconds late.
+ */
+export { MIC_MAX_BUFFERED_BYTES } from "../net/sendPriority";
+
+/** The identity of a spoken line: trimmed, lowercased, punctuation and symbols dropped, spaces collapsed. */
+export function normaliseSpeech(text: string): string {
+  return text.toLowerCase().replace(/[\p{P}\p{S}]+/gu, " ").replace(/\s+/g, " ").trim();
+}
+export const UID_KEY = "aira.uid";
+const DEFAULT_WS = "ws://localhost:8080/ws";
+
+/** What the dispatcher and the gestures need from the playback queue. */
+export interface PlaybackLike {
+  enqueue(b64: string): void;
+  flush(o?: { holdUntilResume?: boolean }): void;
+  resume(): void;
+  /** Ms since AIRA's Live audio last played (Infinity before any). */
+  msSinceAudio(): number;
+}
+
+type SocketLike = Pick<AiraSocket, "connect" | "send" | "on" | "close"> & Partial<Pick<AiraSocket, "bufferedAmount">>;
+type Listenable = Pick<EventTarget, "addEventListener" | "removeEventListener">;
+
+/** Browser adapters. `browserEnv()` gives the real ones; tests pass fakes. */
+export interface WireEnv {
+  createSocket(url: string): SocketLike;
+  createAudioContext(): AudioContext | null;
+  createPlayback(ctx: AudioContext, opts?: PlaybackOpts): PlaybackLike;
+  playEarcon(ctx: AudioContext, n: EarconName): void;
+  vibrate(n: HapticName): void;
+  /**
+   * Client TTS for local status and fallbacks. Null where speechSynthesis is missing. `prime` speaks a silent empty
+   * line: iOS only lets speechSynthesis talk after one speak() call inside a user gesture.
+   */
+  speech: { speak(text: string, lang: Lang, rate: number): void; cancel(): void; prime?(): void } | null;
+  /** Writes to the single aria-live region (screen-reader mode). */
+  announce(text: string): void;
+  startMic(opts: StartMicOpts): Promise<{ stop(): void }>;
+  /** navigator.mediaDevices, for the earphones watcher (voice/route). Missing or null: no watcher. */
+  mediaDevices?: DeviceSource | null;
+  /** navigator.mediaSession, for the earphone button (handsfree/mediaButton). Missing or null: no button. */
+  mediaSession?: MediaSessionLike | null;
+  /** The near-silent looping <audio> that makes this page the active media session (only with the flag on). */
+  mediaKeepAlive?: () => KeepAlive | null;
+  queueStore(): QueueStore;
+  storage: Storage | null;
+  win: Listenable;
+  doc: Listenable & { hidden: boolean };
+  requestWakeLock(): void;
+  /** Asks for mic and camera once, inside the Start tap, so later turns never prompt. */
+  requestPermissions(): void;
+  /** iOS: asks for the motion/orientation sensors inside the tap (core/motionPermission). No-op elsewhere. */
+  requestMotionAccess?(): void;
+  /** The phone's locales: only the hint for AIRA's first line (`hello.lang`) and the labels before anyone speaks. */
+  languages: readonly string[];
+  /** The deployed build (/version.json) for the "build" diagnostic line. Default: `loadBuildInfo`. */
+  buildInfo?: () => Promise<BuildInfo | null>;
+}
+
+/** Everything the screen draws. */
+export interface AppView {
+  screen: ScreenState;
+  /** Mic loudness 0..1 for the voice orb. */
+  level: number;
+  /** Live delivery count for the task card bar. */
+  progress: CountProgress | null;
+  /** A confirm waits for double-tap (yes) or long-press (no). */
+  confirmPending: boolean;
+  online: boolean;
+  lang: Lang;
+}
+
+export interface ViewStore {
+  get(): AppView;
+  subscribe(fn: (v: AppView) => void): () => void;
+}
+
+export interface WireOpts {
+  settings: Settings;
+  /** aira-live WebSocket URL. Defaults to VITE_AIRA_LIVE_WS, then ws://localhost:8080/ws. */
+  wsUrl?: string;
+  /** false: wire everything but send no hello (the demo page connects the socket itself). */
+  connect?: boolean;
+  env?: Partial<WireEnv>;
+  /** Hands-free flags; default: the build's VITE_AIRA_* values (handsfree/flags.ts), all off unless set. */
+  handsfree?: Partial<HandsfreeFlags>;
+}
+
+export interface WiredApp {
+  app: AppApi;
+  socket: AiraSocket;
+  ctx: AudioContext | null;
+  playback: PlaybackLike;
+  confirm: ConfirmState;
+  queue: OfflineQueue;
+  view: ViewStore;
+  /** Double-tap: "yes" to a pending confirm, otherwise talk. */
+  onTalk(): void;
+  /** Long-press: "no" to a pending confirm, otherwise a hard stop. */
+  onStop(): void;
+  /**
+   * Hands-free start (core/autostart.ts, ui/AppShell): opens the mic with no tap. Resolves true once the mic
+   * streams, after the local "listening" earcon and a short greeting; false when the browser refused (no user
+   * gesture on this origin yet, or the permission was not persisted). Nothing is spoken on failure: the
+   * caller shows the Start screen and says "Tap anywhere to start".
+   */
+  startListening(): Promise<boolean>;
+  /**
+   * For ops that must survive a dropped connection: queued under `idemKey` (never twice) and
+   * sent in order now or on the next reconnect. True when it went out now.
+   */
+  sendOrQueue(m: ClientMsg, idemKey: string): Promise<boolean>;
+  /** Sends whatever is queued; returns how many went out. */
+  replay(): Promise<number>;
+  /** Raise a local screen event, e.g. the bump guard's "bump" / "bump_clear". */
+  local(event: LocalEvent["event"]): void;
+  dispose(): void;
+}
+
+const VOICE: Record<Lang, string> = { ta: "ta-IN", hi: "hi-IN", en: "en-IN" };
+
+const NULL_PLAYBACK: PlaybackLike = { enqueue() {}, flush() {}, resume() {}, msSinceAudio: () => Infinity };
+
+function safeStorage(): Storage | null {
+  try {
+    return typeof localStorage === "undefined" ? null : localStorage;
+  } catch {
+    return null;
+  }
+}
+
+/** The real browser adapters. Nothing here runs until wireApp calls it. */
+export function browserEnv(): WireEnv {
+  const synth = typeof speechSynthesis === "undefined" ? null : speechSynthesis;
+  return {
+    createSocket: (url) => new AiraSocket(url),
+    createAudioContext: () => {
+      // iOS 16.4+: "play-and-record" keeps a paired Bluetooth headset for both directions (the default session
+      // type sends playback to the speaker once the mic opens). A no-op elsewhere.
+      try {
+        const session = (navigator as Navigator & { audioSession?: { type: string } }).audioSession;
+        if (session) session.type = "play-and-record";
+      } catch { /* not supported or read-only */ }
+      const AC = globalThis.AudioContext ?? (globalThis as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+      return AC ? new AC() : null;
+    },
+    createPlayback: (ctx, opts) => new PlaybackQueue(ctx, undefined, opts),
+    playEarcon,
+    vibrate: (n) => { vibrate(n); },
+    speech: synth
+      ? {
+          speak(text, lang, rate) {
+            const u = new SpeechSynthesisUtterance(text);
+            u.lang = VOICE[lang];
+            u.rate = rate;
+            synth.cancel();
+            synth.speak(u);
+          },
+          cancel() { synth.cancel(); },
+          prime() {
+            const u = new SpeechSynthesisUtterance("");
+            u.volume = 0;
+            synth.speak(u);
+          },
+        }
+      : null,
+    announce: announceToRegion,
+    startMic,
+    mediaDevices: typeof navigator === "undefined" ? null : navigator.mediaDevices ?? null,
+    mediaSession: typeof navigator === "undefined" ? null : (navigator as Navigator & { mediaSession?: MediaSessionLike }).mediaSession ?? null,
+    mediaKeepAlive: () => (typeof document === "undefined" ? null : audioKeepAlive(document)),
+    queueStore: () => defaultStore(),
+    storage: safeStorage(),
+    win: window,
+    doc: document,
+    requestWakeLock: () => {
+      const wl = (navigator as Navigator & { wakeLock?: { request(t: "screen"): Promise<unknown> } }).wakeLock;
+      wl?.request("screen").catch(() => { /* best effort: battery saver or not visible */ });
+    },
+    requestPermissions: () => {
+      const md = navigator.mediaDevices;
+      if (!md?.getUserMedia) return;
+      const release = (s: MediaStream) => s.getTracks().forEach((t) => t.stop());
+      md.getUserMedia({ audio: true, video: { facingMode: "environment" } })
+        .then(release)
+        .catch(() => md.getUserMedia({ audio: true }).then(release))
+        .catch(() => { /* the mic start reports a block when the owner talks */ });
+    },
+    requestMotionAccess: () => requestMotionAccess(),
+    languages: phoneLanguages(),
+    buildInfo: () => loadBuildInfo(),
+  };
+}
+
+/** A per-phone id, kept across reloads. There is no sign-in in this build. */
+export function deviceUid(storage: Storage | null): string {
+  try {
+    const have = storage?.getItem(UID_KEY);
+    if (have) return have;
+  } catch { /* storage blocked */ }
+  const rand =
+    typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+      ? crypto.randomUUID().replace(/-/g, "").slice(0, 12)
+      : Math.random().toString(36).slice(2, 14);
+  const uid = `owner-${rand}`;
+  try { storage?.setItem(UID_KEY, uid); } catch { /* keep it for this page only */ }
+  return uid;
+}
+
+/**
+ * The shared demo key built in as VITE_AIRA_APP_KEY (shared/docs/ops/security.md); undefined when not set.
+ * In the browser only import.meta.env exists; the process.env fallback is the test seam (vi.stubEnv).
+ */
+export function appKey(): string | undefined {
+  try {
+    const meta = (import.meta as { env?: Record<string, string | undefined> }).env?.VITE_AIRA_APP_KEY;
+    const proc = typeof process !== "undefined" ? process.env?.VITE_AIRA_APP_KEY : undefined;
+    const key = meta || proc;
+    return key ? key : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** VITE_AIRA_LIVE_WS, else ws://localhost:8080/ws. The start-up device check derives its HTTP address from it. */
+export function wsDefault(): string {
+  try {
+    return (import.meta as { env?: Record<string, string | undefined> }).env?.VITE_AIRA_LIVE_WS ?? DEFAULT_WS;
+  } catch {
+    return DEFAULT_WS;
+  }
+}
+
+/**
+ * Call once, synchronously, inside the onboarding Start tap: that tap is the user gesture
+ * that unlocks audio playback, the mic and camera prompts and the wake lock.
+ * Fills the `app` singleton (core/app.ts) and returns the gesture handlers and view state.
+ */
+export function wireApp(opts: WireOpts): WiredApp {
+  const env: WireEnv = { ...browserEnv(), ...opts.env };
+  const settings: Settings = { ...opts.settings, onboarded: true };
+  saveSettings(settings, env.storage);
+
+  // ---- unlock everything inside the tap ----
+  let ctx: AudioContext | null = null;
+  try {
+    ctx = env.createAudioContext();
+    void ctx?.resume().catch(() => {});
+  } catch {
+    ctx = null; // no Web Audio: earcons and Live audio are silent, captions still work
+  }
+  const tryRun = (fn: () => void) => { try { fn(); } catch { /* best effort */ } };
+  tryRun(() => env.requestWakeLock());
+  tryRun(() => env.requestPermissions());
+  tryRun(() => env.requestMotionAccess?.());
+  tryRun(() => env.speech?.prime?.());
+  // The hand-guidance tones play on this same, tap-unlocked context (iOS never starts one made later).
+  if (ctx) tryRun(() => shareToneContext(ctx));
+
+  const socket = env.createSocket(opts.wsUrl ?? wsDefault());
+  // Latency diagnostics: one "latency" line per AIRA answer, when its first chunk starts playing.
+  let lastMicChunkAt = 0; // wall clock of the last mic chunk sent
+  let lastUserFinalAt = 0; // wall clock of the last final user transcript
+  const playback = ctx
+    ? env.createPlayback(ctx, {
+        onPlayStart: (i) => {
+          const now = Date.now();
+          clientLog("latency", {
+            stage: "play_start",
+            ms: Math.round(i.msSinceFirstChunk),
+            ...(lastUserFinalAt ? { sinceUserFinalMs: now - lastUserFinalAt } : {}),
+            ...(lastMicChunkAt ? { sinceMicMs: now - lastMicChunkAt } : {}),
+          });
+        },
+      })
+    : NULL_PLAYBACK;
+  const confirm = new ConfirmState();
+  const queue = new OfflineQueue(env.queueStore());
+  const timers = new Set<ReturnType<typeof setTimeout>>();
+  const cleanups: Array<() => void> = [];
+  let disposed = false;
+  let mock = false;
+
+  // ---- the app singleton ----
+  // No double speech. Gemini Live is AIRA's voice; the phone's own speech only fills gaps:
+  // - a local line never talks over Live audio: while audio plays or is queued it waits, and only the newest
+  //   waiting line is spoken once the audio is idle (a line that waited SPEAK_STALE_MS is dropped);
+  // - the same sentence (ignoring case, punctuation and spacing) within SPEAK_DEDUPE_MS is spoken once;
+  // - screen-reader mode writes to the aria-live region only, never to speechSynthesis.
+  let lastSpoken: { key: string; at: number } | null = null;
+  // - a server error line ("important") is deferred the same way, never dropped for being near Live audio, and a
+  //   lesser line arriving while it waits does not displace it (it is dropped instead).
+  let waiting: { text: string; at: number; important: boolean } | null = null;
+  let waitTimer: ReturnType<typeof setTimeout> | null = null;
+  // Urgent (safety) lines: until this wall-clock time Live chunks are held back and local lines wait.
+  let urgentQuietUntil = 0;
+  let lastUrgent: { key: string; at: number } | null = null;
+  const urgentQuiet = () => Date.now() < urgentQuietUntil;
+  const liveBusy = () => urgentQuiet() || playback.msSinceAudio() < SPEAK_WAIT_GAP_MS;
+  const sayNow = (text: string) => {
+    const now = Date.now();
+    const key = normaliseSpeech(text);
+    if (!key) return;
+    if (lastSpoken && lastSpoken.key === key && now - lastSpoken.at < SPEAK_DEDUPE_MS) {
+      clientLog("speak", { text: shortText(text), dropped: "dedupe" });
+      return;
+    }
+    lastSpoken = { key, at: now };
+    const sr = api.settings.screenReaderMode;
+    if (sr) env.announce(text);
+    else env.speech?.speak(text, uiLang, api.settings.speechRate);
+    clientLog("speak", { text: shortText(text), mode: sr ? "sr" : "tts", lang: uiLang });
+  };
+  const dropWaiting = () => {
+    waiting = null;
+    if (waitTimer) { clearTimeout(waitTimer); timers.delete(waitTimer); }
+    waitTimer = null;
+  };
+  const drainWaiting = () => {
+    waitTimer = null;
+    if (disposed || !waiting) return;
+    if (Date.now() - waiting.at > SPEAK_STALE_MS) {
+      clientLog("speak", { text: shortText(waiting.text), dropped: "stale" });
+      waiting = null;
+      return;
+    }
+    if (liveBusy()) {
+      const id = setTimeout(() => { timers.delete(id); drainWaiting(); }, SPEAK_POLL_MS);
+      timers.add(id);
+      waitTimer = id;
+      return;
+    }
+    const { text } = waiting;
+    waiting = null;
+    sayNow(text);
+  };
+  const speakLocal = (text: string, important = false) => {
+    if (!liveBusy()) { sayNow(text); return; }
+    if (waiting?.important && !important) {
+      clientLog("speak", { text: shortText(text), dropped: "behind_error" });
+      return;
+    }
+    waiting = { text, at: Date.now(), important }; // the newest line replaces an older one: TTS would cancel it anyway
+    if (!waitTimer) drainWaiting();
+  };
+  // A safety line never waits: it cuts Live audio (not held: AIRA's next chunks play once it has been said),
+  // drops any waiting local line, and is deduped only against the same urgent line within URGENT_DEDUPE_MS.
+  const speakUrgent = (text: string, info: UrgentInfo) => {
+    const now = Date.now();
+    const key = normaliseSpeech(text);
+    if (!key || disposed) return;
+    const kind = info.kind ?? "urgent";
+    const waitedMs = Math.max(0, Math.round(info.ageMs ?? 0));
+    const overLive = playback.msSinceAudio() < SPEAK_WAIT_GAP_MS || deferred.length > 0;
+    if (lastUrgent && lastUrgent.key === key && now - lastUrgent.at < URGENT_DEDUPE_MS) {
+      clientLog("guard_alert", { kind, deduped: true, waitedMs, overLive });
+      return;
+    }
+    lastUrgent = { key, at: now };
+    // A barge-in hold (talk, long-press stop, "interrupted") stays a hold: the cut answer must not come back.
+    if (overLive) tryRun(() => playback.flush({ holdUntilResume: Date.now() < bargeHeldUntil }));
+    deferred.length = 0; // chunks held behind an earlier urgent line belong to the cut answer
+    dropWaiting();
+    urgentQuietUntil = now + URGENT_QUIET_MS;
+    armDeferred();
+    wakeAudio(); // iOS: a suspended context would also mute the warn earcon
+    const sr = api.settings.screenReaderMode;
+    if (sr) env.announce(text);
+    else {
+      tryRun(() => env.speech?.cancel()); // the newest urgent line wins; nothing else is spoken
+      env.speech?.speak(text, uiLang, api.settings.speechRate);
+    }
+    clientLog("guard_alert", { kind, deduped: false, waitedMs, overLive });
+  };
+  // Live chunks that arrive inside the quiet window wait for it to end, then play in order (never dropped).
+  const deferred: string[] = [];
+  let bargeHeldUntil = 0; // wall clock: the playback queue drops the interrupted answer's chunks until then
+  let deferTimer: ReturnType<typeof setTimeout> | null = null;
+  const armDeferred = () => {
+    if (deferTimer) { clearTimeout(deferTimer); timers.delete(deferTimer); }
+    const id = setTimeout(() => {
+      timers.delete(id);
+      deferTimer = null;
+      if (disposed) return;
+      const chunks = deferred.splice(0);
+      for (const c of chunks) tryRun(() => playback.enqueue(c));
+    }, Math.max(0, urgentQuietUntil - Date.now()));
+    timers.add(id);
+    deferTimer = id;
+  };
+  const livePlayback = {
+    enqueue: (b64: string) => {
+      if (urgentQuiet()) { deferred.push(b64); return; }
+      playback.enqueue(b64);
+    },
+    flush: (o?: { holdUntilResume?: boolean }) => {
+      deferred.length = 0;
+      bargeHeldUntil = o?.holdUntilResume ? Date.now() + DEFAULT_MAX_HOLD_MS : 0;
+      playback.flush(o);
+    },
+    resume: () => { bargeHeldUntil = 0; playback.resume(); },
+  };
+  const api = initApp({
+    socket,
+    settings,
+    speakImpl: (text) => speakLocal(text),
+    speakUrgentImpl: (text, info) => speakUrgent(text, info),
+    earconImpl: (n) => { if (ctx) tryRun(() => env.playEarcon(ctx!, n)); },
+    hapticImpl: (n) => tryRun(() => env.vibrate(n)),
+    langImpl: () => uiLang,
+  });
+  // No fixed language. The labels and local TTS start from the phone's locale (the hint sent as hello.lang)
+  // and then follow whatever language the server last heard the speaker use (transcript.lang).
+  let uiLang: Lang = settings.lang === "auto" ? langFromPhone(env.languages) : settings.lang;
+  const lang = (): Lang => uiLang;
+
+  // ---- view state ----
+  let view: AppView = {
+    screen: initialScreen,
+    level: 0,
+    progress: null,
+    confirmPending: false,
+    online: true,
+    lang: uiLang,
+  };
+  const subs = new Set<(v: AppView) => void>();
+  const setView = (patch: Partial<AppView>) => {
+    view = { ...view, ...patch, confirmPending: confirm.pending !== null, lang: lang() };
+    subs.forEach((fn) => fn(view));
+  };
+  const viewStore: ViewStore = {
+    get: () => view,
+    subscribe: (fn) => {
+      subs.add(fn);
+      return () => { subs.delete(fn); };
+    },
+  };
+  const local = (event: LocalEvent["event"]) => setView({ screen: reduceScreen(view.screen, { t: "local", event }) });
+
+  const viewFor = (m: ServerMsg): Partial<AppView> => {
+    if (m.t === "transcript" && m.lang) uiLang = uiLangFor(m.lang, uiLang); // follow the speaker's last turn
+    const patch: Partial<AppView> = { screen: reduceScreen(view.screen, m) };
+    if (m.t === "count") patch.progress = { counted: m.counted, expected: m.expected };
+    else if (m.t === "confirm" || (m.t === "state" && m.entity !== "delivery" && !m.summary.startsWith("OPEN_URL "))) {
+      patch.progress = null;
+    }
+    return patch;
+  };
+
+  // ---- thinking sound: 1.5 s of silence after a trigger, repeating until AIRA answers ----
+  let loop: ReturnType<typeof setInterval> | null = null;
+  const thinking = new ThinkingTimer(
+    () => {
+      api.earcon("thinking");
+      loop = setInterval(() => api.earcon("thinking"), THINKING_LOOP_MS);
+    },
+    () => {
+      if (loop) clearInterval(loop);
+      loop = null;
+    },
+  );
+
+  // ---- server messages ----
+  const dispatch = createDispatcher({
+    playback: livePlayback,
+    thinking,
+    confirm,
+    earcon: (n) => api.earcon(n),
+    haptic: (n) => api.haptic(n),
+    speak: (t, kind) => { if (kind === "error") speakLocal(t, true); else api.speak(t); },
+    stopSpeech: () => { dropWaiting(); env.speech?.cancel(); },
+    ctx: () => ({ mock, msSinceLiveAudio: playback.msSinceAudio(), screenReaderMode: api.settings.screenReaderMode }),
+    ui: (m) => setView(viewFor(m)),
+  });
+
+  const replay = () => queue.replay((m) => api.send(m));
+
+  // Diagnostics: the deployed build (/version.json) is fetched once and reported after every `ready`, so a
+  // Cloud Logging session always starts with which build the phone runs. Never blocks anything.
+  const buildLoad: Promise<BuildInfo | null> = (async () => {
+    try { return await (env.buildInfo ?? loadBuildInfo)(); } catch { return null; }
+  })();
+  const ua = typeof navigator === "undefined" ? "" : String(navigator.userAgent ?? "");
+
+  cleanups.push(
+    socket.on((m) => {
+      if (m.t === "ready") {
+        mock = m.mock;
+        void replay().catch(() => {});
+        const isMock = m.mock;
+        void buildLoad.then((b) => {
+          if (disposed) return;
+          clientLog("build", {
+            build: b?.build ?? "unknown", ...(b?.updated ? { updated: b.updated } : {}), appVersion: APP_VERSION,
+            mock: isMock, lang: uiLang, screenReader: api.settings.screenReaderMode, ua: shortText(ua, 120),
+          });
+        });
+      }
+      if (m.t === "transcript" && m.role === "user") {
+        // The owner is still speaking: no thinking sound yet. When he finishes, start the 1.5 s wait.
+        if (m.final) { thinking.arm(); lastUserFinalAt = Date.now(); }
+        else thinking.disarm();
+        if (mic || micOpen) armMicIdle();
+      }
+      dispatch(m);
+    }),
+  );
+
+  // ---- mic ----
+  let mic: { stop(): void } | null = null;
+  let micOpen: Promise<boolean> | null = null; // an open in flight
+  let micIdle: ReturnType<typeof setTimeout> | null = null;
+  let micGen = 0; // bumps on every stop, so a mic that opens after a stop is closed at once
+
+  const later = (fn: () => void, ms: number) => {
+    const id = setTimeout(() => { timers.delete(id); fn(); }, ms);
+    timers.add(id);
+    return id;
+  };
+  const clearMicIdle = () => {
+    if (micIdle) { clearTimeout(micIdle); timers.delete(micIdle); }
+    micIdle = null;
+  };
+  const armMicIdle = () => {
+    clearMicIdle();
+    micIdle = later(() => { micIdle = null; stopMic(); }, MIC_IDLE_MS);
+  };
+  const stopMic = () => {
+    micGen++;
+    clearMicIdle();
+    micOpen = null;
+    if (mic) tryRun(() => mic!.stop());
+    mic = null;
+    if (view.level !== 0) setView({ level: 0 });
+  };
+  /**
+   * Resolves true once the mic streams (or already does), false when it could not open. `quiet` skips the
+   * warning, the "Microphone is blocked" line and the screen reset: the hands-free start handles that itself.
+   */
+  const openMic = (quiet = false): Promise<boolean> => {
+    armMicIdle();
+    if (mic) return Promise.resolve(true);
+    if (micOpen) return micOpen;
+    const gen = micGen;
+    let lastLevel = 0;
+    micOpen = env
+      .startMic({
+        onChunk: (b64) => {
+          // Sent at once, one 32 ms chunk per call. Never queued behind a stalled socket: see MIC_MAX_BUFFERED_BYTES.
+          const buffered = socket.bufferedAmount?.() ?? 0;
+          if (!micMaySend(buffered)) {
+            clientLog("mic_drop", { buffered, drops: micDropCount() }, { minGapMs: 2000 });
+            return;
+          }
+          if (api.send({ t: "audio", pcm16: b64 })) lastMicChunkAt = Date.now();
+        },
+        onLevel: (lv) => {
+          if (lv >= MIC_VOICE_LEVEL) {
+            armMicIdle(); // the owner is audibly speaking: keep the mic open
+            noteSpeech(); // ...and hold the camera video back so his words reach Gemini first
+          }
+          if (Math.abs(lv - lastLevel) < 0.03 && lv !== 0) return; // ~30 chunks/s: redraw only on change
+          lastLevel = lv;
+          setView({ level: lv });
+        },
+      })
+      .then((h) => {
+        if (disposed || gen !== micGen) { tryRun(() => h.stop()); return false; }
+        micOpen = null;
+        mic = h;
+        return true;
+      })
+      .catch((e: unknown) => {
+        if (gen !== micGen) return false;
+        micOpen = null;
+        clearMicIdle();
+        thinking.disarm();
+        if (quiet) return false;
+        api.earcon("warn");
+        api.haptic("warn");
+        if ((e as { name?: string })?.name === "NotAllowedError") api.speak(STRINGS.micBlocked[lang()]);
+        local("stop");
+        return false;
+      });
+    return micOpen;
+  };
+
+  // ---- mic watchdog (completion-guarantee) ----
+  // An active listening session must keep a working mic until the owner stops. `listening` is true from the
+  // first startListening/talk until an explicit stop or dispose. While it holds, re-check that the mic is open
+  // and reopen it if not — the safety net for an idle-close, a dead worklet, or any silent loss of capture.
+  let listening = false;
+  // The earphone button (handsfree/mediaButton), attached below once the gestures exist; a no-op until then.
+  let mediaButton: MediaButton | null = null;
+  let watchdog: ReturnType<typeof setTimeout> | null = null;
+  const armWatchdog = () => {
+    if (watchdog || disposed) return;
+    watchdog = later(() => {
+      watchdog = null;
+      if (disposed || !listening) return;
+      if (!mic && !micOpen) void openMic(true); // the mic closed during an active session: recover it
+      armWatchdog();
+    }, MIC_WATCHDOG_MS);
+  };
+  const startSession = () => { listening = true; armWatchdog(); mediaButton?.setListening(true); };
+  const endSession = () => { listening = false; mediaButton?.setListening(false); };
+
+  // ---- earphones come and go ----
+  // The OS routes audio (voice/mic.ts): earphones when paired, the loudspeaker otherwise. A stream opened
+  // before the change keeps its old route, so on every headset transition an open mic is reopened and the
+  // browser pairs it with the new output. When the earphones drop, a walker must hear at once where the next
+  // "Stop" will come from: said once per drop on the urgent path (never behind Live audio), with the warn
+  // earcon and haptic. Earphones arriving are quiet: he put them on himself.
+  const restartMic = () => {
+    if (!mic && !micOpen) return;
+    stopMic();
+    void openMic(true);
+  };
+  cleanups.push(
+    watchHeadset(env.mediaDevices, (present) => {
+      if (disposed) return;
+      clientLog("headset", { present });
+      restartMic();
+      if (present) return;
+      api.earcon("warn");
+      api.haptic("warn");
+      speakUrgent(STRINGS.earphonesLost[lang()], { kind: "headset.lost" });
+    }),
+  );
+
+  // ---- hands-free start ----
+  // No ack earcon and no thinking timer: nothing was asked yet. Audio output may still be locked (the
+  // AudioContext was created without a gesture), but Chrome lets a page with a live getUserMedia stream start
+  // Web Audio, so resume once more after the mic opens, then play the listening earcon and greet.
+  let saidEarphoneButton = false;
+  const startListening = async (): Promise<boolean> => {
+    local("talk");
+    const ok = await openMic(true);
+    if (!ok) {
+      local("stop");
+      return false;
+    }
+    startSession();
+    if (ctx) {
+      void ctx.resume().catch(() => {});
+      tryRun(() => env.playEarcon(ctx!, "listening"));
+    }
+    api.speak(STRINGS.greeting[lang()]);
+    if (mediaButton?.attached && !saidEarphoneButton) {
+      saidEarphoneButton = true; // once per wiring: the owner learns the button exists, then it is just there
+      api.speak(HANDSFREE_STRINGS.earphoneButton[lang()]);
+    }
+    return true;
+  };
+
+  // ---- gestures ----
+  const answer = (g: "double" | "long"): boolean => {
+    const p = confirm.pending;
+    if (!p) return false;
+    const reply = confirm.onGesture(g)!;
+    if (api.send(reply)) {
+      api.earcon("ack");
+      api.haptic("ack");
+    } else {
+      // Never queued: a late "yes" to a sale or a payment is worse than asking again.
+      confirm.set(p.id, p.kind);
+      api.earcon("warn");
+      api.haptic("warn");
+      api.speak(STRINGS.notSent[lang()]);
+    }
+    setView({});
+    return true;
+  };
+
+  const talk = () => {
+    api.earcon("ack"); // < 150 ms acknowledgement, before anything async
+    api.haptic("ack");
+    livePlayback.flush({ holdUntilResume: true }); // an explicit talk cuts AIRA off
+    dropWaiting();
+    env.speech?.cancel();
+    local("talk");
+    // The owner's turn: on the server this lifts a long-press Stop even for a one-word question.
+    api.send({ t: "event", name: "talk", data: {} });
+    thinking.arm();
+    void openMic();
+    startSession();
+  };
+
+  const stop = () => {
+    endSession();
+    livePlayback.flush({ holdUntilResume: true });
+    thinking.disarm();
+    dropWaiting();
+    env.speech?.cancel();
+    stopMic();
+    api.send({ t: "stop" });
+    api.haptic("done");
+    local("stop");
+  };
+
+  // ---- earphone button (VITE_AIRA_MEDIA_BUTTON, off by default) ----
+  // The headset's play/pause key does exactly what the screen gestures do: play = double-tap (yes, or talk),
+  // pause / stop = long-press (no, or a hard stop). Feature-detected; nothing is attached without the flag or
+  // the API. The keep-alive element starts here, inside the Start tap, so the browser lets it play.
+  const flags: HandsfreeFlags = { ...handsfreeFlags(), ...opts.handsfree };
+  try {
+    mediaButton = attachMediaButton({
+      enabled: flags.mediaButton,
+      mediaSession: env.mediaSession,
+      onTalk: () => { if (!answer("double")) talk(); },
+      onStop: () => { if (!answer("long")) stop(); },
+      keepAlive: flags.mediaButton ? env.mediaKeepAlive?.() ?? null : null,
+      metadata: { title: "AIRA", artist: STRINGS.listening[uiLang] },
+    });
+    if (mediaButton.attached) {
+      mediaButton.setListening(listening);
+      clientLog("media_button", { attached: true });
+    }
+  } catch {
+    mediaButton = null; // the gestures are untouched
+  }
+  cleanups.push(() => { mediaButton?.dispose(); mediaButton = null; });
+
+  // ---- phone status ----
+  const on = (target: Listenable, type: string, fn: () => void) => {
+    target.addEventListener(type, fn);
+    cleanups.push(() => target.removeEventListener(type, fn));
+  };
+  on(env.win, "offline", () => {
+    api.earcon("offline");
+    api.speak(STRINGS.offline[lang()]);
+    setView({ online: false, screen: reduceScreen(view.screen, { t: "local", event: "offline" }) });
+  });
+  on(env.win, "online", () => {
+    api.speak(STRINGS.online[lang()]);
+    setView({ online: true });
+    void replay().catch(() => {});
+  });
+  // ---- keep audio running (iOS Safari) ----
+  // Safari suspends the context when the page hides, puts it in the non-standard "interrupted" state during a
+  // phone call or Siri, and (after a gesture-less start) leaves it suspended until a tap. Resume on every return
+  // to the page, on a bfcache restore, when the state drops while visible, and on the owner's next touch.
+  const wakeAudio = () => {
+    if (disposed || env.doc.hidden) return;
+    mediaButton?.resume(); // the keep-alive clip also stops on a call or Siri; best effort, no-op if playing
+    if (!ctx) return;
+    const st = String(ctx.state);
+    if (st === "running" || st === "closed") return;
+    tryRun(() => { void ctx!.resume().catch(() => {}); });
+  };
+  const ctxEvents = ctx as unknown as Partial<Listenable> | null;
+  if (ctxEvents && typeof ctxEvents.addEventListener === "function") on(ctxEvents as Listenable, "statechange", wakeAudio);
+  on(env.win, "pageshow", () => {
+    wakeAudio();
+    tryRun(() => env.requestWakeLock());
+  });
+  let primedByTouch = false;
+  const onTouch = () => {
+    wakeAudio();
+    if (primedByTouch) return;
+    primedByTouch = true;
+    tryRun(() => env.speech?.prime?.());
+  };
+  on(env.doc, "touchend", onTouch);
+  on(env.doc, "pointerup", onTouch);
+  on(env.doc, "keydown", onTouch);
+  on(env.doc, "visibilitychange", () => {
+    const hidden = env.doc.hidden;
+    api.send({ t: "event", name: "visibility", data: { hidden } });
+    if (hidden) {
+      api.speak(STRINGS.paused[lang()]);
+      return;
+    }
+    tryRun(() => env.requestWakeLock()); // the lock is released whenever the page hides
+    wakeAudio();
+  });
+
+  if (opts.connect !== false) {
+    // idToken is the shared demo key VITE_AIRA_APP_KEY, not a user token: there is no Firebase Auth in this
+    // build (shared/docs/ops/security.md). The server also checks the page's Origin and caps sessions per address.
+    const key = appKey();
+    socket.connect({
+      t: "hello",
+      uid: deviceUid(env.storage),
+      ...(key ? { idToken: key } : {}), // no shopId: there is one shop and the server picks it
+      lang: uiLang, // only a hint for the first line; AIRA then follows the speaker
+      verbosity: settings.verbosity,
+      appVersion: APP_VERSION,
+    });
+  }
+
+  return {
+    app: api,
+    socket: socket as AiraSocket,
+    ctx,
+    playback,
+    confirm,
+    queue,
+    view: viewStore,
+    onTalk: () => { if (!answer("double")) talk(); },
+    onStop: () => { if (!answer("long")) stop(); },
+    startListening,
+    sendOrQueue: async (m, idemKey) => {
+      await queue.add(m, idemKey);
+      await replay();
+      return !(await queue.has(idemKey));
+    },
+    replay,
+    local,
+    dispose: () => {
+      if (disposed) return;
+      disposed = true;
+      listening = false;
+      stopMic();
+      thinking.disarm();
+      timers.forEach((id) => clearTimeout(id));
+      timers.clear();
+      cleanups.splice(0).forEach((fn) => tryRun(fn));
+      subs.clear();
+      tryRun(() => socket.close());
+      if (ctx) {
+        tryRun(() => shareToneContext(null, ctx!));
+        void ctx.close().catch(() => {});
+      }
+    },
+  };
+}

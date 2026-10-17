@@ -1,0 +1,163 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AIRA Downloads</title>
+  <meta name="description" content="Download AIRA: run your own shop and earn by voice, from one phone.">
+  <link rel="icon" href="/icons/aira-logo-192.png">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg: #FFFFFF;
+      --surface: #F5F8FD;
+      --border: #E3E9F4;
+      --text: #0B1F4B;
+      --text-muted: #4A5A7A;
+      --brand-blue: #1F6FFF;
+      --brand-purple: #7B4DFF;
+      --ok: #16A34A;
+      color-scheme: light;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font: 16px/1.5 Inter, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    }
+    header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      flex-wrap: wrap;
+      max-width: 1100px;
+      margin: 0 auto;
+      padding: 24px 16px;
+    }
+    .brand { display: flex; align-items: center; gap: 12px; text-decoration: none; color: var(--text); }
+    .brand img { width: 48px; height: 48px; }
+    .brand strong { font-size: clamp(26px, 5vw, 36px); font-weight: 800; letter-spacing: 0.01em; }
+    .brand span { font-size: clamp(26px, 5vw, 36px); font-weight: 400; color: var(--text-muted); }
+    nav { display: flex; gap: 20px; flex-wrap: wrap; }
+    nav a { color: var(--text); font-weight: 600; text-decoration: none; }
+    nav a:hover, nav a:focus-visible { color: var(--brand-blue); }
+    main { max-width: 760px; margin: 0 auto; padding: 24px 16px 64px; }
+    .intro { color: var(--text-muted); margin: 0 0 24px; }
+    .intro b { display: block; color: var(--text); font-size: 18px; font-weight: 600; }
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 20px;
+      padding: 24px;
+    }
+    .card h2 { margin: 0 0 4px; font-size: 22px; }
+    .meta { color: var(--text-muted); font-size: 14px; margin: 0 0 20px; }
+    .btn {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+      width: 100%;
+      min-height: 56px;
+      border-radius: 14px;
+      background: linear-gradient(135deg, var(--brand-blue), var(--brand-purple));
+      color: #FFFFFF;
+      font-weight: 700;
+      font-size: 17px;
+      text-decoration: none;
+    }
+    .btn:focus-visible { outline: 3px solid var(--brand-blue); outline-offset: 3px; }
+    .btn.secondary {
+      background: var(--bg);
+      color: var(--text);
+      border: 1px solid var(--border);
+      margin-top: 12px;
+      font-weight: 600;
+    }
+    section { margin-top: 32px; }
+    section h3 { font-size: 18px; margin: 0 0 12px; }
+    ol, ul { margin: 0; padding-left: 22px; color: var(--text-muted); }
+    li { margin: 6px 0; }
+    li b { color: var(--text); }
+    .note {
+      margin-top: 32px;
+      padding: 14px 16px;
+      border-radius: 12px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      color: var(--text-muted);
+      font-size: 14px;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <a class="brand" href="/" aria-label="AIRA home">
+      <img src="/icons/aira-logo-192.png" alt="">
+      <strong>AIRA</strong><span>Downloads</span>
+    </a>
+    <nav aria-label="Downloads page">
+      <a href="/">Web App</a>
+      <a href="#install">Installation</a>
+      <a href="#requirements">Requirements</a>
+    </nav>
+  </header>
+
+  <main>
+    <p class="intro">
+      <b>AIRA Android App</b>
+      AIRA turns a blind person into a business owner: serve customers, take payments, order stock and earn, all by voice. Install the latest build on your Android phone.
+    </p>
+
+    <div class="card">
+      <h2>AIRA for Android</h2>
+      <p class="meta">Version 1.0.0 · 2.2 MB · Android 7.0 or newer</p>
+      <p class="meta" id="latest" aria-live="polite">The app always loads the latest AIRA. No reinstall needed for updates.</p>
+      <a class="btn" href="/download/AIRA.apk" download="AIRA.apk">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+          <path d="M12 3v12m0 0-5-5m5 5 5-5M4 19h16" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+        Download Android v1.0.0
+      </a>
+      <a class="btn secondary" href="/">Or open AIRA in the browser</a>
+    </div>
+
+    <section id="install">
+      <h3>Installation</h3>
+      <ol>
+        <li>Tap <b>Download Android v1.0.0</b> on your Android phone.</li>
+        <li>Open the downloaded <b>AIRA.apk</b> from the notification or the Files app.</li>
+        <li>If Android asks, allow <b>Install unknown apps</b> for your browser or Files app.</li>
+        <li>Tap <b>Install</b>, then <b>Open</b>.</li>
+        <li>Tap <b>Start</b> once and allow the microphone and camera. After that, AIRA starts listening as soon as you open it.</li>
+      </ol>
+    </section>
+
+    <section id="requirements">
+      <h3>Requirements</h3>
+      <ul>
+        <li>Android 7.0 or newer, with Google Chrome installed.</li>
+        <li>Internet connection (mobile data or Wi-Fi).</li>
+        <li>Microphone and camera access.</li>
+      </ul>
+    </section>
+
+    <p class="note">On iPhone, open <a href="/">aira-shop.web.app</a> in Safari and use Share → Add to Home Screen.</p>
+  </main>
+  <script>
+    fetch("/version.json", { cache: "no-store" })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (v) {
+        if (!v || !v.updated) return;
+        var when = new Date(v.updated).toLocaleString(undefined, { day: "numeric", month: "short", year: "numeric", hour: "numeric", minute: "2-digit" });
+        document.getElementById("latest").textContent =
+          "Latest update: " + when + " · build " + v.build + ". The app loads it automatically, no reinstall needed.";
+      })
+      .catch(function () {});
+  </script>
+</body>
+</html>

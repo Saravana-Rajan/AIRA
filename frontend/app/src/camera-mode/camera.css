@@ -1,0 +1,43 @@
+/* Shop-camera mode (/camera). Light theme only, like the rest of the app (ui/tokens.css). */
+html, body { margin: 0; background: var(--bg); color: var(--text); font-family: var(--font-sans); }
+
+.camera {
+  max-width: 560px;
+  margin: 0 auto;
+  padding: 24px var(--gutter) 40px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.camera__title { font-size: 28px; margin: 0; }
+.camera__lead, .camera__help, .camera__status { font-size: var(--text-body); line-height: 1.5; margin: 0; }
+.camera__help { color: var(--text-muted); }
+.camera__label { font-size: var(--text-status); font-weight: 600; }
+.camera__input {
+  font: inherit;
+  font-size: var(--text-status);
+  padding: 14px 16px;
+  border: 2px solid var(--border);
+  border-radius: var(--radius-card);
+  background: var(--surface);
+  color: var(--text);
+}
+.camera__input:focus-visible, .camera__start:focus-visible { outline: var(--focus-ring); outline-offset: 3px; }
+.camera__start {
+  font: inherit;
+  font-size: 24px;
+  font-weight: 700;
+  min-height: 96px;
+  border: 0;
+  border-radius: var(--radius-card);
+  background: var(--brand-blue);
+  color: #fff;
+  cursor: pointer;
+}
+.camera__start--on { background: var(--danger); }
+.camera__status {
+  padding: 14px 16px;
+  border-radius: var(--radius-card);
+  background: var(--surface);
+  border: 2px solid var(--border);
+}

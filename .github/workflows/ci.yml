@@ -1,0 +1,50 @@
+# Tests on pull requests and on pushes to non-main branches. No secrets are used here.
+# Pushes to main run the same tests in deploy.yml before deploying.
+# npm runs inside frontend/ (the workspace root for app and dashboard) and inside shared/contracts
+# (a standalone package the apps depend on through file:../../shared/contracts).
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches-ignore:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            frontend/package-lock.json
+            shared/contracts/package-lock.json
+
+      - name: Shared contracts
+        working-directory: shared/contracts
+        run: npm ci && npm test && npm run typecheck
+
+      - name: Frontend workspaces
+        working-directory: frontend
+        run: npm ci && npm test && npm run typecheck
+
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
+        with:
+          enable-cache: true
+          cache-dependency-glob: backend/uv.lock
+
+      - name: backend
+        run: cd backend && uv sync --frozen && uv run pytest -q

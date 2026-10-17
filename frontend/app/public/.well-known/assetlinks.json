@@ -1,0 +1,12 @@
+[
+  {
+    "relation": ["delegate_permission/common.handle_all_urls"],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "in.techjays.aira",
+      "sha256_cert_fingerprints": [
+        "B3:AF:55:CD:81:00:33:B4:A0:C0:A6:EC:4B:4D:70:E7:A2:5A:51:38:58:61:C2:F8:C2:44:41:75:28:66:88:ED"
+      ]
+    }
+  }
+]

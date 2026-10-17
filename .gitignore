@@ -1,0 +1,26 @@
+node_modules/
+dist/
+dist/hosting/
+.env
+.env.*
+!.env.example
+__pycache__/
+.pytest_cache/
+.venv/
+*.pyc
+.firebase/
+.DS_Store
+*.log
+.claude/
+# private benchmark media (faces, real UPI screens) — share via Cloud Storage, not git
+shared/bench/data/private/
+# benchmark run outputs (CSV/JSON); regenerate them with the bench scripts
+shared/bench/results/*
+# the user-study rows are committed: slide 12 must trace back to data in git
+!shared/bench/results/user_study.csv
+# exported deck PDF (uploaded to the submission form, never committed)
+# demo video cuts (uploaded to YouTube, never committed)
+.ruff_cache/
+
+# hosting bundle copied next to shared/infra/firebase.json for firebase deploy
+shared/infra/public/

@@ -1,0 +1,168 @@
+/* Status chip, live captions and task card: the parts the screen components add on top of the
+   base rules in app.css (same class names). LIGHT THEME ONLY. Every colour, size and radius
+   comes from tokens.css. Where a rule here must beat an app.css rule, its selector carries one
+   extra class or attribute on purpose, so the result does not depend on stylesheet order. */
+
+/* ---------- status chip ---------- */
+/* The chip colours itself from its own kind, so it also works outside `.screen`. */
+.status-chip[data-kind] {
+  min-height: 44px;
+  font-variant-numeric: tabular-nums; /* "Counting 12 / 30" does not jitter as digits change */
+}
+.status-chip[data-kind="connecting"] { --state: var(--text-muted); }
+.status-chip[data-kind="ready"],
+.status-chip[data-kind="counting"] { --state: var(--brand-blue); }
+.status-chip[data-kind="listening"] { --state: var(--brand-cyan); }
+.status-chip[data-kind="thinking"] { --state: var(--brand-purple); }
+.status-chip[data-kind="warning"],
+.status-chip[data-kind="offline"] { --state: var(--brand-orange); }
+.status-chip[data-kind="stop"] {
+  --state: var(--danger);
+  background: var(--danger);
+  color: var(--bg);
+  font-weight: 800;
+}
+.status-chip[data-kind="stop"] .status-chip__dot { background: var(--bg); }
+.status-chip[data-kind="listening"] .status-chip__dot,
+.status-chip[data-kind="stop"] .status-chip__dot {
+  animation: aira-chip-pulse 1.1s ease-in-out infinite;
+}
+@keyframes aira-chip-pulse {
+  0%, 100% { transform: scale(1); opacity: 1; }
+  50% { transform: scale(1.45); opacity: 0.55; }
+}
+
+/* ---------- live captions ---------- */
+/* One card for the last exchange: two rows, each a small speaker label over the words.
+   Both lines share one clamp() scale (AIRA one step larger, never giant), wrap at line-height 1.5
+   so Tamil and Devanagari ascenders and descenders have room, and stop at three lines. */
+.captions {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 16px 18px 18px;
+  border-radius: var(--radius-card);
+  background: var(--surface);
+  border: 1px solid var(--border);
+}
+.captions.captions--empty {
+  justify-content: center;
+  min-height: 92px;
+}
+.caption {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.caption--hint {
+  color: var(--text-muted);
+  font-size: var(--text-status);
+  font-weight: 500;
+  line-height: 1.45;
+  text-align: center;
+  text-wrap: balance;
+  overflow-wrap: anywhere;
+}
+.caption__who {
+  font-size: var(--text-label);
+  font-weight: 700;
+  line-height: 1.3;
+  color: var(--text-muted);
+}
+.caption--aira .caption__who {
+  color: var(--brand-blue);
+}
+/* Each line is anchored to its bottom edge: when a sentence is too long, the OLDEST words
+   slide out of the top and the newest words stay in view. */
+.caption__text {
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  max-height: calc(3 * 1.5em);
+  line-height: 1.5;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+}
+.caption--user .caption__text {
+  color: var(--text-muted);
+  font-size: clamp(20px, 5vw + 2px, var(--text-caption-user));
+  font-weight: 500;
+}
+.caption--aira .caption__text {
+  color: var(--text);
+  font-size: clamp(22px, 5.5vw + 2px, var(--text-caption-aira));
+  font-weight: 600;
+}
+
+/* ---------- task card ---------- */
+/* The mark is a round badge with a shape (dots, tick, !, cross, ?), so the state never
+   depends on colour alone. */
+.task-card .task-card__mark {
+  display: grid;
+  place-items: center;
+  align-self: flex-start;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  background: var(--tone);
+  color: var(--bg);
+}
+.task-card__icon {
+  width: 24px;
+  height: 24px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 3;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.task-card[data-tone="neutral"] .task-card__icon { stroke-width: 3.5; }
+/* Navy on orange keeps the mark legible (white on orange is under 3:1). */
+.task-card[data-tone="warn"] .task-card__mark,
+.task-card[data-confirm="true"] .task-card__mark { color: var(--text); }
+
+.task-card .task-card__body { flex: 1; }
+.task-card .task-card__detail { font-variant-numeric: tabular-nums; }
+
+.task-card[data-tone="danger"] {
+  border-color: color-mix(in srgb, var(--danger) 45%, var(--border));
+  background: color-mix(in srgb, var(--danger) 6%, var(--surface));
+}
+/* Waiting for yes/no: the card is the one thing on screen asking for an answer. */
+.task-card[data-confirm="true"] {
+  --tone: var(--brand-orange);
+  border: 2px solid var(--brand-orange);
+  background: color-mix(in srgb, var(--brand-orange) 8%, var(--surface));
+}
+.task-card[data-confirm="true"] .task-card__icon { stroke-width: 2.6; }
+
+.task-card__bar {
+  display: block;
+  height: 10px;
+  margin-top: 10px;
+  border-radius: var(--radius-pill);
+  background: var(--border);
+  overflow: hidden;
+}
+.task-card__fill {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--tone);
+  transform: scaleX(var(--progress, 0));
+  transform-origin: left center;
+  transition: transform 250ms ease-out;
+}
+.task-card__hint {
+  margin-top: 8px;
+  color: var(--text);
+  font-size: var(--text-body);
+  font-weight: 600;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .status-chip[data-kind] .status-chip__dot { animation: none; }
+  .task-card__fill { transition: none; }
+}
